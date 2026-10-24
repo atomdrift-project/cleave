@@ -497,6 +497,13 @@ impl UnifiedSourceAnalyzer {
         };
 
         let mut report = AnalysisReport::new(target);
+        // Encoding context is input to this layer's rules, not an output
+        // appended after evaluation. The host still retains this layer.
+        if let Some(chain) = &self.encoded_context {
+            report.findings.extend(
+                crate::analyzers::embedded_code_detector::generate_encoded_layer_traits(chain, 0),
+            );
+        }
 
         // `pyc.*` kv now comes from filefacts's dual emission step
         // in `evaluate_and_merge_findings`; no synthesis here.

@@ -257,6 +257,19 @@ impl GenericAnalyzer {
                 );
             report.files.extend(encoded_layers);
             report.findings.extend(plain_findings);
+            // HTML script islands can carry a complete literal-table program;
+            // extracting its individual strings loses the reconstruction order.
+            if self.file_type == FileType::Html {
+                report.files.extend(
+                    crate::analyzers::embedded_code_detector::analyze_script_deobfuscation_layers(
+                        &file_path.display().to_string(),
+                        content,
+                        &self.engine,
+                        0,
+                        cancellation.map(AsRef::as_ref),
+                    ),
+                );
+            }
             // cmd builds its commands from `set` fragments at run time, so the
             // command words only exist after expansion; replay it as a layer.
             if self.file_type == FileType::Batch {

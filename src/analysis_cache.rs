@@ -922,7 +922,7 @@ fn options_hash_with(
     // discovery. Historical compact reports discarded them before scan ran.
     let zip_passwords = Sha256::digest(options.zip_passwords.join("\0").as_bytes());
     let key = format!(
-        "v=22,cm={},3p={},yara={},yskip={},ybuiltin={},zpw={},r2={},upx={},plat={},hp={},sp={},ps={},fv={},rizin={}",
+        "v=26,cm={},3p={},yara={},yskip={},ybuiltin={},zpw={},r2={},upx={},plat={},hp={},sp={},ps={},fv={},rizin={}",
         settings.compact_members,
         settings.third_party_yara,
         settings.yara,

@@ -16,6 +16,7 @@ use crate::analyzers::pe::normalize_signer_name;
 
 /// Exact ids emitted by the Mach-O and ELF analyzers.
 const EXACT_IDS: &[&str] = &[
+    "objectives/anti-static/pack/upx::standard-unpack-refused",
     "metadata/binary/linking::macho-install-name",
     "metadata/binary/linking::macho-dylib",
     "metadata/binary/linking::macho-rpath",

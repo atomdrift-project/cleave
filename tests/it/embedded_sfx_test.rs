@@ -313,8 +313,8 @@ fn encoded_payload_detection() {
     fs::write(&sh_path, &sh).unwrap();
     let (stdout, _) = analyze_compact(&sh_path);
     assert!(
-        stdout.contains("base64-gz"),
-        "Expected 'base64-gz' in output.\nFirst 3000 chars:\n{}",
+        stdout.contains("base64-decoded-gz"),
+        "Expected 'base64-decoded-gz' in output.\nFirst 3000 chars:\n{}",
         &stdout[..stdout.len().min(3000)]
     );
 
@@ -383,7 +383,7 @@ echo "Done"
     fs::write(&benign_path, benign).unwrap();
     let (stdout, _) = analyze_compact(&benign_path);
     assert!(
-        !stdout.contains("base64-gz")
+        !stdout.contains("base64-decoded-gz")
             && !stdout.contains("base64-pe")
             && !stdout.contains("base64-elf"),
         "False positive: base64-binary finding on benign deploy script.\nFirst 2000 chars:\n{}",

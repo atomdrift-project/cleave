@@ -63,6 +63,7 @@ pub(crate) mod js_edge_source;
 pub(crate) mod js_joined_module;
 pub(crate) mod js_literal_catalog;
 pub(crate) mod js_string_table;
+pub(crate) mod literal_program;
 pub(crate) mod macho;
 pub(crate) mod media;
 pub(crate) mod office;

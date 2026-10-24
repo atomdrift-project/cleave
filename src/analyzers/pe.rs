@@ -620,7 +620,46 @@ impl PEAnalyzer {
             return report;
         }
 
-        match UPXDecompressor::decompress(data) {
+        let initial = UPXDecompressor::decompress(data);
+        if let Err(error) = &initial
+            && let Some(finding) = crate::upx::standard_unpack_refusal(error)
+        {
+            report.findings.push(finding);
+        }
+        let recovered = if initial
+            .as_ref()
+            .err()
+            .is_some_and(|e| crate::upx::classify_failure(e).checksum_mismatch)
+        {
+            UPXDecompressor::repair_nrv2b_checksums(data)
+                .and_then(|copy| UPXDecompressor::decompress(&copy).ok())
+        } else {
+            None
+        };
+        let unpacked = if let Some(bytes) = recovered {
+            report.findings.push(
+                Finding::structural(
+                    "metadata/binary/layout/compression::upx-checksum-mismatch".to_string(),
+                    "UPX-packed image fails checksum validation".to_string(),
+                    1.0,
+                )
+                .with_criticality(Criticality::Suspicious),
+            );
+            report.findings.push(
+                Finding::structural(
+                    "metadata/binary/layout/compression::upx-checksum-repaired-analysis-copy"
+                        .to_string(),
+                    "Recovered UPX payload after repairing checksums on an analysis copy"
+                        .to_string(),
+                    1.0,
+                )
+                .with_criticality(Criticality::Notable),
+            );
+            Ok(bytes)
+        } else {
+            initial
+        };
+        match unpacked {
             Ok(unpacked_data) => {
                 if let Ok(temp_file) = tempfile::NamedTempFile::new()
                     && fs::write(temp_file.path(), &unpacked_data).is_ok()
@@ -711,10 +750,32 @@ impl PEAnalyzer {
                         failure.description.to_string(),
                         1.0,
                     )
-                    // A checksum mismatch can result from corruption or mutation.
-                    // Tool refusal alone establishes neither evasion nor hostility.
                     .with_criticality(Criticality::Notable),
                 );
+                // Artifact-specific integrity failure, distinct from missing tools,
+                // timeouts and size limits. The finding states the evidence rather
+                // than asserting a particular payload or malware family.
+                if failure.invalid_image {
+                    report.findings.push(
+                        Finding::structural(
+                            "metadata/binary/layout/compression::upx-invalid-packed-image"
+                                .to_string(),
+                            "UPX-like image has invalid or non-packed structure".to_string(),
+                            1.0,
+                        )
+                        .with_criticality(Criticality::Suspicious),
+                    );
+                }
+                if failure.checksum_mismatch {
+                    report.findings.push(
+                        Finding::structural(
+                            "metadata/binary/layout/compression::upx-checksum-mismatch".to_string(),
+                            "UPX-packed image fails checksum validation".to_string(),
+                            1.0,
+                        )
+                        .with_criticality(Criticality::Suspicious),
+                    );
+                }
             }
         }
 
@@ -1018,6 +1079,225 @@ impl PEAnalyzer {
             );
         report.files.extend(encoded_layers);
         report.findings.extend(plain_findings);
+
+        // Recover MPRESS resources using bounded LZMA decoding, never native
+        // execution. Each child is analyzed on its own bytes and evidence is
+        // attributed to that resource before findings are lifted to the wrapper.
+        // The same embedded-scan guard used for ordinary carved PEs prevents
+        // resource-inside-resource recursion from resetting the depth budget.
+        if !self.skip_embedded_scan && !self.is_cancelled() {
+            match crate::extractors::mpress::recover(pe_data) {
+                Ok(resources) => {
+                    for resource in resources {
+                        if self.is_cancelled() {
+                            break;
+                        }
+                        let kind = if resource.executable {
+                            crate::FileType::Pe
+                        } else {
+                            crate::FileType::Text
+                        };
+                        let suffix = if resource.executable { "exe" } else { "txt" };
+                        let member_path = format!("mpress/resource-{:x}.{suffix}", resource.rva);
+                        let virtual_path = format!("{}!{member_path}", logical_path.display());
+                        let temp = match tempfile::Builder::new()
+                            .suffix(&format!(".{suffix}"))
+                            .tempfile()
+                        {
+                            Ok(t) => t,
+                            Err(e) => {
+                                report
+                                    .metadata
+                                    .errors
+                                    .push(format!("MPRESS temporary file: {e}"));
+                                break;
+                            }
+                        };
+                        if let Err(e) = fs::write(temp.path(), &resource.data) {
+                            report
+                                .metadata
+                                .errors
+                                .push(format!("MPRESS temporary file: {e}"));
+                            break;
+                        }
+                        let input =
+                            AnalysisInput::new(Path::new(&virtual_path), &resource.data, kind)
+                                .with_backing_path(temp.path())
+                                .at_depth(1);
+                        let child = if resource.executable {
+                            let mut analyzer = PEAnalyzer::new()
+                                .with_engine(self.engine.clone())
+                                .without_embedded_scan();
+                            if let Some(yara) = &self.yara_engine {
+                                analyzer = analyzer.with_yara_arc(yara.clone());
+                            }
+                            analyzer.analyze_input(&input)
+                        } else {
+                            crate::analyzers::generic::GenericAnalyzer::new(kind)
+                                .with_engine(self.engine.clone())
+                                .analyze_input(&input)
+                        };
+                        match child {
+                            Ok(child) => {
+                                let first = report.files.len();
+                                crate::analyzers::subfile::attach_member(
+                                    &mut report,
+                                    child,
+                                    &resource.data,
+                                    kind,
+                                    &member_path,
+                                    &virtual_path,
+                                    &self.engine,
+                                );
+                                if let Some(file) = report.files.get_mut(first) {
+                                    file.encoding = Some(vec!["mpress-lzma".to_string()]);
+                                }
+                            }
+                            Err(e) => report
+                                .metadata
+                                .errors
+                                .push(format!("MPRESS resource analysis: {e:#}")),
+                        }
+                    }
+                }
+                Err(error) => report.findings.push(
+                    Finding::structural(
+                        "metadata/binary/layout/compression::mpress-recovery-failed".to_string(),
+                        error.to_string(),
+                        1.0,
+                    )
+                    .with_criticality(Criticality::Notable),
+                ),
+            }
+        }
+
+        // Node's SEA resource carries source and assets, not merely runtime
+        // code. Recover bounded members without running Node or the payload.
+        if !self.skip_embedded_scan
+            && !self.is_cancelled()
+            && let Some(members) = crate::extractors::node_sea::recover(pe_data)
+        {
+            for member in members {
+                if self.is_cancelled() {
+                    break;
+                }
+                let kind = if member.javascript {
+                    crate::FileType::JavaScript
+                } else if member.data.starts_with(b"MZ") {
+                    crate::FileType::Pe
+                } else {
+                    crate::FileType::Data
+                };
+                let member_path = format!("node-sea/{}", member.name);
+                let virtual_path = format!("{}!{}", logical_path.display(), member_path);
+                let child = (|| -> Result<AnalysisReport> {
+                    let suffix = if member.javascript {
+                        ".cjs"
+                    } else if kind == crate::FileType::Pe {
+                        ".dll"
+                    } else {
+                        ".bin"
+                    };
+                    let temp = tempfile::Builder::new().suffix(suffix).tempfile()?;
+                    fs::write(temp.path(), &member.data)?;
+                    let input = AnalysisInput::new(Path::new(&virtual_path), &member.data, kind)
+                        .with_backing_path(temp.path())
+                        .at_depth(1);
+                    if kind == crate::FileType::Pe {
+                        let mut analyzer = PEAnalyzer::new()
+                            .with_engine(self.engine.clone())
+                            .with_cancellation(self.cancellation.clone())
+                            .without_embedded_scan();
+                        if let Some(yara) = &self.yara_engine {
+                            analyzer = analyzer.with_yara_arc(yara.clone());
+                        }
+                        analyzer.analyze_input(&input)
+                    } else {
+                        crate::analyzers::generic::GenericAnalyzer::new(kind)
+                            .with_engine(self.engine.clone())
+                            .analyze_input(&input)
+                    }
+                })();
+                match child {
+                    Ok(child) => {
+                        let first = report.files.len();
+                        crate::analyzers::subfile::attach_member(
+                            &mut report,
+                            child,
+                            &member.data,
+                            kind,
+                            &member_path,
+                            &virtual_path,
+                            &self.engine,
+                        );
+                        if let Some(file) = report.files.get_mut(first) {
+                            file.encoding = Some(vec!["node-sea-resource".to_string()]);
+                        }
+                    }
+                    Err(e) => report
+                        .metadata
+                        .errors
+                        .push(format!("Node SEA member analysis: {e:#}")),
+                }
+            }
+        }
+
+        // Recover the recognized x86 NRV2B stub without invoking its code.
+        // The child is explicitly a memory-layout analysis image: imports are
+        // not resolved, and it is never executed or treated as a rebuilt file.
+        if !self.skip_embedded_scan && self.engine.upx() && !self.is_cancelled() {
+            match crate::extractors::nrv32::recover(pe_data) {
+                Ok(Some(data)) => {
+                    let member_path = "nrv2b/memory-image.dll";
+                    let virtual_path = format!("{}!{member_path}", logical_path.display());
+                    let recovered = (|| -> Result<AnalysisReport> {
+                        let temp = tempfile::Builder::new().suffix(".dll").tempfile()?;
+                        fs::write(temp.path(), &data)?;
+                        let input = AnalysisInput::new(
+                            Path::new(&virtual_path),
+                            &data,
+                            crate::FileType::Pe,
+                        )
+                        .with_backing_path(temp.path())
+                        .at_depth(1);
+                        let mut analyzer = PEAnalyzer::new()
+                            .with_engine(self.engine.clone())
+                            .with_cancellation(self.cancellation.clone())
+                            .without_embedded_scan();
+                        if let Some(yara) = &self.yara_engine {
+                            analyzer = analyzer.with_yara_arc(yara.clone());
+                        }
+                        analyzer.analyze_input(&input)
+                    })();
+                    match recovered {
+                        Ok(child) => {
+                            let first = report.files.len();
+                            crate::analyzers::subfile::attach_member(
+                                &mut report,
+                                child,
+                                &data,
+                                crate::FileType::Pe,
+                                member_path,
+                                &virtual_path,
+                                &self.engine,
+                            );
+                            if let Some(file) = report.files.get_mut(first) {
+                                file.encoding = Some(vec!["nrv2b-memory-image".to_string()]);
+                            }
+                        }
+                        Err(error) => report
+                            .metadata
+                            .errors
+                            .push(format!("NRV memory-image analysis: {error:#}")),
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => report
+                    .metadata
+                    .errors
+                    .push(format!("NRV recovery diagnostic: {error}")),
+            }
+        }
 
         // Converter envelopes carry ordinary scripts: the decoded child owns
         // behavioral findings, while the parent records only the encoding.

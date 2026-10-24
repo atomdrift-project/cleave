@@ -52,15 +52,47 @@ pub(crate) enum UPXError {
 pub(crate) struct UpxFailure {
     /// Fixed text, safe to compare across runs and machines.
     pub description: &'static str,
+    /// Exact integrity failures are suspicious artifact evidence, distinct
+    /// from environmental recovery limits.
+    pub checksum_mismatch: bool,
+    /// A claimed UPX image is structurally invalid or rejected as unpacked.
+    pub invalid_image: bool,
+}
+
+/// Triage policy: a file-specific refusal by standard UPX is hostile even
+/// when a later repair recovers its contents. Missing tools, I/O failures,
+/// timeouts and local size ceilings are limitations of the analysis run.
+pub(crate) fn standard_unpack_refusal(err: &UPXError) -> Option<crate::types::Finding> {
+    let failure = classify_failure(err);
+    if !matches!(err, UPXError::DecompressionFailed(_))
+        || matches!(
+            failure.description,
+            "UPX decompression timed out"
+                | "UPX payload exceeds decompression size limit"
+                | "UPX could not read the image"
+        )
+    {
+        return None;
+    }
+    Some(
+        crate::types::Finding::structural(
+            "objectives/anti-static/pack/upx::standard-unpack-refused".to_string(),
+            "UPX image resists standard unpacking".to_string(),
+            1.0,
+        )
+        .with_criticality(crate::types::Criticality::Hostile),
+    )
 }
 
 /// Map a decompression error onto one of a fixed set of reasons.
 ///
 /// Matching is done on substrings of `upx`'s own exception names, which are
 /// stable across releases (`ChecksumException`, `CantUnpackException`,
-/// `NotPackedException`, `IOException`). A refusal records a recovery limitation,
-/// not an attack claim: corruption and benign mutation can also cause it.
+/// `NotPackedException`, `IOException`). Checksum failures are distinguished
+/// from environmental limits and ordinary tool refusals.
 pub(crate) fn classify_failure(err: &UPXError) -> UpxFailure {
+    let mut checksum_mismatch = false;
+    let mut invalid_image = false;
     let description = match err {
         UPXError::NotInstalled => "UPX tool not available to unpack",
         UPXError::IoError(_) => "UPX decompression I/O error",
@@ -70,10 +102,19 @@ pub(crate) fn classify_failure(err: &UPXError) -> UpxFailure {
                 "UPX decompression timed out"
             } else if m.contains("exceeds limit") {
                 "UPX payload exceeds decompression size limit"
-            } else if m.contains("checksum") {
+            } else if m.contains("checksum error") || m.contains("checksumexception") {
+                checksum_mismatch = true;
                 "UPX header checksum does not match payload"
             } else if m.contains("notpacked") || m.contains("not packed") {
+                invalid_image = true;
                 "UPX markers present but image is not packed"
+            } else if m.contains("corrupt")
+                || m.contains("invalid header")
+                || m.contains("invalid packed data")
+                || m.contains("unexpected end of file")
+            {
+                invalid_image = true;
+                "UPX packed-image structure is invalid"
             } else if m.contains("cantunpack") || m.contains("cantpack") {
                 "UPX image refuses to unpack"
             } else if m.contains("ioexception") {
@@ -83,7 +124,11 @@ pub(crate) fn classify_failure(err: &UPXError) -> UpxFailure {
             }
         }
     };
-    UpxFailure { description }
+    UpxFailure {
+        description,
+        checksum_mismatch,
+        invalid_image,
+    }
 }
 
 pub(crate) struct UPXDecompressor;
@@ -111,6 +156,61 @@ impl UPXDecompressor {
         }
 
         false
+    }
+
+    /// Repair checksums only on an analysis copy of a recognized PE32 NRV2B
+    /// stream. A bounded data decoder recovers the bytes without executing the
+    /// specimen. The caller must retain the original integrity finding, and
+    /// ordinary UPX must still accept the repaired copy before it is analyzed.
+    pub(crate) fn repair_nrv2b_checksums(data: &[u8]) -> Option<Vec<u8>> {
+        const LIMIT: usize = 64 * 1024 * 1024;
+        if data.len() > LIMIT || !data.starts_with(b"MZ") {
+            return None;
+        }
+        let at = data
+            .get(..data.len().min(4096))?
+            .windows(4)
+            .position(|v| v == b"UPX!")?;
+        let h = data.get(at..at.checked_add(32)?)?;
+        if !(10..=13).contains(&h[4])
+            || h[5] != 9
+            || h[6] != 2
+            || h[31] != (h[4..31].iter().map(|v| u32::from(*v)).sum::<u32>() % 251) as u8
+        {
+            return None;
+        }
+        let ulen = u32::from_le_bytes(h[16..20].try_into().ok()?) as usize;
+        let clen = u32::from_le_bytes(h[20..24].try_into().ok()?) as usize;
+        if ulen == 0 || ulen > LIMIT || clen == 0 || clen > LIMIT {
+            return None;
+        }
+        let start = at.checked_add(32)?;
+        let compressed = data.get(start..start.checked_add(clen)?)?;
+        let decoded = crate::extractors::nrv32::decode(compressed, ulen).ok()?;
+        if decoded.len() != ulen {
+            return None;
+        }
+        fn adler(bytes: &[u8]) -> u32 {
+            let (mut a, mut b) = (1u32, 0u32);
+            for chunk in bytes.chunks(5552) {
+                for byte in chunk {
+                    a += u32::from(*byte);
+                    b += a;
+                }
+                a %= 65521;
+                b %= 65521;
+            }
+            (b << 16) | a
+        }
+        let mut copy = data.to_vec();
+        copy[at + 8..at + 12].copy_from_slice(&adler(&decoded).to_le_bytes());
+        copy[at + 12..at + 16].copy_from_slice(&adler(compressed).to_le_bytes());
+        copy[at + 31] = (copy[at + 4..at + 31]
+            .iter()
+            .map(|v| u32::from(*v))
+            .sum::<u32>()
+            % 251) as u8;
+        Some(copy)
     }
 
     /// Check if the upx binary is available.
@@ -387,6 +487,28 @@ mod tests {
     /// happened to be handed: two scans of one sample have to produce the same
     /// description, or the reports cannot be diffed.
     #[test]
+    fn standard_unpack_policy_separates_refusal_from_environment() {
+        for message in [
+            "checksum error",
+            "CantUnpackException: unsupported format",
+            "NotPackedException: not packed",
+            "corrupt file",
+        ] {
+            let finding = standard_unpack_refusal(&UPXError::DecompressionFailed(message.into()));
+            assert!(finding.is_some_and(|f| f.crit == crate::types::Criticality::Hostile));
+        }
+        for err in [
+            UPXError::NotInstalled,
+            UPXError::IoError(std::io::Error::other("unavailable input")),
+            UPXError::DecompressionFailed("UPX decompression timed out".into()),
+            UPXError::DecompressionFailed("Decompressed UPX size exceeds limit".into()),
+            UPXError::DecompressionFailed("IOException".into()),
+        ] {
+            assert!(standard_unpack_refusal(&err).is_none());
+        }
+    }
+
+    #[test]
     fn test_classify_failure_is_stable_across_temp_paths() {
         let a = classify_failure(&UPXError::DecompressionFailed(
             "upx: /tmp/.tmpJYEaZH: Exception: checksum error\n".to_string(),
@@ -395,6 +517,7 @@ mod tests {
             "upx: /tmp/.tmpQYT9GU: Exception: checksum error\n".to_string(),
         ));
         assert_eq!(a.description, b.description);
+        assert!(a.checksum_mismatch && b.checksum_mismatch);
         assert!(!a.description.contains("/tmp"));
         assert_eq!(a.description, "UPX header checksum does not match payload");
     }
@@ -413,6 +536,8 @@ mod tests {
         ] {
             let f = classify_failure(&err);
             assert!(!f.description.is_empty());
+            assert!(!f.checksum_mismatch);
+            assert!(!f.invalid_image);
             assert_ne!(f.description, "UPX decompression failed");
         }
     }
@@ -424,6 +549,74 @@ mod tests {
             "upx: something new went wrong".to_string(),
         ));
         assert_eq!(f.description, "UPX decompression failed");
+        assert!(!f.checksum_mismatch);
+    }
+
+    #[test]
+    fn checksum_in_path_is_not_a_checksum_failure() {
+        for message in [
+            "upx: /tmp/checksum.exe: NotPackedException: not packed",
+            "upx: /tmp/test.exe: CantUnpackException: unsupported format",
+        ] {
+            assert!(
+                !classify_failure(&UPXError::DecompressionFailed(message.into())).checksum_mismatch
+            );
+        }
+        assert!(
+            classify_failure(&UPXError::DecompressionFailed("ChecksumException".into()))
+                .checksum_mismatch
+        );
+    }
+
+    #[test]
+    fn invalid_images_are_distinct_from_unsupported_formats() {
+        for message in [
+            "NotPackedException: not packed",
+            "CantUnpackException: invalid header",
+            "corrupted input",
+        ] {
+            assert!(classify_failure(&UPXError::DecompressionFailed(message.into())).invalid_image);
+        }
+        for message in [
+            "CantUnpackException: unsupported format",
+            "UPX decompression timed out",
+            "IOexception",
+        ] {
+            assert!(
+                !classify_failure(&UPXError::DecompressionFailed(message.into())).invalid_image
+            );
+        }
+    }
+
+    #[test]
+    fn bounded_checksum_repair_recovers_literal_stream_without_touching_input() {
+        // NRV2B literals "Hi", followed by the end marker.
+        let stream = [0, 0, 0, 192, 72, 105, 0, 32, 1, 0, 255];
+        let mut data = vec![0u8; 64 + 32];
+        data[..2].copy_from_slice(b"MZ");
+        data[64..72].copy_from_slice(&[b'U', b'P', b'X', b'!', 13, 9, 2, 1]);
+        data[80..84].copy_from_slice(&2u32.to_le_bytes());
+        data[84..88].copy_from_slice(&(stream.len() as u32).to_le_bytes());
+        data[95] = (data[68..95].iter().map(|v| u32::from(*v)).sum::<u32>() % 251) as u8;
+        data.extend_from_slice(&stream);
+        let original = data.clone();
+        let fixed = UPXDecompressor::repair_nrv2b_checksums(&data).unwrap();
+        assert_eq!(data, original);
+        assert_eq!(&fixed[96..], &stream);
+        assert_eq!(
+            u32::from_le_bytes(fixed[72..76].try_into().unwrap()),
+            0x00fb00b2
+        );
+        assert_eq!(
+            fixed[95],
+            (fixed[68..95].iter().map(|v| u32::from(*v)).sum::<u32>() % 251) as u8
+        );
+        for len in 0..data.len() {
+            assert!(UPXDecompressor::repair_nrv2b_checksums(&data[..len]).is_none());
+        }
+        data[80..84].copy_from_slice(&u32::MAX.to_le_bytes());
+        data[95] = (data[68..95].iter().map(|v| u32::from(*v)).sum::<u32>() % 251) as u8;
+        assert!(UPXDecompressor::repair_nrv2b_checksums(&data).is_none());
     }
 
     #[test]

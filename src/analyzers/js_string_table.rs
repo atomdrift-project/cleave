@@ -41,7 +41,19 @@ impl Val {
     fn numeric(&self) -> f64 {
         match &self.value {
             Value::Number(n) => *n,
-            Value::String(s) => s.trim().parse().unwrap_or(f64::NAN),
+            Value::String(s) => {
+                let s = s.trim();
+                if s.is_empty() {
+                    return 0.;
+                }
+                for (prefixes, radix) in [(["0x", "0X"], 16), (["0o", "0O"], 8), (["0b", "0B"], 2)]
+                {
+                    if prefixes.iter().any(|prefix| s.starts_with(prefix)) {
+                        return u64::from_str_radix(&s[2..], radix).map_or(f64::NAN, |n| n as f64);
+                    }
+                }
+                s.parse().unwrap_or(f64::NAN)
+            }
         }
     }
     fn text(&self) -> String {
@@ -992,12 +1004,17 @@ impl<'a> Context<'a> {
                 for a in children(n.child_by_field_name("arguments")?) {
                     args.push(self.eval(a, env, depth + 1)?);
                 }
-                let d = self.decoders.get(self.active);
-                if d.is_some_and(|d| {
-                    d.name == name
+                // A checksum can mix plain Base64 and RC4 lookups into the
+                // same rotated table. Resolve the actual callee while keeping
+                // the selected table and all lexical-binding checks.
+                let active_table = self.decoders.get(self.active).map(|d| d.table);
+                let d = self.decoders.iter().find(|d| {
+                    Some(d.table) == active_table
+                        && d.name == name
                         && covers(d.visible, n.start_byte())
                         && self.resolves(name, n.start_byte(), d.binding)
-                }) {
+                });
+                if d.is_some() {
                     let d = d?;
                     let index = args.first()?.numeric() - d.offset;
                     if !index.is_finite() || index < 0. || index.fract() != 0. {
@@ -1228,10 +1245,6 @@ pub(crate) fn decode(ast: filefacts::SourceAst<'_>) -> Option<String> {
                         valid = false;
                         break;
                     };
-                    if !matches!(v.value, Value::Number(_)) {
-                        valid = false;
-                        break;
-                    }
                     let key = raw_string(k, source).or_else(|| text(k, source).map(str::to_owned));
                     let Some(key) = key else {
                         valid = false;
@@ -1258,6 +1271,15 @@ pub(crate) fn decode(ast: filefacts::SourceAst<'_>) -> Option<String> {
         .retain(|o| immutable_object(o, &ctx.references, source));
     if ctx.tables.len() > 8 || ctx.objects.len() > 4096 {
         return None;
+    }
+    #[cfg(test)]
+    if source.len() > 600000 {
+        eprintln!(
+            "QA2 tables={} objects={} fuel={}",
+            ctx.tables.len(),
+            ctx.objects.len(),
+            ctx.fuel.get()
+        );
     }
     if ctx.tables.is_empty() {
         return None;
@@ -1418,7 +1440,16 @@ pub(crate) fn decode(ast: filefacts::SourceAst<'_>) -> Option<String> {
         }
         let rc4 = raw.contains('^')
             && raw.contains("charCodeAt")
-            && (raw.contains("0x100") || raw.contains("256"));
+            && all.iter().any(|n| {
+                covers((f.start_byte(), f.end_byte()), n.start_byte())
+                    && n.kind() == "binary_expression"
+                    && n.child_by_field_name("operator")
+                        .and_then(|op| text(op, source))
+                        == Some("%")
+                    && n.child_by_field_name("right")
+                        .and_then(|right| ctx.eval(right, &HashMap::new(), 0))
+                        .is_some_and(|v| v.numeric() == 256.)
+            });
         if !rc4 || parameters.len() >= 2 {
             ctx.decoders.push(Decoder {
                 binding: f.child_by_field_name("name")?.start_byte(),
@@ -1437,6 +1468,15 @@ pub(crate) fn decode(ast: filefacts::SourceAst<'_>) -> Option<String> {
         .retain(|d| !identifier_writes(&all, &d.name, d.visible, source, None));
     if ctx.decoders.len() > 8 || ctx.proxies.len() > 4096 {
         return None;
+    }
+    #[cfg(test)]
+    if source.len() > 600000 {
+        eprintln!(
+            "QA2 decoders={} proxies={} fuel={}",
+            ctx.decoders.len(),
+            ctx.proxies.len(),
+            ctx.fuel.get()
+        );
     }
     let mut attempts = 0;
     for active in 0..ctx.decoders.len() {
@@ -1616,6 +1656,49 @@ mod tests {
             source.as_bytes(),
         );
         decode(ctx.source_ast()?)
+    }
+    #[test]
+    fn coerces_radix_strings_without_parse_int_prefix_truncation() {
+        for (text, want) in [
+            ("0x20", 32.),
+            ("0Xff", 255.),
+            ("0o10", 8.),
+            ("0b11", 3.),
+            ("", 0.),
+        ] {
+            assert_eq!(Val::string(text.into()).numeric(), want);
+        }
+        for text in ["0x20junk", "-0x20", "32junk"] {
+            assert!(Val::string(text.into()).numeric().is_nan());
+        }
+    }
+    #[test]
+    fn reduces_string_valued_offset_objects_and_obscured_rc4_modulus() {
+        let number_fields =
+            regex::Regex::new(r"(:\s*)(0x[0-9a-fA-F]+)\b").expect("valid numeric-field pattern");
+        let source = number_fields
+            .replace_all(RC4, r#"$1"$2""#)
+            .to_string()
+            .replace("0x100", "(0x80+0x80)");
+        let out = reduce(&source).expect("constant string offsets and arithmetic RC4 bounds");
+        assert!(out.contains("\"runInContext\""));
+        assert!(out.contains("\"getSignaturesForAddress\""));
+    }
+    #[test]
+    fn qa2_external_probe() {
+        let path = std::env::var("QA2_JS_PROBE").expect("external specimen path");
+        let source = std::fs::read_to_string(path).expect("read specimen");
+        let out = reduce(&source).expect("external specimen table reduction");
+        std::fs::write("/tmp/qa2-deep-review/rfq-engine-decoded.js", out)
+            .expect("write reduced source");
+    }
+    #[test]
+    fn reduces_mixed_decoders_sharing_the_checksum_table() {
+        let source = include_str!("../../testdata/vsix-string-table/mixed-decoders.js");
+        let out = reduce(source).expect("mixed plain/RC4 table checksum");
+        assert!(out.contains("\"child_process\""));
+        assert!(out.contains("\"runInContext\""));
+        assert!(out.contains("\"ordinary text\""));
     }
     #[test]
     fn reduces_base64_proxy_chains_and_constant_string_joins() {

@@ -129,7 +129,11 @@ fn rule_start_re() -> Option<&'static regex::Regex> {
 /// itself small avoids holding 100k × 16-byte tuples per high-match pattern
 /// when only the first ~16 are ever read; on 16 rayon workers the savings
 /// add up to GBs of in-flight memory during heavy YARA-density runs.
+// Evidence is a presentation budget. Rule conditions need a separate,
+// bounded candidate budget: @a[n], #a and offset loops can depend on
+// occurrences after the first eight.
 const MAX_PATTERN_MATCHES: usize = 8;
+const MAX_SCANNER_PATTERN_MATCHES: usize = 4096;
 
 /// Maximum scanners to cache per thread in the engine tier cache.
 ///
@@ -1913,15 +1917,10 @@ impl YaraEngine {
                 let mut entry = cached_scanner::CachedScanner::new(Arc::clone(rules));
                 entry.with(|s| {
                     s.set_timeout(Duration::from_secs(1200));
-                    // Cap per-pattern matches at the same limit cleave collects.
-                    // yara-x's default is 1,000,000 — a pathological high-match
-                    // pattern would otherwise store that many `Match` structs in
-                    // native heap per scanner (GBs in-flight on dense inputs).
-                    // cleave only ever reads the first `MAX_PATTERN_MATCHES` ranges,
-                    // so storing more is pure waste. This also caps the count seen by
-                    // third-party rule conditions (`#a`); conditions relying on
-                    // counts >= MAX_PATTERN_MATCHES are not used in this deployment.
-                    s.max_matches_per_pattern(MAX_PATTERN_MATCHES);
+                    // Keep candidate evaluation bounded without truncating it to
+                    // the eight ranges retained for display. Native decoder rules
+                    // routinely inspect dozens of sites before a target matches.
+                    s.max_matches_per_pattern(MAX_SCANNER_PATTERN_MATCHES);
                 });
                 tracing::debug!("Created new YARA scanner for tier (ptr={:#x})", key);
                 cache.put(key, entry);
@@ -3281,6 +3280,30 @@ mod tests {
             .unwrap();
         engine.populated_tiers.insert(bucket.to_string());
         engine.rule_counts.0 += sources.len();
+    }
+
+    #[test]
+    fn late_pattern_candidates_are_evaluated_before_evidence_is_capped() {
+        let mut compiler = yara_x::Compiler::new();
+        compiler
+            .add_source(
+                r#"rule late_candidate {
+            strings: $a = "marker"
+            condition: #a == 32 and @a[25] == 144
+        }"#,
+            )
+            .unwrap();
+        let rules = Arc::new(compiler.build());
+        let matched = YaraEngine::run_scanner(&rules, b"marker".repeat(32).as_slice()).unwrap();
+        assert_eq!(matched.len(), 1);
+        assert_eq!(matched[0].patterns[0].1.len(), MAX_PATTERN_MATCHES);
+        for count in [8, 24, 31, 33] {
+            assert!(
+                YaraEngine::run_scanner(&rules, b"marker".repeat(count).as_slice())
+                    .unwrap()
+                    .is_empty()
+            );
+        }
     }
 
     #[test]

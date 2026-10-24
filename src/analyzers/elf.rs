@@ -381,12 +381,12 @@ impl ElfAnalyzer {
             // as ELF at all). Emit the structural finding, salvage
             // architecture from the raw header, and fall back to rizin
             // via the shared cached path.
-            let err_msg = report
-                .metadata
-                .errors
+            let err_msg = ctx
+                .parsed
+                .errors()
                 .iter()
-                .find(|e| e.contains("elf-parse"))
-                .cloned()
+                .find(|e| e.stage == filefacts::Stage::ElfParse)
+                .map(|e| e.message.clone())
                 .unwrap_or_default();
             report.findings.push(malformed_header_finding(
                 &report.target.path,
@@ -1058,16 +1058,41 @@ impl ElfAnalyzer {
                 // fixed reason in the finding. See `upx::classify_failure`.
                 tracing::debug!("UPX decompression failed: {}", e);
                 let failure = crate::upx::classify_failure(&e);
+                if let Some(finding) = crate::upx::standard_unpack_refusal(&e) {
+                    report.findings.push(finding);
+                }
                 report.findings.push(
                     Finding::structural(
                         "metadata/binary/layout/compression::upx-decompression-failed".to_string(),
                         failure.description.to_string(),
                         1.0,
                     )
-                    // A checksum mismatch can result from corruption or mutation.
-                    // Tool refusal alone establishes neither evasion nor hostility.
                     .with_criticality(Criticality::Notable),
                 );
+                // Artifact-specific integrity failure, distinct from missing tools,
+                // timeouts and size limits. The finding states the evidence rather
+                // than asserting a particular payload or malware family.
+                if failure.invalid_image {
+                    report.findings.push(
+                        Finding::structural(
+                            "metadata/binary/layout/compression::upx-invalid-packed-image"
+                                .to_string(),
+                            "UPX-like image has invalid or non-packed structure".to_string(),
+                            1.0,
+                        )
+                        .with_criticality(Criticality::Suspicious),
+                    );
+                }
+                if failure.checksum_mismatch {
+                    report.findings.push(
+                        Finding::structural(
+                            "metadata/binary/layout/compression::upx-checksum-mismatch".to_string(),
+                            "UPX-packed image fails checksum validation".to_string(),
+                            1.0,
+                        )
+                        .with_criticality(Criticality::Suspicious),
+                    );
+                }
             }
         }
 
@@ -1158,6 +1183,16 @@ impl Analyzer for ElfAnalyzer {
 /// truncated downloads lose the table the same way. Suspicious, except in the
 /// known-benign layouts below.
 fn malformed_header_finding(path: &str, data: &[u8], err_msg: &str) -> Finding {
+    // ELF string tables are byte strings, not a UTF-8 contract. A parser's
+    // Unicode restriction does not prove a malformed header or anti-analysis.
+    if err_msg.contains("invalid utf8") || err_msg.contains("invalid UTF-8") {
+        return Finding::structural(
+            "metadata/binary/header/parse::elf-non-utf8-parser-limit".to_string(),
+            format!("ELF parser rejected non-UTF8 metadata: {err_msg}"),
+            1.0,
+        )
+        .with_criticality(Criticality::Notable);
+    }
     let mut crit = Criticality::Suspicious;
     if path.contains("!!embedded") {
         crit = Criticality::Notable;
@@ -1720,5 +1755,22 @@ mod tests {
             !UPXDecompressor::is_upx_packed(&data_lowercase),
             "Should not detect lowercase upx!"
         );
+    }
+}
+
+#[cfg(test)]
+mod utf8_parser_limit_tests {
+    use super::*;
+    #[test]
+    fn non_utf8_metadata_is_not_header_evasion() {
+        let f = malformed_header_finding("renamed.so", b"\x7fELF", "bad input invalid utf8 (36)");
+        assert_eq!(f.crit, Criticality::Notable);
+        assert!(f.attack.is_none());
+        assert!(f.id.starts_with("metadata/"));
+    }
+    #[test]
+    fn broken_extent_remains_suspicious() {
+        let f = malformed_header_finding("renamed.so", b"\x7fELF", "section exceeds file");
+        assert_eq!(f.crit, Criticality::Suspicious);
     }
 }

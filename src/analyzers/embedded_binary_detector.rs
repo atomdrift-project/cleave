@@ -26,9 +26,6 @@ const MIN_BINARY_SIZE: usize = 512;
 /// Tiny packer stubs often mimic ELF headers without carrying a real payload.
 const MIN_EMBEDDED_ELF_SIZE: usize = 8 * 1024;
 
-/// Maximum credible PE SizeOfImage (500 MB).
-const MAX_PE_IMAGE_SIZE: usize = 500 * 1024 * 1024;
-
 /// Kind of embedded binary detected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EmbeddedKind {
@@ -486,10 +483,6 @@ fn validate_pe(data: &[u8], offset: usize) -> Option<EmbeddedBinary> {
         }
     }
 
-    let size_of_image = read_u32_le(data, pe_base + 24 + 56)
-        .map(|soi| soi as usize)
-        .filter(|&soi| (MIN_BINARY_SIZE..=MAX_PE_IMAGE_SIZE).contains(&soi));
-
     let embedded_data = &data[offset..];
     let format_hint = detect_embedded_pe_format(embedded_data);
     let sfx_size = match format_hint {
@@ -497,11 +490,10 @@ fn validate_pe(data: &[u8], offset: usize) -> Option<EmbeddedBinary> {
         Some("inno") => Some(available_size),
         _ => None,
     };
-    let estimated_size = size_of_image
-        .unwrap_or(physical_size)
-        .max(physical_size)
-        .max(sfx_size.unwrap_or(0))
-        .min(available_size);
+    // SizeOfImage describes the loaded virtual address space. Applying it
+    // to an on-disk child consumes neighboring resources and can mix their
+    // code, metadata, or signatures into this child's analysis.
+    let estimated_size = physical_size.max(sfx_size.unwrap_or(0)).min(available_size);
 
     if estimated_size < MIN_BINARY_SIZE {
         return None;
@@ -824,6 +816,29 @@ fn read_u64_class(data: &[u8], offset: usize, class: u8, le: bool) -> Option<u64
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn physical_child_does_not_consume_neighbor_from_virtual_image_size() {
+        let mut data = Vec::new();
+        make_synthetic_pe(&mut data, 0);
+        make_synthetic_pe(&mut data, 1024);
+        data[0x80 + 80..0x80 + 84].copy_from_slice(&0x100000u32.to_le_bytes());
+        let first = validate_pe(&data, 0).unwrap();
+        assert_eq!(first.estimated_size, 1024);
+        assert_eq!(validate_pe(&data, 1024).unwrap().estimated_size, 1024);
+    }
+
+    #[test]
+    fn physical_child_keeps_its_file_offset_certificate() {
+        let mut data = Vec::new();
+        make_synthetic_pe(&mut data, 0);
+        let security = 0x80 + 24 + 96 + 4 * 8;
+        data[security..security + 4].copy_from_slice(&1024u32.to_le_bytes());
+        data[security + 4..security + 8].copy_from_slice(&128u32.to_le_bytes());
+        assert_eq!(validate_pe(&data, 0).unwrap().estimated_size, 1152);
+        data[security + 4..security + 8].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(validate_pe(&data, 0).unwrap().estimated_size, 1024);
+    }
 
     /// Build a minimal but structurally valid PE32 blob at the given offset within a buffer.
     fn make_synthetic_pe(buf: &mut Vec<u8>, offset: usize) {

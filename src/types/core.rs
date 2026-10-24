@@ -1420,7 +1420,7 @@ impl AnalysisReport {
                                 file: member.id,
                                 ..Default::default()
                             });
-                        if let Some((line, offset)) = note_location(member, trait_ref) {
+                        if let Some((line, offset)) = evidence_location(member, trait_ref) {
                             let candidate = (line, offset);
                             let current = (entry.line, entry.offset);
                             if source_location_order(candidate) < source_location_order(current) {
@@ -2164,8 +2164,6 @@ impl FileAnalysis {
             findings,
             suppressions,
             context,
-            context_costs: Vec::new(),
-            render_locality: Vec::new(),
             traits,
             structure,
             functions,
@@ -2647,33 +2645,22 @@ fn merge_finding(existing: &mut Finding, new: Finding) {
     }
 }
 
-/// Earliest concrete context-note location for finding `id` in `file`, as
-/// `(line, offset)`. `line` is the 1-based source line for textual chunks (those
-/// carrying a `line`), advanced from the chunk's start past any newlines before
-/// the match; `offset` is the match's byte offset. Returns `None` when no note
-/// pins the finding — e.g. a metric or manifest-field-presence trait.
-fn note_location(file: &FileAnalysis, id: &str) -> Option<(Option<u64>, Option<u64>)> {
-    let mut best = None;
-    for line in &file.context {
-        for note in &line.notes {
-            if note.id == id {
-                let src_line = line.line.map(|start| {
-                    let rel = usize::try_from(note.off.saturating_sub(line.loc))
-                        .unwrap_or(usize::MAX)
-                        .min(line.data.len());
-                    let extra = line.data[..rel].iter().filter(|&&b| b == b'\n').count() as u64;
-                    start + extra
-                });
-                let candidate = (src_line, Some(note.off));
-                if best.is_none_or(|current| {
-                    source_location_order(candidate) < source_location_order(current)
-                }) {
-                    best = Some(candidate);
-                }
-            }
-        }
-    }
-    best
+/// Where finding `id`'s evidence sits in `file`, as `(line, offset)`: its
+/// first matched byte, and the 1-based source line when a textual window holds
+/// that byte. `None` when the finding matched no byte of this file — e.g. a
+/// metric or manifest-field-presence trait.
+fn evidence_location(file: &FileAnalysis, id: &str) -> Option<(Option<u64>, Option<u64>)> {
+    let finding = file
+        .findings
+        .iter()
+        .find(|f| f.id == id && f.src.is_none())?;
+    let [off, _] = *crate::types::traits_findings::finding_spans(finding).first()?;
+    let line = file.context.iter().find_map(|w| {
+        let rel = usize::try_from(off.checked_sub(w.loc)?).ok()?;
+        let before = w.data.get(..rel).filter(|_| rel < w.data.len())?;
+        Some(w.line? + before.iter().filter(|&&b| b == b'\n').count() as u64)
+    });
+    Some((line, Some(off)))
 }
 
 /// Stable ordering for representative composite-source locations. Prefer the
@@ -3394,7 +3381,7 @@ mod tests {
     #[test]
     fn attach_composite_sources_ties_composite_to_members_with_locations() {
         use super::super::file_analysis::ARCHIVE_DELIMITER;
-        use super::super::traits_findings::{ContextLine, Note};
+        use super::super::traits_findings::ContextLine;
 
         // Container with a cross-file composite referencing two components.
         let mut container =
@@ -3416,19 +3403,12 @@ mod tests {
         );
         m1.depth = 1;
         m1.findings = vec![test_finding("comp/manifest", Criticality::Component)];
+        m1.findings[0].precomputed_spans = Some(vec![[40, 5]]);
         m1.context = vec![ContextLine {
             loc: 40, // byte offset of the chunk start
             line: Some(3),
             col: Some(1),
             data: b"  \"preinstall\": \"node x\"".to_vec(),
-            notes: vec![Note {
-                crit: Criticality::Component,
-                id: "comp/manifest".into(),
-                desc: String::new().into(),
-                off: 40,
-                len: 5,
-                conf: 0.9,
-            }],
         }];
 
         // Member 2: a binary carrying comp/payload, anchored to a byte offset.
@@ -3441,19 +3421,12 @@ mod tests {
         );
         m2.depth = 1;
         m2.findings = vec![test_finding("comp/payload", Criticality::Suspicious)];
+        m2.findings[0].precomputed_spans = Some(vec![[0x1234, 4]]);
         m2.context = vec![ContextLine {
             loc: 0x1234,
             line: None, // byte-addressed (binary) → no source line/col
             col: None,
             data: vec![0u8; 4],
-            notes: vec![Note {
-                crit: Criticality::Suspicious,
-                id: "comp/payload".into(),
-                desc: String::new().into(),
-                off: 0x1234,
-                len: 4,
-                conf: 0.9,
-            }],
         }];
 
         let mut files = vec![container, m1, m2];
@@ -3480,9 +3453,9 @@ mod tests {
     }
 
     #[test]
-    fn attach_composite_sources_chooses_earliest_note_independent_of_input_order() {
+    fn attach_composite_sources_chooses_earliest_evidence_independent_of_input_order() {
         use super::super::file_analysis::ARCHIVE_DELIMITER;
-        use super::super::traits_findings::{ContextLine, Note};
+        use super::super::traits_findings::ContextLine;
 
         let run = |refs: &[&str], reverse_context: bool| {
             let mut container =
@@ -3503,47 +3476,25 @@ mod tests {
                 test_finding("comp/path-z", Criticality::Component),
                 test_finding("comp/path-a", Criticality::Component),
             ];
+            member.findings[0].precomputed_spans = Some(vec![[80, 5]]);
+            member.findings[1].precomputed_spans = Some(vec![[20, 5]]);
             let earlier = ContextLine {
                 loc: 10,
                 line: Some(2),
                 col: Some(1),
-                data: b"first path".to_vec(),
-                notes: vec![Note {
-                    crit: Criticality::Component,
-                    id: "comp/path-a".into(),
-                    desc: String::new().into(),
-                    off: 20,
-                    len: 5,
-                    conf: 0.9,
-                }],
+                data: b"first path: a/b".to_vec(),
             };
             let later = ContextLine {
-                loc: 50,
+                loc: 70,
                 line: Some(5),
                 col: Some(1),
                 data: b"second path".to_vec(),
-                notes: vec![Note {
-                    crit: Criticality::Component,
-                    id: "comp/path-z".into(),
-                    desc: String::new().into(),
-                    off: 60,
-                    len: 5,
-                    conf: 0.9,
-                }],
             };
-            let mut notes = if reverse_context {
+            member.context = if reverse_context {
                 vec![later, earlier]
             } else {
                 vec![earlier, later]
             };
-            if reverse_context {
-                notes[0].notes[0].off = 80;
-                notes[0].loc = 70;
-            } else {
-                notes[1].notes[0].off = 80;
-                notes[1].loc = 70;
-            }
-            member.context = notes;
 
             let mut files = vec![container, member];
             AnalysisReport::attach_composite_sources(&mut files);
@@ -3566,7 +3517,7 @@ mod tests {
         // archive path (linked by `parent_id`). Grafting must re-resolve sources
         // so both legs surface — the member by path, the registry leg by parent.
         use super::super::file_analysis::ARCHIVE_DELIMITER;
-        use super::super::traits_findings::{ContextLine, Note};
+        use super::super::traits_findings::ContextLine;
 
         let mut report = AnalysisReport::new(test_target());
 
@@ -3594,19 +3545,12 @@ mod tests {
             "objectives/exfiltration::post",
             Criticality::Component,
         )];
+        member.findings[0].precomputed_spans = Some(vec![[200, 5]]);
         member.context = vec![ContextLine {
             loc: 200,
             line: Some(12),
             col: Some(1),
             data: b"fetch(url, {method:'POST'})".to_vec(),
-            notes: vec![Note {
-                crit: Criticality::Component,
-                id: "objectives/exfiltration::post".into(),
-                desc: String::new().into(),
-                off: 200,
-                len: 5,
-                conf: 0.9,
-            }],
         }];
 
         // Registry provenance child: a direct child of the artifact by parent_id,

@@ -106,10 +106,10 @@ fn raw_ip_url_in_an_archive_member_keeps_its_annotation() -> anyhow::Result<()> 
         "no trait matched the raw-IP URL at byte {ip_at}; fixture no longer exercises the bug"
     );
 
-    let annotated = member
-        .context
+    let annotated = cleave::context::notes(&member.findings, &member.context)
         .iter()
-        .any(|line| line.notes.iter().any(|n| n.off >= ip_at && n.off < ip_end));
+        .flatten()
+        .any(|n| n.off >= ip_at && n.off < ip_end);
     assert!(
         annotated,
         "the raw-IP URL matched {matched:?} but rendered no annotation: \

@@ -915,7 +915,7 @@ fn test_eval_string_substr_match() {
 // version-resource / derived entry) must still anchor its evidence at a
 // resolvable location — its section start, else `0x0` — rather than emitting a
 // `None` location. A locationless content match reaches
-// `context::fallback_anchor`, which logs it as a matcher bug ("content match has
+// `context::report_unanchored`, which logs it as a matcher bug ("content match has
 // no file offset"). Regression for that error flood on PE files. The substr form
 // takes `eval_text`'s general matching loop (not the exact fast path).
 #[test]
@@ -955,7 +955,7 @@ fn test_eval_text_offsetless_string_still_anchors() {
     let result = eval_text(&params, None, &ctx, None);
 
     assert!(result.matched);
-    // Before the fix this was `None`, stranding the match in `fallback_anchor`.
+    // Before the fix this was `None`, stranding the match in `report_unanchored`.
     assert!(
         result.evidence[0].location.is_some(),
         "offset-less text match must still carry a location"

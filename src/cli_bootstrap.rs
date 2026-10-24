@@ -34,7 +34,8 @@ fn scoped_filter(level: &str) -> String {
 }
 
 /// Field formatter that escapes terminal control characters in every event
-/// field, not just the message.
+/// field, not just the message. Wrapped in `.delimited(" ")` at each use:
+/// a custom field formatter writes fields back to back unless told otherwise.
 ///
 /// tracing-subscriber's default formatter escapes the `message` field and
 /// error values, but writes named fields (e.g. `path = %display`) raw — and
@@ -65,12 +66,8 @@ fn sanitized_field(
 
 pub(crate) fn apply_runtime_overrides(
     traits_dir: Option<&str>,
-    enriched: bool,
     disabled: &cli::DisabledComponents,
 ) {
-    if enriched {
-        cleave::enriched::set_enabled(true);
-    }
     if let Some(traits_dir) = traits_dir {
         cleave::traits_repo::set_override_dir(Some(std::path::PathBuf::from(traits_dir)));
     }
@@ -161,7 +158,8 @@ pub(crate) fn init_logging(
             }
         }
 
-        let fields = tracing_subscriber::fmt::format::debug_fn(sanitized_field);
+        use tracing_subscriber::field::MakeExt;
+        let fields = tracing_subscriber::fmt::format::debug_fn(sanitized_field).delimited(" ");
 
         let stderr_layer = tracing_subscriber::fmt::layer()
             .with_target(true)
@@ -203,7 +201,10 @@ pub(crate) fn init_logging(
             .with_thread_ids(false)
             .with_line_number(true)
             .with_writer(std::io::stderr)
-            .fmt_fields(tracing_subscriber::fmt::format::debug_fn(sanitized_field))
+            .fmt_fields({
+                use tracing_subscriber::field::MakeExt;
+                tracing_subscriber::fmt::format::debug_fn(sanitized_field).delimited(" ")
+            })
             .init();
     }
 }
@@ -345,9 +346,13 @@ pub(crate) fn configure_rayon_thread_pool(validating: bool) {
 pub(crate) fn print_version_banner(format: cli::OutputFormat) {
     if format == cli::OutputFormat::Terminal {
         let traits_ver = cleave::traits_repo::version()
-            .map(|v| format!(" (traits: {v})"))
+            .map(|v| format!(": {v}"))
             .unwrap_or_default();
-        eprintln!("cleave v{}{traits_ver}\n", env!("CARGO_PKG_VERSION"));
+        eprintln!(
+            "cleave v{} ({} traits{traits_ver})\n",
+            env!("CARGO_PKG_VERSION"),
+            cleave::traits_repo::Edition::current().styled()
+        );
     }
 }
 

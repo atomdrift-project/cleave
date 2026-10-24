@@ -142,17 +142,10 @@ pub struct Args {
     #[arg(short, long, global = true)]
     pub output: Option<String>,
 
-    /// Experimental context retention (render command only).
+    /// Keep every fact in JSON output — imports, exports, functions and
+    /// sections — not only the ones cleave's models read.
     #[arg(long, global = true)]
-    pub trim_context: bool,
-
-    /// Experimental: retain the audited shipping Azoth fact inputs (render JSON only).
-    #[arg(long, global = true)]
-    pub model_facts: bool,
-
-    /// Experimental: share exactly equal analyses in diagnostic joined JSON (render only).
-    #[arg(long, global = true)]
-    pub share_analyses: bool,
+    pub full_facts: bool,
 
     /// Verbose logging
     #[arg(short, long)]
@@ -195,9 +188,13 @@ pub struct Args {
     #[arg(long, value_name = "DIR")]
     pub traits_dir: Option<String>,
 
-    /// Use the isotope13 Enriched ruleset: the private rules, fresh the hour
-    /// they clear QA. Requires a subscription token from ISOTOPE13_TOKEN or the
-    /// saved one, and asks for one on a terminal. Env: ATOMDRIFT_ENRICHED=1
+    /// Insist on isotope13 Enriched: the latest rules, the moment they clear
+    /// QA. A computer that holds a token (ISOTOPE13_TOKEN, or the one saved
+    /// when it was connected) uses them without this flag. With it, a
+    /// computer that holds none is connected — a terminal shows a code to
+    /// approve at dash.isotope13.io — and a refused token stops the run
+    /// instead of falling back to the open-source rules. Env:
+    /// ATOMDRIFT_ENRICHED=1; =0 keeps the open-source rules.
     #[arg(long)]
     pub enriched: bool,
 
@@ -248,6 +245,16 @@ impl Args {
             DisabledComponents::default()
         } else {
             DisabledComponents::parse(&self.disable)
+        }
+    }
+
+    /// Which facts JSON output keeps: the models' inputs unless `--full-facts`.
+    #[must_use]
+    pub fn facts(&self) -> crate::types::Facts {
+        if self.full_facts {
+            crate::types::Facts::Full
+        } else {
+            crate::types::Facts::Model
         }
     }
 
@@ -1001,7 +1008,7 @@ pub enum DetectFileType {
 /// Output format for analysis and extraction commands.
 #[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq)]
 pub enum OutputFormat {
-    /// Raw JSON snapshot with capture annotations for exact offline rendering
+    /// Raw JSON snapshot of the in-memory report, for offline rendering
     Snapshot,
     /// JSON output (single object)
     Json,

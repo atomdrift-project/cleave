@@ -25,6 +25,7 @@ struct AnalyzeDispatchContext<'a> {
     max_crit: Option<cleave::Criticality>,
     min_file_crit: Option<cleave::Criticality>,
     max_file_crit: Option<cleave::Criticality>,
+    facts: cleave::types::Facts,
     all_files: bool,
 }
 
@@ -57,6 +58,7 @@ fn analyze_targets(targets: &[String], ctx: &AnalyzeDispatchContext<'_>) -> Resu
             max_crit: ctx.max_crit,
             min_file_crit: ctx.min_file_crit,
             max_file_crit: ctx.max_file_crit,
+            facts: ctx.facts,
         })?);
     }
     Ok(results.join(""))
@@ -79,35 +81,6 @@ fn run_analyze_paths(
     analyze_targets(&expanded, ctx)
 }
 
-fn run_version() {
-    use std::time::SystemTime;
-
-    let info = cleave::version_info();
-
-    println!("cleave {}", env!("CARGO_PKG_VERSION"));
-
-    let traits_ver = info.traits_version.as_deref().unwrap_or("unknown");
-    let mtime_str = info
-        .traits_mtime
-        .and_then(|t| {
-            t.duration_since(SystemTime::UNIX_EPOCH).ok().map(|d| {
-                let secs = d.as_secs() as i64;
-                let dt = chrono::DateTime::from_timestamp(secs, 0)?;
-                Some(dt.format("%Y-%m-%d %H:%M UTC").to_string())
-            })
-        })
-        .flatten()
-        .unwrap_or_else(|| "unknown".into());
-    println!("traits  {} ({})", traits_ver, mtime_str);
-    println!(
-        "rules   {} atomic, {} composite",
-        info.trait_count, info.composite_count
-    );
-    println!("yara    {} rules", info.yara_rules);
-    let total = info.trait_count + info.composite_count + info.yara_rules;
-    println!("total   {} rules", total);
-}
-
 fn run_update_rules(force: bool, check: bool, pin: Option<String>) -> Result<()> {
     let dir = cleave::traits_repo::install_target();
     if let Some(commit) = pin {
@@ -115,7 +88,7 @@ fn run_update_rules(force: bool, check: bool, pin: Option<String>) -> Result<()>
     } else if check {
         cleave::rule_update::check(&dir).map_err(anyhow::Error::msg)?;
     } else {
-        cleave::rule_update::update(&dir, force, false).map_err(anyhow::Error::msg)?;
+        cleave::rule_update::refresh(force, false).map_err(anyhow::Error::msg)?;
     }
 
     Ok(())
@@ -167,6 +140,7 @@ pub(crate) struct DispatchOptions<'a> {
     pub max_crit: Option<cleave::Criticality>,
     pub min_file_crit: Option<cleave::Criticality>,
     pub max_file_crit: Option<cleave::Criticality>,
+    pub facts: cleave::types::Facts,
     pub all_files: bool,
 }
 
@@ -189,6 +163,7 @@ pub(crate) fn build_dispatch_context<'a>(opts: &DispatchOptions<'a>) -> Dispatch
             max_crit: opts.max_crit,
             min_file_crit: opts.min_file_crit,
             max_file_crit: opts.max_file_crit,
+            facts: opts.facts,
             all_files: opts.all_files,
         },
     }
@@ -219,7 +194,10 @@ pub(crate) fn dispatch_command(
             return Ok(None);
         }
         Some(cli::Command::Version) => {
-            run_version();
+            println!(
+                "{}",
+                cleave::version_report("cleave", env!("CARGO_PKG_VERSION"))
+            );
             return Ok(None);
         }
         #[cfg(feature = "lint")]

@@ -101,113 +101,82 @@ fn is_zero_usize(n: &usize) -> bool {
 // (value/method) is synthesizable from the content slice if ever needed.
 // ========================================================================
 
-/// One unit of merged context: a contiguous run of raw file bytes plus the
-/// findings whose match falls inside it. Analysis emits the bytes; rendering
-/// them as text or a hex+ascii dump is a render-time concern derived from the
-/// file's `type`. A unit with no notes is pure context (`-` in tiny output); a
-/// unit with notes is a hit (`:`).
+/// One window of captured context: a contiguous run of raw file bytes around
+/// one or more findings. Analysis emits the bytes; rendering them as text or a
+/// hex+ascii dump is a render-time concern derived from the file's `type`. The
+/// notes that label a window are derived from the file's findings when it
+/// renders (`context::notes`); they are not stored.
 ///
 /// `loc` is the absolute byte offset of `data[0]` — always, for binary and text
 /// alike, never a line number. `line` and `col` are its 1-based source
-/// position, present for textual chunks and absent for binaries; they are a
-/// derived label for byte-blind consumers. A note's own position is `line`/`col`
-/// advanced by the newlines and columns between `data[0]` and `note.off`, and
-/// its highlight spans `note.off - loc .. note.off - loc + note.len`.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+/// position, present for textual chunks and absent for binaries.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(try_from = "ContextWire")]
 pub struct ContextLine {
-    /// Absolute byte offset of `data[0]`. Always a byte offset — binary and
-    /// text alike; never a line number.
+    /// Absolute byte offset of `data[0]`.
     #[serde(rename = "ln")]
     pub loc: u64,
-    /// 1-based source line of `data[0]`. `Some` for textual chunks; `None` for
-    /// binary windows, which carry no line structure.
+    /// 1-based source line of `data[0]`; `None` for binary windows.
     #[serde(rename = "line", default, skip_serializing_if = "Option::is_none")]
     pub line: Option<u64>,
-    /// 1-based column of `data[0]` within its line. `Some` for textual chunks;
-    /// `None` for binary. Exceeds 1 when the chunk is a mid-line slice of an
-    /// ultra-long line.
+    /// 1-based column of `data[0]` within its line; `None` for binary. Exceeds
+    /// 1 when the chunk is a mid-line slice of an ultra-long line.
     #[serde(rename = "col", default, skip_serializing_if = "Option::is_none")]
     pub col: Option<u64>,
-    /// Raw content bytes, Z85-encoded. Binary files render as hex+ascii;
-    /// textual files render as decoded text. Render mode is derived from the
-    /// file's `type` field — no per-line flag needed.
-    #[serde(rename = "b", with = "crate::types::z85::serde_z85")]
+    /// Raw content bytes, written as byte text (`s`, see `byte_text`).
+    #[serde(rename = "s", serialize_with = "crate::types::byte_text::serialize")]
     pub data: Vec<u8>,
-    /// Findings whose match falls on this unit. Serialized (as `n`) so a cached
-    /// report round-trips losslessly — the renderer reads these notes directly,
-    /// and they're rebuilt only during a fresh capture, not on a cache hit.
-    /// Omitted when empty (pure-context lines), so most rows stay lean; public
-    /// consumers (prism) can still locate matches via `finding.spans` × ctx.
-    #[serde(rename = "n", default, skip_serializing_if = "Vec::is_empty")]
-    pub notes: Vec<Note>,
 }
 
-/// Serialize/deserialize a [`Criticality`] as its ordinal `0..=5`, matching the
-/// compact finding `crit` field and keeping context notes small.
-pub(crate) mod crit_ordinal {
-    use super::Criticality;
-    use serde::{Deserialize, Deserializer, Serializer};
+/// A window as stored: bytes as byte text (`s`), or as Z85 (`b`) in reports
+/// written before schema 9. Notes (`n`) in old reports are ignored.
+#[derive(Deserialize)]
+struct ContextWire {
+    ln: u64,
+    #[serde(default)]
+    line: Option<u64>,
+    #[serde(default)]
+    col: Option<u64>,
+    s: Option<String>,
+    b: Option<String>,
+}
 
-    // Stable wire ordinals, decoupled from the enum's `as u8` discriminant so that
-    // inserting a variant (e.g. `Exception`) never shifts the serialized values.
-    // `Exception` takes 6 — past the original 0..=5 range — so existing caches stay
-    // valid. Keep `serialize` and `deserialize` exact inverses.
-    pub(crate) fn serialize<S: Serializer>(c: &Criticality, s: S) -> Result<S::Ok, S::Error> {
-        let ordinal: u8 = match c {
-            Criticality::Filtered => 0,
-            Criticality::Component => 1,
-            Criticality::Baseline => 2,
-            Criticality::Notable => 3,
-            Criticality::Suspicious => 4,
-            Criticality::Hostile => 5,
-            Criticality::Exception => 6,
-        };
-        s.serialize_u8(ordinal)
-    }
+impl TryFrom<ContextWire> for ContextLine {
+    type Error = String;
 
-    /// An unknown ordinal is an error, not `Baseline`: silently demoting a
-    /// note from a newer or corrupt producer would hide what it marked. A cache
-    /// entry that fails here is a miss and gets re-analyzed.
-    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Criticality, D::Error> {
-        Ok(match u8::deserialize(d)? {
-            0 => Criticality::Filtered,
-            1 => Criticality::Component,
-            2 => Criticality::Baseline,
-            3 => Criticality::Notable,
-            4 => Criticality::Suspicious,
-            5 => Criticality::Hostile,
-            6 => Criticality::Exception,
-            other => {
-                return Err(serde::de::Error::custom(format!(
-                    "unknown criticality ordinal {other}"
-                )));
+    fn try_from(w: ContextWire) -> Result<Self, Self::Error> {
+        let data = match (w.s, w.b) {
+            (Some(text), None) => {
+                crate::types::byte_text::decode(&text).map_err(|e| e.to_string())?
             }
+            (None, Some(z85)) => crate::types::z85::decode(&z85).map_err(|e| e.to_string())?,
+            (Some(_), Some(_)) => return Err("context window carries both `s` and `b`".into()),
+            (None, None) => return Err("context window carries no bytes".into()),
+        };
+        Ok(Self {
+            loc: w.ln,
+            line: w.line,
+            col: w.col,
+            data,
         })
     }
 }
 
-/// A finding annotation on a [`ContextLine`] — one trait's match at this spot.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+/// A finding's label on a context window: one trait's match at this spot.
+/// Derived at render time by `context::notes`; never stored.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Note {
     /// Criticality of the annotating finding.
-    #[serde(rename = "c", with = "crit_ordinal")]
     pub crit: Criticality,
     /// Finding identifier. Interned: shares the finding's allocation.
-    #[serde(rename = "i")]
     pub id: super::Istr,
     /// Human-readable description (may be empty). Interned.
-    #[serde(rename = "d", default, skip_serializing_if = "super::Istr::is_empty")]
     pub desc: super::Istr,
-    /// Exact byte offset of the match (the "Location").
-    #[serde(rename = "o")]
+    /// Exact byte offset of the match.
     pub off: u64,
-    /// Match length in bytes (the "Length"); 0 when unknown.
-    #[serde(rename = "z", default, skip_serializing_if = "super::is_zero_u32")]
+    /// Match length in bytes, capped for preview; 0 when unknown.
     pub len: u32,
-    /// Finding confidence (used to rank overlapping matches: the highest
-    /// `conf × crit` wins). Serialized (as `cf`) so a cached note round-trips
-    /// with the strength the render-time dedup needs; omitted when zero.
-    #[serde(rename = "cf", default, skip_serializing_if = "super::is_zero_f32")]
+    /// Finding confidence, used with criticality to rank overlapping matches.
     pub conf: f32,
 }
 
@@ -1006,25 +975,6 @@ mod tests {
         assert_eq!(forward[0].by[0].spans, [[2, 4], [8, 4]]);
     }
 
-    /// Every criticality round-trips through its wire ordinal, and an unknown
-    /// ordinal is rejected instead of read as `Baseline`.
-    #[test]
-    fn note_crit_ordinals_round_trip_and_reject_unknowns() {
-        use super::Note;
-        let mut seen = std::collections::HashSet::new();
-        for ordinal in 0..=6 {
-            let wire = format!(r#"{{"c":{ordinal},"i":"test/id","o":0}}"#);
-            let note: Note = serde_json::from_str(&wire).expect("decode note");
-            assert!(
-                seen.insert(format!("{:?}", note.crit)),
-                "ordinal {ordinal} reused"
-            );
-            let encoded = serde_json::to_string(&note).expect("encode note");
-            assert!(encoded.contains(&format!(r#""c":{ordinal}"#)), "{encoded}");
-        }
-        assert!(serde_json::from_str::<Note>(r#"{"c":9,"i":"test/id","o":0}"#).is_err());
-    }
-
     /// Fold-time bounding must be idempotent with serialization: the bounded
     /// form re-bounds to itself, so a member bounded at fold serializes
     /// byte-identically to one bounded only on the wire.
@@ -1495,5 +1445,47 @@ impl SuppressionSink {
             }
         }
         merged
+    }
+}
+
+#[cfg(test)]
+mod context_line_tests {
+    #![allow(clippy::unwrap_used)]
+    use super::ContextLine;
+
+    fn window(data: &[u8]) -> ContextLine {
+        ContextLine {
+            loc: 7,
+            line: Some(2),
+            col: Some(1),
+            data: data.to_vec(),
+        }
+    }
+
+    #[test]
+    fn writes_byte_text_and_reads_it_back() {
+        let w = window(b"exec(\0)\n");
+        let json = serde_json::to_string(&w).unwrap();
+        assert_eq!(
+            json,
+            "{\"ln\":7,\"line\":2,\"col\":1,\"s\":\"exec(\u{100})\\n\"}"
+        );
+        assert_eq!(serde_json::from_str::<ContextLine>(&json).unwrap(), w);
+    }
+
+    #[test]
+    fn reads_schema_8_z85_and_ignores_stored_notes() {
+        let old = r#"{"ln":7,"line":2,"col":1,"b":"HelloWorld","n":[{"c":3,"i":"a/b","o":7}]}"#;
+        let w: ContextLine = serde_json::from_str(old).unwrap();
+        assert_eq!(w.data, [0x86, 0x4F, 0xD2, 0x6F, 0xB5, 0x59, 0xF7, 0x5B]);
+    }
+
+    #[test]
+    fn rejects_ambiguous_or_missing_bytes() {
+        assert!(
+            serde_json::from_str::<ContextLine>(r#"{"ln":0,"s":"a","b":"HelloWorld"}"#).is_err()
+        );
+        assert!(serde_json::from_str::<ContextLine>(r#"{"ln":0}"#).is_err());
+        assert!(serde_json::from_str::<ContextLine>(r#"{"ln":0,"s":"\u0000"}"#).is_err());
     }
 }

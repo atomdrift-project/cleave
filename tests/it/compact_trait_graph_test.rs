@@ -14,7 +14,10 @@ use cleave::{AnalysisOptions, analyze_file};
 fn compact_of(path: &std::path::Path) -> anyhow::Result<cleave::types::CompactReport> {
     let mut report = analyze_file(path, &AnalysisOptions::default())?;
     report.finalize();
-    Ok(cleave::types::compact_from_files(&report.files))
+    Ok(cleave::types::compact_from_files(
+        &report.files,
+        cleave::types::Facts::Full,
+    ))
 }
 
 /// A shell script wielding several behaviours that composites are built to

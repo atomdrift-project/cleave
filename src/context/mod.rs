@@ -1,196 +1,303 @@
-//! Context capture: turn a file's findings into a merged, render-ready
-//! [`ContextLine`] list — the matched content shown once, in file order,
-//! annotated with the findings that touch it.
+//! Context: the bytes around a file's findings, and the notes that label them.
 //!
-//! This is the output surface that replaces raw per-finding [`Evidence`]. Each
-//! finding contributes up to [`ATOMIC_MAX_MATCHES`] byte-addressed windows sized
-//! by its criticality ([`Criticality::hex_context`]); overlapping windows merge
-//! into one chunk. Two traits matching the same span are redundant, so the
-//! weaker ([`Strength`]) is dropped — only the strongest annotation shows. A
-//! textual file additionally carries a `LineIndex`, which labels each chunk with
-//! the 1-based source line/column of its first byte; binaries carry neither.
-//! Rendering those bytes as numbered text lines or a hex dump is solely an
-//! output concern.
+//! [`capture`] runs while a file's bytes are in hand. Each shown finding claims
+//! the bytes it matched — an atomic trait up to [`ATOMIC_MAX_MATCHES`] spans, a
+//! composite its strongest leg no stronger match already holds — widened by a
+//! criticality-sized margin ([`Criticality::hex_context`]); overlapping windows
+//! merge into one [`ContextLine`]. A textual file labels each window with the
+//! 1-based line and column of its first byte; binaries carry neither.
 //!
-//! Because the weaker of two overlapping notes is dropped rather than queued
-//! behind the winner, capture must see the *final* finding set: a note that
-//! disappears afterwards takes the annotations it outranked with it and leaves
-//! the location bare. The standalone path filters before it captures; the
-//! archive-member and embedded-payload paths capture first, so they name what
-//! the filter will delete in `doomed`.
-//!
-//! [`Evidence`]: crate::types::Evidence
+//! Notes are neither captured nor stored. [`notes`] derives them from a file's
+//! final findings whenever something renders, with the same placement capture
+//! used, so a note can never name a finding removed after capture, and a stored
+//! report renders exactly as a live one.
 
 use filefacts::FileType;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::types::{
-    AnalysisReport, ContextLine, Criticality, Finding, Note, traits_findings::MAX_EV_LOCS,
-};
+use crate::types::traits_findings::{MAX_EV_LOCS, finding_spans};
+use crate::types::{AnalysisReport, ContextLine, Criticality, Finding, Istr, Note};
 
 /// Locations shown for an atomic trait that matches in several places.
 const ATOMIC_MAX_MATCHES: usize = MAX_EV_LOCS;
 
-/// Populate `report.context` from `report.findings`, slicing windows out of
-/// `data`. Every file type uses the same byte-addressed window model.
+/// Legs a composite may be placed on. Composites reference a handful of
+/// distinguishing components; more legs add nothing.
+const MAX_LEGS: usize = 8;
+
+/// Longest match a note highlights. A located metric can span a whole
+/// concealed region; its preview must stay a few rows. The uncapped length
+/// still rides the finding's spans.
+const MAX_NOTE_LEN: u64 = 512;
+
+/// Text files at or under this size are captured whole: a header comment or
+/// docstring is often the one place that says what the code is for.
+const SMALL_TEXT_WHOLE_BYTES: u64 = 2048;
+
+/// Slice `report.context` out of `data`: one window per shown finding's
+/// placement, sized by criticality, overlapping windows merged.
 ///
-/// `doomed` names findings that are still in `report` but that the
-/// end-of-analysis low-value filter will delete
-/// (`CapabilityMapper::doomed_low_value_ids`). They are skipped so one cannot
-/// win a byte span and then vanish, silently taking the surviving annotations
-/// it outranked with it. Pass an empty set when the findings are already final.
+/// `doomed` names findings still in `report` that the end-of-analysis
+/// low-value filter will delete (`CapabilityMapper::doomed_low_value_ids`);
+/// they claim no bytes. Pass an empty set when the findings are already final.
 pub(crate) fn capture(
     report: &mut AnalysisReport,
     data: &[u8],
     file_type: FileType,
-    doomed: &FxHashSet<crate::types::Istr>,
+    doomed: &FxHashSet<Istr>,
 ) {
     if report.findings.is_empty() || data.is_empty() {
         return;
     }
-
-    // Anchor symbol matches that arrived without a byte offset before any
-    // anchoring runs, so both the matched finding and any composite that
-    // references it pick up the recovered position.
+    // Recover symbol offsets first, so a composite drawing on the symbol
+    // finds the position through its component.
     anchor_orphan_symbol_matches(&mut report.findings, data);
 
-    // Capture context for every finding that can render: Filtered noise and
-    // `doomed` (deleted right after this by the low-value filter) are the only
-    // ones skipped. Components are captured whether or not a composite references
-    // them — the LLM/tiny view's low-tier fill (`TinyOpts::low_tier_fill`) shows
-    // a top-scored file's best component/baseline traits even when nothing
-    // notable fired, and a trait without captured context would render as
-    // nothing there. Baselines were always captured; this aligns components.
-    let by_id = index_by_id(&report.findings);
     let shown: Vec<&Finding> = report
         .findings
         .iter()
-        .filter(|finding| finding.crit != Criticality::Filtered && !doomed.contains(&finding.id))
+        .filter(|f| f.crit != Criticality::Filtered && !doomed.contains(&f.id))
         .collect();
     if shown.is_empty() {
         return;
     }
+    let by_id = index_by_id(&report.findings);
+    for f in shown.iter().filter(|f| legs(f, &by_id).is_empty()) {
+        report_unanchored(f, &by_id, &report.target.path);
+    }
 
+    let total = data.len() as u64;
     let textual = file_type.is_source_code() || (!file_type.is_binary() && looks_textual(data));
-    let line_index = textual.then(|| LineIndex::new(data));
-    report.context = capture_byte_slices(
-        &shown,
-        &by_id,
-        data,
-        line_index.as_ref(),
-        &report.target.path,
-    );
+    let whole = textual && total <= SMALL_TEXT_WHOLE_BYTES;
+    let windows = place(&shown, &by_id, &Ranker::new(&shown))
+        .into_iter()
+        .map(|(note, sizing)| {
+            if whole {
+                return (0, total);
+            }
+            let (before, after) = sizing.hex_context();
+            let end = note.off + u64::from(note.len) + after;
+            (note.off.saturating_sub(before), end.min(total))
+        })
+        .collect();
+
+    let lines = textual.then(|| LineIndex::new(data));
+    report.context = merge(windows)
+        .into_iter()
+        .filter(|&(lo, hi)| lo < hi)
+        .filter_map(|(lo, hi)| {
+            let data = data.get(usize::try_from(lo).ok()?..usize::try_from(hi).ok()?)?;
+            let (line, col) = lines.as_ref().map(|l| l.position(lo)).unzip();
+            Some(ContextLine {
+                loc: lo,
+                line,
+                col,
+                data: data.to_vec(),
+            })
+        })
+        .collect();
 }
 
-/// One byte-addressed match window before merging.
-struct Window {
-    /// Inclusive start of the window.
-    lo: u64,
-    /// Inclusive end of the window.
-    hi: u64,
-    /// Byte position where the note attaches.
-    at: u64,
-    /// The annotation for this match.
-    note: Note,
-}
-
-/// Collect a finding's anchor offsets: its own evidence, plus — for composites —
-/// the offsets of the component findings it references (their evidence may carry
-/// offsets the merged composite evidence lost to truncation). Deduped by offset,
-/// file-ordered. A composite shows only its first location; an atomic trait
-/// shows up to its first three.
-fn finding_anchors(
-    finding: &Finding,
-    by_id: &FxHashMap<&str, &Finding>,
-    file_path: &str,
-) -> Vec<(u64, u32)> {
-    let composite = !finding.trait_refs.is_empty();
-    let mut anchors = local_anchors(finding, by_id, file_path);
-    anchors.truncate(if composite { 1 } else { ATOMIC_MAX_MATCHES });
-    anchors
-}
-
-/// Collect a finding's local leg anchors `(offset, len, confidence)`
-/// transitively: its own evidence plus, recursively, every component it
-/// references and *their* components. A composite is often built from
-/// "aggregator" components — an `any:` of other components, carrying no offset of
-/// their own (cleave can't nest `any:` inside `all:`, so trait authors flatten
-/// through these). A single level then resolves to no leg; the walk descends
-/// until it reaches evidence with a real byte offset. Each anchor keeps the
-/// confidence of the finding whose evidence produced it, so the placement pass
-/// ranks legs by their true evidence strength. `seen` guards reference cycles.
-fn collect_leg_anchors(
-    finding: &Finding,
-    by_id: &FxHashMap<&str, &Finding>,
-    seen: &mut FxHashSet<String>,
-    out: &mut Vec<(u64, u32, f32)>,
-) {
-    if !seen.insert(finding.id.clone().to_string()) {
-        return;
+/// The notes on each of a file's context windows, indexed like `context`.
+///
+/// Every shown finding is placed exactly as [`capture`] placed it, attached to
+/// the window holding its offset, and each window's notes are reduced to the
+/// ones worth showing ([`dedup_notes`]). A finding inherited from a member
+/// (`src`) brings no spans of its own (inheritance strips them), but as a
+/// composite it may still label this file's own matching legs. Provenance is
+/// deliberately ignored: a stored report cannot always tell an inherited
+/// composite from a native one, and live and replay must agree.
+#[must_use]
+pub fn notes(findings: &[Finding], context: &[ContextLine]) -> Vec<Vec<Note>> {
+    let mut out = vec![Vec::new(); context.len()];
+    let shown: Vec<&Finding> = findings
+        .iter()
+        .filter(|f| f.crit != Criticality::Filtered)
+        .collect();
+    if shown.is_empty() || out.is_empty() {
+        return out;
     }
-    for (off, len) in finding.evidence.iter().filter_map(local_anchor) {
-        out.push((off, len, finding.conf));
-    }
-    for ref_id in &finding.trait_refs {
-        if let Some(component) = by_id.get(ref_id.as_str()) {
-            collect_leg_anchors(component, by_id, seen, out);
+    let ranker = Ranker::new(&shown);
+    for (note, _) in place(&shown, &index_by_id(findings), &ranker) {
+        let holder = context
+            .iter()
+            .position(|c| note.off >= c.loc && note.off - c.loc < c.data.len() as u64);
+        if let Some(i) = holder {
+            out[i].push(note);
         }
     }
+    for window in &mut out {
+        dedup_notes(window, &ranker);
+    }
+    out
 }
 
-/// All of a finding's local byte anchors `(offset, len)`, file-ordered and
-/// deduped by offset — its own evidence plus its components' (a composite's
-/// "legs"), resolved transitively. Falls back to [`fallback_anchor`] when none
-/// are local. Unlike [`finding_anchors`] this keeps every leg, so a composite can
-/// be placed at the first one not already taken by a stronger match.
-fn local_anchors(
-    finding: &Finding,
+/// Each shown finding's notes, with the criticality that sizes its window.
+///
+/// Atomic traits are the fixed scaffolding: one note per span, sized by the
+/// strongest composite drawing on them. Composites are conclusions spanning
+/// several legs; strongest first, each takes its most confident leg that no
+/// equal-or-stronger match already holds, so the higher-severity conclusion
+/// claims a contested leg. A composite whose every leg is held gets no note.
+fn place(
+    shown: &[&Finding],
     by_id: &FxHashMap<&str, &Finding>,
-    file_path: &str,
-) -> Vec<(u64, u32)> {
-    let mut legs = Vec::new();
-    collect_leg_anchors(finding, by_id, &mut FxHashSet::default(), &mut legs);
-    if legs.is_empty() {
-        return fallback_anchor(finding, by_id, file_path);
+    ranker: &Ranker<'_>,
+) -> Vec<(Note, Criticality)> {
+    let mut placed: Vec<(Note, Criticality)> = Vec::new();
+    // The byte ranges claimed so far, with the strength that claimed them.
+    let mut held: Vec<(u64, u64, Strength)> = Vec::new();
+    let claim = |f: &Finding, [off, len]: [u64; 2], held: &mut Vec<(u64, u64, Strength)>| {
+        let note = note_for(f, off, len);
+        held.push((
+            note.off,
+            note.off + u64::from(note.len.max(1)),
+            ranker.of(f),
+        ));
+        note
+    };
+
+    for f in shown.iter().filter(|f| f.trait_refs.is_empty()) {
+        for span in finding_spans(f).into_iter().take(ATOMIC_MAX_MATCHES) {
+            placed.push((claim(f, span, &mut held), ranker.sizing(f)));
+        }
     }
-    let mut anchors: Vec<(u64, u32)> = legs.into_iter().map(|(off, len, _)| (off, len)).collect();
-    anchors.sort_unstable_by_key(|(off, _)| *off);
-    anchors.dedup_by_key(|(off, _)| *off);
-    anchors
+
+    let mut composites: Vec<&Finding> = shown
+        .iter()
+        .copied()
+        .filter(|f| !f.trait_refs.is_empty())
+        .collect();
+    composites.sort_by(|a, b| {
+        ranker
+            .of(b)
+            .total_cmp(&ranker.of(a))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    for f in composites {
+        let strength = ranker.of(f);
+        let free = legs(f, by_id).into_iter().find(|&[off, len]| {
+            let end = off + len.clamp(1, MAX_NOTE_LEN);
+            !held
+                .iter()
+                .any(|&(lo, hi, s)| s.total_cmp(&strength).is_ge() && lo < end && off < hi)
+        });
+        if let Some(span) = free {
+            placed.push((claim(f, span, &mut held), f.crit));
+        }
+    }
+    placed
 }
 
-/// A composite's candidate legs `(offset, len, confidence)` — one per local
-/// component match — ordered most-confident first (ties: earliest offset),
-/// deduped by offset keeping the highest confidence, and capped. `confidence` is
-/// the *component's* confidence, so the placement pass anchors the composite at
-/// its strongest evidence point. Falls back to [`fallback_anchor`] (carrying the
-/// composite's own confidence) when no leg is local — e.g. a cross-file composite
-/// whose components live in other files, which then has no leg and is omitted
-/// from the byte view (it renders as a located-elsewhere note instead).
-fn composite_legs(
-    finding: &Finding,
-    by_id: &FxHashMap<&str, &Finding>,
-    file_path: &str,
-) -> Vec<(u64, u32, f32)> {
-    /// Bound on legs considered — composites reference at most a handful of
-    /// distinguishing components; a few extra metric legs add nothing.
-    const MAX_LEGS: usize = 8;
-
-    let mut legs = Vec::new();
-    collect_leg_anchors(finding, by_id, &mut FxHashSet::default(), &mut legs);
-    if legs.is_empty() {
-        return fallback_anchor(finding, by_id, file_path)
-            .into_iter()
-            .map(|(o, l)| (o, l, finding.conf))
-            .collect();
+/// A finding's candidate locations: its own spans and those of every component
+/// it draws on, transitively (aggregator components carry no offset of their
+/// own). One per offset, keeping the most confident; ordered most confident
+/// first, earliest offset breaking ties; capped at [`MAX_LEGS`]. Empty when
+/// the finding matched no byte of this file.
+fn legs(composite: &Finding, by_id: &FxHashMap<&str, &Finding>) -> Vec<[u64; 2]> {
+    let mut found: Vec<([u64; 2], f32)> = Vec::new();
+    let mut seen: FxHashSet<&str> = FxHashSet::default();
+    let mut stack = vec![composite];
+    while let Some(f) = stack.pop() {
+        if !seen.insert(f.id.as_str()) {
+            continue;
+        }
+        found.extend(finding_spans(f).into_iter().map(|span| (span, f.conf)));
+        stack.extend(
+            f.trait_refs
+                .iter()
+                .filter_map(|r| by_id.get(r.as_str()).copied()),
+        );
     }
-    // Keep the highest-confidence leg per offset…
-    legs.sort_by(|a, b| a.0.cmp(&b.0).then(b.2.total_cmp(&a.2)));
-    legs.dedup_by_key(|l| l.0);
-    // …then order by confidence (desc), earliest offset breaking ties.
-    legs.sort_by(|a, b| b.2.total_cmp(&a.2).then(a.0.cmp(&b.0)));
-    legs.truncate(MAX_LEGS);
-    legs
+    found.sort_by(|a, b| a.0[0].cmp(&b.0[0]).then(b.1.total_cmp(&a.1)));
+    found.dedup_by_key(|(span, _)| span[0]);
+    found.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0[0].cmp(&b.0[0])));
+    found.truncate(MAX_LEGS);
+    found.into_iter().map(|(span, _)| span).collect()
+}
+
+/// A note for `finding`'s match at `off`, its length capped at [`MAX_NOTE_LEN`].
+fn note_for(finding: &Finding, off: u64, len: u64) -> Note {
+    Note {
+        crit: finding.crit,
+        id: finding.id.clone(),
+        desc: finding.desc.clone(),
+        off,
+        len: u32::try_from(len.min(MAX_NOTE_LEN)).unwrap_or(u32::MAX),
+        conf: finding.conf,
+    }
+}
+
+/// Index findings by id, first occurrence winning, for component lookup.
+fn index_by_id(findings: &[Finding]) -> FxHashMap<&str, &Finding> {
+    let mut by_id = FxHashMap::default();
+    for f in findings {
+        by_id.entry(f.id.as_str()).or_insert(f);
+    }
+    by_id
+}
+
+/// Merge overlapping or adjacent `(lo, hi)` windows, in file order.
+fn merge(mut windows: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
+    windows.sort_unstable();
+    let mut out: Vec<(u64, u64)> = Vec::with_capacity(windows.len());
+    for (lo, hi) in windows {
+        match out.last_mut() {
+            Some(last) if lo <= last.1.saturating_add(1) => last.1 = last.1.max(hi),
+            _ => out.push((lo, hi)),
+        }
+    }
+    out
+}
+
+/// Log a shown finding that claims no bytes of this file. Its offsets either
+/// index an embedded member (that member shows them — nothing to report), or
+/// it has none: a file-global fact (signing trust, a metric) is expected, but a
+/// content matcher that matched bytes without recording where is a bug.
+fn report_unanchored(finding: &Finding, by_id: &FxHashMap<&str, &Finding>, file_path: &str) {
+    let in_member = |f: &Finding| {
+        f.evidence.iter().any(|e| {
+            e.byte_offset().is_some()
+                || e.location
+                    .as_deref()
+                    .is_some_and(|l| l.starts_with("archive:"))
+        })
+    };
+    if in_member(finding)
+        || finding
+            .trait_refs
+            .iter()
+            .any(|r| by_id.get(r.as_str()).is_some_and(|c| in_member(c)))
+    {
+        return;
+    }
+    const CONTENT: [&str; 12] = [
+        "string",
+        "symbol",
+        "symbols",
+        "raw",
+        "text",
+        "literal",
+        "string_literal",
+        "ast",
+        "ast_query",
+        "encoded_string",
+        "hex",
+        "xor",
+    ];
+    if finding
+        .evidence
+        .iter()
+        .any(|e| CONTENT.contains(&e.method.as_str()))
+    {
+        tracing::error!(
+            finding_id = %finding.id,
+            kind = ?finding.kind,
+            "{file_path}: content match has no file offset — the matcher should record where it matched"
+        );
+    } else {
+        tracing::debug!(finding_id = %finding.id, "file-global finding has no byte context");
+    }
 }
 
 /// Anchor symbol matches that carry a name but no byte offset.
@@ -205,7 +312,7 @@ fn composite_legs(
 /// references this finding pick up the recovered offset through its component.
 ///
 /// A name genuinely absent from the file stays unanchored and is still surfaced
-/// by [`fallback_anchor`] — that is the matcher bug the guard exists to catch.
+/// by [`report_unanchored`] — that is the matcher bug the guard exists to catch.
 fn anchor_orphan_symbol_matches(findings: &mut [Finding], data: &[u8]) {
     for finding in findings {
         for e in &mut finding.evidence {
@@ -238,134 +345,6 @@ fn locate_nul_terminated(data: &[u8], value: &str) -> Option<u64> {
     needle.extend_from_slice(value.as_bytes());
     needle.push(0);
     memchr::memmem::find(data, &needle).map(|pos| pos as u64)
-}
-
-/// A finding without a local byte offset has no honest context window. When
-/// [`finding_anchors`] collects none, distinguish the two reasons:
-///
-/// - The finding's offsets index an embedded archive member (`archive:`
-///   location, skipped by [`local_anchor`]). That member renders them in its own
-///   context, so this finding stays description-only here — no fallback.
-/// - The finding carries no byte offset anywhere. Two unrelated cases land here:
-///   a *content* matcher
-///   (string/symbol/raw/text/ast/…) that matched specific bytes but failed to
-///   record where — a real bug worth an error — or a *file-global* fact (signing
-///   trust, UUID, arch, metrics, a `value:` field match, an `exists: false`
-///   absence) which belongs in the file-level annotation surface. Classify by
-///   evidence method and log accordingly; neither case fabricates byte-zero
-///   context.
-fn fallback_anchor(
-    finding: &Finding,
-    by_id: &FxHashMap<&str, &Finding>,
-    file_path: &str,
-) -> Vec<(u64, u32)> {
-    // An `archive:` location carries a real offset in an embedded member's byte
-    // space — `local_anchor` skips it (it doesn't index *this* file's bytes), and
-    // the member renders it in its own context. `byte_offset()` can't parse that
-    // form, so check the prefix explicitly; otherwise these member findings look
-    // offset-less and get mis-reported as bugs.
-    let has_offset = |e: &crate::types::Evidence| {
-        e.byte_offset().is_some()
-            || e.location
-                .as_deref()
-                .is_some_and(|l| l.starts_with("archive:"))
-    };
-    let has_remote_offset = finding.evidence.iter().any(&has_offset)
-        || finding.trait_refs.iter().any(|id| {
-            by_id
-                .get(id.as_str())
-                .is_some_and(|c| c.evidence.iter().any(&has_offset))
-        });
-    if has_remote_offset {
-        // Offsets belong to an embedded member; that member owns their context.
-        return Vec::new();
-    }
-    let is_content_match = finding.evidence.iter().any(|e| {
-        matches!(
-            e.method.as_str(),
-            "string"
-                | "symbol"
-                | "symbols"
-                | "raw"
-                | "text"
-                | "literal"
-                | "string_literal"
-                | "ast"
-                | "ast_query"
-                | "encoded_string"
-                | "hex"
-                | "xor"
-        )
-    });
-    if is_content_match {
-        tracing::error!(
-            finding_id = %finding.id,
-            kind = ?finding.kind,
-            "{file_path}: content match has no file offset — the matcher should record where it matched"
-        );
-    } else {
-        tracing::debug!(
-            finding_id = %finding.id,
-            "file-global finding has no byte context"
-        );
-    }
-    Vec::new()
-}
-
-/// A byte anchor `(offset, len)` for evidence whose offset is in *this* file's
-/// byte space. Evidence carried up from an embedded archive member is tagged
-/// with an `archive:` location and its offsets index the member's (decompressed)
-/// bytes, not the bytes being captured here — anchoring it would render garbage,
-/// so it is skipped. Such findings still appear (description-only), and the
-/// member that owns them renders its own context.
-fn local_anchor(e: &crate::types::Evidence) -> Option<(u64, u32)> {
-    if e.location
-        .as_deref()
-        .is_some_and(|l| l.starts_with("archive:"))
-    {
-        return None;
-    }
-    e.byte_offset().map(|o| (o, len_of(e)))
-}
-
-/// Render cap for an anchored window's match length. A *located* metric can
-/// span a whole concealed region (hundreds of KiB); the rendered preview must
-/// stay a few rows, so the anchor length is capped here. The true, uncapped
-/// span still rides the compact span output (`match_len`) for prism/tooling.
-const MAX_ANCHOR_LEN: u64 = 512;
-
-/// Byte length of an evidence match for rendering/placement. Mirrors the
-/// compact span source — `match_len` when set (decoded-layer or located
-/// metrics, where `value` is not the source bytes), else `value.len()` — but
-/// caps it so a large span yields a bounded preview rather than rendering the
-/// entire region.
-fn len_of(e: &crate::types::Evidence) -> u32 {
-    let raw = match e.match_len {
-        Some(l) => l.min(MAX_ANCHOR_LEN),
-        None => e.value.len() as u64,
-    };
-    u32::try_from(raw).unwrap_or(u32::MAX)
-}
-
-/// Build a per-finding id index for composite component lookup.
-fn index_by_id(findings: &[Finding]) -> FxHashMap<&str, &Finding> {
-    let mut by_id = FxHashMap::default();
-    for f in findings {
-        by_id.entry(f.id.as_str()).or_insert(f);
-    }
-    by_id
-}
-
-/// A note attached to a finding's match (without position).
-fn note_for(finding: &Finding, off: u64, len: u32) -> Note {
-    Note {
-        crit: finding.crit,
-        id: finding.id.clone(),
-        desc: finding.desc.clone(),
-        off,
-        len,
-        conf: finding.conf,
-    }
 }
 
 /// Source position index used only to label byte-addressed text chunks. Window
@@ -424,8 +403,8 @@ fn referring_crit<'a>(shown: &[&'a Finding]) -> FxHashMap<&'a str, Criticality> 
 ///    what it mentions;
 /// 4. confidence.
 ///
-/// The placement pass and the per-chunk dedup share it, so they agree on
-/// which match is "stronger."
+/// Placement and the per-window dedup share it, so they agree on which match
+/// is "stronger."
 ///
 /// Composite support counts because the weaker note is dropped outright: a
 /// notable leg behind a suspicious conclusion (a paste-site URL a tunnel
@@ -470,6 +449,18 @@ impl<'a> Ranker<'a> {
         }
     }
 
+    fn of(&self, f: &Finding) -> Strength {
+        self.strength(f.id.as_str(), f.crit, f.conf)
+    }
+
+    /// The criticality that sizes an atomic trait's window: its own, raised to
+    /// that of the strongest composite drawing on it.
+    fn sizing(&self, f: &Finding) -> Criticality {
+        self.leg_crit
+            .get(f.id.as_str())
+            .map_or(f.crit, |&c| c.max(f.crit))
+    }
+
     fn strength(&self, id: &str, crit: Criticality, conf: f32) -> Strength {
         Strength {
             rank: self.leg_crit.get(id).map_or(crit, |&c| c.max(crit)).rank(),
@@ -480,184 +471,21 @@ impl<'a> Ranker<'a> {
     }
 }
 
-/// Whether a finding describes an invocation rather than a reference.
-///
-/// The structural signal is a call-site symbol match (`symbol` evidence from
-/// the `call` source: the matcher saw `curl` invoked, not mentioned). Text
-/// and regex matchers carry no such signal, so their wording decides: a leaf
+/// Whether a finding describes an invocation rather than a reference: a leaf
 /// id naming a call (`-call`, `-command`, `invoke`, `exec`) or a description
-/// using an action verb ("Source invokes systemctl enable action").
+/// using an action verb ("Source invokes systemctl enable action"). Decided
+/// from the finding alone, so a stored report ranks exactly as a live one.
 fn is_invocation(finding: &Finding) -> bool {
     const ID_MARKERS: [&str; 4] = ["-call", "-command", "invoke", "exec"];
     const VERBS: [&str; 5] = ["invokes", "calls", "runs", "executes", "spawns"];
     let id = finding.id.as_str();
     let leaf = id.rsplit_once("::").map_or(id, |(_, leaf)| leaf);
-    finding
-        .evidence
-        .iter()
-        .any(|e| e.method == "symbol" && e.source == "call")
-        || ID_MARKERS.iter().any(|m| leaf.contains(m))
+    ID_MARKERS.iter().any(|m| leaf.contains(m))
         || finding
             .desc
             .as_str()
             .split_whitespace()
             .any(|w| VERBS.iter().any(|v| w.eq_ignore_ascii_case(v)))
-}
-
-// ========================================================================
-// Byte-addressed context windows
-// ========================================================================
-
-/// Text files at or under this size render in full rather than as windows.
-const SMALL_TEXT_WHOLE_BYTES: u64 = 2048;
-
-fn capture_byte_slices(
-    shown: &[&Finding],
-    by_id: &FxHashMap<&str, &Finding>,
-    data: &[u8],
-    line_index: Option<&LineIndex>,
-    file_path: &str,
-) -> Vec<ContextLine> {
-    let total = data.len() as u64;
-
-    // `[off, off+len)` widened to the criticality-sized context margin
-    // (asymmetric — more trailing than leading, since a payload runs forward from
-    // the match), plus the match anchor `at`. The strongest matches reserve the
-    // widest window; overlapping windows merge into one segment, which
-    // `render_byte_segment` emits as a single raw-byte chunk.
-    //
-    // A small text file is shown whole: its header comment or docstring is often
-    // the one place that says what the code is for, and a window cut to the
-    // matches alone trims it away for no real saving.
-    let whole = line_index.is_some() && total <= SMALL_TEXT_WHOLE_BYTES;
-    let bounds = |crit: Criticality, off: u64, len: u32| {
-        if whole {
-            return (0, total, off);
-        }
-        let (before, after) = crit.hex_context();
-        let lo = off.saturating_sub(before);
-        let hi = (off + u64::from(len) + after).min(total);
-        (lo, hi, off)
-    };
-
-    // An atomic leg a stronger composite drew on reserves that composite's wider
-    // window, so the evidence is sized for the conclusion it supports.
-    let ranker = Ranker::new(shown);
-
-    let mut windows: Vec<Window> = Vec::new();
-    // Match span `[start, end)` of every placed note, with its strength. A later
-    // composite is placed only where no *stronger* match already sits.
-    let mut placed: Vec<(u64, u64, Strength)> = Vec::new();
-    let span = |off: u64, len: u32| (off, off + u64::from(len.max(1)));
-
-    // Atomic findings anchor at their own offsets (the fixed scaffolding). A leg a
-    // stronger composite drew on is sized by that composite's severity.
-    let strength = |f: &Finding| ranker.strength(f.id.as_str(), f.crit, f.conf);
-    for finding in shown.iter().filter(|f| f.trait_refs.is_empty()) {
-        let score = strength(finding);
-        let crit = ranker
-            .leg_crit
-            .get(finding.id.as_str())
-            .map_or(finding.crit, |&c| c.max(finding.crit));
-        for (off, len) in finding_anchors(finding, by_id, file_path) {
-            let (lo, hi, at) = bounds(crit, off, len);
-            windows.push(Window {
-                lo,
-                hi,
-                at,
-                note: note_for(finding, off, len),
-            });
-            let (s, e) = span(off, len);
-            placed.push((s, e, score));
-        }
-    }
-
-    // Composites are conclusions that span several legs (their components). Place
-    // each at its strongest-evidence leg — the highest-confidence component — that
-    // no equal-or-stronger match already occupies, so it anchors at its best real
-    // location instead of being silently dropped when a leg collides; the other
-    // legs keep showing their component traits. A composite whose every leg is
-    // dominated is omitted (no honest spot for it). Strongest-first so the
-    // higher-severity conclusion claims the contested leg.
-    let mut composites: Vec<&&Finding> =
-        shown.iter().filter(|f| !f.trait_refs.is_empty()).collect();
-    composites.sort_by(|a, b| {
-        strength(b)
-            .total_cmp(&strength(a))
-            .then_with(|| a.id.cmp(&b.id))
-    });
-    for finding in composites {
-        let score = strength(finding);
-        let leg = composite_legs(finding, by_id, file_path)
-            .into_iter()
-            .find(|&(off, len, _)| {
-                let (s, e) = span(off, len);
-                !placed
-                    .iter()
-                    .any(|&(ps, pe, pscore)| pscore.total_cmp(&score).is_ge() && ps < e && s < pe)
-            });
-        if let Some((off, len, _)) = leg {
-            let (lo, hi, at) = bounds(finding.crit, off, len);
-            windows.push(Window {
-                lo,
-                hi,
-                at,
-                note: note_for(finding, off, len),
-            });
-            let (s, e) = span(off, len);
-            placed.push((s, e, score));
-        }
-    }
-
-    merge(windows, |seg| {
-        render_byte_segment(data, seg, line_index, &ranker)
-    })
-}
-
-/// Emit a merged byte segment as one raw-byte unit: the contiguous slice
-/// `[lo, hi)` with every match note attached at its absolute offset. The
-/// renderer wraps it into hex|ascii rows at the terminal's width and inserts a
-/// break before the next unit when their offsets aren't contiguous.
-fn render_byte_segment(
-    data: &[u8],
-    seg: &Segment,
-    line_index: Option<&LineIndex>,
-    ranker: &Ranker<'_>,
-) -> Vec<ContextLine> {
-    let total = data.len() as u64;
-    let lo = seg.lo.min(total);
-    let hi = seg.hi.min(total);
-    if lo >= hi {
-        return Vec::new();
-    }
-    let (line, col) = match line_index {
-        Some(index) => {
-            let (l, c) = index.position(lo);
-            (Some(l), Some(c))
-        }
-        None => (None, None),
-    };
-    let mut notes: Vec<Note> = seg.notes.iter().map(|(_, note)| note.clone()).collect();
-    dedup_notes(&mut notes, ranker);
-    vec![ContextLine {
-        loc: lo,
-        line,
-        col,
-        data: data[lo as usize..hi as usize].to_vec(),
-        notes,
-    }]
-}
-
-// ========================================================================
-// Merge
-// ========================================================================
-
-/// A merged run of overlapping/adjacent windows plus their positioned notes.
-struct Segment {
-    lo: u64,
-    hi: u64,
-    /// `(position, note)` pairs, where position is the line/row the note hits.
-    notes: Vec<(u64, Note)>,
 }
 
 /// Path depth below the namespace at which two notes count as the same kind
@@ -713,49 +541,6 @@ fn dedup_notes(notes: &mut Vec<Note>, ranker: &Ranker<'_>) {
     *notes = kept;
 }
 
-/// Sort windows by start, merge overlapping/adjacent ones into [`Segment`]s, and
-/// render each via `render_segment`. Segments are emitted in file order; the
-/// renderer (tiny/JSON) inserts gap markers where consecutive `loc` values jump.
-fn merge(
-    mut windows: Vec<Window>,
-    render_segment: impl Fn(&Segment) -> Vec<ContextLine>,
-) -> Vec<ContextLine> {
-    if windows.is_empty() {
-        return Vec::new();
-    }
-    windows.sort_unstable_by_key(|w| w.lo);
-
-    let mut out = Vec::new();
-    let mut seg: Option<Segment> = None;
-    for w in windows {
-        match &mut seg {
-            // Merge when the next window overlaps or sits adjacent to the run.
-            Some(s) if w.lo <= s.hi.saturating_add(1) => {
-                s.hi = s.hi.max(w.hi);
-                s.notes.push((w.at, w.note));
-            }
-            _ => {
-                if let Some(done) = seg.take() {
-                    out.extend(render_segment(&done));
-                }
-                seg = Some(Segment {
-                    lo: w.lo,
-                    hi: w.hi,
-                    notes: vec![(w.at, w.note)],
-                });
-            }
-        }
-    }
-    if let Some(done) = seg {
-        out.extend(render_segment(&done));
-    }
-    out
-}
-
-// ========================================================================
-// Helpers
-// ========================================================================
-
 /// True when the head of the file is mostly printable/whitespace — a cheap
 /// "is this text?" check for types filefacts neither calls source nor binary.
 fn looks_textual(data: &[u8]) -> bool {
@@ -803,9 +588,32 @@ mod tests {
         f
     }
 
-    fn block_for<'a>(ctx: &'a [ContextLine], id: &str) -> Option<&'a ContextLine> {
-        ctx.iter()
-            .find(|c| c.notes.iter().any(|note| note.id == id))
+    /// The notes derived for each of `r`'s captured windows.
+    fn derived(r: &AnalysisReport) -> Vec<Vec<Note>> {
+        notes(&r.findings, &r.context)
+    }
+
+    /// Every derived note's `(id, offset)`, in window order.
+    fn placed(r: &AnalysisReport) -> Vec<(String, u64)> {
+        derived(r)
+            .into_iter()
+            .flatten()
+            .map(|n| (n.id.to_string(), n.off))
+            .collect()
+    }
+
+    fn note_ids(r: &AnalysisReport) -> Vec<String> {
+        placed(r).into_iter().map(|(id, _)| id).collect()
+    }
+
+    /// The window whose notes include `id`.
+    fn block_for<'a>(r: &'a AnalysisReport, id: &str) -> Option<&'a ContextLine> {
+        let notes = derived(r);
+        r.context
+            .iter()
+            .zip(&notes)
+            .find(|(_, n)| n.iter().any(|note| note.id == id))
+            .map(|(c, _)| c)
     }
 
     #[test]
@@ -828,14 +636,15 @@ mod tests {
         let doomed: FxHashSet<crate::types::Istr> =
             std::iter::once(crate::types::Istr::from(doomed_id)).collect();
         capture(&mut r, data, FileType::JavaScript, &doomed);
+        r.findings.retain(|f| !doomed.contains(&f.id));
 
         assert!(
-            block_for(&r.context, doomed_id).is_none(),
+            block_for(&r, doomed_id).is_none(),
             "a doomed finding must not be annotated at all: {:?}",
             r.context
         );
         assert!(
-            block_for(&r.context, survivor_id).is_some(),
+            block_for(&r, survivor_id).is_some(),
             "the surviving trait must keep the span the doomed one used to take: {:?}",
             r.context
         );
@@ -859,6 +668,31 @@ mod tests {
     }
 
     #[test]
+    fn inherited_composite_labels_its_local_leg_with_or_without_provenance() {
+        // A composite bubbled up from a decoded member keeps `src`, and its own
+        // evidence is `archive:`-located, so it has no span of its own. Its leg
+        // also matched this file's bytes, so it labels the leg here. A stored
+        // report cannot always say the composite was inherited, so the labels
+        // must not depend on `src`.
+        let data = b"const BASE = \"https://203.0.113.9:4443/x\"\n";
+        let mut composite = finding("objectives/c2::beacon", Criticality::Suspicious, &[]);
+        composite.trait_refs = vec!["micro/ip::literal".into()];
+        composite.evidence =
+            vec![Evidence::new("m", "s", "match").with_location("archive:member:0x5")];
+        composite.src = Some(1);
+        let mut r = report(vec![
+            composite,
+            finding("micro/ip::literal", Criticality::Notable, &[13]),
+        ]);
+        capture(&mut r, data, FileType::JavaScript, &FxHashSet::default());
+        let inherited = placed(&r);
+        assert_eq!(inherited, vec![("objectives/c2::beacon".to_string(), 13)]);
+
+        r.findings[0].src = None;
+        assert_eq!(placed(&r), inherited);
+    }
+
+    #[test]
     fn textual_matches_share_the_same_byte_window() {
         let data = b"import os\nx = 1\ndata = decode(p)\nexec(data)\nend\n";
         let mut r = report(vec![
@@ -875,7 +709,7 @@ mod tests {
         assert_eq!(r.context[0].loc, 0);
         assert_eq!(r.context[0].line, Some(1));
         assert_eq!(r.context[0].col, Some(1));
-        assert_eq!(r.context[0].notes.len(), 3);
+        assert_eq!(derived(&r)[0].len(), 3);
     }
 
     #[test]
@@ -891,8 +725,8 @@ mod tests {
         ]);
         capture(&mut r, &data, FileType::JavaScript, &FxHashSet::default());
 
-        let first = block_for(&r.context, "text/first").expect("first chunk");
-        let second = block_for(&r.context, "text/second").expect("second chunk");
+        let first = block_for(&r, "text/first").expect("first chunk");
+        let second = block_for(&r, "text/second").expect("second chunk");
         // `loc` is the byte offset of the window start; both sit on line 1, at the
         // column their offset lands on (there are no newlines to reset it).
         assert_eq!((first.loc, first.line, first.col), (36, Some(1), Some(37)));
@@ -916,7 +750,7 @@ mod tests {
 
         // Window starts at byte 436, which is on line 3 (after the newlines at 99
         // and 199), at column 436 − 200 + 1 = 237.
-        let chunk = block_for(&r.context, "text/hit").expect("text chunk");
+        let chunk = block_for(&r, "text/hit").expect("text chunk");
         assert_eq!(chunk.loc, 436);
         assert_eq!(chunk.line, Some(3));
         assert_eq!(chunk.col, Some(237));
@@ -946,9 +780,7 @@ mod tests {
         let mut r = report(vec![f]);
         capture(&mut r, data, FileType::Python, &FxHashSet::default());
         assert!(
-            r.context
-                .iter()
-                .all(|c| c.notes.iter().all(|n| n.id != "member/evil")),
+            !note_ids(&r).iter().any(|id| id == "member/evil"),
             "archive-member finding must not be pinned into the carrier: {:?}",
             r.context
         );
@@ -969,9 +801,7 @@ mod tests {
         let mut r = report(vec![f]);
         capture(&mut r, data, FileType::Python, &FxHashSet::default());
         assert!(
-            r.context
-                .iter()
-                .all(|c| c.notes.iter().all(|n| n.id != "member/evil")),
+            !note_ids(&r).iter().any(|id| id == "member/evil"),
             "archive-member finding with an embedded-offset location must not be \
              pinned into the carrier: {:?}",
             r.context
@@ -994,11 +824,11 @@ mod tests {
         let mut r = report(vec![strong, comp_a, comp_b, composite]);
         capture(&mut r, &data, FileType::Elf, &FxHashSet::default());
 
+        let placed = placed(&r);
         let note_at = |off: u64| {
-            r.context
+            placed
                 .iter()
-                .flat_map(|c| &c.notes)
-                .any(|n| n.id == "obj/composite" && n.off == off)
+                .any(|(id, o)| id == "obj/composite" && *o == off)
         };
         assert!(
             !note_at(10),
@@ -1027,10 +857,7 @@ mod tests {
         capture(&mut r, &data, FileType::Elf, &FxHashSet::default());
 
         assert!(
-            r.context
-                .iter()
-                .flat_map(|c| &c.notes)
-                .all(|n| n.id != "obj/dominated"),
+            !note_ids(&r).iter().any(|id| id == "obj/dominated"),
             "a composite dominated on every leg is omitted: {:?}",
             r.context
         );
@@ -1049,9 +876,9 @@ mod tests {
         // The composite (no evidence of its own) anchors at its component's offset.
         // Both share that span, so overlap dedup keeps the stronger composite and
         // drops the component note.
-        let chunk = block_for(&r.context, "obj/loader").expect("composite chunk");
+        assert!(block_for(&r, "obj/loader").is_some(), "composite chunk");
         assert!(
-            !chunk.notes.iter().any(|n| n.id == "comp/open"),
+            !note_ids(&r).iter().any(|id| id == "comp/open"),
             "overlapping component dropped for the stronger composite: {:?}",
             r.context
         );
@@ -1072,7 +899,7 @@ mod tests {
 
         // The near leg inherits the hostile 128-byte lead-in (not notable's 64), so
         // its window starts at 800 − 128; the composite anchored far away at 100.
-        let near = block_for(&r.context, "cap/near").expect("near chunk");
+        let near = block_for(&r, "cap/near").expect("near chunk");
         assert_eq!(near.loc, 800 - 128);
         assert_eq!(near.line, Some(1));
         assert_eq!(near.col, Some(800 - 128 + 1));
@@ -1161,15 +988,14 @@ mod tests {
         lo.conf = 0.9;
         let mut r = report(vec![hi, lo]);
         capture(&mut r, data, FileType::Python, &FxHashSet::default());
-        let ids: Vec<&str> = r
-            .context
-            .iter()
-            .flat_map(|c| &c.notes)
-            .map(|n| n.id.as_str())
-            .collect();
-        assert!(ids.contains(&"a/strong"), "strongest kept: {:?}", r.context);
+        let ids = note_ids(&r);
         assert!(
-            !ids.contains(&"b/weak"),
+            ids.iter().any(|id| id == "a/strong"),
+            "strongest kept: {:?}",
+            r.context
+        );
+        assert!(
+            !ids.iter().any(|id| id == "b/weak"),
             "weaker overlapping trait dropped: {:?}",
             r.context
         );
@@ -1202,19 +1028,14 @@ mod tests {
             FileType::Python,
             &FxHashSet::default(),
         );
-        let ids: Vec<&str> = r
-            .context
-            .iter()
-            .flat_map(|c| &c.notes)
-            .map(|n| n.id.as_str())
-            .collect();
+        let ids = note_ids(&r);
         assert!(
-            ids.contains(&"c2/paste::shz-al"),
+            ids.iter().any(|id| id == "c2/paste::shz-al"),
             "leg kept: {:?}",
             r.context
         );
         assert!(
-            !ids.contains(&"c2/domain::short-domain-url"),
+            !ids.iter().any(|id| id == "c2/domain::short-domain-url"),
             "peer dropped: {:?}",
             r.context
         );
@@ -1235,32 +1056,24 @@ mod tests {
         mention.desc = "References curl file-output option".to_string().into();
         let mut r = report(vec![call, mention]);
         capture(&mut r, data, FileType::Shell, &FxHashSet::default());
-        let ids: Vec<&str> = r
-            .context
-            .iter()
-            .flat_map(|c| &c.notes)
-            .map(|n| n.id.as_str())
-            .collect();
+        let ids = note_ids(&r);
         assert_eq!(ids, ["cli::curl-command-call"], "{:?}", r.context);
 
         let call = finding("cli::curl-command-call", Criticality::Notable, &[0]);
         let mention = finding("curl::curl-output-file", Criticality::Suspicious, &[0]);
         let mut r = report(vec![call, mention]);
         capture(&mut r, data, FileType::Shell, &FxHashSet::default());
-        let ids: Vec<&str> = r
-            .context
-            .iter()
-            .flat_map(|c| &c.notes)
-            .map(|n| n.id.as_str())
-            .collect();
+        let ids = note_ids(&r);
         assert_eq!(ids, ["curl::curl-output-file"], "{:?}", r.context);
     }
 
     #[test]
-    fn is_invocation_reads_call_evidence_then_wording() {
+    fn is_invocation_reads_the_finding_wording() {
+        // Call-site evidence alone does not count: a stored report has no
+        // evidence, and must rank exactly as the live analysis did.
         let mut call = finding("t::curl", Criticality::Notable, &[]);
         call.evidence = vec![Evidence::new("symbol", "call", "curl").with_offset(0)];
-        assert!(is_invocation(&call));
+        assert!(!is_invocation(&call));
         assert!(is_invocation(&finding(
             "t::python-setsid-call",
             Criticality::Notable,
@@ -1305,9 +1118,7 @@ mod tests {
         capture(&mut r, data, FileType::Elf, &FxHashSet::default());
         assert_eq!(r.findings[0].evidence[0].byte_offset(), Some(5));
         assert!(
-            r.context
-                .iter()
-                .any(|c| c.notes.iter().any(|n| n.id == "micro/sleep")),
+            note_ids(&r).iter().any(|id| id == "micro/sleep"),
             "recovered symbol finding should render anchored: {:?}",
             r.context
         );
@@ -1320,7 +1131,13 @@ mod tests {
         capture(&mut r, &data, FileType::Elf, &FxHashSet::default());
         // Byte-offset mode: one window of raw bytes spanning the match, carrying no
         // line/col labels (the renderer wraps it into hex rows at display time).
-        let hit = r.context.iter().find(|c| !c.notes.is_empty());
+        let notes = derived(&r);
+        let hit = r
+            .context
+            .iter()
+            .zip(&notes)
+            .find(|(_, n)| !n.is_empty())
+            .map(|(c, _)| c);
         assert!(
             matches!(hit, Some(c) if c.line.is_none() && c.col.is_none() && c.data.contains(&16u8))
         );
@@ -1338,10 +1155,7 @@ mod tests {
         capture(&mut r, &data, FileType::Elf, &FxHashSet::default());
 
         let block = |id: &str| {
-            r.context
-                .iter()
-                .find(|c| c.notes.iter().any(|n| n.id == id))
-                .unwrap_or_else(|| panic!("no block for {id}: {:?}", r.context))
+            block_for(&r, id).unwrap_or_else(|| panic!("no block for {id}: {:?}", r.context))
         };
         // Lead-in (`before`) scales with severity: hostile 128, component 32.
         assert_eq!(block("mal/exec").loc, 500 - 128);
@@ -1367,15 +1181,14 @@ mod tests {
         let mut r = report(vec![strong, weak]);
         capture(&mut r, &data, FileType::Elf, &FxHashSet::default());
 
-        let ids: Vec<&str> = r
-            .context
-            .iter()
-            .flat_map(|c| &c.notes)
-            .map(|n| n.id.as_str())
-            .collect();
-        assert!(ids.contains(&"mal/exec"), "strongest kept: {:?}", r.context);
+        let ids = note_ids(&r);
         assert!(
-            !ids.contains(&"cap/str"),
+            ids.iter().any(|id| id == "mal/exec"),
+            "strongest kept: {:?}",
+            r.context
+        );
+        assert!(
+            !ids.iter().any(|id| id == "cap/str"),
             "weaker overlapping trait dropped: {:?}",
             r.context
         );
@@ -1397,10 +1210,7 @@ mod tests {
         let mut r = report(vec![near, far, composite]);
         capture(&mut r, &data, FileType::Elf, &FxHashSet::default());
 
-        let near_block = r
-            .context
-            .iter()
-            .find(|c| c.notes.iter().any(|n| n.id == "cap/near"));
+        let near_block = block_for(&r, "cap/near");
         assert_eq!(
             near_block.map(|c| c.loc),
             Some(800 - 128),

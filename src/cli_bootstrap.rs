@@ -66,12 +66,8 @@ fn sanitized_field(
 
 pub(crate) fn apply_runtime_overrides(
     traits_dir: Option<&str>,
-    enriched: bool,
     disabled: &cli::DisabledComponents,
 ) {
-    if enriched {
-        cleave::enriched::set_enabled(true);
-    }
     if let Some(traits_dir) = traits_dir {
         cleave::traits_repo::set_override_dir(Some(std::path::PathBuf::from(traits_dir)));
     }
@@ -350,9 +346,13 @@ pub(crate) fn configure_rayon_thread_pool(validating: bool) {
 pub(crate) fn print_version_banner(format: cli::OutputFormat) {
     if format == cli::OutputFormat::Terminal {
         let traits_ver = cleave::traits_repo::version()
-            .map(|v| format!(" (traits: {v})"))
+            .map(|v| format!(": {v}"))
             .unwrap_or_default();
-        eprintln!("cleave v{}{traits_ver}\n", env!("CARGO_PKG_VERSION"));
+        eprintln!(
+            "cleave v{} ({} traits{traits_ver})\n",
+            env!("CARGO_PKG_VERSION"),
+            cleave::traits_repo::Edition::current().styled()
+        );
     }
 }
 

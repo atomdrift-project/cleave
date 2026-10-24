@@ -163,17 +163,6 @@ pub struct FileAnalysis {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub context: Vec<ContextLine>,
 
-    /// Original captured-window byte costs for the opt-in context retention
-    /// prototype. Indexed like `context`; preserves selection when padding is
-    /// removed. Empty on ordinary analysis reports.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub context_costs: Vec<usize>,
-
-    /// Historical locality overrides for legacy replay, indexed like `findings`.
-    /// Empty vectors derive locality from raw or retained local byte spans.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub render_locality: Vec<bool>,
-
     // === Verbose fields (omitted in minimal mode) ===
     /// Traits discovered in this file
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -288,22 +277,12 @@ pub struct FileAnalysis {
 }
 
 impl FileAnalysis {
-    /// Retaining spans while releasing matcher evidence must not change rendering.
+    /// Whether finding `index` matched a byte of this file. Spans survive
+    /// archive slimming, so releasing matcher evidence doesn't change this.
     pub(crate) fn finding_has_local_offset(&self, index: usize) -> bool {
-        self.render_locality.get(index).copied().unwrap_or_else(|| {
-            self.findings.get(index).is_some_and(|f| {
-                f.precomputed_spans
-                    .as_ref()
-                    .is_some_and(|spans| !spans.is_empty())
-                    || f.evidence.iter().any(|e| {
-                        e.byte_offset().is_some()
-                            && !e
-                                .location
-                                .as_deref()
-                                .is_some_and(|s| s.starts_with("archive:"))
-                    })
-            })
-        })
+        self.findings
+            .get(index)
+            .is_some_and(|f| !super::traits_findings::finding_spans(f).is_empty())
     }
 
     /// Create a new FileAnalysis with minimal required fields
@@ -328,8 +307,6 @@ impl FileAnalysis {
             findings: Vec::new(),
             suppressions: Vec::new(),
             context: Vec::new(),
-            context_costs: Vec::new(),
-            render_locality: Vec::new(),
             traits: Vec::new(),
             structure: Vec::new(),
             functions: Vec::new(),

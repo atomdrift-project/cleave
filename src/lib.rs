@@ -29,7 +29,7 @@ pub mod analysis_context;
 pub mod breadcrumb;
 pub mod cache;
 pub mod cancellation;
-pub(crate) mod context;
+pub mod context;
 pub mod decoders;
 mod engine;
 pub mod enriched;
@@ -64,10 +64,8 @@ pub mod capabilities;
 pub mod cli;
 pub mod commands;
 pub mod composite_rules;
-pub mod context_retention;
 pub mod diff;
 pub mod env_mapper;
-pub mod file_wire;
 pub mod malecule_bridge;
 pub mod model_facts;
 pub mod output;
@@ -2182,8 +2180,6 @@ pub(crate) fn report_from_file_analysis(
         composite_sources: _,
         precompact_facts: _,
         precompact_refs: _,
-        context_costs: _,
-        render_locality: _,
     } = fa;
     let target = TargetInfo {
         path,
@@ -4395,6 +4391,7 @@ pub fn validate_traits() -> Result<()> {
 #[allow(missing_docs)]
 #[derive(Debug)]
 pub struct VersionInfo {
+    pub traits_edition: traits_repo::Edition,
     pub traits_version: Option<String>,
     pub traits_mtime: Option<std::time::SystemTime>,
     pub trait_count: usize,
@@ -4402,12 +4399,14 @@ pub struct VersionInfo {
     pub yara_rules: usize,
 }
 
-/// Collect version information: traits revision, mtime, and resource counts.
+/// Collect version information: traits edition and revision, mtime, and
+/// resource counts.
 ///
 /// This initialises the global CapabilityMapper and YARA engine if they
 /// haven't been loaded yet, so the counts reflect the full rule set.
 #[must_use]
 pub fn version_info() -> VersionInfo {
+    let traits_edition = traits_repo::Edition::current();
     let traits_version = traits_repo::version();
     let traits_mtime = cache::most_recent_yaml_file().ok().map(|(t, _)| t);
 
@@ -4424,12 +4423,49 @@ pub fn version_info() -> VersionInfo {
     let yara_rules = engine.total_rules();
 
     VersionInfo {
+        traits_edition,
         traits_version,
         traits_mtime,
         trait_count,
         composite_count,
         yara_rules,
     }
+}
+
+/// The `version` text every atomdrift tool prints: the tool, the cleave it
+/// embeds, and the rules it is using — edition before revision, because
+/// "Enriched or open source?" is the first thing a support thread asks.
+///
+/// Loads the rule engines to count them, like [`version_info`].
+#[must_use]
+pub fn version_report(tool: &str, tool_version: &str) -> String {
+    let info = version_info();
+    let embeds = if tool == "cleave" {
+        String::new()
+    } else {
+        format!("cleave  {}\n", env!("CARGO_PKG_VERSION"))
+    };
+    let built = info
+        .traits_mtime
+        .map(|t| {
+            chrono::DateTime::<chrono::Utc>::from(t)
+                .format(" (%Y-%m-%d %H:%M UTC)")
+                .to_string()
+        })
+        .unwrap_or_default();
+    let at = match &info.traits_edition {
+        traits_repo::Edition::Checkout(dir) => format!("  {}", dir.display()),
+        traits_repo::Edition::Enriched | traits_repo::Edition::OpenSource => String::new(),
+    };
+    format!(
+        "{tool:<7} {tool_version}\n{embeds}traits  {}  {}{built}{at}\nrules   {} ({} atomic, {} composite, {} yara)",
+        info.traits_edition.styled(),
+        info.traits_version.as_deref().unwrap_or("not installed"),
+        info.trait_count + info.composite_count + info.yara_rules,
+        info.trait_count,
+        info.composite_count,
+        info.yara_rules
+    )
 }
 
 /// Report whether `pattern` makes the lazy DFA explode on bundle-shaped text.

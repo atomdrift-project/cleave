@@ -84,6 +84,19 @@ pub struct AnalyzeConfig<'a> {
     pub min_file_crit: Option<types::Criticality>,
     /// Maximum file-level criticality to emit.
     pub max_file_crit: Option<types::Criticality>,
+    /// Which facts JSON output keeps.
+    pub facts: types::Facts,
+}
+
+/// How each analyzed report is filtered and written.
+#[derive(Clone, Copy)]
+struct Output {
+    format: cli::OutputFormat,
+    min_crit: Option<types::Criticality>,
+    max_crit: Option<types::Criticality>,
+    min_file_crit: Option<types::Criticality>,
+    max_file_crit: Option<types::Criticality>,
+    facts: types::Facts,
 }
 
 /// Analyze a single file or directory and render the result in the requested format.
@@ -126,14 +139,18 @@ pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
         skip_predicate: None,
     };
 
+    let out = Output {
+        format: *config.format,
+        min_crit: config.min_crit,
+        max_crit: config.max_crit,
+        min_file_crit: config.min_file_crit,
+        max_file_crit: config.max_file_crit,
+        facts: config.facts,
+    };
+
     // If target is a directory, process files recursively
     if path.is_dir() {
         let options_arc = std::sync::Arc::new(options);
-        let format_val = *config.format;
-        let min_crit = config.min_crit;
-        let max_crit = config.max_crit;
-        let min_file_crit = config.min_file_crit;
-        let max_file_crit = config.max_file_crit;
 
         // Sink: one of three destinations, all configured up front so the
         // per-file callback stays cheap. Streaming to the output file used to
@@ -173,14 +190,7 @@ pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
                 let formatted = match *result {
                     Ok(lib_report) => {
                         let mut report = prepare_output_report(lib_report);
-                        let Ok(res) = format_report_output(
-                            &mut report,
-                            &format_val,
-                            min_crit,
-                            max_crit,
-                            min_file_crit,
-                            max_file_crit,
-                        ) else {
+                        let Ok(res) = format_report_output(&mut report, &out) else {
                             return;
                         };
                         res
@@ -234,15 +244,7 @@ pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
     }
 
     // Single file analysis
-    analyze_and_format(
-        config.target,
-        &options,
-        config.format,
-        config.min_crit,
-        config.max_crit,
-        config.min_file_crit,
-        config.max_file_crit,
-    )
+    analyze_and_format(config.target, &options, &out)
 }
 
 /// Analyze a single file and format the output.
@@ -253,11 +255,7 @@ pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
 fn analyze_and_format(
     target: &str,
     options: &cleave::AnalysisOptions,
-    format: &cli::OutputFormat,
-    min_crit: Option<types::Criticality>,
-    max_crit: Option<types::Criticality>,
-    min_file_crit: Option<types::Criticality>,
-    max_file_crit: Option<types::Criticality>,
+    out: &Output,
 ) -> Result<String> {
     let path = Path::new(target);
 
@@ -267,45 +265,31 @@ fn analyze_and_format(
 
     let mut report = prepare_output_report(lib_report);
 
-    format_report_output(
-        &mut report,
-        format,
-        min_crit,
-        max_crit,
-        min_file_crit,
-        max_file_crit,
-    )
+    format_report_output(&mut report, out)
 }
 
-fn format_report_output(
-    report: &mut types::AnalysisReport,
-    format: &cli::OutputFormat,
-    min_crit: Option<types::Criticality>,
-    max_crit: Option<types::Criticality>,
-    min_file_crit: Option<types::Criticality>,
-    max_file_crit: Option<types::Criticality>,
-) -> Result<String> {
-    if min_file_crit.is_some() || max_file_crit.is_some() {
-        apply_file_criticality_filter(report, min_file_crit, max_file_crit);
+fn format_report_output(report: &mut types::AnalysisReport, out: &Output) -> Result<String> {
+    if out.min_file_crit.is_some() || out.max_file_crit.is_some() {
+        apply_file_criticality_filter(report, out.min_file_crit, out.max_file_crit);
     }
 
-    if min_crit.is_some() || max_crit.is_some() {
-        apply_criticality_filter(report, min_crit, max_crit);
+    if out.min_crit.is_some() || out.max_crit.is_some() {
+        apply_criticality_filter(report, out.min_crit, out.max_crit);
     }
 
-    match format {
+    match out.format {
         cli::OutputFormat::Snapshot => {
             let mut snapshot = serde_json::to_string(report)?;
             snapshot.push('\n');
             Ok(snapshot)
         }
         cli::OutputFormat::Json => {
-            let compact = types::compact_from_files(&report.files);
+            let compact = types::compact_from_files(&report.files, out.facts);
             Ok(serde_json::to_string(&compact)?)
         }
         // One record per line: a directory scan streams these back to back.
         cli::OutputFormat::Jsonl => {
-            let compact = types::compact_from_files(&report.files);
+            let compact = types::compact_from_files(&report.files, out.facts);
             let mut line = serde_json::to_string(&compact)?;
             line.push('\n');
             Ok(line)
@@ -419,6 +403,17 @@ fn apply_file_criticality_filter(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn output(format: cli::OutputFormat) -> Output {
+        Output {
+            format,
+            min_crit: None,
+            max_crit: None,
+            min_file_crit: None,
+            max_file_crit: None,
+            facts: types::Facts::Model,
+        }
+    }
     use types::file_analysis::FileAnalysis;
     use types::traits_findings::{Finding, FindingKind};
     use types::{AnalysisReport, Criticality, TargetInfo};
@@ -487,15 +482,8 @@ mod tests {
                 vec![make_finding("x", Criticality::Notable)],
             )]);
             out.push_str(
-                &format_report_output(
-                    &mut report,
-                    &cli::OutputFormat::Jsonl,
-                    None,
-                    None,
-                    None,
-                    None,
-                )
-                .expect("format"),
+                &format_report_output(&mut report, &output(cli::OutputFormat::Jsonl))
+                    .expect("format"),
             );
         }
         let lines: Vec<&str> = out.lines().collect();
@@ -505,15 +493,8 @@ mod tests {
         }
 
         let mut report = make_report(vec![make_file("/bin/a", vec![])]);
-        let json = format_report_output(
-            &mut report,
-            &cli::OutputFormat::Json,
-            None,
-            None,
-            None,
-            None,
-        )
-        .expect("format");
+        let json =
+            format_report_output(&mut report, &output(cli::OutputFormat::Json)).expect("format");
         assert!(
             !json.ends_with('\n'),
             "--format json stays a single bare object"

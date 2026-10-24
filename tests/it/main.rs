@@ -6,6 +6,7 @@
 //! dropping `tests/it/<name>.rs` and a `mod <name>;` line below.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+mod package_type_test;
 mod support;
 
 mod amos_traits_test;

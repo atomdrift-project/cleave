@@ -52,6 +52,19 @@ impl Val {
                         return u64::from_str_radix(&s[2..], radix).map_or(f64::NAN, |n| n as f64);
                     }
                 }
+                if matches!(s, "Infinity" | "+Infinity" | "-Infinity") {
+                    return if s.starts_with('-') {
+                        f64::NEG_INFINITY
+                    } else {
+                        f64::INFINITY
+                    };
+                }
+                if !s
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || matches!(b, b'+' | b'-' | b'.' | b'e' | b'E'))
+                {
+                    return f64::NAN;
+                }
                 s.parse().unwrap_or(f64::NAN)
             }
         }
@@ -91,6 +104,7 @@ struct Decoder {
     binding: usize,
     visible: Span,
     function: Span,
+    producer_call: Span,
     name: String,
     table: usize,
     offset: f64,
@@ -172,6 +186,7 @@ fn member<'a>(n: Node<'a>, source: &str) -> Option<(Node<'a>, String)> {
 fn immutable_object(
     object: &Object,
     references: &HashMap<String, Vec<Node<'_>>>,
+    bindings: &HashMap<String, Vec<Binding>>,
     source: &str,
 ) -> bool {
     references
@@ -182,6 +197,7 @@ fn immutable_object(
             covers(object.scope, n.start_byte())
                 && matches!(n.kind(), "identifier" | "shorthand_property_identifier")
                 && text(**n, source) == Some(object.name.as_str())
+                && may_resolve_at(bindings, &object.name, n.start_byte(), object.declaration)
         })
         .all(|n| {
             if shadowed_parameter(*n, object, source) {
@@ -355,7 +371,7 @@ fn add_literal_objects<'a>(ctx: &mut Context<'a>, all: &[Node<'a>]) {
             }
         }
         if (!object.fields.is_empty() || !object.forwards.is_empty())
-            && immutable_object(&object, &ctx.references, ctx.source)
+            && immutable_object(&object, &ctx.references, &ctx.bindings, ctx.source)
         {
             ctx.objects.push(object);
         }
@@ -682,23 +698,28 @@ fn table_reference_region(
 ) -> Option<ReductionRegion> {
     let d = &ctx.decoders[ctx.active];
     let table = &ctx.tables[d.table];
-    if !all
-        .iter()
-        .filter(|n| {
-            n.kind() == "identifier"
-                && covers(d.visible, n.start_byte())
-                && text(**n, ctx.source) == Some(d.name.as_str())
-        })
-        .all(|n| {
-            covers(d.function, n.start_byte())
-                || n.parent().is_some_and(|p| {
-                    p.kind() == "call_expression"
-                        && p.child_by_field_name("function")
-                            .is_some_and(|f| f.byte_range() == n.byte_range())
-                })
-        })
-    {
-        return None;
+    // References to a shadowing parameter are not escapes of the decoder.
+    // Audit every decoder sharing this table, not just the first checksum leg.
+    for decoder in ctx.decoders.iter().filter(|other| other.table == d.table) {
+        if !all
+            .iter()
+            .filter(|n| {
+                n.kind() == "identifier"
+                    && covers(decoder.visible, n.start_byte())
+                    && text(**n, ctx.source) == Some(decoder.name.as_str())
+                    && ctx.resolves(&decoder.name, n.start_byte(), decoder.binding)
+            })
+            .all(|n| {
+                covers(decoder.function, n.start_byte())
+                    || n.parent().is_some_and(|p| {
+                        p.kind() == "call_expression"
+                            && p.child_by_field_name("function")
+                                .is_some_and(|f| f.byte_range() == n.byte_range())
+                    })
+            })
+        {
+            return None;
+        }
     }
     let unsafe_refs: Vec<_> = all
         .iter()
@@ -719,7 +740,9 @@ fn table_reference_region(
             });
             !owner_parameter
                 && !covers(table.function, n.start_byte())
-                && !covers(d.function, n.start_byte())
+                && !ctx.decoders.iter().any(|other| {
+                    other.table == d.table && covers(other.producer_call, n.start_byte())
+                })
                 && !covers(rotator, n.start_byte())
         })
         .collect();
@@ -794,11 +817,12 @@ fn identifier_writes(
     name: &str,
     visible: Span,
     source: &str,
-    allowed: Option<Span>,
+    expected: usize,
+    bindings: &HashMap<String, Vec<Binding>>,
 ) -> bool {
     all.iter().any(|n| {
         covers(visible, n.start_byte())
-            && !allowed.is_some_and(|s| covers(s, n.start_byte()))
+            && resolves_at(bindings, name, n.start_byte(), expected)
             && matches!(
                 n.kind(),
                 "assignment_expression" | "augmented_assignment_expression" | "update_expression"
@@ -882,19 +906,47 @@ fn rc4(cipher: &str, key: &str) -> Option<String> {
     }
     String::from_utf16(&out).ok()
 }
+// Keep ambiguous references in the immutability audit, while ignoring a
+// definite inner binding with the same spelling.
+fn may_resolve_at(
+    bindings: &HashMap<String, Vec<Binding>>,
+    name: &str,
+    at: usize,
+    declaration: usize,
+) -> bool {
+    let Some(bindings) = bindings.get(name) else {
+        return false;
+    };
+    let selected: Vec<_> = bindings.iter().filter(|b| covers(b.scope, at)).collect();
+    let Some(width) = selected.iter().map(|b| b.scope.1 - b.scope.0).min() else {
+        return false;
+    };
+    selected
+        .iter()
+        .filter(|b| b.scope.1 - b.scope.0 == width)
+        .any(|b| b.declaration == declaration)
+}
+fn resolves_at(
+    bindings: &HashMap<String, Vec<Binding>>,
+    name: &str,
+    at: usize,
+    declaration: usize,
+) -> bool {
+    let Some(bindings) = bindings.get(name) else {
+        return false;
+    };
+    let selected: Vec<_> = bindings.iter().filter(|b| covers(b.scope, at)).collect();
+    let Some(width) = selected.iter().map(|b| b.scope.1 - b.scope.0).min() else {
+        return false;
+    };
+    selected
+        .iter()
+        .filter(|b| b.scope.1 - b.scope.0 == width)
+        .all(|b| b.declaration == declaration)
+}
 impl<'a> Context<'a> {
     fn resolves(&self, name: &str, at: usize, declaration: usize) -> bool {
-        let Some(bindings) = self.bindings.get(name) else {
-            return false;
-        };
-        let selected: Vec<_> = bindings.iter().filter(|b| covers(b.scope, at)).collect();
-        let Some(width) = selected.iter().map(|b| b.scope.1 - b.scope.0).min() else {
-            return false;
-        };
-        selected
-            .iter()
-            .filter(|b| b.scope.1 - b.scope.0 == width)
-            .all(|b| b.declaration == declaration)
+        resolves_at(&self.bindings, name, at, declaration)
     }
 
     fn member_value(
@@ -1268,18 +1320,9 @@ pub(crate) fn decode(ast: filefacts::SourceAst<'_>) -> Option<String> {
         }
     }
     ctx.objects
-        .retain(|o| immutable_object(o, &ctx.references, source));
+        .retain(|o| immutable_object(o, &ctx.references, &ctx.bindings, source));
     if ctx.tables.len() > 8 || ctx.objects.len() > 4096 {
         return None;
-    }
-    #[cfg(test)]
-    if source.len() > 600000 {
-        eprintln!(
-            "QA2 tables={} objects={} fuel={}",
-            ctx.tables.len(),
-            ctx.objects.len(),
-            ctx.fuel.get()
-        );
     }
     if ctx.tables.is_empty() {
         return None;
@@ -1424,7 +1467,7 @@ pub(crate) fn decode(ast: filefacts::SourceAst<'_>) -> Option<String> {
             fields: HashMap::new(),
             forwards: HashMap::new(),
         };
-        if !immutable_object(&table_object, &ctx.references, source)
+        if !immutable_object(&table_object, &ctx.references, &ctx.bindings, source)
             || all.iter().any(|n| {
                 covers(table_object.scope, n.start_byte())
                     && n.kind() == "call_expression"
@@ -1432,7 +1475,12 @@ pub(crate) fn decode(ast: filefacts::SourceAst<'_>) -> Option<String> {
                         .and_then(|n| member(n, source))
                         .is_some_and(|(receiver, _)| {
                             text(receiver, source) == Some(table_object.name.as_str())
-                                && !shadowed_parameter(receiver, &table_object, source)
+                                && may_resolve_at(
+                                    &ctx.bindings,
+                                    &table_object.name,
+                                    receiver.start_byte(),
+                                    table_object.declaration,
+                                )
                         })
             })
         {
@@ -1455,6 +1503,7 @@ pub(crate) fn decode(ast: filefacts::SourceAst<'_>) -> Option<String> {
                 binding: f.child_by_field_name("name")?.start_byte(),
                 visible: visible_scope(f),
                 function: (f.start_byte(), f.end_byte()),
+                producer_call: (table_call.start_byte(), table_call.end_byte()),
                 name,
                 table,
                 offset,
@@ -1463,20 +1512,11 @@ pub(crate) fn decode(ast: filefacts::SourceAst<'_>) -> Option<String> {
         }
     }
     ctx.proxies
-        .retain(|p| !identifier_writes(&all, &p.name, p.visible, source, None));
+        .retain(|p| !identifier_writes(&all, &p.name, p.visible, source, p.binding, &ctx.bindings));
     ctx.decoders
-        .retain(|d| !identifier_writes(&all, &d.name, d.visible, source, None));
+        .retain(|d| !identifier_writes(&all, &d.name, d.visible, source, d.binding, &ctx.bindings));
     if ctx.decoders.len() > 8 || ctx.proxies.len() > 4096 {
         return None;
-    }
-    #[cfg(test)]
-    if source.len() > 600000 {
-        eprintln!(
-            "QA2 decoders={} proxies={} fuel={}",
-            ctx.decoders.len(),
-            ctx.proxies.len(),
-            ctx.fuel.get()
-        );
     }
     let mut attempts = 0;
     for active in 0..ctx.decoders.len() {
@@ -1668,7 +1708,7 @@ mod tests {
         ] {
             assert_eq!(Val::string(text.into()).numeric(), want);
         }
-        for text in ["0x20junk", "-0x20", "32junk"] {
+        for text in ["0x20junk", "-0x20", "32junk", "inf", "infinity"] {
             assert!(Val::string(text.into()).numeric().is_nan());
         }
     }
@@ -1685,20 +1725,37 @@ mod tests {
         assert!(out.contains("\"getSignaturesForAddress\""));
     }
     #[test]
-    fn qa2_external_probe() {
-        let path = std::env::var("QA2_JS_PROBE").expect("external specimen path");
-        let source = std::fs::read_to_string(path).expect("read specimen");
-        let out = reduce(&source).expect("external specimen table reduction");
-        std::fs::write("/tmp/qa2-deep-review/rfq-engine-decoded.js", out)
-            .expect("write reduced source");
-    }
-    #[test]
     fn reduces_mixed_decoders_sharing_the_checksum_table() {
         let source = include_str!("../../testdata/vsix-string-table/mixed-decoders.js");
         let out = reduce(source).expect("mixed plain/RC4 table checksum");
         assert!(out.contains("\"child_process\""));
         assert!(out.contains("\"runInContext\""));
         assert!(out.contains("\"ordinary text\""));
+        let overwritten = source.replace(
+            "console.log",
+            "B = function() { return 'changed'; }; console.log",
+        );
+        assert!(reduce(&overwritten).is_none());
+        let escaped = source.replace(
+            "console.log",
+            "var leaked = Z(); leaked.reverse(); console.log",
+        );
+        assert!(reduce(&escaped).is_none());
+        let nested_escape = source.replace(
+            "var t = F[B];",
+            "var t = F[B]; var leaked = Z(); leaked.reverse();",
+        );
+        assert!(reduce(&nested_escape).is_none());
+        let shadowed = format!(
+            "var offsets = {{a:0x1d2}}; function unrelated() {{ var offsets = {{}}; return offsets; }} {}",
+            source.replace("B(0x1d2)", "B(offsets.a)")
+        );
+        let reduced = reduce(&shadowed).expect("independent shadowing object");
+        assert!(reduced.contains("\"child_process\""));
+        let escaped_object = format!("unknown(offsets); {}", shadowed);
+        if let Some(reduced) = reduce(&escaped_object) {
+            assert!(reduced.contains("B(offsets.a)"));
+        }
     }
     #[test]
     fn reduces_base64_proxy_chains_and_constant_string_joins() {

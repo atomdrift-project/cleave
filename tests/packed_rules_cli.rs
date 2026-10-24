@@ -75,7 +75,7 @@ fn cached_buckets(cache: &Path) -> Vec<PathBuf> {
     walkdir::WalkDir::new(cache)
         .into_iter()
         .filter_map(Result::ok)
-        .map(|entry| entry.into_path())
+        .map(walkdir::DirEntry::into_path)
         .filter(|path| {
             path.is_file()
                 && (path.extension().is_some_and(|ext| ext == "yrc")

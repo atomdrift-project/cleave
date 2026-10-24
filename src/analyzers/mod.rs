@@ -711,6 +711,14 @@ impl FileTypeExt for FileType {
             ],
             FileType::Svg => vec!["svg", "xml", "image/svg+xml"],
             FileType::Zip => vec!["zip", "archive"],
+            FileType::GoModule => vec!["go_module", "zip", "archive"],
+            FileType::Composer => vec!["composer", "zip", "archive"],
+            FileType::Hex => vec!["hex", "tar", "archive"],
+            FileType::Pub => vec!["pub", "tar", "archive"],
+            FileType::Cran => vec!["cran", "tar", "archive"],
+            FileType::Cpan => vec!["cpan", "tar", "archive"],
+            FileType::Hackage => vec!["hackage", "tar", "archive"],
+
             FileType::Tar
             | FileType::TarGz
             | FileType::TarBz2

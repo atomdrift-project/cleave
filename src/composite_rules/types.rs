@@ -680,6 +680,35 @@ pub(crate) enum FileType {
     #[archive]
     #[package]
     Nupkg,
+    /// Go module distribution ZIP, including releases without go.mod.
+    #[archive]
+    #[package]
+    GoModule,
+    /// composer package distribution.
+    #[archive]
+    #[package]
+    Composer,
+    /// hex package distribution.
+    #[archive]
+    #[package]
+    Hex,
+    /// pub package distribution.
+    #[archive]
+    #[package]
+    Pub,
+    /// cran package distribution.
+    #[archive]
+    #[package]
+    Cran,
+    /// cpan package distribution.
+    #[archive]
+    #[package]
+    Cpan,
+    /// hackage package distribution.
+    #[archive]
+    #[package]
+    Hackage,
+
     /// Rust crate (.crate)
     #[archive]
     #[package]
@@ -913,6 +942,14 @@ impl From<filefacts::FileType> for FileType {
             Ff::Yaml => Self::Yaml,
             // Archives / packages
             Ff::Zip => Self::Zip,
+            Ff::GoModule => Self::GoModule,
+            Ff::Composer => Self::Composer,
+            Ff::Hex => Self::Hex,
+            Ff::Pub => Self::Pub,
+            Ff::Cran => Self::Cran,
+            Ff::Cpan => Self::Cpan,
+            Ff::Hackage => Self::Hackage,
+
             Ff::Tar | Ff::TarGz | Ff::TarBz2 | Ff::TarXz | Ff::TarZst => Self::Tar,
             Ff::Gz => Self::Gz,
             Ff::Bz2 => Self::Bz2,
@@ -1143,6 +1180,8 @@ impl FileType {
             | FileType::Jar
             | FileType::Whl
             | FileType::Nupkg
+            | FileType::GoModule
+            | FileType::Composer
             | FileType::Crx
             | FileType::Xpi
             | FileType::VsixArchive
@@ -1151,6 +1190,11 @@ impl FileType {
             FileType::AlpineApk
             | FileType::Npm
             | FileType::Crate
+            | FileType::Hex
+            | FileType::Pub
+            | FileType::Cran
+            | FileType::Cpan
+            | FileType::Hackage
             | FileType::Gem
             | FileType::Pkg
             | FileType::OciImage
@@ -1343,6 +1387,14 @@ impl FileType {
             Self::Lzma => "lzma",
             Self::Npm => "npm",
             Self::Nupkg => "nupkg",
+            Self::GoModule => "go_module",
+            Self::Composer => "composer",
+            Self::Hex => "hex",
+            Self::Pub => "pub",
+            Self::Cran => "cran",
+            Self::Cpan => "cpan",
+            Self::Hackage => "hackage",
+
             Self::Crate => "crate",
             Self::Conda => "conda",
             Self::Egg => "egg",
@@ -1509,6 +1561,14 @@ impl FileType {
             "zst" => FileType::Zst,
             "npm" => FileType::Npm,
             "nupkg" => FileType::Nupkg,
+            "go_module" => FileType::GoModule,
+            "composer" => FileType::Composer,
+            "hex" => FileType::Hex,
+            "pub" => FileType::Pub,
+            "cran" => FileType::Cran,
+            "cpan" => FileType::Cpan,
+            "hackage" => FileType::Hackage,
+
             "crate" => FileType::Crate,
             "conda" => FileType::Conda,
             "egg" => FileType::Egg,
@@ -1995,6 +2055,13 @@ mod tests {
             Ff::Jar,
             Ff::Whl,
             Ff::Nupkg,
+            Ff::GoModule,
+            Ff::Composer,
+            Ff::Hex,
+            Ff::Pub,
+            Ff::Cran,
+            Ff::Cpan,
+            Ff::Hackage,
             Ff::Crx,
             Ff::Xpi,
             Ff::Vsix,
@@ -2350,6 +2417,13 @@ mod package_family_tests {
         for ft in [
             FileType::Npm,
             FileType::Gem,
+            FileType::GoModule,
+            FileType::Composer,
+            FileType::Hex,
+            FileType::Pub,
+            FileType::Cran,
+            FileType::Cpan,
+            FileType::Hackage,
             FileType::Whl,
             FileType::Deb,
             FileType::Rpm,
@@ -2386,6 +2460,13 @@ mod package_family_tests {
         for label in [
             "npm",
             "nupkg",
+            "go_module",
+            "composer",
+            "hex",
+            "pub",
+            "cran",
+            "cpan",
+            "hackage",
             "gem",
             "whl",
             "python_sdist",

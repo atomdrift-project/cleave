@@ -23,7 +23,8 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 
-/// Run `cleave --json analyze <path>` and return the full compact report.
+/// Run `cleave --json --full-facts analyze <path>` and return the compact
+/// report with every fact (trait authors read the full surface).
 /// Skips YARA + cache for speed and determinism. Returns `None` when the
 /// fixture is not present on the test host (binary fixtures are gitignored;
 /// we test what the host can extract, not require every one).
@@ -36,7 +37,7 @@ fn analyze_report(path: &Path) -> Option<Value> {
     let output = cmd
         .env("CLEAVE_SKIP_YARA", "1")
         .env("CLEAVE_SKIP_CACHE", "1")
-        .args(["--json", "analyze", path.to_str().unwrap()])
+        .args(["--json", "--full-facts", "analyze", path.to_str().unwrap()])
         .output()
         .expect("cleave run");
     assert!(

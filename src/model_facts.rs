@@ -201,7 +201,7 @@ mod tests {
     #[test]
     fn profile_preserves_missingness_values_and_both_gap_semantics() {
         let facts: CompactFacts = serde_json::from_value(serde_json::json!({
-            "metrics":{"binary":{"overall_entropy":0,"unneeded":23},"text":{"total_lines":null},"unused":{"x":1}},
+            "metrics":{"binary":{"overall_entropy":0,"unneeded":23},"text":{"total_lines":null,"lines":7},"file":{"entropy":2.28},"unused":{"x":1}},
             "imp":[["lib","socket"],["hashlib",""],["lib","  requests  "],["lib","not_used"]],
             "funcs":[["subprocess",12],["not_used",24]],"tgt":["os.system","no"],
             "sec":[[".text",0,42,1.0,"x"]]
@@ -214,12 +214,17 @@ mod tests {
         let metrics = &projected.metrics.as_ref().unwrap().0;
         assert_eq!(metrics["binary"]["overall_entropy"], 0);
         assert!(metrics["text"]["total_lines"].is_null());
+        // Models name these by their old keys and collimator back-fills them
+        // from the renamed report keys, so the report keys must survive.
+        assert_eq!(metrics["text"]["lines"], 7);
+        assert_eq!(metrics["file"]["entropy"], 2.28);
         assert!(metrics["binary"].get("unneeded").is_none());
         assert!(supports(profile_id(), &["metrics:binary_overall_entropy".into()]).is_ok());
         assert!(supports(profile_id(), &["symbol:new".into()]).is_err());
         assert!(supports(profile_id(), &["metrics:new_input".into()]).is_err());
         assert!(supports(profile_id(), &["struct:unaudited_section_count".into()]).is_err());
         assert!(supports(profile_id(), &["present:a/new/trait".into()]).is_ok());
+        assert!(supports(profile_id(), &["filetype:new".into(), "ghost:a/b".into()]).is_ok());
     }
 
     #[test]

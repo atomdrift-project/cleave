@@ -21,7 +21,7 @@ fn analyze_compact(path: &std::path::Path) -> (String, serde_json::Value) {
     let mut report = cleave::analyze_file(path, &options).expect("analyze");
     report.shrink_to_fit();
     report.finalize();
-    let compact = cleave::types::compact_from_files(&report.files);
+    let compact = cleave::types::compact_from_files(&report.files, cleave::types::Facts::Full);
     let json_string = serde_json::to_string(&compact).expect("serialize");
     let json_value: serde_json::Value =
         serde_json::from_str(&json_string).expect("parse roundtrip");

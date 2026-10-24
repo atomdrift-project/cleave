@@ -42,6 +42,7 @@ pub mod istr;
 // `identifiers.*`/`strings.*`/`comments.*`/`functions.*`/`imports.*`):
 // file_metrics, image_metrics, jpeg_metrics, png_metrics, lnk_metrics,
 // pdf_metrics, text_metrics, language_metrics.
+pub(crate) mod byte_text;
 pub(crate) mod ml_features;
 pub(crate) mod office_metrics;
 pub(crate) mod paths_env;
@@ -54,7 +55,7 @@ pub(crate) mod z85;
 // These re-exports are part of the public library API even if not used directly in the binary
 pub use compact::{
     CompactDep, CompactExport, CompactFacts, CompactFile, CompactFunction, CompactImport,
-    CompactReport, CompactSection, CompactTrait, RoundedMetrics, compact_from_files,
+    CompactReport, CompactSection, CompactTrait, Facts, RoundedMetrics, compact_from_files,
 };
 #[allow(unused_imports)]
 pub use core::{

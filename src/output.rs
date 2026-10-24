@@ -858,34 +858,32 @@ pub fn format_context_badged(
         // located evidence left with the conclusion and the leg rendered as a
         // bare note (an agent skill's `curl --data-binary @file` line never
         // reached the grader). Hand such notes to the omitted legs instead.
+        let notes = crate::context::notes(&file.findings, &file.context);
         let relabeled = if minimal && shows_context && !relabel_disabled() {
-            relabel_composite_notes(file, &context_selected).map(|context| FileAnalysis {
-                context,
-                ..file.clone()
-            })
+            relabel_composite_notes(file, &notes, &context_selected)
         } else {
             None
         };
-        let file_view: &FileAnalysis = relabeled.as_ref().unwrap_or(file);
+        let view_notes: &[Vec<Note>] = relabeled.as_deref().unwrap_or(&notes);
 
         // The ids actually drawn as byte/source windows by `render_context`: a
         // context note whose id the window view will render. This is the single
         // source of truth for the windowed-vs-location-less split — a selected
         // finding not in this set renders as a location-less note instead.
-        let plan = window_plan(file_view, &context_selected, opts);
+        let plan = window_plan(file, view_notes, &context_selected, opts);
         let windowed: HashSet<&str> = plan
             .iter()
-            .flatten()
+            .filter_map(|w| w.ids.as_ref())
             .flat_map(|ids| ids.iter().copied())
             .collect();
         // Findings that hold a note but whose every window the plan cut: they
         // were capped, not dominated, so the no-anchor block must still list
         // them (see `render_no_anchor`'s dominance rule).
         let context_sel: HashSet<&str> = context_selected.iter().copied().collect();
-        let capped: HashSet<&str> = file_view
-            .context
+        let capped: HashSet<&str> = view_notes
             .iter()
-            .flat_map(|l| l.notes.iter().map(|n| n.id.as_str()))
+            .flatten()
+            .map(|n| n.id.as_str())
             .filter(|id| context_sel.contains(id) && !windowed.contains(id))
             .collect();
 
@@ -908,11 +906,10 @@ pub fn format_context_badged(
         let drawn: Vec<(u64, u64)> = if is_binary_file_type(&file.file_type) {
             Vec::new()
         } else {
-            file_view
-                .context
+            file.context
                 .iter()
                 .zip(&plan)
-                .filter(|(_, ids)| ids.is_some())
+                .filter(|(_, w)| w.ids.is_some())
                 .map(|(c, _)| (c.loc, c.loc + c.data.len() as u64))
                 .collect()
         };
@@ -921,6 +918,7 @@ pub fn format_context_badged(
             file,
             &selected,
             &ContextCoverage {
+                notes: &notes,
                 windowed: &windowed,
                 capped: &capped,
                 drawn: &drawn,
@@ -933,7 +931,7 @@ pub fn format_context_badged(
         );
         render_context(
             &mut body,
-            file_view,
+            file,
             &context_selected,
             &plan,
             &owed,
@@ -1291,16 +1289,17 @@ fn indent_block(out: &mut String, block: &str, depth: u32) {
 /// windowed-vs-location-less split: a selected finding in no drawn window
 /// renders as a bare note instead.
 fn window_plan<'a>(
-    file: &'a FileAnalysis,
+    file: &FileAnalysis,
+    notes: &'a [Vec<Note>],
     selected: &[&'a str],
     opts: &TinyOpts,
-) -> Vec<Option<HashSet<&'a str>>> {
+) -> Vec<Planned<'a>> {
     let sel: HashSet<&str> = selected.iter().copied().collect();
     let mut drawn: HashMap<&str, usize> = HashMap::new();
-    let mut plan: Vec<Option<HashSet<&'a str>>> = Vec::with_capacity(file.context.len());
-    for line in &file.context {
+    let mut plan: Vec<Planned<'a>> = Vec::with_capacity(notes.len());
+    for window_notes in notes {
         let mut ids: HashSet<&'a str> = HashSet::new();
-        for n in &line.notes {
+        for n in window_notes {
             let id = n.id.as_str();
             if !sel.contains(id) || ids.contains(id) {
                 continue;
@@ -1312,32 +1311,36 @@ fn window_plan<'a>(
             *count += 1;
             ids.insert(id);
         }
-        plan.push((!ids.is_empty()).then_some(ids));
+        plan.push(Planned {
+            notes: window_notes,
+            ids: (!ids.is_empty()).then_some(ids),
+        });
     }
-    let windows = plan.iter().flatten().count();
+    let windows = plan.iter().filter(|w| w.ids.is_some()).count();
     let bytes: usize = plan
         .iter()
         .zip(&file.context)
-        .enumerate()
-        .filter(|(_, (ids, _))| ids.is_some())
-        .map(|(i, (_, line))| {
-            file.context_costs
-                .get(i)
-                .copied()
-                .unwrap_or(line.data.len())
-        })
+        .filter(|(w, _)| w.ids.is_some())
+        .map(|(_, line)| line.data.len())
         .sum();
     let capped = opts.max_windows > 0 && windows > opts.max_windows;
     let budgeted = opts.window_bytes > 0 && bytes > opts.window_bytes;
     if capped || budgeted {
         let kept = pick_windows(file, &plan, &sel, opts);
-        for (ids, keep) in plan.iter_mut().zip(kept) {
+        for (w, keep) in plan.iter_mut().zip(kept) {
             if !keep {
-                *ids = None;
+                w.ids = None;
             }
         }
     }
     plan
+}
+
+/// One context window in the render plan: the notes derived for it and, when
+/// the plan draws it, the finding ids it annotates.
+struct Planned<'a> {
+    notes: &'a [Note],
+    ids: Option<HashSet<&'a str>>,
 }
 
 /// One annotated note's say in which windows a budgeted file draws.
@@ -1398,20 +1401,20 @@ impl Candidate<'_> {
 /// composite draws on (an import, say) earns no window here — a file's import
 /// block would otherwise outbid its behavior — and still lists as a
 /// location-less note.
-fn pick_windows(
+fn pick_windows<'a>(
     file: &FileAnalysis,
-    plan: &[Option<HashSet<&str>>],
+    plan: &[Planned<'a>],
     selected: &HashSet<&str>,
     opts: &TinyOpts,
 ) -> Vec<bool> {
     let support = withheld_composite_support(file, selected);
-    let mut candidates: Vec<Candidate<'_>> = Vec::new();
-    for (i, ids) in plan.iter().enumerate() {
-        let Some(ids) = ids else { continue };
+    let mut candidates: Vec<Candidate<'a>> = Vec::new();
+    for (i, w) in plan.iter().enumerate() {
+        let Some(ids) = &w.ids else { continue };
         let mut seen: HashSet<&str> = HashSet::new();
         let mut tier = 0u8;
         let mut notes = Vec::new();
-        for n in &file.context[i].notes {
+        for n in w.notes {
             let id = n.id.as_str();
             if !ids.contains(id) || !seen.insert(id) {
                 continue;
@@ -1433,11 +1436,7 @@ fn pick_windows(
             candidates.push(Candidate {
                 line: i,
                 tier,
-                bytes: file
-                    .context_costs
-                    .get(i)
-                    .copied()
-                    .unwrap_or(file.context[i].data.len()),
+                bytes: file.context[i].data.len(),
                 notes,
             });
         }
@@ -1545,15 +1544,16 @@ fn relabel_disabled() -> bool {
     *OFF.get_or_init(|| std::env::var("CLEAVE_TINY_NO_RELABEL").as_deref() == Ok("1"))
 }
 
-/// Context windows with every note for a withheld composite reassigned to the
-/// composite's own legs, or `None` when nothing changes.
+/// A file's window notes with every note for a withheld composite reassigned
+/// to the composite's own legs, or `None` when nothing changes.
 ///
 /// The LLM/tiny view drops composites and shows their legs (`select_ids`), but
-/// the capture pass keeps only the strongest note on an overlapping span, and
+/// placement keeps only the strongest note on an overlapping span, and
 /// a hostile composite anchored on its leg's evidence beats that notable leg
 /// every time. The leg then owned no note at all: the window with the matched
 /// line was drawn only if some other selected trait happened to sit on it, and
-/// its annotation was never the leg's. A note whose id is a native composite
+/// its annotation was never the leg's. A note whose id is a composite (native
+/// or inherited: notes ignore provenance, see [`crate::context::notes`])
 /// becomes one note per leg that is selected here, has no located note of its
 /// own, and has a span of its own evidence overlapping the note's, at the
 /// composite's span with the leg's identity. A composite's note covers only
@@ -1562,19 +1562,19 @@ fn relabel_disabled() -> bool {
 /// location-less. A composite with no such leg keeps its (unselected,
 /// unrendered) note, and a composite that is itself selected (a leg of a
 /// wider one) keeps its own.
-fn relabel_composite_notes(file: &FileAnalysis, selected: &[&str]) -> Option<Vec<ContextLine>> {
+fn relabel_composite_notes(
+    file: &FileAnalysis,
+    notes: &[Vec<Note>],
+    selected: &[&str],
+) -> Option<Vec<Vec<Note>>> {
     let sel: HashSet<&str> = selected.iter().copied().collect();
-    let located: HashSet<&str> = file
-        .context
-        .iter()
-        .flat_map(|l| l.notes.iter().map(|n| n.id.as_str()))
-        .collect();
+    let located: HashSet<&str> = notes.iter().flatten().map(|n| n.id.as_str()).collect();
     let mut legs: HashMap<&str, Vec<(&Finding, Vec<[u64; 2]>)>> = HashMap::new();
     for f in &file.findings {
         // A composite that is itself selected — a leg of a wider composite,
         // guaranteed by `select_ids` — keeps its own note: it is shown, so
         // its evidence stays with it.
-        if f.src.is_some() || f.trait_refs.is_empty() || sel.contains(f.id.as_str()) {
+        if f.trait_refs.is_empty() || sel.contains(f.id.as_str()) {
             continue;
         }
         let mine: Vec<(&Finding, Vec<[u64; 2]>)> = composite_atoms(file, [f])
@@ -1595,12 +1595,11 @@ fn relabel_composite_notes(file: &FileAnalysis, selected: &[&str]) -> Option<Vec
         return None;
     }
     let mut changed = false;
-    let context = file
-        .context
+    let relabeled = notes
         .iter()
-        .map(|line| {
-            let mut notes = Vec::with_capacity(line.notes.len());
-            for n in &line.notes {
+        .map(|window| {
+            let mut out: Vec<Note> = Vec::with_capacity(window.len());
+            for n in window {
                 let end = n.off + u64::from(n.len.max(1));
                 let covered: Vec<&Finding> = legs
                     .get(n.id.as_str())
@@ -1614,18 +1613,15 @@ fn relabel_composite_notes(file: &FileAnalysis, selected: &[&str]) -> Option<Vec
                     .map(|&(leg, _)| leg)
                     .collect();
                 if covered.is_empty() {
-                    notes.push(n.clone());
+                    out.push(n.clone());
                     continue;
                 }
                 changed = true;
                 for leg in covered {
-                    if notes
-                        .iter()
-                        .any(|m: &Note| m.id == leg.id && m.off == n.off)
-                    {
+                    if out.iter().any(|m| m.id == leg.id && m.off == n.off) {
                         continue;
                     }
-                    notes.push(Note {
+                    out.push(Note {
                         crit: leg.crit,
                         id: leg.id.clone(),
                         desc: leg.desc.clone(),
@@ -1635,13 +1631,10 @@ fn relabel_composite_notes(file: &FileAnalysis, selected: &[&str]) -> Option<Vec
                     });
                 }
             }
-            ContextLine {
-                notes,
-                ..line.clone()
-            }
+            out
         })
         .collect();
-    changed.then_some(context)
+    changed.then_some(relabeled)
 }
 
 /// Whether a file contributes anything to the context view.
@@ -2323,7 +2316,7 @@ fn render_context(
     out: &mut String,
     file: &FileAnalysis,
     selected: &[&str],
-    plan: &[Option<HashSet<&str>>],
+    plan: &[Planned<'_>],
     owed: &HashSet<&str>,
     opts: &TinyOpts,
     term_width: usize,
@@ -2337,7 +2330,7 @@ fn render_context(
         if matches!(opts.header, HeaderStyle::Minimal) {
             render_ascii_context(out, file, plan, opts);
         } else {
-            render_hex_context(out, file, selected, term_width, opts, colorize);
+            render_hex_context(out, file, plan, selected, term_width, opts, colorize);
         }
     } else {
         render_text_chunks(out, file, plan, owed, opts, term_width, colorize);
@@ -2363,20 +2356,20 @@ fn render_context(
 fn render_ascii_context(
     out: &mut String,
     file: &FileAnalysis,
-    plan: &[Option<HashSet<&str>>],
+    plan: &[Planned<'_>],
     opts: &TinyOpts,
 ) {
     use std::fmt::Write;
     let marker = comment_marker(&file.file_type);
     let mut emitted = false;
-    for (line, ids) in file.context.iter().zip(plan) {
-        let Some(ids) = ids else {
+    for (line, w) in file.context.iter().zip(plan) {
+        let Some(ids) = &w.ids else {
             continue;
         };
-        // Distinct planned findings on this window. (Capture already capped
+        // Distinct planned findings on this window. (Placement already capped
         // locations per trait; merging can pool several here.)
         let mut seen = HashSet::new();
-        let notes: Vec<&Note> = line
+        let notes: Vec<&Note> = w
             .notes
             .iter()
             .filter(|n| ids.contains(n.id.as_str()) && seen.insert(n.id.as_str()))
@@ -2438,9 +2431,7 @@ fn render_ascii_context(
     }
 }
 
-/// Shared binary byte-range plan. Retention uses all captured notes, while
-/// rendering supplies the selected notes. Keeping the bounding range of every
-/// claim preserves any later subset, including a file rendered independently.
+/// Split a binary window into contiguous blocks around its selected notes.
 fn ascii_blocks<'a>(
     line: &'a ContextLine,
     mut notes: Vec<&'a Note>,
@@ -2473,14 +2464,6 @@ fn ascii_blocks<'a>(
         }
     }
     blocks
-}
-
-pub(crate) fn binary_retained_bounds(line: &ContextLine) -> std::ops::Range<usize> {
-    let blocks = ascii_blocks(line, line.notes.iter().collect(), true);
-    match (blocks.first(), blocks.last()) {
-        (Some((start, _, _)), Some((_, end, _))) if start < end => *start..*end,
-        _ => 0..line.data.len(),
-    }
 }
 
 /// Bytes per gutter-prefixed row in the ASCII-forward view. Wider than xxd's 16
@@ -2674,7 +2657,7 @@ fn chunk_rows(chunk: &ContextLine) -> Vec<ChunkRow> {
 fn render_text_chunks(
     out: &mut String,
     file: &FileAnalysis,
-    plan: &[Option<HashSet<&str>>],
+    plan: &[Planned<'_>],
     owed: &HashSet<&str>,
     opts: &TinyOpts,
     term_width: usize,
@@ -2684,11 +2667,11 @@ fn render_text_chunks(
     let marker = comment_marker(&file.file_type);
 
     // Chunks the plan draws, each with the finding ids it annotates.
-    let shown: Vec<(&ContextLine, &HashSet<&str>)> = file
+    let shown: Vec<(&ContextLine, &[Note], &HashSet<&str>)> = file
         .context
         .iter()
         .zip(plan)
-        .filter_map(|(c, ids)| ids.as_ref().map(|ids| (c, ids)))
+        .filter_map(|(c, w)| w.ids.as_ref().map(|ids| (c, w.notes, ids)))
         .collect();
     if shown.is_empty() {
         return;
@@ -2697,7 +2680,7 @@ fn render_text_chunks(
     // Gutter width spans the widest line number across shown chunks.
     let loc_width = shown
         .iter()
-        .map(|(c, _)| {
+        .map(|(c, _, _)| {
             let last = c.line.unwrap_or(0) + c.data.iter().filter(|b| **b == b'\n').count() as u64;
             last.max(1).to_string().len()
         })
@@ -2737,7 +2720,7 @@ fn render_text_chunks(
     }
 
     let mut emitted = false;
-    for (chunk, ids) in shown {
+    for (chunk, chunk_notes, ids) in shown {
         // A blank line sets each window apart as its own paragraph — except in
         // the card layout, where the line-number gaps already mark the jumps
         // and the block stays one compact unit.
@@ -2773,8 +2756,7 @@ fn render_text_chunks(
         for (idx, row) in rows.iter().enumerate() {
             let bytes = &chunk.data[row.start..row.end];
             // Notes whose match starts within this row's byte span.
-            let notes: Vec<&Note> = chunk
-                .notes
+            let notes: Vec<&Note> = chunk_notes
                 .iter()
                 .filter(|n| {
                     ids.contains(n.id.as_str()) && n.off >= row.off && n.off < row.cover_end
@@ -2868,6 +2850,7 @@ fn push_source_block(out: &mut String, block: &mut String) {
 fn render_hex_context(
     out: &mut String,
     file: &FileAnalysis,
+    plan: &[Planned<'_>],
     selected: &[&str],
     term_width: usize,
     opts: &TinyOpts,
@@ -2876,11 +2859,10 @@ fn render_hex_context(
     let sel: HashSet<&str> = selected.iter().copied().collect();
     // Every window holding a selected match (capture already capped the
     // locations per trait — atomic up to 3, composite 1).
-    let show: Vec<usize> = file
-        .context
+    let show: Vec<usize> = plan
         .iter()
         .enumerate()
-        .filter(|(_, l)| l.notes.iter().any(|n| sel.contains(n.id.as_str())))
+        .filter(|(_, w)| w.notes.iter().any(|n| sel.contains(n.id.as_str())))
         .map(|(i, _)| i)
         .collect();
     if show.is_empty() {
@@ -2909,7 +2891,7 @@ fn render_hex_context(
         colorize,
     };
     for &i in &show {
-        render_hex_unit(out, &file.context[i], &layout);
+        render_hex_unit(out, &file.context[i], plan[i].notes, &layout);
     }
 }
 
@@ -3271,7 +3253,7 @@ struct HexLayout<'a> {
 /// rows, highlight the matched bytes, and trail each row that carries a match
 /// with a tinted `// desc` aligned in a hex-editor gutter. The comment is
 /// truncated to the remaining terminal width so a row never wraps.
-fn render_hex_unit(out: &mut String, line: &ContextLine, layout: &HexLayout<'_>) {
+fn render_hex_unit(out: &mut String, line: &ContextLine, notes: &[Note], layout: &HexLayout<'_>) {
     let HexLayout {
         sel,
         stride,
@@ -3291,8 +3273,7 @@ fn render_hex_unit(out: &mut String, line: &ContextLine, layout: &HexLayout<'_>)
     // the gutter comments. A merged capture window then no longer annotates
     // unselected neighbors, whose rows (a language token, a file extension)
     // came with a margin each and buried the finding the window was drawn for.
-    let notes: Vec<&Note> = line
-        .notes
+    let notes: Vec<&Note> = notes
         .iter()
         .filter(|n| (opts.focus_crit.is_none() && !trim) || sel.contains(n.id.as_str()))
         .collect();
@@ -3697,6 +3678,8 @@ fn paint_spans(text: &str, mut spans: Vec<(usize, usize, Criticality)>) -> Strin
 /// must not repeat.
 #[derive(Clone, Copy)]
 struct ContextCoverage<'a> {
+    /// The notes derived for each of the file's context windows.
+    notes: &'a [Vec<Note>],
     /// Finding ids drawn as byte or source windows.
     windowed: &'a HashSet<&'a str>,
     /// Findings holding a note whose every window the plan cut.
@@ -3728,6 +3711,7 @@ fn render_no_anchor(
     colorize: bool,
 ) {
     let ContextCoverage {
+        notes,
         windowed,
         capped,
         drawn,
@@ -3736,9 +3720,8 @@ fn render_no_anchor(
     let sel: HashSet<&str> = selected.iter().copied().collect();
 
     let rich = matches!(opts.header, HeaderStyle::Rich);
-    // Capture anchors every shown finding — at its own offset, or, for a
-    // file-global fact with no byte to point at, a fallback of offset 0 (see
-    // `context::fallback_anchor`). So once context exists, a finding missing from
+    // Placement anchors every shown finding that matched a byte of this file
+    // (`context::notes`). So once context exists, a finding missing from
     // `windowed` wasn't location-less; its window was *dominated* by a stronger
     // overlapping match and dropped by the placement pass. The dominating match
     // already represents that span, so showing the loser again — here, with no
@@ -3782,10 +3765,9 @@ fn render_no_anchor(
                 .any(|&[off, len]| off < hi && lo < off + len.max(1))
         };
         drawn.iter().any(|&(lo, hi)| overlaps(lo, hi))
-            || file
-                .context
+            || notes
                 .iter()
-                .flat_map(|l| &l.notes)
+                .flatten()
                 .filter(|n| sel.contains(n.id.as_str()))
                 .any(|n| overlaps(n.off, n.off + u64::from(n.len.max(1))))
     };
@@ -4957,7 +4939,7 @@ mod tests {
         path: &str,
         score: u32,
         findings: Vec<Finding>,
-        context: Vec<crate::types::ContextLine>,
+        context: Vec<Win>,
     ) -> FileAnalysis {
         let mut fa = FileAnalysis::new(
             id,
@@ -4968,23 +4950,74 @@ mod tests {
         );
         fa.score = score;
         fa.findings = findings;
-        fa.context = context;
+        annotate(&mut fa, context);
         fa
     }
 
-    /// A single-line textual chunk whose byte offset and display line both equal
-    /// `loc` (the note's `off` lands on `data[0]`), carrying an optional note.
-    fn ctx_line(
-        loc: u64,
-        data: &str,
-        note: Option<crate::types::Note>,
-    ) -> crate::types::ContextLine {
-        crate::types::ContextLine {
-            loc,
-            line: Some(loc),
-            col: Some(1),
-            data: data.as_bytes().to_vec(),
-            notes: note.into_iter().collect(),
+    /// A context window and the notes a test means it to carry.
+    struct Win {
+        line: crate::types::ContextLine,
+        notes: Vec<crate::types::Note>,
+    }
+
+    /// Append `context`'s windows to `fa`. Notes are derived from findings when
+    /// a report renders, so each intended note becomes a span (and the label)
+    /// of its finding, and a finding the test didn't supply is added from it.
+    fn annotate(fa: &mut FileAnalysis, context: Vec<Win>) {
+        for Win { line, notes } in context {
+            for n in notes {
+                let at = fa
+                    .findings
+                    .iter()
+                    .position(|f| f.id == n.id)
+                    .unwrap_or_else(|| {
+                        let mut f = Finding::new(
+                            n.id.to_string(),
+                            FindingKind::Capability,
+                            n.desc.to_string(),
+                            n.conf,
+                        );
+                        f.crit = n.crit;
+                        fa.findings.push(f);
+                        fa.findings.len() - 1
+                    });
+                // One label per finding: a note's description replaces the
+                // id-as-description placeholder `finding_with` gives a finding.
+                let f = &mut fa.findings[at];
+                if f.desc == f.id {
+                    f.desc = n.desc;
+                }
+                f.precomputed_spans
+                    .get_or_insert_with(Vec::new)
+                    .push([n.off, u64::from(n.len)]);
+            }
+            fa.context.push(line);
+        }
+    }
+
+    /// Bytes reserved per test line, so windows on different lines never share
+    /// bytes (capture never emits overlapping windows).
+    const LINE_BYTES: u64 = 1000;
+
+    /// A single-line textual chunk at display line `line`, carrying an optional
+    /// note written with `off == line` meaning `data[0]` (ids and columns read
+    /// naturally; the bytes sit at `line * LINE_BYTES`).
+    fn ctx_line(line: u64, data: &str, note: Option<crate::types::Note>) -> Win {
+        let loc = line * LINE_BYTES;
+        Win {
+            line: crate::types::ContextLine {
+                loc,
+                line: Some(line),
+                col: Some(1),
+                data: data.as_bytes().to_vec(),
+            },
+            notes: note
+                .into_iter()
+                .map(|n| crate::types::Note {
+                    off: loc + n.off.saturating_sub(line),
+                    ..n
+                })
+                .collect(),
         }
     }
 
@@ -5009,12 +5042,7 @@ mod tests {
 
     /// A binary (`elf`) file with a score, findings, and pre-built byte context —
     /// what the tiny binary (ASCII-forward) view renders from.
-    fn bin_file(
-        id: u32,
-        score: u32,
-        findings: Vec<Finding>,
-        context: Vec<crate::types::ContextLine>,
-    ) -> FileAnalysis {
+    fn bin_file(id: u32, score: u32, findings: Vec<Finding>, context: Vec<Win>) -> FileAnalysis {
         let mut fa = FileAnalysis::new(
             id,
             format!("/mal{id}.bin"),
@@ -5024,23 +5052,21 @@ mod tests {
         );
         fa.score = score;
         fa.findings = findings;
-        fa.context = context;
+        annotate(&mut fa, context);
         fa
     }
 
     /// A raw-byte context unit starting at byte offset `loc`, carrying `notes`
     /// (each note's `off` is an absolute file offset). No `line`/`col` marks it a
     /// binary byte unit rather than a textual chunk.
-    fn byte_unit(
-        loc: u64,
-        data: &[u8],
-        notes: Vec<crate::types::Note>,
-    ) -> crate::types::ContextLine {
-        crate::types::ContextLine {
-            loc,
-            line: None,
-            col: None,
-            data: data.to_vec(),
+    fn byte_unit(loc: u64, data: &[u8], notes: Vec<crate::types::Note>) -> Win {
+        Win {
+            line: crate::types::ContextLine {
+                loc,
+                line: None,
+                col: None,
+                data: data.to_vec(),
+            },
             notes,
         }
     }
@@ -5257,12 +5283,14 @@ mod tests {
         // A hostile hit keeps the next *real* line (the lone `}` is skipped);
         // rows past the trail are dropped even though the chunk carries them.
         let hostile = finding_with("objectives/h", Criticality::Hostile);
-        let chunk = crate::types::ContextLine {
-            loc: 0,
-            line: Some(1),
-            col: Some(1),
-            data: b"sudo ./payload run\n}\ninstall -Dm755 target\nunrelated trailing line\n"
-                .to_vec(),
+        let chunk = Win {
+            line: crate::types::ContextLine {
+                loc: 0,
+                line: Some(1),
+                col: Some(1),
+                data: b"sudo ./payload run\n}\ninstall -Dm755 target\nunrelated trailing line\n"
+                    .to_vec(),
+            },
             notes: vec![ctx_note("objectives/h", Criticality::Hostile, 0)],
         };
         let report = report_with_files(vec![src_file(0, "/d.sh", 9, vec![hostile], vec![chunk])]);
@@ -5660,7 +5688,7 @@ mod tests {
             finding_with("objectives/exfil::skill-posts-file", Criticality::Hostile);
         composite.trait_refs = vec![leg.to_string().into()];
         let leg_finding = Finding {
-            evidence: vec![Evidence::new("string", "", "curl").with_offset(12)],
+            evidence: vec![Evidence::new("string", "", "curl").with_offset(12 * LINE_BYTES)],
             ..finding_with(leg, Criticality::Notable)
         };
         let file = src_file(
@@ -5703,7 +5731,7 @@ mod tests {
             ..finding_with(comp, Criticality::Hostile)
         };
         let leg_finding = Finding {
-            evidence: vec![Evidence::new("string", "", "curl").with_offset(12)],
+            evidence: vec![Evidence::new("string", "", "curl").with_offset(12 * LINE_BYTES)],
             ..finding_with(leg, Criticality::Notable)
         };
         let file = src_file(
@@ -5742,8 +5770,8 @@ mod tests {
         let b = "objectives/evasion::debugger-abort";
         let mut line = ctx_line(1, "exec(d(p)) if not trace() else exit()\n", None);
         line.notes = vec![
-            ctx_note(a, Criticality::Hostile, 1),
-            ctx_note(b, Criticality::Suspicious, 1),
+            ctx_note(a, Criticality::Hostile, line.line.loc),
+            ctx_note(b, Criticality::Suspicious, line.line.loc + 18), // `trace`
         ];
         let file = src_file(
             0,
@@ -5757,7 +5785,7 @@ mod tests {
         );
         let tiny = format_tiny(&report_with_files(vec![file]));
         assert!(tiny.contains(&format!("# H 1:1 {a}")), "{tiny}");
-        assert!(tiny.contains(&format!("# S 1:1 {b}")), "{tiny}");
+        assert!(tiny.contains(&format!("# S 1:19 {b}")), "{tiny}");
         assert_eq!(
             tiny.matches(&format!("({b})")).count(),
             1,
@@ -5783,9 +5811,9 @@ mod tests {
             None,
         );
         line.notes = vec![
-            ctx_note(strong, Criticality::Notable, 3),
-            ctx_note(a, Criticality::Component, 3),
-            ctx_note(b, Criticality::Component, 3),
+            ctx_note(strong, Criticality::Notable, line.line.loc + 16), // `eval`
+            ctx_note(a, Criticality::Component, line.line.loc + 41),    // `readText`
+            ctx_note(b, Criticality::Component, line.line.loc),
         ];
         let file = src_file(
             0,
@@ -5800,8 +5828,8 @@ mod tests {
             vec![line],
         );
         let tiny = format_tiny(&report_with_files(vec![file]));
-        assert!(tiny.contains(&format!("# N 3:1 {strong}")), "{tiny}");
-        assert!(tiny.contains(&format!("# C 3:1 {a}")), "{tiny}");
+        assert!(tiny.contains(&format!("# N 3:17 {strong}")), "{tiny}");
+        assert!(tiny.contains(&format!("# C 3:42 {a}")), "{tiny}");
         assert!(tiny.contains(&format!("# C 3:1 {b}")), "{tiny}");
         assert!(!tiny.contains(comp) && !tiny.contains("# H"), "{tiny}");
     }
@@ -5940,7 +5968,7 @@ mod tests {
             "agent.py",
             50,
             vec![
-                leg(a, 12, "trycloudflare"),
+                leg(a, 12 * LINE_BYTES, "trycloudflare"),
                 leg(b, 900, "shz.al"),
                 composite,
             ],
@@ -5966,11 +5994,11 @@ mod tests {
         );
     }
 
-    /// A leg whose evidence sits inside a window another trait's note labels
-    /// is on screen but unnamed. A withheld composite's leg is owed evidence,
-    /// so it is still named — once, location-less.
+    /// Each leg of a withheld composite labels the line at its own column:
+    /// notes come from the final findings, so a leg with its own span is never
+    /// left unnamed under the composite's note.
     #[test]
-    fn tiny_names_a_leg_whose_evidence_is_drawn_under_another_note() {
+    fn tiny_labels_each_leg_of_a_withheld_composite_at_its_own_column() {
         let a = "micro/ps::iex";
         let b = "micro/ps::irm-alias";
         let comp = "objectives/exec::download-cradle";
@@ -6003,8 +6031,10 @@ mod tests {
             tiny.contains(&format!("0:1 {a}")),
             "A labels the line: {tiny}"
         );
-        assert_eq!(tiny.matches(b).count(), 2, "B named once: {tiny}");
-        assert!(tiny.contains(&format!("# N {b} ({b})")), "{tiny}");
+        assert!(
+            tiny.contains(&format!("0:6 {b}")),
+            "B labels its own column: {tiny}"
+        );
         assert!(!tiny.contains(comp), "{tiny}");
     }
 
@@ -6032,9 +6062,6 @@ mod tests {
         );
         for (f, c) in file.findings.iter_mut().zip([0.9, 0.8, 0.7]) {
             f.conf = c;
-        }
-        for (l, c) in file.context.iter_mut().zip([0.9, 0.8, 0.7]) {
-            l.notes[0].conf = c;
         }
         let opts = TinyOpts {
             max_windows: 1,
@@ -6107,7 +6134,7 @@ mod tests {
     }
 
     /// A located note for `id` at line `line` with confidence `conf`.
-    fn story_line(line: u64, data: &str, id: &str, crit: Criticality, conf: f32) -> ContextLine {
+    fn story_line(line: u64, data: &str, id: &str, crit: Criticality, conf: f32) -> Win {
         let mut note = ctx_note(id, crit, line);
         note.conf = conf;
         ctx_line(line, data, Some(note))
@@ -6115,7 +6142,7 @@ mod tests {
 
     /// Findings for every note in `context`, at the note's criticality and
     /// confidence, followed by `extra`.
-    fn story_file(context: Vec<ContextLine>, extra: Vec<Finding>) -> FileAnalysis {
+    fn story_file(context: Vec<Win>, extra: Vec<Finding>) -> FileAnalysis {
         let mut findings: Vec<Finding> = context
             .iter()
             .flat_map(|l| &l.notes)
@@ -6158,7 +6185,7 @@ mod tests {
                 0.95,
             ));
         }
-        context.sort_by_key(|l| l.loc);
+        context.sort_by_key(|w| w.line.loc);
         let tiny = format_context(
             &report_with_files(vec![story_file(context, vec![])]),
             &capped(1),
@@ -6228,7 +6255,7 @@ mod tests {
             };
             let leg_finding = Finding {
                 conf: 0.7,
-                evidence: vec![Evidence::new("string", "", "shz.al").with_offset(50)],
+                evidence: vec![Evidence::new("string", "", "shz.al").with_offset(50 * LINE_BYTES)],
                 ..finding_with(leg, Criticality::Notable)
             };
             let leg_line = if relabeled {
@@ -6256,7 +6283,7 @@ mod tests {
                 0.95,
             );
             let mut file = story_file(vec![other], vec![leg_finding, composite]);
-            file.context.push(leg_line);
+            annotate(&mut file, vec![leg_line]);
             let tiny = format_context(&report_with_files(vec![file]), &capped(1));
             assert!(
                 tiny.contains("shz.al"),
@@ -6316,7 +6343,7 @@ mod tests {
     /// run, whatever order the hash maps iterate in.
     #[test]
     fn tiny_window_pick_is_deterministic() {
-        let context: Vec<ContextLine> = (0..40u64)
+        let context: Vec<Win> = (0..40u64)
             .map(|i| {
                 story_line(
                     i * 10 + 1,
@@ -6571,11 +6598,13 @@ mod tests {
                 finding_with("a/first", Criticality::Notable),
                 finding_with("b/second", Criticality::Notable),
             ],
-            vec![ContextLine {
-                loc: 0,
-                line: Some(1),
-                col: Some(1),
-                data: src.as_bytes().to_vec(),
+            vec![Win {
+                line: ContextLine {
+                    loc: 0,
+                    line: Some(1),
+                    col: Some(1),
+                    data: src.as_bytes().to_vec(),
+                },
                 notes: vec![note("a/first", 0), note("b/second", beta_off)],
             }],
         );
@@ -6676,11 +6705,14 @@ mod tests {
         in_top
             .findings
             .push(finding_with("blocks/c::shown", Criticality::Component));
-        in_top.context.push(ctx_line(
-            20,
-            "SHOWN_COMPONENT = side_effect()",
-            Some(ctx_note("blocks/c::shown", Criticality::Component, 20)),
-        ));
+        annotate(
+            in_top,
+            vec![ctx_line(
+                20,
+                "SHOWN_COMPONENT = side_effect()",
+                Some(ctx_note("blocks/c::shown", Criticality::Component, 20)),
+            )],
+        );
 
         // A sixth file, past the cap, whose only extra signal is a component.
         files.push(src_file(
@@ -7299,20 +7331,25 @@ mod tests {
         // bytes). Line 4 "ctx before" is bytes 40..50, then '\n', then line 5
         // "s = socket()" at byte 51; the match's 'o' sits at byte 56 → column 6.
         let mut report = report;
-        report.files[0].context = vec![ContextLine {
-            loc: 40,
-            line: Some(4),
-            col: Some(1),
-            data: b"ctx before\ns = socket()".to_vec(),
-            notes: vec![Note {
-                crit: Criticality::Notable,
-                id: "net/socket".to_string().into(),
-                desc: "socket usage".to_string().into(),
-                off: 56,
-                len: 6,
-                conf: 0.8,
+        annotate(
+            &mut report.files[0],
+            vec![Win {
+                line: ContextLine {
+                    loc: 40,
+                    line: Some(4),
+                    col: Some(1),
+                    data: b"ctx before\ns = socket()".to_vec(),
+                },
+                notes: vec![Note {
+                    crit: Criticality::Notable,
+                    id: "net/socket".to_string().into(),
+                    desc: "socket usage".to_string().into(),
+                    off: 56,
+                    len: 6,
+                    conf: 0.8,
+                }],
             }],
-        }];
+        );
         let output = format_tiny(&report);
         // Context row: bare source, no annotation and no `LINE`/severity prefix.
         assert!(output.contains("ctx before"));
@@ -7369,30 +7406,35 @@ mod tests {
             vec![],
         );
         let mut report = report;
-        report.files[0].context = vec![ContextLine {
-            loc: 0,
-            line: Some(1),
-            col: Some(1),
-            data: b"exec(payload)".to_vec(),
-            notes: vec![
-                Note {
-                    crit: Criticality::Hostile,
-                    id: "a/strong".to_string().into(),
-                    desc: "decode+exec".to_string().into(),
-                    off: 0,
-                    len: 13,
-                    conf: 0.9,
+        annotate(
+            &mut report.files[0],
+            vec![Win {
+                line: ContextLine {
+                    loc: 0,
+                    line: Some(1),
+                    col: Some(1),
+                    data: b"exec(payload)".to_vec(),
                 },
-                Note {
-                    crit: Criticality::Notable,
-                    id: "b/weak".to_string().into(),
-                    desc: "exec call".to_string().into(),
-                    off: 0,
-                    len: 4,
-                    conf: 0.9,
-                },
-            ],
-        }];
+                notes: vec![
+                    Note {
+                        crit: Criticality::Hostile,
+                        id: "a/strong".to_string().into(),
+                        desc: "decode+exec".to_string().into(),
+                        off: 0,
+                        len: 13,
+                        conf: 0.9,
+                    },
+                    Note {
+                        crit: Criticality::Notable,
+                        id: "b/weak".to_string().into(),
+                        desc: "exec call".to_string().into(),
+                        off: 0,
+                        len: 4,
+                        conf: 0.9,
+                    },
+                ],
+            }],
+        );
         let output = format_tiny(&report);
         // Only the strongest finding is announced, above the lone source line.
         assert!(output.contains("// H 1:1 decode+exec"), "{output:?}");
@@ -7433,22 +7475,29 @@ mod tests {
         };
         let report = create_test_report(vec![finding("a/one"), finding("b/two")], vec![]);
         let mut report = report;
-        report.files[0].context = vec![
-            ContextLine {
-                loc: 0,
-                line: Some(5),
-                col: Some(1),
-                data: b"first_hit(x)\n".to_vec(),
-                notes: vec![note("a/one", 0)],
-            },
-            ContextLine {
-                loc: 200,
-                line: Some(50),
-                col: Some(1),
-                data: b"second_hit(y)\n".to_vec(),
-                notes: vec![note("b/two", 200)],
-            },
-        ];
+        annotate(
+            &mut report.files[0],
+            vec![
+                Win {
+                    line: ContextLine {
+                        loc: 0,
+                        line: Some(5),
+                        col: Some(1),
+                        data: b"first_hit(x)\n".to_vec(),
+                    },
+                    notes: vec![note("a/one", 0)],
+                },
+                Win {
+                    line: ContextLine {
+                        loc: 200,
+                        line: Some(50),
+                        col: Some(1),
+                        data: b"second_hit(y)\n".to_vec(),
+                    },
+                    notes: vec![note("b/two", 200)],
+                },
+            ],
+        );
         let output = format_tiny(&report);
         // The two windows are split by a blank line (source row, blank, annotation).
         assert!(
@@ -7491,20 +7540,25 @@ mod tests {
         );
         let mut report = report;
         // Only `a/win` won a window; `b/dominated` was dropped by the overlap pass.
-        report.files[0].context = vec![ContextLine {
-            loc: 0,
-            line: Some(7),
-            col: Some(1),
-            data: b"winner()".to_vec(),
-            notes: vec![Note {
-                crit: Criticality::Hostile,
-                id: "a/win".to_string().into(),
-                desc: "a/win desc".to_string().into(),
-                off: 0,
-                len: 6,
-                conf: 0.9,
+        annotate(
+            &mut report.files[0],
+            vec![Win {
+                line: ContextLine {
+                    loc: 0,
+                    line: Some(7),
+                    col: Some(1),
+                    data: b"winner()".to_vec(),
+                },
+                notes: vec![Note {
+                    crit: Criticality::Hostile,
+                    id: "a/win".to_string().into(),
+                    desc: "a/win desc".to_string().into(),
+                    off: 0,
+                    len: 6,
+                    conf: 0.9,
+                }],
             }],
-        }];
+        );
         let output = format_tiny(&report);
         assert!(output.contains("// H 7:1 a/win desc"), "{output:?}");
         // A suspicious atom is evidence the tiny view owes its reader, so it
@@ -7566,13 +7620,18 @@ mod tests {
         // The ASCII-forward view is chosen by file type; the canonical labels
         // are lowercase (`macho`, `elf`), which is what a real report carries.
         report.files[0].file_type = "elf".to_string();
-        report.files[0].context = vec![ContextLine {
-            loc: 0x1000,
-            line: None,
-            col: None,
-            data: vec![b'A'; 192],
-            notes: vec![note("t/late", 0x1050), note("t/early", 0x1005)],
-        }];
+        annotate(
+            &mut report.files[0],
+            vec![Win {
+                line: ContextLine {
+                    loc: 0x1000,
+                    line: None,
+                    col: None,
+                    data: vec![b'A'; 192],
+                },
+                notes: vec![note("t/late", 0x1050), note("t/early", 0x1005)],
+            }],
+        );
 
         let out = format_tiny(&report);
         let annotations: Vec<&str> = out.lines().filter(|l| l.starts_with("// ")).collect();
@@ -7641,20 +7700,25 @@ mod tests {
             vec![],
         );
         let mut report = report;
-        report.files[0].context = vec![ContextLine {
-            loc: 600,
-            line: Some(1),
-            col: Some(601),
-            data: b"while(!![]){...}".to_vec(),
-            notes: vec![Note {
-                crit: Criticality::Suspicious,
-                id: "obf/loop".to_string().into(),
-                desc: "obfuscated loop".to_string().into(),
-                off: 606,
-                len: 4,
-                conf: 0.9,
+        annotate(
+            &mut report.files[0],
+            vec![Win {
+                line: ContextLine {
+                    loc: 600,
+                    line: Some(1),
+                    col: Some(601),
+                    data: b"while(!![]){...}".to_vec(),
+                },
+                notes: vec![Note {
+                    crit: Criticality::Suspicious,
+                    id: "obf/loop".to_string().into(),
+                    desc: "obfuscated loop".to_string().into(),
+                    off: 606,
+                    len: 4,
+                    conf: 0.9,
+                }],
             }],
-        }];
+        );
         let output = format_tiny(&report);
         assert!(output.contains("// S 1:607 obfuscated loop"), "{output:?}");
         assert!(

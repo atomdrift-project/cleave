@@ -140,6 +140,16 @@ pub fn resolve_and_ensure() -> Result<PathBuf, String> {
     }
 
     // 3. Platform data directory — bootstrap-install from the bundle if missing.
+    ensure_data_dir()
+}
+
+/// The installed tree for this run's rules edition, installing it on first
+/// use.
+///
+/// When a held token alone chose the Enriched tree and it cannot be installed
+/// — refused, or offline — the run falls back to the open-source tree rather
+/// than scan with no rules at all. Under `--enriched` the failure stands.
+fn ensure_data_dir() -> Result<PathBuf, String> {
     let data_dir = default_traits_dir();
     if has_traits(&data_dir) {
         if cfg!(windows)
@@ -153,12 +163,16 @@ pub fn resolve_and_ensure() -> Result<PathBuf, String> {
         tracing::debug!("Using traits from data directory: {}", data_dir.display());
         return Ok(data_dir);
     }
-    if let Err(e) = crate::rule_update::update(&data_dir, false, false) {
-        return Err(format!(
+    match crate::rule_update::update(&data_dir, false, false) {
+        Ok(()) => Ok(data_dir),
+        Err(e) if crate::enriched::enabled() && !crate::enriched::required() => {
+            crate::enriched::fall_back(&e.to_string());
+            ensure_data_dir()
+        }
+        Err(e) => Err(format!(
             "Failed to install traits from the update bucket: {e}\n\nRun 'cleave update-rules' to install."
-        ));
+        )),
     }
-    Ok(data_dir)
 }
 
 /// Resolve the traits directory without bootstrapping or process::exit.
@@ -227,6 +241,65 @@ pub fn installed_dir(enriched: bool) -> PathBuf {
     } else {
         "traits-oss"
     })
+}
+
+/// Which rules a process is using, read from the tree it resolved rather than
+/// from the flag it was given: `--enriched` with no Enriched tree installed
+/// still scans with the open-source one, and `version` should say so.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Edition {
+    /// `traits-enriched`: isotope13's rules, the moment they clear QA.
+    Enriched,
+    /// `traits-oss`: the open-source rules.
+    OpenSource,
+    /// A checkout or an explicit directory, whatever it holds.
+    Checkout(PathBuf),
+}
+
+impl Edition {
+    /// The edition of the traits directory currently in use.
+    #[must_use]
+    pub fn current() -> Self {
+        Self::of(resolve_current_traits_dir())
+    }
+
+    fn of(dir: PathBuf) -> Self {
+        match dir.file_name().and_then(|name| name.to_str()) {
+            Some("traits-enriched") => Self::Enriched,
+            Some("traits-oss") => Self::OpenSource,
+            _ => Self::Checkout(dir),
+        }
+    }
+
+    /// The one-word form, for JSON and logs.
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Enriched => "enriched",
+            Self::OpenSource => "oss",
+            Self::Checkout(_) => "checkout",
+        }
+    }
+
+    /// The form for a terminal: the paid edition in its colours, so a glance
+    /// at any tool's `version` says which rules it is on.
+    #[must_use]
+    pub fn styled(&self) -> String {
+        match self {
+            Self::Enriched => crate::enriched::brand(),
+            other => other.to_string(),
+        }
+    }
+}
+
+impl std::fmt::Display for Edition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Enriched => "isotope13 Enriched",
+            Self::OpenSource => "open source",
+            Self::Checkout(_) => "checkout",
+        })
+    }
 }
 
 fn installed_root() -> PathBuf {
@@ -474,6 +547,16 @@ fn resolve_current_traits_dir_from(explicit: Option<String>) -> PathBuf {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_edition_is_the_name_of_the_tree_in_use() {
+        assert_eq!(Edition::of(installed_dir(true)), Edition::Enriched);
+        assert_eq!(Edition::of(installed_dir(false)), Edition::OpenSource);
+        let checkout = PathBuf::from("/src/traits");
+        assert_eq!(Edition::of(checkout.clone()), Edition::Checkout(checkout));
+        assert_eq!(Edition::Enriched.as_str(), "enriched");
+        assert_eq!(Edition::OpenSource.to_string(), "open source");
+    }
 
     #[test]
     fn a_pre_split_install_becomes_the_oss_tree_once() {

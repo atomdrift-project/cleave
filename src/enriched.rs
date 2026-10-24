@@ -1,10 +1,16 @@
-//! isotope13 Enriched: the subscription token, and the switch that requires it.
+//! isotope13 Enriched: the subscription token, and the switch it throws.
 //!
-//! `--enriched` (or `ATOMDRIFT_ENRICHED=1`) selects the fresh ruleset in
-//! `traits-enriched/`, and in scan, remote verdicts. It requires a token:
-//! `ISOTOPE13_TOKEN`, else the one saved in `<config>/atomdrift/isotope13-api.json`,
-//! else — on a terminal — one pasted from <https://dash.isotope13.io/>. Holding a
-//! token never turns enriched on by itself.
+//! A token — `ISOTOPE13_TOKEN`, else the one saved in
+//! `<config>/atomdrift/isotope13-api.json` — selects the fresh ruleset in
+//! `traits-enriched/`, and in scan, remote verdicts. Once a computer is
+//! connected it stays connected: the token is used for every refresh until
+//! the rules Worker refuses it, and only then does a run fall back to the
+//! open-source rules, saying so. `--enriched` (or `ATOMDRIFT_ENRICHED=1`)
+//! adds insistence: with no token it connects this computer — on a terminal,
+//! through [`crate::rule_update::sign_in`], with a code approved at
+//! <https://dash.isotope13.io/device> — and a refusal is an error rather than
+//! a fall back. `ATOMDRIFT_ENRICHED=0` keeps the open-source rules whatever
+//! the host holds.
 //!
 //! The token is opaque here. Whether it is valid, and what it is entitled to,
 //! is the server's to say, so the saved file holds the token and nothing that
@@ -34,8 +40,9 @@ const TOKEN_FILE: &str = "isotope13-api.json";
 const MAX_TOKEN_LEN: usize = 256;
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
+static REQUIRED: AtomicBool = AtomicBool::new(false);
 
-/// Turn enriched mode on or off for this process (`--enriched`).
+/// Turn enriched mode on or off for this process.
 ///
 /// The default traits directory follows this switch, so the capability mapper
 /// and traits fingerprint built from the other one are dropped, exactly as
@@ -48,12 +55,78 @@ pub fn set_enabled(on: bool) {
     }
 }
 
-/// Whether enriched mode was asked for, by [`set_enabled`] or [`ENABLE_ENV`].
+/// Whether this run uses the Enriched rules: decided by [`resolve`], and
+/// withdrawn by [`fall_back`].
 #[must_use]
 pub fn enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
-        || std::env::var(ENABLE_ENV)
-            .is_ok_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+}
+
+/// Whether `--enriched` insisted: no token connects this computer, and a
+/// refusal is an error rather than a fall back to the open-source rules.
+#[must_use]
+pub fn required() -> bool {
+    REQUIRED.load(Ordering::Relaxed)
+}
+
+/// Decide this run's rules from what the host holds. Called once, before
+/// anything resolves a traits directory.
+///
+/// A held token means Enriched. `required` — `--enriched`, or
+/// [`ENABLE_ENV`] set to `1` — means Enriched too, with the token asked for
+/// by [`crate::rule_update::sign_in`] when there is none. [`ENABLE_ENV`] set
+/// to `0` means the open-source rules, whatever is held.
+///
+/// # Errors
+///
+/// A saved token file that others can read, or that cannot be read or
+/// parsed: a fault to fix rather than a token to quietly do without.
+pub fn resolve(required: bool) -> Result<(), String> {
+    let switch = env_switch(std::env::var(ENABLE_ENV).ok().as_deref());
+    let required = required || switch == Some(true);
+    REQUIRED.store(required, Ordering::Relaxed);
+    // Opted out, and the flag did not overrule it: whatever is held stays unused.
+    let opted_out = switch == Some(false) && !required;
+    let held = if opted_out { None } else { token()? };
+    let on = held.is_some() || required;
+    set_enabled(on);
+    tracing::info!(
+        event = "enriched.mode",
+        enabled = on,
+        required,
+        token = held.map_or("none", |(_, source)| source.as_str())
+    );
+    Ok(())
+}
+
+/// Leave the Enriched channel for the rest of this run, because it could not
+/// be had and `--enriched` did not insist: the open-source rules are used
+/// from here on, and the one warning says why.
+///
+/// A traits override pinned to the Enriched tree (scan pins the installed
+/// tree so a checkout in the working directory cannot supply the rules)
+/// follows, or the open-source rules would never be resolved.
+pub fn fall_back(why: &str) {
+    tracing::warn!(
+        event = "enriched.fallback",
+        reason = %why,
+        "isotope13 Enriched unavailable; using the open-source rules"
+    );
+    set_enabled(false);
+    if crate::traits_repo::override_dir()
+        .is_some_and(|dir| dir == crate::traits_repo::installed_dir(true))
+    {
+        crate::traits_repo::set_override_dir(Some(crate::traits_repo::installed_dir(false)));
+    }
+}
+
+/// What [`ENABLE_ENV`] says: on, off, or nothing.
+fn env_switch(value: Option<&str>) -> Option<bool> {
+    match value?.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
 }
 
 /// A subscription token. Its `Debug` shows only the fingerprint, so a token
@@ -103,8 +176,9 @@ pub enum Source {
     Env,
     /// The saved file.
     File,
-    /// Pasted at the prompt just now, and not saved until it is accepted.
-    Prompt,
+    /// Issued to this computer by the device flow just now, and not saved
+    /// until it is accepted.
+    Device,
 }
 
 impl Source {
@@ -114,7 +188,7 @@ impl Source {
         match self {
             Source::Env => "env",
             Source::File => "file",
-            Source::Prompt => "prompt",
+            Source::Device => "device",
         }
     }
 }
@@ -232,74 +306,378 @@ fn write_token_file(path: &Path, token: &Token) -> Result<(), String> {
     Ok(())
 }
 
-/// Ask for a token on the terminal, without echoing it.
-///
-/// `why` opens the prompt, and is the whole error when there is no terminal to
-/// ask on: a CI job is told what to set rather than left waiting on stdin.
-///
-/// # Errors
-///
-/// No terminal, a read failure, or nothing usable entered.
-pub fn prompt(why: &str) -> Result<Token, String> {
+/// Whether a token can be asked for: stdin and stderr are both terminals.
+#[must_use]
+pub fn interactive() -> bool {
     use std::io::IsTerminal;
-    if !(io::stdin().is_terminal() && io::stderr().is_terminal()) {
-        return Err(format!(
-            "{why}: set {TOKEN_ENV}, or run once in a terminal to paste one from {DASH_URL}"
-        ));
-    }
-    eprint!("{why}. Create a token at {DASH_URL} and paste it here.\ntoken: ");
-    let line = read_hidden_line().map_err(|e| format!("reading token: {e}"))?;
-    Token::parse(&line).ok_or_else(|| "no token entered".to_string())
+    io::stdin().is_terminal() && io::stderr().is_terminal()
 }
 
-/// Read one line from the terminal with echo off, restoring it however the
-/// read ends. `ECHONL` keeps the newline, so the cursor still moves on.
-#[cfg(unix)]
-fn read_hidden_line() -> io::Result<String> {
-    use std::os::fd::AsRawFd;
+/// What to do when there is no token and no terminal to ask on: a CI job is
+/// told what to set rather than left waiting on stdin.
+#[must_use]
+pub fn how_to_get_one() -> String {
+    format!(
+        "set {TOKEN_ENV}, or run with --enriched on a terminal to connect this computer (hood: `hood enrich`). Plans are at {DASH_URL}"
+    )
+}
 
-    struct Restore(i32, libc::termios);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            // SAFETY: `self.1` is the state `tcgetattr` reported for this fd.
-            unsafe { libc::tcsetattr(self.0, libc::TCSANOW, &self.1) };
+/// "isotope¹³ Enriched" in its colours: the one way the product is named on
+/// a terminal, from the welcome to every tool's `version`.
+#[must_use]
+pub fn brand() -> String {
+    use colored::Colorize;
+    format!(
+        "{} {}",
+        "isotope¹³".truecolor(255, 0, 204).bold(),
+        "Enriched".truecolor(0, 158, 142).bold()
+    )
+}
+
+/// The welcome: one line on what Enriched is, and the link to approve.
+fn welcome(link: &str) {
+    use colored::Colorize;
+    eprintln!(
+        "\n⚛️  {} — the latest atomdrift rules, the moment they clear QA.\n\n   \
+         Approve this computer in your browser:  {}\n",
+        brand(),
+        link.bold(),
+    );
+}
+
+/// Open `url` in the browser this desktop uses, when there is one. Nothing
+/// is reported either way: the link is on the screen regardless, and over
+/// SSH it is the link that gets used.
+///
+/// Only an absolute path to the opener is run, never a name found on PATH.
+fn open_browser(url: &str) {
+    use std::process::{Command, Stdio};
+    let (opener, args): (&str, &[&str]) = match std::env::consts::OS {
+        "macos" => ("open", &[]),
+        "windows" => ("cmd", &["/C", "start", ""]),
+        _ if std::env::var_os("DISPLAY").is_some()
+            || std::env::var_os("WAYLAND_DISPLAY").is_some() =>
+        {
+            ("xdg-open", &[])
+        }
+        _ => return,
+    };
+    let Some(path) = filefacts::tools::resolve(opener) else {
+        return;
+    };
+    let spawned = Command::new(path)
+        .args(args)
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    match spawned {
+        Ok(_) => tracing::debug!(opener, "opened the browser"),
+        Err(e) => tracing::debug!(opener, error = %e, "could not open the browser"),
+    }
+}
+
+/// A line of progress at the bottom of the terminal, redrawn in place.
+///
+/// Started while something is waited for, and finished with the line that
+/// takes its place; dropped unfinished, it leaves nothing behind. Writes to
+/// stderr, which [`interactive`] has established is a terminal.
+#[derive(Debug)]
+pub struct Progress {
+    label: std::sync::Arc<std::sync::Mutex<String>>,
+    stop: std::sync::Arc<AtomicBool>,
+    spinner: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Progress {
+    const FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+    /// Start showing `label`, animated.
+    #[must_use]
+    pub fn start(label: &str) -> Self {
+        use std::io::Write;
+        let label = std::sync::Arc::new(std::sync::Mutex::new(label.to_string()));
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let spinner = {
+            let (label, stop) = (label.clone(), stop.clone());
+            std::thread::spawn(move || {
+                for frame in Self::FRAMES.iter().cycle() {
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let text = label.lock().map(|l| l.clone()).unwrap_or_default();
+                    let mut err = io::stderr().lock();
+                    let _ = write!(err, "\r\x1b[2K   {frame} {text}");
+                    let _ = err.flush();
+                    std::thread::sleep(std::time::Duration::from_millis(80));
+                }
+            })
+        };
+        Self {
+            label,
+            stop,
+            spinner: Some(spinner),
         }
     }
 
-    let fd = io::stdin().as_raw_fd();
-    let mut original = std::mem::MaybeUninit::<libc::termios>::uninit();
-    // SAFETY: `fd` is stdin, checked to be a terminal; tcgetattr fills the
-    // struct on success, and it is read only then.
-    if unsafe { libc::tcgetattr(fd, original.as_mut_ptr()) } != 0 {
-        return Err(io::Error::last_os_error());
+    /// Change what is being waited for.
+    pub fn set(&self, label: &str) {
+        if let Ok(mut held) = self.label.lock() {
+            *held = label.to_string();
+        }
     }
-    // SAFETY: initialized by the successful tcgetattr above.
-    let original = unsafe { original.assume_init() };
-    let mut quiet = original;
-    quiet.c_lflag &= !libc::ECHO;
-    quiet.c_lflag |= libc::ECHONL;
-    // SAFETY: `quiet` is a valid termios derived from the terminal's own.
-    if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &quiet) } != 0 {
-        return Err(io::Error::last_os_error());
+
+    /// Stop, and leave `line` where the progress was.
+    pub fn finish(mut self, line: &str) {
+        self.clear();
+        eprintln!("   {line}");
     }
-    let _restore = Restore(fd, original);
-    let mut line = String::new();
-    io::stdin().read_line(&mut line)?;
-    Ok(line)
+
+    fn clear(&mut self) {
+        use std::io::Write;
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(spinner) = self.spinner.take() {
+            let _ = spinner.join();
+        }
+        let mut err = io::stderr().lock();
+        let _ = write!(err, "\r\x1b[2K");
+        let _ = err.flush();
+    }
 }
 
-/// Windows consoles echo the paste; the one platform where that is accepted.
-#[cfg(not(unix))]
-fn read_hidden_line() -> io::Result<String> {
-    let mut line = String::new();
-    io::stdin().read_line(&mut line)?;
-    Ok(line)
+impl Drop for Progress {
+    fn drop(&mut self) {
+        if self.spinner.is_some() {
+            self.clear();
+        }
+    }
+}
+
+/// What dash answers when a flow starts.
+#[derive(Deserialize)]
+struct DeviceStart {
+    device_code: String,
+    verification_uri: String,
+    verification_uri_complete: Option<String>,
+    expires_in: u64,
+    interval: u64,
+}
+
+/// What dash answers to a poll: the token once approved, or a reason.
+#[derive(Deserialize, Default)]
+struct DevicePoll {
+    token: Option<String>,
+    error: Option<String>,
+}
+
+/// A token dash has just issued to this computer, and the progress line
+/// still showing, for the caller to finish once the token is checked.
+#[derive(Debug)]
+pub struct Connected {
+    /// The issued token, not yet checked against the rules channel.
+    pub token: Token,
+    /// The line still animating on the terminal.
+    pub progress: Progress,
+}
+
+/// Connect this computer through dash's device flow: ask for a code, open
+/// the browser on it, and wait for the customer to approve. The token that
+/// comes back is a device's, not one of the org's listed API tokens.
+///
+/// `label` is what dash records the device as, and nothing more.
+///
+/// # Errors
+///
+/// No terminal to show the link on, dash unreachable, the code expiring
+/// unapproved, or Ctrl-C.
+pub fn connect(label: &str) -> Result<Connected, String> {
+    use std::time::{Duration, Instant};
+    if !interactive() {
+        return Err(format!(
+            "isotope13 Enriched needs a token: {}",
+            how_to_get_one()
+        ));
+    }
+    let dash = Dash::new()?;
+    let body = serde_json::json!({ "label": label }).to_string();
+    let (status, text) = dash.post("device/code", &body)?;
+    if status != 200 {
+        return Err(format!(
+            "{DASH_URL} could not start a connection (HTTP {status})"
+        ));
+    }
+    let start: DeviceStart =
+        serde_json::from_str(&text).map_err(|e| format!("{DASH_URL} answered oddly: {e}"))?;
+    let expires = Duration::from_secs(start.expires_in.clamp(60, 3600));
+    let interval = Duration::from_secs(start.interval.clamp(1, 60));
+    let link = start
+        .verification_uri_complete
+        .unwrap_or(start.verification_uri);
+    welcome(&link);
+    open_browser(&link);
+    let progress = Progress::start("Waiting for approval…");
+
+    let poll = serde_json::json!({ "device_code": start.device_code }).to_string();
+    let started = Instant::now();
+    let mut failures = 0u32;
+    loop {
+        // Slept in slices so Ctrl-C is noticed within the second.
+        for _ in 0..interval.as_secs() {
+            if crate::cancellation::is_cancelled() {
+                return Err("connection cancelled".to_string());
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        }
+        if started.elapsed() > expires {
+            return Err(
+                "the code expired before it was approved; run again for a new one".to_string(),
+            );
+        }
+        let (status, text) = match dash.post("device/token", &poll) {
+            Ok(answer) => answer,
+            // One dropped poll is not a verdict; a run of them is dash gone.
+            Err(e) if failures < 5 => {
+                failures += 1;
+                tracing::debug!(error = %e, failures, "device poll failed; trying again");
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
+        failures = 0;
+        let answer: DevicePoll = serde_json::from_str(&text).unwrap_or_default();
+        match (status, answer.token) {
+            (200, Some(token)) => {
+                let token = Token::parse(&token).ok_or("dash issued a token that is not one")?;
+                tracing::info!(event = "enriched.device", outcome = "connected", tid = %token.fingerprint());
+                return Ok(Connected { token, progress });
+            }
+            (202, _) => {}
+            (410, _) => {
+                return Err(
+                    "the code expired or was already used; run again for a new one".to_string(),
+                );
+            }
+            (status, _) => {
+                let reason = answer.error.unwrap_or_default();
+                return Err(format!(
+                    "{DASH_URL} refused the connection (HTTP {status} {reason})"
+                ));
+            }
+        }
+    }
+}
+
+/// A plan as the dashboard names it.
+#[must_use]
+pub fn plan_name(tier: &str) -> String {
+    match tier {
+        "free" => "Community".to_string(),
+        "supporter" => "Early Supporter".to_string(),
+        "business" => "Business".to_string(),
+        "oem" => "Critical".to_string(),
+        other => {
+            let mut chars = other.chars();
+            chars
+                .next()
+                .map(|c| c.to_uppercase().collect::<String>() + chars.as_str())
+                .unwrap_or_default()
+        }
+    }
+}
+
+/// A path with the home directory written as `~`, for a line on a terminal.
+#[must_use]
+pub fn tilde(path: &Path) -> String {
+    match dirs::home_dir().and_then(|home| path.strip_prefix(home).ok()) {
+        Some(rest) => format!("~/{}", rest.display()),
+        None => path.display().to_string(),
+    }
+}
+
+/// How dash is reached: TLS only, no redirects, and a short deadline per call,
+/// so a device code can go nowhere but dash.
+///
+/// A debug build honours `ISOTOPE13_DASH_URL`, so the flow can be run against
+/// `node local.js`; a release build has no override.
+struct Dash {
+    base: String,
+    http: reqwest::blocking::Client,
+}
+
+impl Dash {
+    fn new() -> Result<Self, String> {
+        #[cfg(debug_assertions)]
+        let local = std::env::var("ISOTOPE13_DASH_URL")
+            .ok()
+            .filter(|v| !v.is_empty());
+        #[cfg(not(debug_assertions))]
+        let local: Option<String> = None;
+        let base = local.map_or_else(
+            || DASH_URL.to_string(),
+            |local| format!("{}/", local.trim_end_matches('/')),
+        );
+        let http = reqwest::blocking::Client::builder()
+            .https_only(base == DASH_URL)
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
+            .user_agent(concat!("cleave/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .map_err(|e| format!("http client: {e}"))?;
+        Ok(Self { base, http })
+    }
+
+    fn post(&self, path: &str, json: &str) -> Result<(u16, String), String> {
+        let url = format!("{}{path}", self.base);
+        let resp = self
+            .http
+            .post(&url)
+            .header("content-type", "application/json")
+            .body(json.to_string())
+            .send()
+            .map_err(|e| format!("POST {url}: {e}"))?;
+        let status = resp.status().as_u16();
+        let text = resp.text().map_err(|e| format!("reading {url}: {e}"))?;
+        Ok((status, text))
+    }
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_env_switch_is_on_off_or_absent() {
+        for on in ["1", "true", " YES ", "on"] {
+            assert_eq!(env_switch(Some(on)), Some(true), "{on:?}");
+        }
+        for off in ["0", "false", "No", "off"] {
+            assert_eq!(env_switch(Some(off)), Some(false), "{off:?}");
+        }
+        for unset in [None, Some(""), Some("maybe")] {
+            assert_eq!(env_switch(unset), None, "{unset:?}");
+        }
+    }
+
+    #[test]
+    fn a_plan_is_named_as_the_dashboard_names_it() {
+        assert_eq!(plan_name("free"), "Community");
+        assert_eq!(plan_name("supporter"), "Early Supporter");
+        assert_eq!(plan_name("business"), "Business");
+        assert_eq!(plan_name("oem"), "Critical");
+        // A tier this build has never heard of is still shown, not hidden.
+        assert_eq!(plan_name("platinum"), "Platinum");
+        assert_eq!(plan_name(""), "");
+    }
+
+    #[test]
+    fn a_path_under_home_is_written_with_a_tilde() {
+        let home = dirs::home_dir().unwrap();
+        assert_eq!(tilde(&home.join("x").join("y")), "~/x/y");
+        assert_eq!(tilde(Path::new("/etc/hosts")), "/etc/hosts");
+    }
 
     #[test]
     fn a_token_is_the_first_non_empty_line() {

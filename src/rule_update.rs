@@ -13,7 +13,7 @@
 //!
 //! There are two, and they publish the same layout. The public bucket carries
 //! the open-source release, rolled up every four hours, and is fetched with no
-//! token. The enriched channel carries each ruleset the hour it clears QA, and
+//! token. The enriched channel carries each ruleset the moment it clears QA, and
 //! is reached through the rules Worker, which checks a subscription token and
 //! serves the private bucket behind it.
 //!
@@ -44,6 +44,8 @@ const ENRICHED_URL: &str = "https://updates.isotope13.ai/v1/rules/cleave";
 const MANIFEST: &str = "versions.toml";
 /// The rules Worker's answer to "which bucket did this token open".
 const CHANNEL_HEADER: &str = "x-isotope13-channel";
+/// The plan a recognised token is on; absent for one the Worker never minted.
+const TIER_HEADER: &str = "x-isotope13-tier";
 
 /// Whole-request budget for manifest + bundle downloads.
 const TIMEOUT: Duration = Duration::from_secs(60);
@@ -343,7 +345,8 @@ impl Channel {
 fn fetch_manifest(connect: Option<Duration>) -> Result<(Manifest, Channel), Error> {
     let (bytes, channel) = if crate::enriched::enabled() {
         let held = crate::enriched::token().map_err(Error::Enriched)?;
-        enriched_manifest(held, connect)?
+        let (bytes, token, _) = enriched_manifest(held, connect)?;
+        (bytes, Channel::Enriched(token))
     } else {
         let fetched = download(&Channel::Public, MANIFEST, connect).map_err(|e| e.message)?;
         (fetched.bytes, Channel::Public)
@@ -354,86 +357,294 @@ fn fetch_manifest(connect: Option<Duration>) -> Result<(Manifest, Channel), Erro
     Ok((manifest, channel))
 }
 
-/// Ask for a token, check it against the enriched channel, and save it.
+/// Install or refresh the rules this run uses, in the tree it chose.
 ///
-/// What `hood login` runs: the same check every enriched update makes, so a
-/// token is saved only once the rules Worker has honoured it.
+/// A held token opens the Enriched channel. When the rules Worker refuses it
+/// and `--enriched` did not insist, the run falls back to the open-source
+/// rules — says so once, through [`crate::enriched::fall_back`] — and
+/// refreshes those instead. With `--enriched`, the refusal is the error. A
+/// network failure is neither: it is returned, and the rules on disk serve.
+pub fn refresh(force: bool, quiet: bool) -> Result<(), Error> {
+    match update(&crate::traits_repo::install_target(), force, quiet) {
+        Err(Error::Enriched(why)) if !crate::enriched::required() => {
+            crate::enriched::fall_back(&why);
+            // The target moved with the fall back: it is the open-source tree now.
+            update(&crate::traits_repo::install_target(), force, quiet)
+        }
+        done => done,
+    }
+}
+
+/// The token `--enriched` needs, asked for now if this host holds none.
+///
+/// Called once, before anything fetches rules, so the asking happens at the
+/// start of a run rather than inside whichever download happens first — and
+/// happens once, rather than once per download that fails without it.
 ///
 /// # Errors
 ///
-/// No terminal to ask on, or a token the Worker will not honour.
-pub fn login() -> Result<(), Error> {
-    let token =
-        crate::enriched::prompt("Sign in to isotope13 Enriched").map_err(Error::Enriched)?;
-    enriched_manifest(Some((token, crate::enriched::Source::Prompt)), None).map(drop)
+/// No token and no terminal to ask on, or none accepted.
+pub fn sign_in() -> Result<(), Error> {
+    match crate::enriched::token().map_err(Error::Enriched)? {
+        Some(_) => Ok(()),
+        None => enrich(),
+    }
 }
 
-/// The enriched manifest, and the channel — with the token — that opened it.
+/// Connect this computer to isotope13 Enriched, check the token it is issued
+/// against the enriched channel, and save it. What `hood enrich` runs, and
+/// what `--enriched` runs when it finds no token.
+///
+/// # Errors
+///
+/// No terminal to show the code on, no approval, or a token the channel
+/// will not honour.
+pub fn enrich() -> Result<(), Error> {
+    if !crate::enriched::interactive() {
+        return Err(needs_a_token());
+    }
+    connect_device(None).map(drop)
+}
+
+fn needs_a_token() -> Error {
+    Error::Enriched(format!(
+        "isotope13 Enriched needs a token: {}",
+        crate::enriched::how_to_get_one()
+    ))
+}
+
+/// How long a newly issued token may take to reach the rules Worker. Dash
+/// writes it to KV a moment before handing it over; KV takes up to a minute
+/// to reach every edge, and the Worker caches a miss for another minute. A
+/// check that lands first is not believed until both have run out.
+const ISSUE_PROPAGATION: Duration = Duration::from_secs(150);
+/// How often a newly issued token is checked again while it propagates.
+const ISSUE_RECHECK: Duration = Duration::from_secs(5);
+
+/// Connect, check, save: the one place a token is asked for.
+///
+/// A token dash has just issued is real, so it is saved whatever plan it is
+/// on: a Community computer keeps its token, says so, and picks up an upgrade
+/// with no second connection. What it is not, yet, is everywhere — so a
+/// check that does not recognise it waits out KV's propagation before
+/// believing that.
+fn connect_device(
+    connect: Option<Duration>,
+) -> Result<(Vec<u8>, crate::enriched::Token, Option<String>), Error> {
+    use crate::enriched::{Connected, Source};
+    // What dash records the device as: the tool and the OS, nothing that
+    // names the person or the machine.
+    let tool = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.file_stem().map(|s| s.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "atomdrift".to_string());
+    let label = format!("{tool} on {}", std::env::consts::OS);
+    let Connected { token, progress } =
+        crate::enriched::connect(&label).map_err(Error::Enriched)?;
+    progress.set("Approved. Connecting…");
+
+    let started = std::time::Instant::now();
+    let checked = loop {
+        match check_token(&token, Source::Device, connect)? {
+            Err(Answer::Public(None)) if started.elapsed() < ISSUE_PROPAGATION => {
+                if crate::cancellation::is_cancelled() {
+                    return Err(Error::Enriched("connection cancelled".into()));
+                }
+                let waited = started.elapsed().as_secs();
+                tracing::debug!(
+                    tid = %token.fingerprint(),
+                    waited,
+                    "issued token not at the edge yet; checking again"
+                );
+                // A second stage, so a wait that is KV catching up reads as
+                // one — and a wait that never ends names which side to look at.
+                progress.set(&format!(
+                    "Approved. Waiting for the rules service to see the new token… {waited}s"
+                ));
+                std::thread::sleep(ISSUE_RECHECK);
+            }
+            other => break other,
+        }
+    };
+    let tid = token.fingerprint();
+    match checked {
+        Ok(Opened {
+            manifest: bytes,
+            tier,
+        }) => {
+            let plan = tier.as_deref().map(crate::enriched::plan_name);
+            progress.finish(&match plan {
+                Some(plan) => format!("✓ Connected on the {plan} plan."),
+                None => "✓ Connected.".to_string(),
+            });
+            save_issued(&token);
+            Ok((bytes, token, tier))
+        }
+        Err(Answer::Public(Some(tier))) => {
+            drop(progress);
+            let saved = save_issued(&token);
+            Err(Error::Enriched(format!(
+                "connected, but the {} plan gets the public rules. Upgrade at {}plans for the latest rules the moment they clear QA; this computer picks up the upgrade on its own.{saved}",
+                crate::enriched::plan_name(&tier),
+                crate::enriched::DASH_URL
+            )))
+        }
+        Err(Answer::Public(None)) => Err(Error::Enriched(format!(
+            "isotope13 issued token {tid}, but the rules service had not seen it after {}s; run again in a minute",
+            ISSUE_PROPAGATION.as_secs()
+        ))),
+        Err(answer) => Err(Error::Enriched(refusal(&tid, Source::Device, &answer))),
+    }
+}
+
+/// Save a token this computer was just issued, and say where, quietly. A
+/// token that could not be saved still opens the channel for this run; the
+/// next one connects again. Returns what was said, for an error to carry.
+fn save_issued(token: &crate::enriched::Token) -> String {
+    use colored::Colorize;
+    let said = match crate::enriched::save(token) {
+        Ok(path) => format!("Token saved to {}", crate::enriched::tilde(&path)),
+        Err(e) => format!("The token could not be saved ({e}); it is used for this run only"),
+    };
+    eprintln!("   {}\n", said.dimmed());
+    format!(" {said}.")
+}
+
+/// The enriched manifest, the token that opened it, and the plan it is on.
 ///
 /// The rules Worker answers a token it will not honour (revoked, Community
 /// tier, a typo) with the *public* manifest and a 200, so that old clients keep
 /// running. Asked for enriched, that is a refusal: the channel header must say
-/// `fresh`. A refused saved token is replaced by asking, once, on a terminal;
-/// a refused token from the environment or the prompt is an error. A prompted
-/// token is saved only after it has been honoured.
+/// `fresh`. Under `--enriched`, a saved token the Worker no longer recognises
+/// — revoked, or this computer disconnected — is replaced by connecting
+/// again, on a terminal; any other refusal is an error that says what was
+/// wrong and where the token came from, and [`refresh`] turns it into a fall
+/// back when `--enriched` did not insist. No token at all is the same error —
+/// the CLIs ask through [`sign_in`] before they get here.
 fn enriched_manifest(
-    mut held: Option<(crate::enriched::Token, crate::enriched::Source)>,
+    held: Option<(crate::enriched::Token, crate::enriched::Source)>,
     connect: Option<Duration>,
-) -> Result<(Vec<u8>, Channel), Error> {
+) -> Result<(Vec<u8>, crate::enriched::Token, Option<String>), Error> {
     use crate::enriched::Source;
-    loop {
-        let (token, source) = match held.take() {
-            Some(found) => found,
-            None => (
-                crate::enriched::prompt("isotope13 Enriched needs a token")
-                    .map_err(Error::Enriched)?,
-                Source::Prompt,
-            ),
-        };
-        let tid = token.fingerprint();
-        let channel = Channel::Enriched(token);
-        let refused = match download(&channel, MANIFEST, connect) {
-            Ok(got) if got.fresh => {
-                // A token that opened the channel but could not be saved still
-                // opens it for this run; the next one asks again.
-                if let (Source::Prompt, Some(token)) = (source, channel.token()) {
-                    match crate::enriched::save(token) {
-                        Ok(path) => {
-                            print_status(&format!("Saved isotope13 token to {}", path.display()));
-                        }
-                        Err(e) => tracing::warn!(%tid, error = %e, "isotope13 token not saved"),
-                    }
-                }
-                tracing::info!(
-                    event = "enriched.token",
-                    source = source.as_str(),
-                    outcome = "ok",
-                    %tid
-                );
-                return Ok((got.bytes, channel));
-            }
-            Ok(_) => "answered with the public channel".to_string(),
-            Err(err) if err.unauthorized() => err.status_text(),
-            Err(err) => return Err(Error::Other(err.message)),
-        };
-        tracing::warn!(
-            event = "enriched.token",
-            source = source.as_str(),
-            outcome = "refused",
-            %tid,
-            %refused
-        );
-        let why = format!(
-            "isotope13 token {tid} is not entitled to enriched rules ({refused}: revoked, or Community tier)"
-        );
-        if source != Source::File {
-            return Err(Error::Enriched(format!(
-                "{why}; see {}",
-                crate::enriched::DASH_URL
-            )));
+    let Some((token, source)) = held else {
+        return Err(needs_a_token());
+    };
+    let answer = match check_token(&token, source, connect)? {
+        Ok(Opened { manifest, tier }) => return Ok((manifest, token, tier)),
+        Err(answer) => answer,
+    };
+    let unknown = matches!(answer, Answer::Public(None) | Answer::Status(_));
+    if source == Source::File
+        && unknown
+        && crate::enriched::required()
+        && crate::enriched::interactive()
+    {
+        print_status(&format!(
+            "✗ {}.\n",
+            refusal(&token.fingerprint(), source, &answer)
+        ));
+        return connect_device(connect);
+    }
+    Err(Error::Enriched(refusal(
+        &token.fingerprint(),
+        source,
+        &answer,
+    )))
+}
+
+/// The enriched manifest a token opened, and the plan it is on.
+struct Opened {
+    manifest: Vec<u8>,
+    tier: Option<String>,
+}
+
+/// Ask the rules Worker about a token: what it opened, or what it said
+/// instead. Only a transport or bucket failure is an `Error`; a refusal is an
+/// answer.
+fn check_token(
+    token: &crate::enriched::Token,
+    source: crate::enriched::Source,
+    connect: Option<Duration>,
+) -> Result<Result<Opened, Answer>, Error> {
+    let tid = token.fingerprint();
+    let answer = match download(&Channel::Enriched(token.clone()), MANIFEST, connect) {
+        Ok(got) if got.fresh => {
+            tracing::info!(
+                event = "enriched.token",
+                source = source.as_str(),
+                outcome = "ok",
+                tier = got.tier.as_deref().unwrap_or(""),
+                %tid
+            );
+            return Ok(Ok(Opened {
+                manifest: got.bytes,
+                tier: got.tier,
+            }));
         }
-        let token = crate::enriched::prompt(&why).map_err(Error::Enriched)?;
-        held = Some((token, Source::Prompt));
+        Ok(got) => Answer::Public(got.tier),
+        Err(err) if err.unauthorized() => Answer::Status(err.status_text()),
+        Err(err) => return Err(Error::Other(err.message)),
+    };
+    // Info, not warn: the caller turns a refusal into an error that says the
+    // same thing in words, and a terminal should not read it twice.
+    tracing::info!(
+        event = "enriched.token",
+        source = source.as_str(),
+        outcome = "refused",
+        %tid,
+        refused = %answer
+    );
+    Ok(Err(answer))
+}
+
+/// What the rules Worker said about a token it did not honour.
+enum Answer {
+    /// The public manifest, and the plan the token resolved to, if it is one
+    /// the Worker has heard of.
+    Public(Option<String>),
+    /// A 401 or 403, which the Worker does not send today.
+    Status(String),
+}
+
+impl std::fmt::Display for Answer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Answer::Public(Some(tier)) => write!(f, "public channel; {tier} plan"),
+            Answer::Public(None) => f.write_str("public channel; token not recognised"),
+            Answer::Status(status) => f.write_str(status),
+        }
+    }
+}
+
+/// A refusal in words someone can act on: what was wrong, where the token came
+/// from, and what to do about it.
+fn refusal(tid: &str, source: crate::enriched::Source, answer: &Answer) -> String {
+    use crate::enriched::Source;
+    let dash = crate::enriched::DASH_URL;
+    let env = crate::enriched::TOKEN_ENV;
+    let saved = || {
+        crate::enriched::token_path().map_or_else(
+            || "the saved token".to_string(),
+            |p| p.display().to_string(),
+        )
+    };
+    match (answer, source) {
+        (Answer::Public(Some(tier)), _) => format!(
+            "isotope13 token {tid} is on the {tier} plan, which gets the public rules; upgrade at {dash}plans for the latest rules the moment they clear QA"
+        ),
+        (Answer::Public(None), Source::Env) => format!(
+            "isotope13 does not recognise the token in {env} ({tid}): check it holds the whole token, and that it has not been revoked at {dash}"
+        ),
+        (Answer::Public(None), Source::File) => format!(
+            "isotope13 no longer recognises this computer's token ({tid}, saved at {}): it was revoked, or the computer was disconnected",
+            saved()
+        ),
+        (Answer::Public(None), Source::Device) => {
+            format!("isotope13 does not recognise the token it just issued ({tid})")
+        }
+        (Answer::Status(status), _) => {
+            format!("isotope13 refused token {tid} ({status}); see {dash}")
+        }
     }
 }
 
@@ -625,6 +836,8 @@ fn sibling(parent: &Path, name: &str) -> PathBuf {
 struct Fetched {
     bytes: Vec<u8>,
     fresh: bool,
+    /// The plan the token resolved to, when the Worker recognised it.
+    tier: Option<String>,
 }
 
 /// A failed download, with the HTTP status when there was one.
@@ -763,6 +976,12 @@ fn download_once(
         .headers()
         .get(CHANNEL_HEADER)
         .is_some_and(|v| v.as_bytes() == b"fresh");
+    let tier = resp
+        .headers()
+        .get(TIER_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .filter(|t| !t.is_empty() && t.len() <= 32 && t.bytes().all(|b| b.is_ascii_alphanumeric()))
+        .map(str::to_owned);
     let bytes = resp.bytes().map_err(|e| FetchError {
         status: Some(status.as_u16()),
         message: format!("reading {url}: {e}"),
@@ -770,6 +989,7 @@ fn download_once(
     Ok(Fetched {
         bytes: bytes.to_vec(),
         fresh,
+        tier,
     })
 }
 
@@ -869,6 +1089,45 @@ mod tests {
         assert!(error.contains("unsupported tar entry type Symlink"));
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "unchanged");
         assert!(std::fs::symlink_metadata(staging.join(SIDECAR)).is_err());
+    }
+
+    #[test]
+    fn a_refusal_says_what_was_wrong_and_what_to_do() {
+        use crate::enriched::Source;
+        let tid = "8f2d0497b4e2c5a7";
+        let community = refusal(tid, Source::File, &Answer::Public(Some("free".into())));
+        assert!(
+            community.contains("free plan") && community.contains("upgrade at"),
+            "{community}"
+        );
+        assert!(
+            community.contains("the latest rules the moment they clear QA"),
+            "{community}"
+        );
+
+        let env = refusal(tid, Source::Env, &Answer::Public(None));
+        assert!(
+            env.contains("ISOTOPE13_TOKEN") && env.contains("whole token"),
+            "{env}"
+        );
+        let saved = refusal(tid, Source::File, &Answer::Public(None));
+        assert!(
+            saved.contains("isotope13-api.json") && saved.contains("disconnected"),
+            "{saved}"
+        );
+        let issued = refusal(tid, Source::Device, &Answer::Public(None));
+        assert!(issued.contains("just issued"), "{issued}");
+        // Nothing is pasted any more, so nothing says to check a paste.
+        for message in [&community, &env, &saved, &issued] {
+            assert!(!message.contains("pasted"), "{message}");
+            assert!(message.contains(tid), "{message}");
+        }
+
+        let status = refusal(tid, Source::Env, &Answer::Status("HTTP 401".into()));
+        assert!(
+            status.contains("(HTTP 401)") && status.contains(crate::enriched::DASH_URL),
+            "{status}"
+        );
     }
 
     #[test]

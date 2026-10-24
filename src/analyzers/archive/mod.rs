@@ -118,6 +118,8 @@ fn is_zip_container(file_type: FileType) -> bool {
     matches!(
         file_type,
         FileType::Zip
+            | FileType::GoModule
+            | FileType::Composer
             | FileType::Jar
             | FileType::Whl
             | FileType::Crx
@@ -1551,20 +1553,29 @@ fn dispatch_decompressed_file(
     if looks_like_tar_archive(&sniff)
         || matches!(
             detected,
-            FileType::Tar | FileType::Gem | FileType::OciImage | FileType::GentooBinpkg
+            FileType::Tar
+                | FileType::Gem
+                | FileType::Hex
+                | FileType::OciImage
+                | FileType::GentooBinpkg
         )
     {
         return tar::extract_tar_entries_safe(reopen_decoded(&tmp, stem)?, dest_dir, guard);
     }
 
     match detected {
-        FileType::TarGz | FileType::Npm | FileType::Crate | FileType::PythonSdist => {
-            tar::extract_tar_entries_safe(
-                flate2::read::GzDecoder::new(reopen_decoded(&tmp, stem)?),
-                dest_dir,
-                guard,
-            )
-        }
+        FileType::TarGz
+        | FileType::Npm
+        | FileType::Crate
+        | FileType::PythonSdist
+        | FileType::Pub
+        | FileType::Cran
+        | FileType::Cpan
+        | FileType::Hackage => tar::extract_tar_entries_safe(
+            flate2::read::GzDecoder::new(reopen_decoded(&tmp, stem)?),
+            dest_dir,
+            guard,
+        ),
         FileType::TarBz2 => tar::extract_tar_entries_safe(
             bzip2::read::BzDecoder::new(reopen_decoded(&tmp, stem)?),
             dest_dir,
@@ -2878,7 +2889,11 @@ impl ArchiveAnalyzer {
             // A gem is an uncompressed `ustar` tar (members: metadata.gz,
             // data.tar.gz, checksums.yaml.gz); recursion descends into
             // data.tar.gz for the installed files.
-            FileType::Tar | FileType::Gem | FileType::OciImage | FileType::GentooBinpkg => {
+            FileType::Tar
+            | FileType::Gem
+            | FileType::Hex
+            | FileType::OciImage
+            | FileType::GentooBinpkg => {
                 tar::extract_tar_entries_safe(Cursor::new(data), dest_dir, guard)
             }
             // Alpine/Wolfi `.apk`: several gzip streams concatenated (control +
@@ -2893,13 +2908,18 @@ impl ArchiveAnalyzer {
             // PKG-INFO, installed files). filefacts only labels a gzip-tar as an
             // sdist when it carries a `PKG-INFO` root, so this arm is always a
             // gzip tarball.
-            FileType::TarGz | FileType::Npm | FileType::Crate | FileType::PythonSdist => {
-                tar::extract_tar_entries_safe(
-                    flate2::read::GzDecoder::new(Cursor::new(data)),
-                    dest_dir,
-                    guard,
-                )
-            }
+            FileType::TarGz
+            | FileType::Npm
+            | FileType::Crate
+            | FileType::PythonSdist
+            | FileType::Pub
+            | FileType::Cran
+            | FileType::Cpan
+            | FileType::Hackage => tar::extract_tar_entries_safe(
+                flate2::read::GzDecoder::new(Cursor::new(data)),
+                dest_dir,
+                guard,
+            ),
             FileType::TarBz2 => tar::extract_tar_entries_safe(
                 bzip2::read::BzDecoder::new(Cursor::new(data)),
                 dest_dir,
@@ -2958,6 +2978,8 @@ impl ArchiveAnalyzer {
             // Zip-based packages: Android apk, conda, egg, nupkg, ipa, vsix —
             // same extraction as the other zip family.
             FileType::Zip
+            | FileType::GoModule
+            | FileType::Composer
             | FileType::Jar
             | FileType::Whl
             | FileType::Xpi
@@ -3886,6 +3908,43 @@ composite_rules:
             hash,
             "916f0027a575074ce72a331777c3478d6513f786a591bd892da1a577bf2335f9"
         );
+    }
+
+    #[test]
+    fn go_module_download_retains_package_type_and_analyzes_members() {
+        let dir = tempfile::tempdir().unwrap();
+        // A proxy response can be stored under its digest with no extension.
+        let path = dir.path().join("download");
+        let mut zip = zip::ZipWriter::new(File::create(&path).unwrap());
+        let options = zip::write::SimpleFileOptions::default();
+        for (name, bytes) in [
+            ("go.mod", "module example.com/hello\n\ngo 1.23\n"),
+            (
+                "hello.go",
+                "package hello\nfunc Hello() string { return \"hello\" }\n",
+            ),
+        ] {
+            zip.start_file(format!("example.com/hello@v1.2.3/{name}"), options)
+                .unwrap();
+            zip.write_all(bytes.as_bytes()).unwrap();
+        }
+        zip.finish().unwrap();
+        let report = ArchiveAnalyzer::new()
+            .with_capability_mapper(CapabilityMapper::empty())
+            .analyze(&path)
+            .unwrap();
+        assert_eq!(report.target.file_type, "go_module");
+        for (suffix, kind) in [("go.mod", "go.mod"), ("hello.go", "go")] {
+            let member = report
+                .files
+                .iter()
+                .find(|f| f.path.ends_with(suffix))
+                .expect("Go module member must be analyzed");
+            assert_eq!(member.file_type, kind);
+        }
+        let kind = crate::composite_rules::FileType::from_str(&report.target.file_type);
+        assert!(kind.is_package());
+        assert!(kind.is_archive());
     }
 
     #[test]
@@ -6420,6 +6479,13 @@ traits:
         // Mirrors `FileType::is_archive()`.
         let containers = [
             "Zip",
+            "GoModule",
+            "Composer",
+            "Hex",
+            "Pub",
+            "Cran",
+            "Cpan",
+            "Hackage",
             "Tar",
             "Cpio",
             "TarGz",

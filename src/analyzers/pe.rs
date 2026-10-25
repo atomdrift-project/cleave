@@ -1360,6 +1360,55 @@ impl PEAnalyzer {
             }
         }
 
+        // A code-relative RC4 table can carry several independent PE files.
+        // Decode only the bounded envelope; each child owns its behavior.
+        if !self.skip_embedded_scan && !self.is_cancelled() {
+            for payload in crate::extractors::rc4_pe_table::recover(pe_data) {
+                if self.is_cancelled() {
+                    break;
+                }
+                let member = format!("rc4-table/payload-{}.exe", payload.offset);
+                let virtual_path = format!("{}!{}", logical_path.display(), member);
+                let child = (|| -> Result<AnalysisReport> {
+                    let temp = tempfile::Builder::new().suffix(".exe").tempfile()?;
+                    fs::write(temp.path(), &payload.data)?;
+                    let input = AnalysisInput::new(
+                        Path::new(&virtual_path),
+                        &payload.data,
+                        crate::FileType::Pe,
+                    )
+                    .with_backing_path(temp.path())
+                    .at_depth(1);
+                    PEAnalyzer::new()
+                        .with_engine(self.engine.clone())
+                        .with_cancellation(self.cancellation.clone())
+                        .without_embedded_scan()
+                        .analyze_input(&input)
+                })();
+                match child {
+                    Ok(child) => {
+                        let first = report.files.len();
+                        crate::analyzers::subfile::attach_member(
+                            &mut report,
+                            child,
+                            &payload.data,
+                            crate::FileType::Pe,
+                            &member,
+                            &virtual_path,
+                            &self.engine,
+                        );
+                        if let Some(file) = report.files.get_mut(first) {
+                            file.encoding = Some(vec!["rc4-table".to_string()]);
+                        }
+                    }
+                    Err(error) => report
+                        .metadata
+                        .errors
+                        .push(format!("RC4 table member: {error:#}")),
+                }
+            }
+        }
+
         // Converter envelopes carry ordinary scripts: the decoded child owns
         // behavioral findings, while the parent records only the encoding.
         if !self.skip_embedded_scan {

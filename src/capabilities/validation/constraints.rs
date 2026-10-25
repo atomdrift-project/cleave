@@ -1460,6 +1460,13 @@ pub(crate) fn find_hostile_composites_with_too_few_notable_legs(
     for c in composite_rules {
         crit_by_id.insert(c.id.as_str(), c.crit);
     }
+    // This exact analyzer-owned fact is emitted as Notable. Count it by its
+    // declared criticality just like YAML evidence; unknown runtime ids remain
+    // absent rather than receiving a namespace-wide validation exemption.
+    crit_by_id.insert(
+        crate::analyzers::ci_secret_file_flow::FACT_ID,
+        Criticality::Notable,
+    );
     let index = ReferenceIndex::new(crit_by_id.keys().copied().collect());
     let composite_by_id: HashMap<&str, &CompositeTrait> =
         composite_rules.iter().map(|c| (c.id.as_str(), c)).collect();

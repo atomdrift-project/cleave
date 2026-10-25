@@ -287,6 +287,49 @@ impl GenericAnalyzer {
             );
         }
 
+        // Recover a bounded self-read/certutil hex envelope as data. PE analysis
+        // supplies behavioral findings; the carrier records encoding provenance.
+        if self.file_type == FileType::Batch
+            && let Some(payload) = crate::extractors::batch_self_hex::recover(content.as_bytes())
+        {
+            let member = format!("certutil-hex/payload-{}.exe", payload.offset);
+            let virtual_path = format!("{}!{}", file_path.display(), member);
+            let child = (|| -> Result<AnalysisReport> {
+                let temp = tempfile::Builder::new().suffix(".exe").tempfile()?;
+                std::fs::write(temp.path(), &payload.data)?;
+                let input =
+                    AnalysisInput::new(Path::new(&virtual_path), &payload.data, FileType::Pe)
+                        .with_backing_path(temp.path())
+                        .at_depth(1);
+                crate::analyzers::pe::PEAnalyzer::new()
+                    .with_engine(self.engine.clone())
+                    .with_cancellation(cancellation.cloned())
+                    .without_embedded_scan()
+                    .analyze_input(&input)
+            })();
+            match child {
+                Ok(child) => {
+                    let first = report.files.len();
+                    crate::analyzers::subfile::attach_member(
+                        &mut report,
+                        child,
+                        &payload.data,
+                        FileType::Pe,
+                        &member,
+                        &virtual_path,
+                        &self.engine,
+                    );
+                    if let Some(file) = report.files.get_mut(first) {
+                        file.encoding = Some(vec!["batch-self-hex".to_string()]);
+                    }
+                }
+                Err(error) => report
+                    .metadata
+                    .errors
+                    .push(format!("Batch hex PE: {error:#}")),
+            }
+        }
+
         // Analyze paths and environment variables
         let t_paths = std::time::Instant::now();
         crate::path_mapper::analyze_and_link_paths(&mut report);

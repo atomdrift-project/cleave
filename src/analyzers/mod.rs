@@ -80,6 +80,7 @@ pub(crate) mod vsix_manifest;
 pub(crate) mod unified;
 
 // Fallback for languages without tree-sitter support
+pub(crate) mod ci_secret_file_flow;
 mod declared_sources;
 pub(crate) mod generic;
 

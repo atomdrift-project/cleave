@@ -69,11 +69,39 @@ pub(super) fn append(
             })
             .collect();
         let path = format!("{}!!{locator}", report.target.path);
-        let child = analyzer
+        let mut child = analyzer
             .with_engine(engine.clone())
             .without_embedded_detection()
             .with_cancellation(cancelled.cloned())
             .analyze_source_as_configured(Path::new(&path), &source);
+        if parsed.fileid().file_type() == filefacts::FileType::GithubActions
+            && script.file_type == Some(filefacts::FileType::Shell)
+            && let Some(step) = script.pointer.strip_suffix("/run")
+            && let Some(env) = parsed.values().as_json().pointer(&format!("{step}/env"))
+        {
+            for witness in super::ci_secret_file_flow::find(&source, env) {
+                let mut fact = crate::types::Finding::structural(
+                    super::ci_secret_file_flow::FACT_ID.to_string(),
+                    "CI secret bindings feed a matched file-to-Base64-to-HTTP chain".to_string(),
+                    0.99,
+                );
+                fact.source_file = Some(path.clone());
+                fact.evidence.push(crate::types::Evidence {
+                    method: "source-flow".to_string(),
+                    source: "ci_secret_file_flow".to_string(),
+                    value: format!(
+                        "step secret variables {:?}: {} -> {} -> {}",
+                        witness.secrets,
+                        witness.source_path,
+                        witness.encoded_path,
+                        witness.destination
+                    ),
+                    ..Default::default()
+                });
+                child.findings.push(fact.clone());
+                report.findings.push(fact);
+            }
+        }
         let (mut file, nested, _) = child.into_file_analysis(0, engine);
         // Embedded detection is deliberately disabled here: one declared body
         // is one independent source scope, not an unbounded recursive container.

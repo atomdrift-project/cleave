@@ -319,7 +319,8 @@ pub(crate) const MAX_TRAITS_PER_DIRECTORY: usize = 100;
 const REVIEWED_DIRECTORY_TRAIT_BUDGETS: &[(&str, usize)] = &[
     // Reviewed static-property catalogs; VSIX controls preserve distinct forms.
     ("metadata/file/naming", 101),
-    ("metadata/file/archive", 101),
+    // Complete 2026-10-24 data-taxonomy review: 111 distinct archive facts.
+    ("metadata/file/archive", 111),
     ("metadata/package/dependencies/manifest/identity", 108),
     ("micro-behaviors/data/decode/base64", 103),
     ("micro-behaviors/fs/file/copy", 101),
@@ -4189,5 +4190,23 @@ mod printenv_filetype_allowance_tests {
             );
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod archive_catalog_budget_tests {
+    use super::{MAX_TRAITS_PER_DIRECTORY, trait_directory_budget};
+
+    #[test]
+    fn archive_review_budget_is_exact_and_does_not_extend_to_other_leaves() {
+        assert_eq!(MAX_TRAITS_PER_DIRECTORY, 100);
+        assert_eq!(trait_directory_budget("metadata/file/archive"), 111);
+        for directory in [
+            "metadata/file/archive/7z",
+            "metadata/file/archive-copy",
+            "metadata/lang/source/declaration",
+        ] {
+            assert_eq!(trait_directory_budget(directory), 100, "{directory}");
+        }
     }
 }

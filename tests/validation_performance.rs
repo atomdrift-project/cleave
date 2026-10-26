@@ -5,6 +5,24 @@ use serde_json::{Value, json};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
+fn write_fixture(path: &std::path::Path, source: &str) {
+    use std::io::Write;
+    let compressed = std::path::PathBuf::from(format!("{}.xz", path.display()));
+    if source.len() > 20 * 1024 {
+        let mut encoder = xz2::write::XzEncoder::new(Vec::new(), 6);
+        encoder.write_all(source.as_bytes()).unwrap();
+        std::fs::write(&compressed, encoder.finish().unwrap()).unwrap();
+        if path.exists() {
+            std::fs::remove_file(path).unwrap();
+        }
+    } else {
+        std::fs::write(path, source).unwrap();
+        if compressed.exists() {
+            std::fs::remove_file(compressed).unwrap();
+        }
+    }
+}
+
 /// Exercise the CLI, disk cache and real query work together. Comparing runs
 /// on the same fixture avoids a machine-specific elapsed-time threshold.
 #[test]
@@ -14,17 +32,13 @@ fn unchanged_validation_is_ten_times_faster_after_a_yaml_addition() {
     let rules = root.join("rules");
     for sub in [
         "testdata/hostile",
-        "testdata/benign",
-        "testdata/performance",
+        "testdata/suspicious",
+        "testdata/notable",
+        "testdata/baseline/performance",
         "metadata/lang/source/shape",
     ] {
         std::fs::create_dir_all(rules.join(sub)).unwrap();
     }
-    std::fs::write(
-        rules.join("testdata/expectations.toml"),
-        "hostile=[]\nbenign=[]\nwalked_hostile=[]\n[does_nothing]\ndefault_cap=0\n",
-    )
-    .unwrap();
     let traits: Vec<_> = (0..24).map(|i| json!({
         "id": format!("numeric-expression-{i}"),
         "desc": format!("Numeric expression cost probe {i}"),
@@ -44,11 +58,10 @@ fn unchanged_validation_is_ten_times_faster_after_a_yaml_addition() {
         let source: String = (0..4000)
             .map(|i| format!("const v{i}=1+{};\n", i + fixture))
             .collect();
-        std::fs::write(
-            rules.join(format!("testdata/performance/cost-{fixture}.js")),
-            source,
-        )
-        .unwrap();
+        write_fixture(
+            &rules.join(format!("testdata/baseline/performance/cost-{fixture}.js")),
+            &source,
+        );
     }
     let measured = |threshold: &str| -> (Output, Duration) {
         let started = Instant::now();
@@ -160,17 +173,13 @@ fn original_slow_query_is_a_soft_outlier_and_fixed_queries_pass() {
     let rules = root.join("rules");
     for sub in [
         "testdata/hostile",
-        "testdata/benign",
-        "testdata/performance",
+        "testdata/suspicious",
+        "testdata/notable",
+        "testdata/notable/performance",
         "objectives/impact/dos/resource",
     ] {
         std::fs::create_dir_all(rules.join(sub)).unwrap();
     }
-    std::fs::write(
-        rules.join("testdata/expectations.toml"),
-        "hostile=[]\nbenign=[]\nwalked_hostile=[]\n[does_nothing]\ndefault_cap=0\n",
-    )
-    .unwrap();
     let queries: std::collections::BTreeMap<String, String> =
         serde_json::from_str(include_str!("fixtures/rule-performance/queries.json")).unwrap();
     let traits: Vec<Value> = queries
@@ -195,7 +204,10 @@ fn original_slow_query_is_a_soft_outlier_and_fixed_queries_pass() {
         "var alias=String.fromCharCode; const table={{{properties}}};\nfor(var i=0;i<1;i++){{output+=String(bytes[i]^1);}}\n/*{}*/\n",
         "fixture ".repeat(600)
     );
-    std::fs::write(rules.join("testdata/performance/wide-object.js"), &source).unwrap();
+    write_fixture(
+        &rules.join("testdata/notable/performance/wide-object.js"),
+        &source,
+    );
 
     // A partial rule bundle cannot satisfy the repository-wide allowlist lint.
     // Exclude only that legacy lint; rule-performance remains fully enabled.
@@ -213,6 +225,14 @@ fn original_slow_query_is_a_soft_outlier_and_fixed_queries_pass() {
     assert!(
         !errors.contains("exhausted its CPU budget"),
         "must fail by relative cost before the safety deadline: {errors}"
+    );
+
+    // Confirmation samples cannot waive the original whole-rule deadline.
+    let absolute = run(root, "1", &["--exclude", "validation"]);
+    let absolute_errors = String::from_utf8_lossy(&absolute.stderr);
+    assert!(
+        !absolute.status.success() && absolute_errors.contains("slow-rule threshold 1ms"),
+        "{absolute_errors}"
     );
 
     let soft = run(root, "60000", &["--exclude", "validation", "--soft"]);
@@ -238,8 +258,12 @@ fn original_slow_query_is_a_soft_outlier_and_fixed_queries_pass() {
             .map(|i| format!("p{i}:{i}"))
             .collect::<Vec<_>>()
             .join(",");
-        std::fs::write(rules.join("testdata/performance/wide-object.js"),
-            format!("var alias=String.fromCharCode; const table={{{wide}}}; for(var i=0;i<1;i++){{output+=String(bytes[i]^1);}}" )).unwrap();
+        write_fixture(
+            &rules.join("testdata/notable/performance/wide-object.js"),
+            &format!(
+                "var alias=String.fromCharCode; const table={{{wide}}}; for(var i=0;i<1;i++){{output+=String(bytes[i]^1);}}"
+            ),
+        );
         let bounded = run(root, "60000", &["--exclude", "validation"]);
         let errors = String::from_utf8_lossy(&bounded.stderr);
         assert!(
@@ -252,7 +276,10 @@ fn original_slow_query_is_a_soft_outlier_and_fixed_queries_pass() {
             bounded_soft.status.success() && errors.contains("AST query exhausted its"),
             "budget exhaustion must remain advisory in soft mode: {errors}"
         );
-        std::fs::write(rules.join("testdata/performance/wide-object.js"), &source).unwrap();
+        write_fixture(
+            &rules.join("testdata/notable/performance/wide-object.js"),
+            &source,
+        );
     }
 
     // Keep the fixed queries and all peers. They must pass, and a cached pass
@@ -280,4 +307,47 @@ fn original_slow_query_is_a_soft_outlier_and_fixed_queries_pass() {
         tighter_soft.status.success() && errors.contains("slow-rule threshold 0ms"),
         "the whole-rule deadline must remain advisory in soft mode: {errors}"
     );
+}
+
+/// Sharing a compiled query's mutable regex cache pool made identical tiny
+/// queries appear hundreds of times slower at random under parallel validation.
+#[test]
+fn parallel_identical_queries_do_not_become_relative_cost_outliers() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let rules = root.join("rules");
+    let shape = rules.join("metadata/lang/source/shape");
+    std::fs::create_dir_all(&shape).unwrap();
+    let fixtures = rules.join("testdata/notable/performance");
+    std::fs::create_dir_all(&fixtures).unwrap();
+    let traits: Vec<_> = (0..12).map(|i| json!({
+        "id":format!("identical-{i}"), "desc":format!("Identical shell query {i}"),
+        "if":{"type":"tree-sitter", "language":"shell", "query":format!(
+            "((command_name (word) @word) (#match? @word \"^(printf|echo|cat)$\")) ; instance {i}\n")}
+    })).collect();
+    std::fs::write(
+        shape.join("queries.yaml"),
+        serde_json::to_vec(&json!({
+            "defaults":{"for":["shell"],"platforms":["unix"],"crit":"notable","conf":1.0},
+            "traits":traits
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    for i in 0..32 {
+        std::fs::write(
+            fixtures.join(format!("input-{i:02}.sh")),
+            "echo ready | cat\n",
+        )
+        .unwrap();
+    }
+    for _ in 0..3 {
+        let result = run(root, "4000", &["--exclude", "validation"]);
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(String::from_utf8_lossy(&result.stdout).contains("notable 32/32"));
+    }
 }

@@ -224,8 +224,9 @@ fn may_match(
     matched || interrupted || limited
 }
 
-/// Only a wildcard root with multiple mandatory children qualifies.
-/// Alternatives and optional direct children deliberately receive no gate.
+/// Only a statement container with multiple mandatory children qualifies.
+/// Optional direct children deliberately receive no gate. Mandatory alternatives
+/// count as a sibling, but are not themselves extracted as a required child.
 fn required_child_query(source: &str) -> Option<String> {
     let tokens = query_token_spans(source);
     let mut closes = vec![None; tokens.len()];
@@ -252,7 +253,7 @@ fn required_child_query(source: &str) -> Option<String> {
                 .get(i + 1)
                 .is_some_and(|t| !matches!(t.0, "(" | "[") && !t.0.starts_with('#'))
     })?;
-    if tokens.get(root + 1)?.0 != "_" {
+    if !matches!(tokens.get(root + 1)?.0, "_" | "program" | "statement_block") {
         return None;
     }
     let end = closes[root]?;
@@ -275,7 +276,18 @@ fn required_child_query(source: &str) -> Option<String> {
     let mut required_children = 0;
     while i < end {
         match tokens[i].0 {
-            "[" => return None,
+            "[" => {
+                let close = closes[i]?;
+                let mut after = close + 1;
+                while tokens.get(after).is_some_and(|t| t.0.starts_with('@')) {
+                    after += 1;
+                }
+                if tokens.get(after).is_some_and(|t| matches!(t.0, "?" | "*")) {
+                    return None;
+                }
+                required_children += 1;
+                i = close + 1;
+            }
             "(" => {
                 let close = closes[i]?;
                 let kind = tokens.get(i + 1)?.0;
@@ -554,6 +566,39 @@ mod tests {
                     .is_some();
                 assert!(!matched || possible);
             });
+        }
+    }
+
+    #[test]
+    fn named_containers_with_alternative_declarations_keep_intervening_statements() {
+        for kind in ["program", "statement_block"] {
+            let pattern = QUERY.replacen("((_ (variable_declaration", &format!("(({kind} [(variable_declaration"), 1)
+                .replacen("value: (string)))", "value: (string))) (lexical_declaration (variable_declarator name: (identifier) @buf value: (string)))]", 1);
+            for (code, possible) in [
+                ("var s=''; observe(); for(var i=0;i<32;i++){s+=s;}", true),
+                ("let s=''; observe(); for(var i=0;i<32;i++){s+=s;}", true),
+                ("var s=''; for(var i=0;i<2;i++){s+=s;}", false),
+            ] {
+                let source = if kind == "statement_block" {
+                    format!("function f(){{{code}}}")
+                } else {
+                    code.to_string()
+                };
+                with_tree(&source, |tree| {
+                    let query = Query::new(&tree.language(), &pattern).unwrap();
+                    let gates = RequiredSubqueries::of(&tree.language(), &query, &pattern);
+                    assert_eq!(gates.queries.len(), 1);
+                    let mut enabled = vec![true];
+                    gates.prune(tree, &source, &mut enabled, None, None);
+                    assert_eq!(enabled, [possible]);
+                    let mut cursor = QueryCursor::new();
+                    let matched = cursor
+                        .matches(&query, tree.root_node(), source.as_bytes())
+                        .next()
+                        .is_some();
+                    assert_eq!(matched, possible);
+                });
+            }
         }
     }
 

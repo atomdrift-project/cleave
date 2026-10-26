@@ -324,7 +324,19 @@ const REVIEWED_DIRECTORY_TRAIT_BUDGETS: &[(&str, usize)] = &[
     ("metadata/package/dependencies/manifest/identity", 108),
     ("micro-behaviors/data/decode/base64", 103),
     ("micro-behaviors/fs/file/copy", 101),
-    ("micro-behaviors/communications/http/url/path", 101),
+    // Complete 2026-10-26 stealer item review. Broad credential matchers do
+    // not prove a password/token/key subtype; inventing one would overstate
+    // their evidence. The full populations, scopes and duplicate comparison
+    // are recorded in traits testdata/triage/review-pool-20261026.
+    ("objectives/exfiltration/stealer/credential", 276),
+    ("micro-behaviors/communications/http/header/custom", 101),
+    ("micro-behaviors/communications/http/post", 101),
+    ("micro-behaviors/communications/http/request/body", 104),
+    ("micro-behaviors/communications/http/upload", 102),
+    ("micro-behaviors/communications/http/url/path", 110),
+    ("micro-behaviors/fs/path/credential", 103),
+    ("micro-behaviors/fs/write/file/full", 101),
+    ("micro-behaviors/os/user/account", 101),
 ];
 
 fn trait_directory_budget(dir: &str) -> usize {
@@ -1598,6 +1610,12 @@ pub(crate) fn find_deep_taxonomy_directories(trait_dirs: &[String]) -> Vec<(Stri
 // Audited operation boundaries in TAXONOMY.md. These are exact child sets,
 // not exemptions for arbitrary future subdivisions under these parents.
 const REVIEWED_SPARSE_TAXONOMY_PARTITIONS: &[(&str, &[&str])] = &[
+    // Media item modality is independent of the capture device or store.
+    // Broad/mixed-modality evidence stays at the media ancestor.
+    (
+        "objectives/exfiltration/stealer/media",
+        &["audio", "image", "video"],
+    ),
     // Direction-neutral Base64 and XOR scheme evidence must retain distinct
     // algorithm homes; merging would discard the scheme that every matcher
     // requires. JVM long-state XOR is not intrinsically encode or decode.
@@ -3273,7 +3291,6 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     "text:objectives/command-and-control/backdoor/rat/keywords/",
     "text:objectives/command-and-control/remote-command/keywords/",
     "text:objectives/command-and-control/remote-command/llm/",
-    "text:objectives/exfiltration/stealer/surveillance/",
     "text:objectives/evasion/kernel-hide/keywords/",
     "text:objectives/evasion/indicator-removal/keywords/",
     "text:objectives/evasion/security-bypass/edr/",
@@ -4201,10 +4218,21 @@ mod archive_catalog_budget_tests {
     fn archive_review_budget_is_exact_and_does_not_extend_to_other_leaves() {
         assert_eq!(MAX_TRAITS_PER_DIRECTORY, 100);
         assert_eq!(trait_directory_budget("metadata/file/archive"), 111);
+        assert_eq!(
+            trait_directory_budget("objectives/exfiltration/stealer/credential"),
+            276
+        );
+        assert_eq!(
+            trait_directory_budget("micro-behaviors/communications/http/url/path"),
+            110
+        );
         for directory in [
             "metadata/file/archive/7z",
             "metadata/file/archive-copy",
             "metadata/lang/source/declaration",
+            "objectives/exfiltration/stealer/credential/token",
+            "objectives/exfiltration/stealer/credential-copy",
+            "micro-behaviors/communications/http/url/path-copy",
         ] {
             assert_eq!(trait_directory_budget(directory), 100, "{directory}");
         }

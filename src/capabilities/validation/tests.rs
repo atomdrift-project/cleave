@@ -4971,13 +4971,16 @@ mod taxonomy_tests {
     }
 
     #[test]
-    fn test_oversized_dir_uses_exact_reviewed_combined_budgets() {
+    fn test_oversized_dir_uses_uniform_combined_limit() {
         assert_eq!(MAX_TRAITS_PER_DIRECTORY, 100);
         let reviewed_path = "micro-behaviors/communications/http/url/path";
         let reviewed_rules: Vec<_> = (0..101)
             .map(|i| make_trait(&format!("{reviewed_path}::r{i}"), "other::t"))
             .collect();
-        assert!(find_oversized_trait_directories(&reviewed_rules, &[]).is_empty());
+        assert_eq!(
+            find_oversized_trait_directories(&reviewed_rules, &[]),
+            vec![(reviewed_path.to_string(), 101)]
+        );
         let unreviewed_sibling: Vec<_> = (0..101)
             .map(|i| {
                 make_trait(
@@ -5047,13 +5050,16 @@ mod taxonomy_tests {
     }
 
     #[test]
-    fn reviewed_sparse_taxonomies_require_exact_parent_and_child_sets() {
+    fn sparse_checks_apply_to_formerly_reviewed_partitions() {
         let codec = HashMap::from([
             ("micro-behaviors/data/codec/gzip".to_string(), 7),
             ("micro-behaviors/data/codec/lzma".to_string(), 1),
             ("micro-behaviors/data/codec/zlib".to_string(), 1),
         ]);
-        assert!(find_sparse_sibling_cohorts(&codec).is_empty());
+        assert_eq!(
+            find_sparse_sibling_cohorts(&codec),
+            vec![("micro-behaviors/data/codec".to_string(), 9, 3)]
+        );
         let codec_with_new_sibling = HashMap::from([
             ("micro-behaviors/data/codec/gzip".to_string(), 7),
             ("micro-behaviors/data/codec/lzma".to_string(), 1),
@@ -5069,7 +5075,10 @@ mod taxonomy_tests {
             ("micro-behaviors/fs/swap/on".to_string(), 1),
             ("micro-behaviors/fs/swap/off".to_string(), 2),
         ]);
-        assert!(find_sparse_sibling_cohorts(&rules).is_empty());
+        assert_eq!(
+            find_sparse_sibling_cohorts(&rules),
+            vec![("micro-behaviors/fs/swap".to_string(), 3, 2)]
+        );
         rules.insert("micro-behaviors/fs/swap/helper".to_string(), 1);
         assert_eq!(
             find_sparse_sibling_cohorts(&rules),
@@ -5140,78 +5149,31 @@ mod taxonomy_tests {
     }
 
     #[test]
-    fn reviewed_manifest_identity_budget_is_exact_and_scoped() {
-        let reviewed = "metadata/package/dependencies/manifest/identity";
-        let traits: Vec<_> = (0..108)
-            .map(|i| make_trait(&format!("{reviewed}::rule-{i}"), "other::t"))
-            .collect();
-        assert!(find_oversized_trait_directories(&traits, &[]).is_empty());
-
-        let mut over_reviewed_budget = traits.clone();
-        over_reviewed_budget.push(make_trait(&format!("{reviewed}::rule-108"), "other::t"));
-        assert_eq!(
-            find_oversized_trait_directories(&over_reviewed_budget, &[]),
-            vec![(reviewed.to_string(), 109)]
-        );
-
-        let other = "metadata/package/dependencies/manifest/source";
-        let other_traits: Vec<_> = (0..101)
-            .map(|i| make_trait(&format!("{other}::rule-{i}"), "other::t"))
-            .collect();
-        assert_eq!(
-            find_oversized_trait_directories(&other_traits, &[]),
-            vec![(other.to_string(), 101)]
-        );
-    }
-
-    #[test]
-    fn reviewed_base64_decode_budget_is_exact_and_scoped() {
-        let reviewed = "micro-behaviors/data/decode/base64";
-        let traits: Vec<_> = (0..103)
-            .map(|i| make_trait(&format!("{reviewed}::rule-{i}"), "other::t"))
-            .collect();
-        assert!(find_oversized_trait_directories(&traits, &[]).is_empty());
-
-        let mut over_reviewed_budget = traits.clone();
-        over_reviewed_budget.push(make_trait(&format!("{reviewed}::rule-103"), "other::t"));
-        assert_eq!(
-            find_oversized_trait_directories(&over_reviewed_budget, &[]),
-            vec![(reviewed.to_string(), 104)]
-        );
-
-        let other = "micro-behaviors/data/decode/base64/pipeline";
-        let other_traits: Vec<_> = (0..101)
-            .map(|i| make_trait(&format!("{other}::rule-{i}"), "other::t"))
-            .collect();
-        assert_eq!(
-            find_oversized_trait_directories(&other_traits, &[]),
-            vec![(other.to_string(), 101)]
-        );
-    }
-
-    #[test]
-    fn reviewed_file_copy_budget_is_exact_and_scoped() {
-        let reviewed = "micro-behaviors/fs/file/copy";
-        let traits: Vec<_> = (0..101)
-            .map(|i| make_trait(&format!("{reviewed}::rule-{i}"), "other::t"))
-            .collect();
-        assert!(find_oversized_trait_directories(&traits, &[]).is_empty());
-
-        let mut over_reviewed_budget = traits.clone();
-        over_reviewed_budget.push(make_trait(&format!("{reviewed}::rule-101"), "other::t"));
-        assert_eq!(
-            find_oversized_trait_directories(&over_reviewed_budget, &[]),
-            vec![(reviewed.to_string(), 102)]
-        );
-
-        let other = "micro-behaviors/fs/file/move";
-        let other_traits: Vec<_> = (0..101)
-            .map(|i| make_trait(&format!("{other}::rule-{i}"), "other::t"))
-            .collect();
-        assert_eq!(
-            find_oversized_trait_directories(&other_traits, &[]),
-            vec![(other.to_string(), 101)]
-        );
+    fn all_former_budget_paths_reject_rule_101() {
+        for directory in [
+            "metadata/filename",
+            "metadata/file/archive",
+            "metadata/package/dependencies/manifest/identity",
+            "micro-behaviors/data/decode/base64",
+            "micro-behaviors/fs/file/copy",
+            "objectives/exfiltration/stealer/credential",
+            "micro-behaviors/communications/http/header/custom",
+            "micro-behaviors/communications/http/post",
+            "micro-behaviors/communications/http/request/body",
+            "micro-behaviors/communications/http/upload",
+            "micro-behaviors/communications/http/url/path",
+            "micro-behaviors/fs/path/credential",
+            "micro-behaviors/fs/write/file/full",
+            "micro-behaviors/os/user/account",
+        ] {
+            let traits: Vec<_> = (0..101)
+                .map(|i| make_trait(&format!("{directory}::rule-{i}"), "other::t"))
+                .collect();
+            assert_eq!(
+                find_oversized_trait_directories(&traits, &[]),
+                vec![(directory.to_string(), 101)]
+            );
+        }
     }
 }
 
@@ -11702,9 +11664,9 @@ mod all_platform_directory_tests {
                 "micro-behaviors/communications/url/host/nested::syntax",
                 vec![Platform::All],
             ),
-            make_trait("metadata/file/naming::readme-basename", vec![Platform::All]),
-            make_trait("metadata/file/naming/subdir::shape", vec![Platform::All]),
-            make_trait("metadata/file/naming-impostor::shape", vec![Platform::All]),
+            make_trait("metadata/filename::readme-basename", vec![Platform::All]),
+            make_trait("metadata/filename/subdir::shape", vec![Platform::All]),
+            make_trait("metadata/filename-impostor::shape", vec![Platform::All]),
             make_trait("metadata/registry-impostor::age", vec![Platform::All]),
             make_trait("well-known/lib/crypto/ece::api", vec![Platform::All]),
             make_trait(
@@ -11756,8 +11718,8 @@ mod all_platform_directory_tests {
             ids,
             vec![
                 "age",
-                "metadata/file/naming-impostor::shape",
                 "metadata/file/profile/source-indications-impostor::alternatives",
+                "metadata/filename-impostor::shape",
                 "metadata/registry-impostor::age",
                 "objectives/persistence/login::entry",
                 "objectives/supply-chain/security-hold-impostor::entry",

@@ -195,10 +195,34 @@ what cleave's renderer does.
 
 ### Compact facts (`facts`)
 
-By default `facts` keeps only what cleave's models read: the metrics they use,
-and the imports, exports and other symbols whose names they look for. Sections
-and every other symbol are dropped, and `fp` names the profile. Pass
-`--full-facts` to keep everything below.
+By default `facts` keeps the complete metric maps used for numeric and categorical vocabulary discovery and
+all import, export, function, call-target and member-chain rows used by symbol
+vocabularies. Existing import/export/function caps still apply. Sections are
+omitted, and `fp` identifies the exact retention contract. Pass `--full-facts`
+to retain sections and other facts too.
+
+The contract is generated from shipping and candidate training layouts. From
+the cleave checkout, audit candidate layouts and refresh its inventory:
+
+```sh
+python tools/model_facts_manifest.py ../azoth ../collimator \
+  --training-specs ../collimator/out/models \
+  --training-specs ../collimator/out/experiments
+cp src/model_facts_manifest.json ../collimator/src/collimator/data/
+```
+
+The metric inventory records known layouts; it does not restrict metric
+retention. Training can discover additional metrics without rebuilding
+the producer. New scalar features require
+a dependency audit; symbol vocabularies can discover new tokens without another
+contract change. Rebuild producers that embed cleave (including scan) to use the
+updated retention code and manifest.
+
+Earlier profiles retained only gap-check symbol tokens and fewer metrics.
+Readers validate those reports against their historical contract, not the new
+one. Rendering or reserializing an old report preserves its profile ID and
+cannot recover omitted facts. Refresh affected reports from full analysis/cache
+or rescan the original samples before training features their profile omitted.
 
 | JSON | Meaning |
 | ---- | ------- |

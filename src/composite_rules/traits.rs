@@ -75,9 +75,9 @@ fn condition_count_weight(condition: &Condition, result: &ConditionResult) -> us
         return 0;
     }
 
-    if let Condition::Trait { id } = condition
-        && !id.contains("::")
-        && id.contains('/')
+    if matches!(condition, Condition::TraitSet { .. })
+        || matches!(condition,
+        Condition::Trait { id } if !id.contains("::") && id.contains('/'))
     {
         let distinct: rustc_hash::FxHashSet<&str> = result
             .matched_trait_ids
@@ -365,6 +365,10 @@ fn eval_condition(
             }
         }
         Condition::Trait { id } => timed_eval!("trait", eval_trait(id, ctx)),
+        Condition::TraitSet { ids } => timed_eval!(
+            "trait-set",
+            super::evaluators::misc::eval_trait_set(ids, ctx)
+        ),
         Condition::TreeSitter(TreeSitterQuery {
             kind,
             node,
@@ -1512,9 +1516,7 @@ impl TraitDefinition {
     pub(crate) fn trait_ref_ids(&self) -> Vec<&str> {
         let mut refs = Vec::new();
         fn add<'a>(cond: &'a Condition, refs: &mut Vec<&'a str>) {
-            if let Condition::Trait { id } = cond {
-                refs.push(id.as_str());
-            }
+            refs.extend(cond.trait_references().iter().map(String::as_str));
         }
         add(&self.r#if, &mut refs);
         if let Some(ref unless) = self.unless {
@@ -2799,7 +2801,13 @@ impl CompositeTrait {
 
         if let Some(conds) = &self.any {
             let required_from_any = self.needs.unwrap_or(1);
-            if required_from_any >= conds.len() {
+            if required_from_any >= conds.len()
+                && !conds.iter().any(|c| {
+                    matches!(c, Condition::TraitSet { .. })
+                        || matches!(c,
+                    Condition::Trait { id } if id.contains('/') && !id.contains("::"))
+                })
+            {
                 for cond in conds {
                     if let Condition::Trait { id } = cond {
                         ids.push(id.clone());

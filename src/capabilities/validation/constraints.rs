@@ -213,7 +213,23 @@ fn count_potential_matches(conditions: &[Condition], all_trait_ids: &[String]) -
     let mut total = 0;
 
     for condition in conditions {
-        if let Condition::Trait { id } = condition {
+        if let Condition::TraitSet { ids } = condition {
+            let matches: HashSet<_> = all_trait_ids
+                .iter()
+                .filter(|candidate| {
+                    ids.iter().any(|id| {
+                        id == *candidate
+                            || (!id.contains("::")
+                                && candidate
+                                    .strip_prefix(id.trim_end_matches('/'))
+                                    .is_some_and(|rest| {
+                                        rest.starts_with("::") || rest.starts_with('/')
+                                    }))
+                    })
+                })
+                .collect();
+            total += matches.len().max(1);
+        } else if let Condition::Trait { id } = condition {
             if id.contains("::") {
                 // Specific trait reference: counts as 1
                 total += 1;

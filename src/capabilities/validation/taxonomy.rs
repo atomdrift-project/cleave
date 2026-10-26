@@ -292,59 +292,9 @@ const BANNED_SEGMENT_EXCEPTIONS: &[(&str, &str)] = &[
     ),
 ];
 
-/// Default number of rules (atomic traits plus composite rules) allowed in a
-/// single directory before a reviewed budget is required. Composites count
-/// because a directory holding 40 atoms and 90 roll-ups is just as flat to an
-/// author and to the ML directory feature as one holding 130 atoms. A higher
-/// exact-path budget is allowed only when a documented review establishes that
-/// the leaf remains coherent.
+/// Maximum atomic traits and composite rules combined in any directory.
+/// Every directory uses the same limit; there are no path-specific budgets.
 pub(crate) const MAX_TRAITS_PER_DIRECTORY: usize = 100;
-/// Exact reviewed budgets above the default directory review trigger.
-///
-/// These are narrow semantic exceptions, not a higher global ceiling. Each
-/// entry must be justified in TAXONOMY.md and backed by a current migration
-/// record showing that the leaf is accurate, at the right level, and free of
-/// duplicates. The Cargo dependency identity leaf is one coherent namespace:
-/// the eight moved declarations identify package dependencies, not source
-/// imports, and have no equivalent declaration already in the leaf. The
-/// Base64 decode leaf keeps one algorithm across implementation scopes;
-/// language, API and source form belong in `for` and matchers, not taxonomy
-/// children. Its review removed the duplicate Ruby URL-safe match and moved an
-/// encoded-only PHP string out. The file-copy leaf gained one precise ELF
-/// command atom and its shared source/ELF composite; the operation remains one
-/// coherent home, with no neutral child axis for those declarations. The HTTP
-/// URL path leaf admits its additional API route reference: route syntax is a
-/// path fact; request use, SDK identity and endpoint operation are separate
-/// claims.
-const REVIEWED_DIRECTORY_TRAIT_BUDGETS: &[(&str, usize)] = &[
-    // Reviewed static-property catalogs; VSIX controls preserve distinct forms.
-    ("metadata/file/naming", 101),
-    // Complete 2026-10-24 data-taxonomy review: 111 distinct archive facts.
-    ("metadata/file/archive", 111),
-    ("metadata/package/dependencies/manifest/identity", 108),
-    ("micro-behaviors/data/decode/base64", 103),
-    ("micro-behaviors/fs/file/copy", 101),
-    // Complete 2026-10-26 stealer item review. Broad credential matchers do
-    // not prove a password/token/key subtype; inventing one would overstate
-    // their evidence. The full populations, scopes and duplicate comparison
-    // are recorded in traits testdata/triage/review-pool-20261026.
-    ("objectives/exfiltration/stealer/credential", 276),
-    ("micro-behaviors/communications/http/header/custom", 101),
-    ("micro-behaviors/communications/http/post", 101),
-    ("micro-behaviors/communications/http/request/body", 104),
-    ("micro-behaviors/communications/http/upload", 102),
-    ("micro-behaviors/communications/http/url/path", 110),
-    ("micro-behaviors/fs/path/credential", 103),
-    ("micro-behaviors/fs/write/file/full", 101),
-    ("micro-behaviors/os/user/account", 101),
-];
-
-fn trait_directory_budget(dir: &str) -> usize {
-    REVIEWED_DIRECTORY_TRAIT_BUDGETS
-        .iter()
-        .find_map(|(reviewed_dir, budget)| (*reviewed_dir == dir).then_some(*budget))
-        .unwrap_or(MAX_TRAITS_PER_DIRECTORY)
-}
 
 /// Maximum number of immediate subdirectories allowed in one directory.
 /// Past this, a level has stopped being a taxonomy and become a flat list:
@@ -1036,7 +986,7 @@ fn composite_condition_lists(rule: &CompositeTrait) -> Vec<(&'static str, &[Cond
 /// `Condition` variant forces a decision here.
 fn condition_kind(cond: &Condition) -> &'static str {
     match cond {
-        Condition::Trait { .. } => "trait",
+        Condition::Trait { .. } | Condition::TraitSet { .. } => "trait",
         Condition::Symbol(_) => "symbol",
         Condition::Text(_) => "text",
         Condition::Comment(_) => "comment",
@@ -1607,263 +1557,6 @@ pub(crate) fn find_deep_taxonomy_directories(trait_dirs: &[String]) -> Vec<(Stri
     candidates
 }
 
-// Audited operation boundaries in TAXONOMY.md. These are exact child sets,
-// not exemptions for arbitrary future subdivisions under these parents.
-const REVIEWED_SPARSE_TAXONOMY_PARTITIONS: &[(&str, &[&str])] = &[
-    // Media item modality is independent of the capture device or store.
-    // Broad/mixed-modality evidence stays at the media ancestor.
-    (
-        "objectives/exfiltration/stealer/media",
-        &["audio", "image", "video"],
-    ),
-    // Direction-neutral Base64 and XOR scheme evidence must retain distinct
-    // algorithm homes; merging would discard the scheme that every matcher
-    // requires. JVM long-state XOR is not intrinsically encode or decode.
-    ("micro-behaviors/data/encoding", &["base64", "xor"]),
-    // IRC command vocabulary is distinct from declared connection settings;
-    // TAXONOMY.md records the boundary and focused near-miss fixtures.
-    (
-        "micro-behaviors/communications/irc",
-        &["command", "configure"],
-    ),
-    // Algorithm-specific codec homes remain useful with a small current corpus;
-    // do not merge gzip, LZMA, and joint zlib evidence into one bucket.
-    ("micro-behaviors/data/codec", &["gzip", "lzma", "zlib"]),
-    // Construct a path, canonicalize it, or extract a path component.
-    (
-        "micro-behaviors/fs/path-ops",
-        &["join", "normalize", "parse"],
-    ),
-    // Enabling and disabling swap are opposite kernel operations.
-    ("micro-behaviors/fs/swap", &["off", "on"]),
-    // Create a FIFO versus transfer data through a pipe.
-    ("micro-behaviors/fs/pipe", &["fifo", "transfer"]),
-    // Different SQL Server execution facilities, each corroborated by
-    // facility-specific configuration and shell/procedure evidence.
-    (
-        "objectives/execution/database",
-        &["clr-procedure", "ole-automation", "xp-cmdshell"],
-    ),
-    // Throughput measurement and HTTP request workload testing have
-    // distinct subjects, even when both are called benchmarks.
-    (
-        "micro-behaviors/communications/benchmark",
-        &["bandwidth", "http"],
-    ),
-    // Fixed-width decimal digits versus language character-escape syntax.
-    (
-        "micro-behaviors/data/decode/char-code",
-        &["decimal-triplet", "escape-sequence"],
-    ),
-    // Pointer coordinate access, event vocabulary, and synthetic input.
-    (
-        "micro-behaviors/hardware/input/mouse",
-        &["message", "position", "simulate"],
-    ),
-    // Creating a TLS context versus configuring certificate verification.
-    (
-        "micro-behaviors/communications/tls",
-        &["initialize", "verify"],
-    ),
-    // Installing a validation callback does not imply accepting invalid peers.
-    (
-        "micro-behaviors/communications/tls/verify",
-        &["callback", "disable"],
-    ),
-    // Different filesystem link kinds, with junctions requiring a mount-point
-    // tag or explicit junction-creation command rather than any reparse flag.
-    (
-        "micro-behaviors/fs/link",
-        &["hardlink", "junction", "symlink"],
-    ),
-    // Callback registration is different from requesting termination.
-    ("micro-behaviors/process/exit", &["handler", "terminate"]),
-    // Configure/inspect signal disposition versus dispatch a signal.
-    ("micro-behaviors/os/signal", &["dispatch", "handler"]),
-    // Hive export and LSA secret-key access are distinct credential sources.
-    (
-        "objectives/credential-access/windows-registry",
-        &["hive", "security-keys"],
-    ),
-    // Hollowing, remote-thread creation, and existing-thread hijack are different injection methods.
-    (
-        "objectives/command-and-control/dropper/process-inject",
-        &["hollow", "remote-thread", "thread-hijack"],
-    ),
-    // Database configuration-file harvesting is separate from database queries.
-    ("objectives/collection/database", &["credentials", "query"]),
-    // Blockchain clients speak to chains; name-service clients resolve chain names.
-    (
-        "micro-behaviors/communications/blockchain",
-        &["client", "name-service"],
-    ),
-    // PowerShell command-line launch options differ from host/runtime operations.
-    (
-        "micro-behaviors/process/interpreter/powershell",
-        &["command", "host"],
-    ),
-    // Connectivity, API/function, path, pipe, and environment-variable checks are distinct sandbox evidence.
-    (
-        "objectives/anti-analysis/sandbox-detect/environment",
-        &[
-            "connectivity",
-            "function",
-            "native-injector",
-            "path",
-            "pipe",
-            "var",
-        ],
-    ),
-    // Host marker, local platform, and remote gating are separate execution conditions.
-    (
-        "objectives/execution/condition",
-        &["host-marker", "platform", "remote-gate"],
-    ),
-    // Bind function/API, address structure, and address identity evidence differ.
-    (
-        "micro-behaviors/communications/socket/bind",
-        &["address", "function", "ident"],
-    ),
-    // DNS and ICMP are distinct exfiltration channels.
-    ("objectives/exfiltration/side-channel", &["dns", "icmp"]),
-    // COM, library staging, named pipes, preload variables, and services are distinct hijack surfaces.
-    (
-        "objectives/privilege-escalation/hijack-execution-flow",
-        &["com", "library-stage", "named-pipe", "preload", "service"],
-    ),
-    // Thread configuration, enumeration, grouping, lifecycle, priority, and termination are separate operations.
-    (
-        "micro-behaviors/process/thread",
-        &[
-            "config",
-            "enumerate",
-            "group",
-            "lifecycle",
-            "priority",
-            "terminate",
-        ],
-    ),
-    // Account takeover, stored MFA-secret recovery, and OWA-specific access have distinct evidence.
-    (
-        "objectives/credential-access/email/webmail",
-        &["account-takeover", "mfa-secrets", "owa"],
-    ),
-    // Linker auditing, loader environment, load paths, and symbol ABI versions are distinct.
-    (
-        "micro-behaviors/os/linker",
-        &["audit", "env", "load-path", "symbol-version"],
-    ),
-    // Polyglot format collisions, IExpress SED, and ZIP EOCD signatures are separate mechanisms.
-    (
-        "objectives/anti-static/polyglot",
-        &["format", "iexpress", "zip-eocd"],
-    ),
-    // Process enumeration, target selection, and window-based discovery are different questions.
-    (
-        "objectives/discovery/process",
-        &["enumerate", "targeting", "window"],
-    ),
-    // Packet socket, libpcap, tcpdump, and WinDivert are distinct capture backends.
-    (
-        "micro-behaviors/communications/capture",
-        &["packet-socket", "pcap", "tcpdump", "windivert"],
-    ),
-    // Archive integrity and executable/runtime integrity are separate anti-tamper checks.
-    (
-        "objectives/anti-analysis/anti-tampering",
-        &["archive", "integrity"],
-    ),
-    // ICMP channel use, ping, and route tracing are distinct operations.
-    (
-        "micro-behaviors/communications/icmp",
-        &["channel", "ping", "trace"],
-    ),
-    // Process census, explicit process lists, and Node SEA gates use different runtime evidence.
-    (
-        "objectives/anti-analysis/sandbox-detect/process",
-        &["census", "list", "node-sea"],
-    ),
-    // Local quarantine controls and network-appliance quarantine are different security surfaces.
-    (
-        "objectives/evasion/quarantine-removal",
-        &["bypass", "network-appliance"],
-    ),
-    // Keychain extraction primitives and theft workflows are different levels of evidence.
-    (
-        "objectives/credential-access/keychain",
-        &["extract", "theft"],
-    ),
-    // TCC bypass APIs, database edits, and Full Disk Access state are separate mechanisms.
-    (
-        "objectives/evasion/tcc-manipulation",
-        &["bypass", "db", "fda"],
-    ),
-    // Hidden installation, init activation, install-state markers, and hidden paths differ.
-    (
-        "objectives/persistence/system/daemon",
-        &["hidden", "init", "install-state", "path-hidden"],
-    ),
-    // Block identity, ioctl, loop devices, node creation, network blocks, and device links are separate.
-    (
-        "micro-behaviors/fs/device",
-        &["blkid", "ioctl", "loop", "mknod", "network-block", "query"],
-    ),
-    // Provider-specific Telegram and WhatsApp stores require different schemas and APIs.
-    (
-        "objectives/credential-access/messaging",
-        &["telegram", "whatsapp"],
-    ),
-    // Partition operations differ from raw-disk access.
-    ("micro-behaviors/fs/disk", &["partition", "raw"]),
-    // Arbitrary, cross-process, dump-format, and physical-memory reads are distinct.
-    (
-        "micro-behaviors/mem/read",
-        &["arbitrary", "cross-process", "dump", "physical"],
-    ),
-    // URL fragments, provider/service construction, and template expansion are different constructors.
-    (
-        "micro-behaviors/communications/url/construction",
-        &["fragment", "service", "template"],
-    ),
-    // Console, HTTP, inline, JIT, and monitoring hooks instrument different surfaces.
-    (
-        "objectives/evasion/process/hook",
-        &["console", "http", "inline", "jit", "monitor"],
-    ),
-    // Request-driven shell execution, command injection, and embedded inline commands differ by source.
-    (
-        "objectives/execution/interpreter/cmd",
-        &["http", "injection", "inline"],
-    ),
-    // DOM access, audio element use, creation, rendering, and tree traversal are separate UI operations.
-    (
-        "micro-behaviors/ui/window/dom",
-        &["access", "audio", "create", "render", "tree"],
-    ),
-    // Audio, raster, magic validation, and streaming are distinct media operations.
-    (
-        "micro-behaviors/data/format/media",
-        &["audio", "magic", "raster", "streaming"],
-    ),
-    // Credential-provider integration and Userinit launch replacement are different Winlogon surfaces.
-    (
-        "objectives/persistence/login/winlogon",
-        &["credential-provider", "userinit"],
-    ),
-];
-
-fn is_reviewed_sparse_taxonomy_partition(parent: &str, children: &[(String, usize)]) -> bool {
-    REVIEWED_SPARSE_TAXONOMY_PARTITIONS
-        .iter()
-        .any(|(reviewed_parent, expected)| {
-            parent == *reviewed_parent
-                && children.len() == expected.len()
-                && children
-                    .iter()
-                    .all(|(child, _)| expected.contains(&child.as_str()))
-        })
-}
-
 /// Find sparse sibling cohorts that may be over-fragmented in the taxonomy.
 ///
 /// A cohort produces a soft warning when a parent has at least two rule-bearing child
@@ -1913,9 +1606,7 @@ pub(crate) fn find_sparse_sibling_cohorts(
             continue;
         }
         let sibling_rules: usize = children.iter().map(|(_, count)| count).sum();
-        if sibling_rules < SPARSE_SIBLING_RULE_THRESHOLD
-            && !is_reviewed_sparse_taxonomy_partition(&parent, &children)
-        {
+        if sibling_rules < SPARSE_SIBLING_RULE_THRESHOLD {
             candidates.push((parent, sibling_rules, children.len()));
         }
     }
@@ -2559,7 +2250,7 @@ pub(crate) fn find_oversized_trait_directories(
 
     let mut violations: Vec<_> = dir_counts
         .into_iter()
-        .filter(|(dir, count)| *count > trait_directory_budget(dir))
+        .filter(|(_, count)| *count > MAX_TRAITS_PER_DIRECTORY)
         .map(|(dir, count)| (dir.to_string(), count))
         .collect();
 
@@ -3124,7 +2815,7 @@ fn filetype_cap_for_condition(cond: &Condition) -> usize {
         // its own — it delegates to the referenced trait, which is capped per its
         // own matcher. The wrapper's `for:` is only an evaluation gate, so it is
         // exempt from the file-type cap.
-        Condition::Trait { .. } => usize::MAX,
+        Condition::Trait { .. } | Condition::TraitSet { .. } => usize::MAX,
         Condition::Metrics(MetricsQuery { .. }) => BROAD_FILETYPE_THRESHOLD_METRICS,
         // Full-path matchers use the dedicated path cap; `basename`/`dirname`-
         // scoped paths are filename-bounded and get the basename cap. A path
@@ -3195,7 +2886,7 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // The file's own directory components have the same meaning across
     // content formats. Preserve the original scope when this neutral path
     // observations move to naming metadata; their matchers scan no body.
-    "path:metadata/file/naming/directory-components.yaml",
+    "path:metadata/path/directory-components.yaml",
     // Browser SQL schemas are shared by source and compiled carriers. These
     // bounded query matchers require specific columns and tables in any format.
     "text:micro-behaviors/data/db/access/chromium-queries.yaml",
@@ -3387,7 +3078,8 @@ pub(crate) const ALL_PLATFORM_DIRECTORY_ALLOWLIST: &[&str] = &[
     "metadata/package/documentation/source",
     // Scanned filenames and naming measurements are OS-independent properties.
     // OS-specific filename rules still require their own explicit platform scope.
-    "metadata/file/naming",
+    "metadata/filename",
+    "metadata/path",
     // Transparent test-indication profiles defer all target-OS and file-type
     // filtering to their referenced metadata/name observations. The OR itself
     // means the same on every OS; it asserts neither purpose nor portability.
@@ -4207,34 +3899,5 @@ mod printenv_filetype_allowance_tests {
             );
         }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod archive_catalog_budget_tests {
-    use super::{MAX_TRAITS_PER_DIRECTORY, trait_directory_budget};
-
-    #[test]
-    fn archive_review_budget_is_exact_and_does_not_extend_to_other_leaves() {
-        assert_eq!(MAX_TRAITS_PER_DIRECTORY, 100);
-        assert_eq!(trait_directory_budget("metadata/file/archive"), 111);
-        assert_eq!(
-            trait_directory_budget("objectives/exfiltration/stealer/credential"),
-            276
-        );
-        assert_eq!(
-            trait_directory_budget("micro-behaviors/communications/http/url/path"),
-            110
-        );
-        for directory in [
-            "metadata/file/archive/7z",
-            "metadata/file/archive-copy",
-            "metadata/lang/source/declaration",
-            "objectives/exfiltration/stealer/credential/token",
-            "objectives/exfiltration/stealer/credential-copy",
-            "micro-behaviors/communications/http/url/path-copy",
-        ] {
-            assert_eq!(trait_directory_budget(directory), 100, "{directory}");
-        }
     }
 }

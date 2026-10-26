@@ -454,6 +454,13 @@ fn score_condition(condition: &Condition) -> f32 {
         Condition::Trait { id } => {
             score += score_string_value(id);
         }
+        Condition::TraitSet { ids } => {
+            score += ids
+                .iter()
+                .map(|id| score_string_value(id))
+                .reduce(f32::min)
+                .unwrap_or(0.0);
+        }
         Condition::TreeSitter(TreeSitterQuery {
             kind,
             node,
@@ -874,6 +881,20 @@ fn calculate_composite_precision_indexed(
                         cache,
                         visiting,
                     ),
+                    Condition::TraitSet { ids } => ids
+                        .iter()
+                        .map(|id| {
+                            referenced_precision(
+                                id,
+                                composite_lookup,
+                                trait_lookup,
+                                reference_index,
+                                cache,
+                                visiting,
+                            )
+                        })
+                        .reduce(f32::min)
+                        .unwrap_or(0.0),
                     _ => score_condition(cond),
                 };
                 all_scores.push(score);
@@ -894,6 +915,20 @@ fn calculate_composite_precision_indexed(
                         cache,
                         visiting,
                     ),
+                    Condition::TraitSet { ids } => ids
+                        .iter()
+                        .map(|id| {
+                            referenced_precision(
+                                id,
+                                composite_lookup,
+                                trait_lookup,
+                                reference_index,
+                                cache,
+                                visiting,
+                            )
+                        })
+                        .reduce(f32::min)
+                        .unwrap_or(0.0),
                     _ => score_condition(cond),
                 })
                 .collect();
@@ -919,6 +954,20 @@ fn calculate_composite_precision_indexed(
                         cache,
                         visiting,
                     ),
+                    Condition::TraitSet { ids } => ids
+                        .iter()
+                        .map(|id| {
+                            referenced_precision(
+                                id,
+                                composite_lookup,
+                                trait_lookup,
+                                reference_index,
+                                cache,
+                                visiting,
+                            )
+                        })
+                        .reduce(f32::min)
+                        .unwrap_or(0.0),
                     _ => score_condition(cond),
                 })
                 .collect();

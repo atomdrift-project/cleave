@@ -5580,7 +5580,7 @@ impl super::CapabilityMapper {
                         "   Then reorganize the remaining traits into meaningful subdirectories only when each child adds precision under TAXONOMY.md."
                     );
                     eprintln!(
-                        "   Merely moving the same broad set to another location is not a fix; keep splits technique-based and platform-neutral where possible. The default budget is 100; exact-path exceptions require current evidence and a TAXONOMY.md entry.\n"
+                        "   Merely moving the same broad set to another location is not a fix; keep splits technique-based and platform-neutral where possible. Every directory has a 100-rule limit; there are no path-specific exceptions.\n"
                     );
                     for (dir_path, count) in &oversized_dirs {
                         eprintln!("   {}: {} rules", dir_path, count);

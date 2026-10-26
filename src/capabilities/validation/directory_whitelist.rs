@@ -864,6 +864,9 @@ const ALLOWED_LIBS: &[&str] = &[
 ///
 /// Update this list AND TAXONOMY.md when adding new metadata categories.
 const ALLOWED_METADATA: &[&str] = &[
+    "archive",    // Archive container properties and member fields
+    "filename",   // Scanned artifact basename and stem
+    "path",       // Scanned artifact location and directory relationships
     "arch",       // CPU architecture detection (x86, ARM, MIPS, IoT)
     "binary",     // Binary internals (sections, debug, framework, installer, metrics)
     "build",      // Build system detection (cmake, cargo, docker, CI/CD)

@@ -75,6 +75,10 @@ impl CompactReport {
     /// `fp`: the same report [`Facts::Model`] conversion builds, for a caller
     /// that needed the full facts first (a model extracts features from them).
     pub fn retain_model_facts(&mut self) {
+        // A newer manifest cannot restore inputs omitted by an older producer.
+        if self.fp.is_some() {
+            return;
+        }
         for file in &mut self.files {
             file.facts = crate::model_facts::project(&file.facts);
         }
@@ -1711,6 +1715,16 @@ mod formula_tests {
             serde_json::to_value(&model).ok()
         );
         assert_eq!(model.fp.as_deref(), Some(crate::model_facts::profile_id()));
+    }
+
+    #[test]
+    fn reducing_an_old_profile_does_not_claim_richer_facts() {
+        let mut report = super::CompactReport {
+            fp: Some("azoth-1fbfcdb8a8ed5902".into()),
+            ..Default::default()
+        };
+        report.retain_model_facts();
+        assert_eq!(report.fp.as_deref(), Some("azoth-1fbfcdb8a8ed5902"));
     }
 
     fn finding(id: &str, crit: Criticality, conf: f32) -> Finding {

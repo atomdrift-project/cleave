@@ -100,6 +100,22 @@ impl DoomedSkipIndex {
                 }
             }
 
+            // A fixed union has alternative partners, never individually
+            // mandatory members. Keep these candidates alive for evaluation.
+            let multi_any = rule.any.as_ref().is_some_and(|conds| {
+                conds.iter().any(|c| {
+                    matches!(c, Condition::TraitSet { .. })
+                        || matches!(c,
+                    Condition::Trait { id } if id.contains('/') && !id.contains("::"))
+                })
+            });
+            for cond in rule.all.iter().flatten().chain(rule.any.iter().flatten()) {
+                if matches!(cond, Condition::TraitSet { .. }) || multi_any {
+                    for id in cond.trait_references() {
+                        mark_never(id);
+                    }
+                }
+            }
             let pools_across_members = rule.scope.is_some_and(Scope::pools_members);
             if pools_across_members {
                 for id in all_trait_ids_in_all_any(rule) {
@@ -131,7 +147,7 @@ impl DoomedSkipIndex {
             }
             if let Some(conds) = &rule.any {
                 let required_from_any = rule.needs.unwrap_or(1);
-                if required_from_any >= conds.len() {
+                if required_from_any >= conds.len() && !multi_any {
                     for cond in conds {
                         if let Condition::Trait { id } = cond
                             && let Some(idx) = resolve_unique(id, trait_id_map, &leaf_hits)

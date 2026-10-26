@@ -139,7 +139,17 @@ fn run() -> Result<()> {
                         facts == cleave::types::Facts::Model || loaded.fact_profile.is_none(),
                         "--full-facts cannot restore facts this report was reduced to"
                     );
-                    let mut compact = cleave::types::compact_from_files(&report.files, facts);
+                    // Rendering stored reduced facts cannot upgrade their contract.
+                    let output_facts = if loaded.fact_profile.is_some() {
+                        cleave::types::Facts::Full
+                    } else {
+                        facts
+                    };
+                    let mut compact =
+                        cleave::types::compact_from_files(&report.files, output_facts);
+                    if loaded.fact_profile.is_some() {
+                        compact.fp.clone_from(&loaded.fact_profile);
+                    }
                     compact.traits_version.clone_from(&loaded.traits_version);
                     compact.fetched.clone_from(&loaded.fetched);
                     Ok(serde_json::to_string(&compact)? + "\n")

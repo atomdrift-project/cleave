@@ -1240,6 +1240,10 @@ enum ConditionTagged {
     Trait {
         id: String,
     },
+    #[serde(rename = "trait-set")]
+    TraitSet {
+        ids: Vec<String>,
+    },
     #[serde(rename = "tree-sitter")]
     TreeSitter(TreeSitterQuery),
     Yara {
@@ -1302,6 +1306,7 @@ impl From<ConditionDeser> for Condition {
                     dirname: false,
                 }),
                 ConditionTagged::Trait { id } => Condition::Trait { id },
+                ConditionTagged::TraitSet { ids } => Condition::TraitSet { ids },
                 ConditionTagged::Yara { source } => Condition::Yara {
                     source,
                     compiled: None,
@@ -1368,6 +1373,7 @@ impl From<Condition> for ConditionTagged {
             Condition::Path(query) => ConditionTagged::Path(query),
             Condition::Kv(query) => ConditionTagged::Kv(query),
             Condition::Trait { id } => ConditionTagged::Trait { id },
+            Condition::TraitSet { ids } => ConditionTagged::TraitSet { ids },
             Condition::Yara {
                 source,
                 compiled: _,
@@ -1428,6 +1434,12 @@ pub(crate) enum Condition {
         /// The ID of the trait to reference
         id: String,
     },
+
+    /// An explicit union of trait IDs or directories. Like a directory selector,
+    /// this preserves each matching child's identity for `any` + `needs`.
+    /// It creates no new finding; exact IDs freeze membership, while directory
+    /// members deliberately retain their ordinary prefix semantics.
+    TraitSet { ids: Vec<String> },
 
     /// Live tree-sitter query — escape hatch for structural patterns
     /// the precomputed `Symbol::Call/Member/Bind` projections can't
@@ -1662,7 +1674,7 @@ impl Condition {
     }
 
     pub(crate) fn collect_trait_refs(&self, out: &mut std::collections::BTreeSet<String>) {
-        if let Self::Trait { id } = self {
+        for id in self.trait_references() {
             out.insert(id.trim_end_matches('/').to_string());
         }
     }
@@ -1671,6 +1683,7 @@ impl Condition {
     pub(crate) fn trait_references(&self) -> &[String] {
         match self {
             Self::Trait { id } => std::slice::from_ref(id),
+            Self::TraitSet { ids } => ids,
             _ => &[],
         }
     }
@@ -1679,6 +1692,7 @@ impl Condition {
     pub(crate) fn trait_references_mut(&mut self) -> &mut [String] {
         match self {
             Self::Trait { id } => std::slice::from_mut(id),
+            Self::TraitSet { ids } => ids,
             _ => &mut [],
         }
     }
@@ -2174,7 +2188,7 @@ impl Condition {
     /// Returns true if this condition is a trait reference
     #[must_use]
     pub(crate) fn is_trait_reference(&self) -> bool {
-        matches!(self, Condition::Trait { .. })
+        matches!(self, Condition::Trait { .. } | Condition::TraitSet { .. })
     }
 
     /// Check if this condition can possibly match for a given file type.
@@ -2239,7 +2253,7 @@ impl Condition {
             Condition::Text(TextQuery { .. }) => "text",
             Condition::Comment(CommentQuery { .. }) => "comment",
             Condition::Literal(LiteralQuery { .. }) => "string_literal",
-            Condition::Trait { .. } => "trait",
+            Condition::Trait { .. } | Condition::TraitSet { .. } => "trait",
             Condition::TreeSitter(TreeSitterQuery { .. }) => "tree-sitter",
             Condition::Yara { .. } => "yara",
             Condition::Syscall { .. } => "syscall",
@@ -2272,6 +2286,18 @@ impl Condition {
     /// the `ast-query-compile` validator.
     pub(crate) fn validate(&self) -> Result<()> {
         match self {
+            Condition::TraitSet { ids } => {
+                if ids.is_empty()
+                    || ids
+                        .iter()
+                        .any(|id| (!id.contains("::") && !id.contains('/')) || id.trim() != id)
+                {
+                    anyhow::bail!(
+                        "trait-set requires a nonempty list of fully qualified trait IDs or directories"
+                    );
+                }
+                Ok(())
+            }
             Condition::Symbol(query) => {
                 if matches!(query.kind, Some(SymbolKind::Bind)) {
                     if query.args.is_some() {

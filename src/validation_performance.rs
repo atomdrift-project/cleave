@@ -18,6 +18,9 @@ static QUERY_COSTS: Mutex<BTreeMap<(String, bool), BTreeMap<String, Duration>>> 
 thread_local! {
     static QUERY_RUNS: Cell<u64> = const { Cell::new(0) };
     static QUERY_EXECUTION_COST: Cell<Duration> = const { Cell::new(Duration::ZERO) };
+    static PROBING_AST: Cell<bool> = const { Cell::new(false) };
+    static PROBE_COST: Cell<Option<Duration>> = const { Cell::new(None) };
+    static PROBE_CPU: Cell<Duration> = const { Cell::new(Duration::ZERO) };
 }
 
 /// Time only cursor execution for relative comparisons. Cold compilation and
@@ -25,7 +28,9 @@ thread_local! {
 /// deadline still includes them, but they must not distort execution peers.
 pub(crate) fn ast_execution_started() -> Option<ExecutionTimer> {
     active().then(|| {
-        QUERY_RUNS.with(|n| n.set(n.get().wrapping_add(1)));
+        if !PROBING_AST.with(Cell::get) {
+            QUERY_RUNS.with(|n| n.set(n.get().wrapping_add(1)));
+        }
         ExecutionTimer {
             cpu: thread_cpu_time(),
             wall: Instant::now(),
@@ -44,7 +49,66 @@ impl Drop for ExecutionTimer {
         } else {
             thread_cpu_time().saturating_sub(self.cpu)
         };
-        QUERY_EXECUTION_COST.with(|cost| cost.set(cost.get().saturating_add(elapsed)));
+        if PROBING_AST.with(Cell::get) {
+            PROBE_COST.with(|cost| cost.set(Some(elapsed)));
+        } else {
+            QUERY_EXECUTION_COST.with(|cost| cost.set(cost.get().saturating_add(elapsed)));
+        }
+    }
+}
+
+/// Relative timing uses confirmed execution cost. One cold allocation or
+/// contended cache lookup must not turn an otherwise identical query into an
+/// outlier. Confirmation never replaces the original detection result.
+pub(crate) fn ast_cost_snapshot() -> Option<Duration> {
+    (active() && !PROBING_AST.with(Cell::get)).then(|| QUERY_EXECUTION_COST.with(Cell::get))
+}
+
+pub(crate) fn ast_confirmation_fence(path: &str) -> Option<Duration> {
+    let mode = crate::composite_rules::evaluators::symbol_string::match_count_needed();
+    QUERY_COSTS
+        .lock()
+        .get(&(path.to_owned(), mode))
+        .and_then(outlier_fence)
+        .map(|(_, fence)| fence)
+}
+
+pub(crate) fn confirm_ast_cost(original: Duration, confirmed: Duration) {
+    QUERY_EXECUTION_COST.with(|cost| {
+        cost.set(
+            cost.get()
+                .saturating_sub(original.saturating_sub(confirmed)),
+        )
+    });
+}
+
+pub(crate) struct AstProbe {
+    cpu: Duration,
+    wall: Instant,
+    previous: bool,
+}
+impl AstProbe {
+    pub(crate) fn begin() -> Self {
+        PROBE_COST.with(|cost| cost.set(None));
+        Self {
+            cpu: thread_cpu_time(),
+            wall: Instant::now(),
+            previous: PROBING_AST.with(|flag| flag.replace(true)),
+        }
+    }
+    pub(crate) fn cost(&self) -> Option<Duration> {
+        PROBE_COST.with(Cell::get)
+    }
+}
+impl Drop for AstProbe {
+    fn drop(&mut self) {
+        let elapsed = if self.cpu.is_zero() {
+            self.wall.elapsed()
+        } else {
+            thread_cpu_time().saturating_sub(self.cpu)
+        };
+        PROBE_CPU.with(|cost| cost.set(cost.get().saturating_add(elapsed)));
+        PROBING_AST.with(|flag| flag.set(self.previous));
     }
 }
 
@@ -165,6 +229,7 @@ pub(crate) struct RuleTimer<'a> {
     path: &'a str,
     source: &'a Path,
     threshold: Duration,
+    probe_cpu: Duration,
     cpu: Duration,
     wall: Instant,
 }
@@ -179,6 +244,7 @@ impl<'a> RuleTimer<'a> {
             path: &ctx.report.target.path,
             source,
             threshold: Duration::from_millis(ctx.slow_rule_ms),
+            probe_cpu: PROBE_CPU.with(Cell::get),
             cpu: thread_cpu_time(),
             wall: Instant::now(),
         })
@@ -191,6 +257,8 @@ impl Drop for RuleTimer<'_> {
         } else {
             thread_cpu_time().saturating_sub(self.cpu)
         };
+        let elapsed =
+            elapsed.saturating_sub(PROBE_CPU.with(Cell::get).saturating_sub(self.probe_cpu));
         if elapsed > self.threshold {
             let problem = issue(
                 self.id,

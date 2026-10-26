@@ -98,6 +98,14 @@ pub(super) fn append(
                     ),
                     ..Default::default()
                 });
+                if super::ci_secret_file_flow::is_request_collector(&witness.destination) {
+                    let mut collector = fact.clone();
+                    collector.id = super::ci_secret_file_flow::COLLECTOR_FACT_ID.into();
+                    collector.desc =
+                        "Bound CI secret file is uploaded to a public request collector".into();
+                    child.findings.push(collector.clone());
+                    report.findings.push(collector);
+                }
                 child.findings.push(fact.clone());
                 report.findings.push(fact);
             }

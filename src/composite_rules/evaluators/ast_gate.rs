@@ -19,6 +19,91 @@ use tree_sitter::{CaptureQuantifier, Query};
 mod loop_gate;
 pub(super) use loop_gate::RequiredSubqueries;
 
+/// Compound text checks may run after structural matching only when a
+/// mandatory scalar capture inside that same node provides early pruning.
+/// Unguarded joins (for example mkfifo-command regexes) must keep their early
+/// checks, or unrelated sibling commands create combinatorial search states.
+#[derive(Default)]
+pub(super) struct DeferredPredicates(Vec<rustc_hash::FxHashSet<u32>>);
+
+impl DeferredPredicates {
+    pub(super) fn of(query: &Query, source: &str) -> Self {
+        Self(
+            (0..query.pattern_count())
+                .map(|pattern| {
+                    let text = source
+                        .get(
+                            query.start_byte_for_pattern(pattern)
+                                ..query.end_byte_for_pattern(pattern),
+                        )
+                        .unwrap_or_default();
+                    let tokens = query_token_spans(text);
+                    let mut stack = Vec::new();
+                    let mut captures = Vec::new();
+                    for (i, &(token, _, _)) in tokens.iter().enumerate() {
+                        match token {
+                            "(" | "[" => stack.push(i),
+                            ")" | "]" => {
+                                let Some(open) = stack.pop() else {
+                                    return Default::default();
+                                };
+                                if token != ")" {
+                                    continue;
+                                }
+                                let kind = tokens.get(open + 1).map_or("", |t| t.0);
+                                let mut after = i + 1;
+                                while let Some(name) =
+                                    tokens.get(after).and_then(|t| t.0.strip_prefix('@'))
+                                {
+                                    captures.push((name, kind, open, i));
+                                    after += 1;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    let positive: rustc_hash::FxHashSet<_> = positive_text_predicates(text)
+                        .into_iter()
+                        .map(|(_, capture, _)| capture)
+                        .collect();
+                    let scalar: Vec<_> = captures
+                        .iter()
+                        .filter(|(name, kind, _, _)| {
+                            indexed_kind(kind)
+                                && positive.contains(name)
+                                && query.capture_index_for_name(name).is_some_and(|id| {
+                                    query.capture_quantifiers(pattern).get(id as usize)
+                                        == Some(&CaptureQuantifier::One)
+                                })
+                        })
+                        .collect();
+                    captures
+                        .iter()
+                        .filter(|(_, kind, open, close)| {
+                            matches!(
+                                *kind,
+                                "pipeline"
+                                    | "command"
+                                    | "redirected_statement"
+                                    | "compound_statement"
+                            ) && scalar.iter().any(|(_, _, child_open, child_close)| {
+                                child_open > open && child_close < close
+                            })
+                        })
+                        .filter_map(|(name, _, _, _)| query.capture_index_for_name(name))
+                        .collect()
+                })
+                .collect(),
+        )
+    }
+
+    pub(super) fn contains(&self, pattern: usize, capture: u32) -> bool {
+        self.0
+            .get(pattern)
+            .is_some_and(|captures| captures.contains(&capture))
+    }
+}
+
 /// Per pattern, the literals every match of that pattern contains.
 #[derive(Debug, Default)]
 pub(crate) struct RequiredLiterals(Vec<Vec<Box<[u8]>>>);

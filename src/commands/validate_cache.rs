@@ -175,12 +175,12 @@ impl ResultCache {
         // Recollect as well as rehash: additions/removals in walked corpora and
         // newly unlisted top-level fixtures must invalidate the completed run.
         let unchanged = (|| -> Result<bool> {
-            let (targets, _, expectations) = super::collect_targets()?;
+            let targets = super::collect_targets()?;
             let paths: Vec<_> = targets.iter().map(|t| t.path().to_path_buf()).collect();
             Ok(fingerprint(
                 &self.traits_dir,
                 &paths,
-                &expectations,
+                "severity-directories-v1",
                 &self.settings,
                 crate::traits_fingerprint::binary_identity(),
             )? == self.key)
@@ -239,7 +239,7 @@ fn fingerprint_with_sources(
     engine: &str,
 ) -> Result<String> {
     let mut hash = Sha256::new();
-    field(&mut hash, b"cleave-full-validation-v4");
+    field(&mut hash, b"cleave-full-validation-v5");
     field(&mut hash, traits_dir.as_os_str().as_encoded_bytes());
     field(&mut hash, engine.as_bytes());
     field(&mut hash, settings);

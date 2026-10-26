@@ -18,7 +18,7 @@ fn safe_path(path: &std::path::Path) -> String {
 use anyhow::{Context, Result};
 use cleave::{AnalysisReport, CapabilityMapper, Criticality, FileAnalysis, validation_controls};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -27,66 +27,15 @@ use std::time::Instant;
 #[path = "validate_cache.rs"]
 mod result_cache;
 
-/// A single file to analyze during validation and how to judge its score.
-enum Target {
-    /// Cost probes; findings are unrestricted, but execution budgets still apply.
-    Performance { path: PathBuf },
-    /// Known-hostile sample whose root-file score and severe finding counts
-    /// must stay above a per-file floor.
-    Hostile {
-        path: PathBuf,
-        min_score: u32,
-        min_hostile: usize,
-        min_suspicious: usize,
-        traits: TraitExpectations,
-    },
-    /// Known-benign sample whose root-file score must stay under a per-file cap
-    /// — and at or above a per-file floor, so the identity/functionality traits
-    /// a benign program legitimately carries (usage surface, purpose-defining
-    /// syscalls) can't silently regress to invisible.
-    Benign {
-        path: PathBuf,
-        cap: u32,
-        min_score: u32,
-        traits: TraitExpectations,
-    },
-    /// Walked-hostile sample (e.g. `testdata/drop-exec/`, `testdata/reverse-shell/`).
-    /// Every file under the corpus directory must satisfy the configured score
-    /// and/or hostile-finding floors — like the inverse of the does-nothing walk.
-    WalkedHostile {
-        path: PathBuf,
-        corpus: String,
-        min_score: u32,
-        min_hostile: usize,
-    },
-    /// Does-nothing sample. Its (and any archive-member) score must stay
-    /// within the cap returned by [`does_nothing_cap`].
-    DoesNothing {
-        path: PathBuf,
-        /// Root of the does-nothing directory (for resolving per-file caps).
-        dir: PathBuf,
-    },
+/// Every fixture derives its sole expectation from its top-level directory.
+struct Target {
+    path: PathBuf,
+    expected: Criticality,
 }
 
 impl Target {
     fn path(&self) -> &Path {
-        match self {
-            Self::Hostile { path, .. }
-            | Self::Benign { path, .. }
-            | Self::WalkedHostile { path, .. }
-            | Self::DoesNothing { path, .. }
-            | Self::Performance { path } => path,
-        }
-    }
-
-    /// Inline byte-flow fixtures need the YARA results their traits consume.
-    fn requires_yara(&self) -> bool {
-        match self {
-            Self::Hostile { traits, .. } | Self::Benign { traits, .. } => traits.enable_yara,
-            Self::WalkedHostile { .. } | Self::DoesNothing { .. } | Self::Performance { .. } => {
-                false
-            }
-        }
+        &self.path
     }
 }
 
@@ -106,9 +55,9 @@ fn print_contributing_findings(file: &FileAnalysis, indent: &str) {
     }
 }
 
-/// Run full trait validation: trait defs + hostile/benign fixtures + does-nothing checks.
+/// Run trait validation and exact-severity fixture checks.
 ///
-/// All sample analyses (fixture files and the does-nothing corpus) run in a
+/// All fixture analyses run in a
 /// single rayon parallel pool; judgement happens serially afterwards by
 /// scanning the collected reports. On success, prints a single summary line.
 /// On failure, prints only the failing files with their contributing findings.
@@ -168,12 +117,12 @@ pub fn run_with_options(
     // Hard problems (won't load / won't fire) fatal.
     validation_controls::set_disabled_validators_override(exclude)?;
     validation_controls::set_soft_validation_mode(soft);
-    let (targets, expectations, expectations_text) = collect_targets()?;
+    let targets = collect_targets()?;
     let traits_dir = cleave::traits_repo::try_resolve().map_err(anyhow::Error::msg)?;
     let result_cache = result_cache::ResultCache::new(
         &traits_dir,
         &targets,
-        &expectations_text,
+        "severity-directories-v1",
         soft,
         verbose,
         slow_rule_ms,
@@ -217,18 +166,12 @@ pub fn run_with_options(
         OutputFormat::Terminal => cleave::validation_controls::ValidationOutputFormat::Terminal,
     }));
     let options = cleave::AnalysisOptions {
-        disable_yara: true,
+        disable_yara: false,
         disable_radare2: true,
         disable_upx: true,
+        all_files: true,
         slow_rule_ms,
         ..Default::default()
-    };
-
-    // Only fixtures explicitly requiring inline YARA pay for that engine;
-    // their score and exact-trait expectations remain unchanged.
-    let yara_options = cleave::AnalysisOptions {
-        disable_yara: false,
-        ..options.clone()
     };
 
     // Load the mapper once with full validation enabled. This replaces the
@@ -269,9 +212,7 @@ pub fn run_with_options(
     // so rule collection can use the whole pool, before any fixture waits on it.
     // The full-validation cache hit above still avoids engine loading entirely.
     let yara_started = Instant::now();
-    if targets.iter().any(Target::requires_yara) {
-        cleave::prefetch_yara_engine(yara_options.enable_third_party_yara);
-    }
+    cleave::prefetch_yara_engine(options.enable_third_party_yara);
     let yara_ms = yara_started.elapsed().as_millis();
     let performance = crate::validation_performance::Session::begin();
     let analysis_started = Instant::now();
@@ -302,14 +243,9 @@ pub fn run_with_options(
             let job = next.fetch_add(1, Ordering::Relaxed);
             let Some(&(i, _)) = work.get(job) else { break };
             let t = &targets[i];
-            let fixture_options = if t.requires_yara() {
-                &yara_options
-            } else {
-                &options
-            };
             let fixture_started = Instant::now();
             let report = stage.analyze(t.path(), |p| {
-                cleave::analyze_file_with_mapper(p, fixture_options, &mapper)
+                cleave::analyze_file_with_mapper(p, &options, &mapper)
             });
             let elapsed_ms = fixture_started.elapsed().as_millis();
             if elapsed_ms >= 500 {
@@ -357,7 +293,7 @@ pub fn run_with_options(
     let mut performance_issues = performance.issues();
     stage.relabel_issues(&mut performance_issues);
     print_performance_issues(&performance_issues, format);
-    let stats = evaluate(results, &expectations.does_nothing)?;
+    let fixtures = evaluate(results)?;
     if performance_issues
         .iter()
         .any(|p| p.severity >= validation_controls::fatal_severity_threshold())
@@ -381,33 +317,7 @@ pub fn run_with_options(
         );
     }
 
-    let report = validation_output(FixtureSummary {
-        performance: FixtureCount {
-            passed: stats.performance_passed,
-            total: stats.performance_total,
-        },
-        hostile: FixtureCount {
-            passed: stats.hostile_passed,
-            total: stats.hostile_total,
-        },
-        benign: FixtureCount {
-            passed: stats.benign_passed,
-            total: stats.benign_total,
-        },
-        does_nothing: FixtureCount {
-            passed: stats.does_nothing_passed,
-            total: stats.does_nothing_total,
-        },
-        walked_hostile: stats
-            .walked_hostile
-            .iter()
-            .map(|(corpus, count)| WalkedCorpusCount {
-                corpus: (*corpus).to_string(),
-                passed: count.passed,
-                total: count.total,
-            })
-            .collect(),
-    });
+    let report = validation_output(fixtures);
     if cacheable
         && performance_issues.is_empty()
         && let Some(cache) = result_cache
@@ -457,26 +367,27 @@ struct ValidateOutput {
     fixtures: FixtureSummary,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct FixtureSummary {
-    #[serde(default)]
-    performance: FixtureCount,
     hostile: FixtureCount,
-    benign: FixtureCount,
-    does_nothing: FixtureCount,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    walked_hostile: Vec<WalkedCorpusCount>,
+    suspicious: FixtureCount,
+    notable: FixtureCount,
+    baseline: FixtureCount,
+}
+
+impl FixtureSummary {
+    fn count_mut(&mut self, severity: Criticality) -> &mut FixtureCount {
+        match severity {
+            Criticality::Hostile => &mut self.hostile,
+            Criticality::Suspicious => &mut self.suspicious,
+            Criticality::Notable => &mut self.notable,
+            _ => &mut self.baseline,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct FixtureCount {
-    passed: usize,
-    total: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct WalkedCorpusCount {
-    corpus: String,
     passed: usize,
     total: usize,
 }
@@ -495,1078 +406,330 @@ fn format_validate_output(report: &ValidateOutput, format: &OutputFormat) -> Str
     }
 }
 
+fn fixture_counts(fixtures: &FixtureSummary) -> String {
+    [
+        ("hostile", &fixtures.hostile),
+        ("suspicious", &fixtures.suspicious),
+        ("notable", &fixtures.notable),
+        ("baseline", &fixtures.baseline),
+    ]
+    .into_iter()
+    .map(|(name, count)| format!("{name} {}/{}", count.passed, count.total))
+    .collect::<Vec<_>>()
+    .join("  ")
+}
+
 fn format_validate_terminal(report: &ValidateOutput) -> String {
-    let mut out = String::new();
-    out.push_str(&validation_controls::format_disabled_validators_terminal());
-    out.push_str(&format!(
-        "validate ok: hostile {}/{}  benign {}/{}  does-nothing {}/{}",
-        report.fixtures.hostile.passed,
-        report.fixtures.hostile.total,
-        report.fixtures.benign.passed,
-        report.fixtures.benign.total,
-        report.fixtures.does_nothing.passed,
-        report.fixtures.does_nothing.total
-    ));
-    if report.fixtures.performance.total > 0 {
-        out.push_str(&format!(
-            "  performance {}/{}",
-            report.fixtures.performance.passed, report.fixtures.performance.total
-        ));
-    }
-    for c in &report.fixtures.walked_hostile {
-        out.push_str(&format!("  {} {}/{}", c.corpus, c.passed, c.total));
-    }
-    out.push('\n');
-    out
+    format!(
+        "{}validate ok: {}\n",
+        validation_controls::format_disabled_validators_terminal(),
+        fixture_counts(&report.fixtures)
+    )
 }
 
 fn format_validate_tiny(report: &ValidateOutput) -> String {
-    let mut out = String::new();
-    out.push_str(
-        "validate ok
-",
-    );
+    let mut out = String::from("validate ok\n");
     for (category, validators) in &report.disabled_validators {
         let labels = validators
             .iter()
             .map(|validator| validator.display_id)
             .collect::<Vec<_>>()
             .join(",");
-        out.push_str(&format!(
-            "disabled {category}={labels}
-"
-        ));
+        out.push_str(&format!("disabled {category}={labels}\n"));
     }
-    out.push_str(&format!(
-        "fixtures hostile={}/{} benign={}/{} does-nothing={}/{}",
-        report.fixtures.hostile.passed,
-        report.fixtures.hostile.total,
-        report.fixtures.benign.passed,
-        report.fixtures.benign.total,
-        report.fixtures.does_nothing.passed,
-        report.fixtures.does_nothing.total
-    ));
-    if report.fixtures.performance.total > 0 {
-        out.push_str(&format!(
-            " performance={}/{}",
-            report.fixtures.performance.passed, report.fixtures.performance.total
-        ));
-    }
-    for c in &report.fixtures.walked_hostile {
-        out.push_str(&format!(" {}={}/{}", c.corpus, c.passed, c.total));
-    }
-    out.push('\n');
+    out.push_str(&format!("fixtures {}\n", fixture_counts(&report.fixtures)));
     out
 }
 
-/// Build the full target list, including walked performance cost probes.
-///
-/// Returns the loaded [`Expectations`] alongside the targets so the evaluator can
-/// consult the does-nothing caps. Expectations live in the traits repo (not the
-/// engine), so any build validates the exact fixture set a traits commit defines.
-fn collect_targets() -> Result<(Vec<Target>, Expectations, String)> {
-    let mut targets = Vec::new();
-
+/// Discover every file, including dotfiles, without reading fixture contents.
+/// This runs before cache lookup: an unrecognized file can never hide behind
+/// a previously passing validation result. Subdirectories carry no semantics.
+fn collect_targets() -> Result<Vec<Target>> {
     let traits_dir = cleave::traits_repo::try_resolve().map_err(anyhow::Error::msg)?;
-    let expectations_path = traits_dir.join("testdata").join("expectations.toml");
-    let expectations_text = std::fs::read_to_string(&expectations_path).with_context(|| {
-        format!(
-            "reading validation expectations: {}",
-            expectations_path.display()
-        )
-    })?;
-    let exp: Expectations = toml::from_str(&expectations_text)
-        .with_context(|| format!("parsing {}", expectations_path.display()))?;
-
-    collect_hostile_fixtures(
-        &traits_dir.join("testdata").join("hostile"),
-        &exp.hostile,
-        &mut targets,
-    )?;
-    collect_benign_fixtures(
-        &traits_dir.join("testdata").join("benign"),
-        &exp.benign,
-        &mut targets,
-    )?;
-
-    let dn_dir = traits_dir.join("testdata").join("does-nothing");
-    if dn_dir.is_dir() {
-        walk_does_nothing(&dn_dir, &mut targets)?;
-    }
-
-    for corpus in &exp.walked_hostile {
-        let dir = traits_dir.join("testdata").join(&corpus.corpus);
-        if dir.is_dir() {
-            walk_hostile_corpus(
-                &dir,
-                &corpus.corpus,
-                corpus.min_score,
-                corpus.min_hostile,
-                &mut targets,
-            )?;
-        }
-    }
-
-    let performance_dir = traits_dir.join("testdata").join("performance");
-    if performance_dir.is_dir() {
-        for entry in walkdir::WalkDir::new(&performance_dir)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|e| {
-                is_fixture_entry(e)
-                    && (e.depth() == 0 || !e.file_type().is_dir() || e.file_name() != "scripts")
-            })
-        {
-            let entry = entry?;
-            if entry.file_type().is_file() {
-                targets.push(Target::Performance {
-                    path: entry.into_path(),
-                });
-            }
-        }
-    }
-    Ok((targets, exp, expectations_text))
+    discover_targets(&traits_dir.join("testdata"))
 }
 
-/// Every direct file in `testdata/hostile/` must have an expectation entry.
-fn collect_hostile_fixtures(
-    dir: &Path,
-    expectations: &[HostileExpectation],
-    out: &mut Vec<Target>,
-) -> Result<()> {
-    for expected in expectations {
-        out.push(Target::Hostile {
-            path: dir.join(&expected.name),
-            min_score: expected.min_score,
-            min_hostile: expected.min_hostile,
-            min_suspicious: expected.min_suspicious,
-            traits: expected.traits.clone(),
-        });
+fn discover_targets(root: &Path) -> Result<Vec<Target>> {
+    if !root.is_dir() {
+        anyhow::bail!("missing validation fixture directory: {}", safe_path(root));
     }
-    validate_fixture_table(
-        dir,
-        expectations.iter().map(|expected| expected.name.as_str()),
-        "hostile",
-    )
-}
-
-/// Every direct file in `testdata/benign/` must have a cap entry.
-fn collect_benign_fixtures(dir: &Path, caps: &[BenignCap], out: &mut Vec<Target>) -> Result<()> {
-    for entry in caps {
-        out.push(Target::Benign {
-            path: dir.join(&entry.name),
-            cap: entry.cap,
-            min_score: entry.min_score,
-            traits: entry.traits.clone(),
-        });
-    }
-    validate_fixture_table(dir, caps.iter().map(|entry| entry.name.as_str()), "benign")
-}
-
-fn validate_fixture_table<'a>(
-    dir: &Path,
-    configured: impl Iterator<Item = &'a str>,
-    label: &str,
-) -> Result<()> {
-    if !dir.is_dir() {
-        anyhow::bail!("missing {label} fixture directory: {}", dir.display());
-    }
-
-    let configured: HashSet<&str> = configured.collect();
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_file() {
+    let mut targets = Vec::new();
+    let mut unused = Vec::new();
+    for entry in walkdir::WalkDir::new(root).min_depth(1).follow_links(false) {
+        let entry = entry.with_context(|| format!("walking {}", safe_path(root)))?;
+        if entry.file_type().is_dir() {
             continue;
         }
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if !configured.contains(name.as_ref()) {
-            anyhow::bail!(
-                "missing validation threshold for {label} fixture: {}",
-                entry.path().display()
-            );
-        }
-    }
-
-    for name in configured {
-        let relative = Path::new(name);
-        let safe = relative
+        let relative = entry.path().strip_prefix(root)?;
+        let expected = match relative
             .components()
-            .all(|component| matches!(component, std::path::Component::Normal(_)));
-        if !safe || !dir.join(relative).is_file() {
-            anyhow::bail!(
-                "configured {label} fixture is missing: {}",
-                dir.join(name).display()
-            );
-        }
-    }
-    Ok(())
-}
-
-/// Skip hidden tooling/VCS directories while retaining hidden fixture files.
-/// The selected corpus root is admitted regardless of its own directory name.
-fn is_fixture_entry(entry: &walkdir::DirEntry) -> bool {
-    entry.depth() == 0
-        || !entry.file_type().is_dir()
-        || !entry.file_name().to_string_lossy().starts_with('.')
-}
-
-/// Walk the does-nothing directory, collecting every analyzable file.
-fn walk_does_nothing(dir: &Path, out: &mut Vec<Target>) -> Result<()> {
-    for entry in walkdir::WalkDir::new(dir)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|e| {
-            // Generator scripts assemble fixtures; they are not samples.
-            is_fixture_entry(e)
-                && (e.depth() == 0 || !e.file_type().is_dir() || e.file_name() != "scripts")
-        })
-    {
-        let entry = entry?;
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        out.push(Target::DoesNothing {
-            path: entry.path().to_path_buf(),
-            dir: dir.to_path_buf(),
-        });
-    }
-    Ok(())
-}
-
-/// Walk a hostile-floor corpus directory (e.g. `testdata/drop-exec/`).
-fn walk_hostile_corpus(
-    dir: &Path,
-    corpus: &str,
-    min_score: u32,
-    min_hostile: usize,
-    out: &mut Vec<Target>,
-) -> Result<()> {
-    for entry in walkdir::WalkDir::new(dir)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(is_fixture_entry)
-    {
-        let entry = entry?;
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        out.push(Target::WalkedHostile {
-            path: entry.path().to_path_buf(),
-            corpus: corpus.to_string(),
-            min_score,
-            min_hostile,
-        });
-    }
-    Ok(())
-}
-
-/// Walk the collected analysis results, emitting failures inline and tallying totals.
-struct ValidationStats {
-    performance_passed: usize,
-    performance_total: usize,
-    hostile_passed: usize,
-    hostile_total: usize,
-    benign_passed: usize,
-    benign_total: usize,
-    does_nothing_passed: usize,
-    does_nothing_total: usize,
-    walked_hostile: std::collections::BTreeMap<String, WalkedCorpusStats>,
-}
-
-#[derive(Default)]
-struct WalkedCorpusStats {
-    passed: usize,
-    total: usize,
-}
-
-/// Walk the collected analysis results, emitting failures inline and tallying totals.
-fn evaluate(
-    results: Vec<(Target, Result<AnalysisReport>)>,
-    does_nothing: &DoesNothing,
-) -> Result<ValidationStats> {
-    let disable_score_caps = validation_controls::is_validator_disabled("score-caps");
-
-    let mut stats = ValidationStats {
-        performance_passed: 0,
-        performance_total: 0,
-        hostile_passed: 0,
-        hostile_total: 0,
-        benign_passed: 0,
-        benign_total: 0,
-        does_nothing_passed: 0,
-        does_nothing_total: 0,
-        walked_hostile: std::collections::BTreeMap::new(),
-    };
-    let mut failed = 0usize;
-
-    for (target, result) in results {
-        let report = match result {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("❌ {}: analysis failed: {e:#}", safe_path(target.path()));
-                failed += 1;
-                match target {
-                    Target::Performance { .. } => stats.performance_total += 1,
-                    Target::Hostile { .. } => stats.hostile_total += 1,
-                    Target::Benign { .. } => stats.benign_total += 1,
-                    Target::DoesNothing { .. } => stats.does_nothing_total += 1,
-                    Target::WalkedHostile { corpus, .. } => {
-                        stats.walked_hostile.entry(corpus).or_default().total += 1;
-                    }
-                }
+            .next()
+            .and_then(|c| c.as_os_str().to_str())
+        {
+            Some("hostile") => Some(Criticality::Hostile),
+            Some("suspicious") => Some(Criticality::Suspicious),
+            Some("notable") => Some(Criticality::Notable),
+            Some("baseline") => Some(Criticality::Baseline),
+            _ => None,
+        };
+        // Symlinks (including directory links) are rejected rather than silently
+        // skipped or followed outside the fixture tree.
+        if let Some(expected) = expected.filter(|_| {
+            entry.file_type().is_file()
+                && relative
+                    .parent()
+                    .is_some_and(|parent| !parent.as_os_str().is_empty())
+        }) {
+            let exempt = relative.components().nth(2).is_some()
+                && relative
+                    .components()
+                    .nth(1)
+                    .is_some_and(|c| c.as_os_str() == "does-nothing");
+            let size = entry.metadata()?.len();
+            if !exempt && size > 500 * 1024 {
+                unused.push(format!(
+                    "{}: {size} bytes exceeds the 500 KiB fixture limit",
+                    safe_path(relative)
+                ));
                 continue;
             }
-        };
-
-        match target {
-            Target::Performance { .. } => {
-                stats.performance_total += 1;
-                stats.performance_passed += 1;
-            }
-            Target::Hostile {
-                path,
-                min_score,
-                min_hostile,
-                min_suspicious,
-                traits,
-            } => {
-                stats.hostile_total += 1;
-                let matched = judge_traits(&path, &traits, &report);
-                if judge_hostile(&path, min_score, min_hostile, min_suspicious, &report) && matched
-                {
-                    stats.hostile_passed += 1;
-                } else {
-                    failed += 1;
-                }
-            }
-            Target::Benign {
-                path,
-                cap,
-                min_score,
-                traits,
-            } => {
-                stats.benign_total += 1;
-                let matched = judge_traits(&path, &traits, &report);
-                if (disable_score_caps || judge_benign(&path, cap, min_score, &report)) && matched {
-                    stats.benign_passed += 1;
-                } else {
-                    failed += 1;
-                }
-            }
-            Target::DoesNothing { dir, .. } => {
-                for file in &report.files {
-                    stats.does_nothing_total += 1;
-                    // Boring-by-definition invariant (always enforced,
-                    // independent of the bypassable, version-sensitive score
-                    // caps): a do-nothing benign binary must carry
-                    //   1. NO intent — zero objectives/ or well-known/ findings
-                    //      at ANY criticality (e.g. a crypto/rsa import read as
-                    //      ransomware, or a log-rotation helper read as
-                    //      mass-delete), and
-                    //   2. nothing NOTABLE — these samples are the opposite of
-                    //      notable, so every finding must be component/baseline;
-                    //      a notable/suspicious/hostile trait firing here is a
-                    //      false positive.
-                    // These fixtures exist precisely to keep both classes
-                    // regression-free.
-                    let allowed: &[String] = does_nothing_override(&file.path, &dir, does_nothing)
-                        .map_or(&[], |o| o.allowed_prefixes.as_slice());
-                    let disallowed: Vec<String> = file
-                        .findings
-                        .iter()
-                        .filter(|f| {
-                            // A finding this sample was reviewed to carry.
-                            if allowed.iter().any(|p| f.id.starts_with(p.as_str())) {
-                                return false;
-                            }
-                            // Intent and malware-family findings are never
-                            // acceptable on a do-nothing fixture, at any crit.
-                            if f.id.starts_with("objectives/") || f.id.starts_with("well-known/") {
-                                return true;
-                            }
-                            // Inherent code-signing trust state is a legitimate
-                            // file property, not a behavior. Ad-hoc signing in
-                            // particular is unusual-but-real and notable by
-                            // design (and is the default for every `go build`
-                            // macOS binary), so a notable metadata/signed/*
-                            // finding is not a do-nothing false positive.
-                            // Higher tiers (suspicious/hostile) are still caught.
-                            if f.id.starts_with("metadata/signed/")
-                                && f.crit == Criticality::Notable
-                            {
-                                return false;
-                            }
-                            // Compiler/toolchain identity is a neutral file
-                            // fact. A no-op binary can still be meaningfully
-                            // identified as Go-compiled; TAXONOMY.md treats
-                            // program identity as notable, so this is not a
-                            // false-positive capability finding.
-                            if f.id.starts_with("metadata/lang/compiler/")
-                                && f.crit == Criticality::Notable
-                            {
-                                return false;
-                            }
-                            // Package-format and build/CI metadata identity
-                            // are inherent file facts in the same sense: a
-                            // no-op .deb is still a Debian package, and a
-                            // no-op workflow still pins actions by tag.
-                            if (f.id.starts_with("metadata/package/files/")
-                                || f.id.starts_with("metadata/build/"))
-                                && f.crit == Criticality::Notable
-                            {
-                                return false;
-                            }
-                            matches!(
-                                f.crit,
-                                Criticality::Notable
-                                    | Criticality::Suspicious
-                                    | Criticality::Hostile
-                            )
-                        })
-                        .map(|f| format!("{} ({:?})", f.id, f.crit))
-                        .collect();
-                    if !disallowed.is_empty() {
-                        eprintln!(
-                            "❌ {}: {} disallowed finding(s) on a does-nothing fixture (intent or >= notable): {disallowed:?}",
-                            safe_path(Path::new(&file.path)),
-                            disallowed.len(),
-                        );
-                        print_contributing_findings(file, "     ");
-                        failed += 1;
-                        continue;
-                    }
-                    if disable_score_caps {
-                        stats.does_nothing_passed += 1;
-                        continue;
-                    }
-                    let cap = does_nothing_cap(&file.path, &dir, does_nothing);
-                    if file.score > cap {
-                        eprintln!(
-                            "❌ {}: score {} > cap {cap}",
-                            safe_path(Path::new(&file.path)),
-                            file.score
-                        );
-                        print_contributing_findings(file, "     ");
-                        failed += 1;
-                    } else {
-                        stats.does_nothing_passed += 1;
-                    }
-                }
-            }
-            Target::WalkedHostile {
-                path,
-                corpus,
-                min_score,
-                min_hostile,
-            } => {
-                let entry = stats.walked_hostile.entry(corpus.clone()).or_default();
-                entry.total += 1;
-                if judge_walked_hostile(&path, &corpus, min_score, min_hostile, &report) {
-                    entry.passed += 1;
-                } else {
-                    failed += 1;
-                }
-            }
-        }
-    }
-
-    if failed > 0 {
-        anyhow::bail!("{failed} validation check(s) failed");
-    }
-    Ok(stats)
-}
-
-/// Judge a walked-hostile sample. Returns `true` if it passes the `min_hostile` floor.
-fn judge_walked_hostile(
-    path: &Path,
-    corpus: &str,
-    min_score: u32,
-    min_hostile: usize,
-    report: &AnalysisReport,
-) -> bool {
-    let Some(file) = report.files.first() else {
-        eprintln!("❌ {}: analysis produced no files", safe_path(path));
-        return false;
-    };
-    let hostile = count_findings(file, Criticality::Hostile);
-    if file.score >= min_score && hostile >= min_hostile {
-        return true;
-    }
-    if file.score < min_score {
-        eprintln!(
-            "❌ {} [{corpus}]: score {} < minimum {min_score}",
-            safe_path(path),
-            file.score
-        );
-    }
-    if hostile < min_hostile {
-        eprintln!(
-            "❌ {} [{corpus}]: hostile findings {hostile} < minimum {min_hostile}",
-            safe_path(path)
-        );
-    }
-    print_contributing_findings(file, "     ");
-    false
-}
-
-/// Judge a known-hostile fixture root file. Returns `true` if it passes.
-fn judge_hostile(
-    path: &Path,
-    min_score: u32,
-    min_hostile: usize,
-    min_suspicious: usize,
-    report: &AnalysisReport,
-) -> bool {
-    let Some(file) = report.files.first() else {
-        eprintln!("❌ {}: analysis produced no files", safe_path(path));
-        return false;
-    };
-    let display = safe_path(path);
-    let hostile = count_findings(file, Criticality::Hostile);
-    let suspicious = count_findings(file, Criticality::Suspicious);
-
-    let score_too_low = file.score < min_score;
-    let hostile_too_low = hostile < min_hostile;
-    let suspicious_too_low = suspicious < min_suspicious;
-    if !score_too_low && !hostile_too_low && !suspicious_too_low {
-        return true;
-    }
-
-    if score_too_low {
-        eprintln!("❌ {display}: score {} < minimum {min_score}", file.score);
-    }
-    if hostile_too_low {
-        eprintln!("❌ {display}: hostile findings {hostile} < minimum {min_hostile}");
-    }
-    if suspicious_too_low {
-        eprintln!("❌ {display}: suspicious findings {suspicious} < minimum {min_suspicious}");
-    }
-    print_contributing_findings(file, "     ");
-    false
-}
-
-/// Judge a known-benign fixture root file. Returns `true` if it passes.
-fn judge_benign(path: &Path, cap: u32, min_score: u32, report: &AnalysisReport) -> bool {
-    let Some(file) = report.files.first() else {
-        eprintln!("❌ {}: analysis produced no files", safe_path(path));
-        return false;
-    };
-    let misleading = misleading_benign_findings(report);
-    if file.score <= cap
-        && file.score >= min_score
-        && (file.score < Criticality::Suspicious.score_weight()
-            || cap >= Criticality::Suspicious.score_weight())
-        && misleading.is_empty()
-    {
-        return true;
-    }
-
-    if file.score > cap {
-        eprintln!("❌ {}: score {} > cap {cap}", safe_path(path), file.score);
-    }
-    // The floor guards a benign program's legitimate identity/functionality
-    // traits (usage surface, purpose-defining syscalls) from silently
-    // regressing to invisible — an empty render tells an LLM or diff nothing.
-    if file.score < min_score {
-        eprintln!(
-            "❌ {}: score {} < minimum {min_score}",
-            safe_path(path),
-            file.score
-        );
-    }
-    for (file_path, finding) in misleading {
-        eprintln!(
-            "❌ {}: suspicious/hostile intent or campaign trait on benign fixture: {} ({:?})",
-            crate::output::escape_control_chars(file_path),
-            crate::output::escape_control_chars(&finding.id),
-            finding.crit
-        );
-    }
-    print_contributing_findings(file, "     ");
-    false
-}
-
-fn count_findings(file: &FileAnalysis, crit: Criticality) -> usize {
-    file.findings.iter().filter(|f| f.crit == crit).count()
-}
-
-fn misleading_benign_findings(
-    report: &AnalysisReport,
-) -> Vec<(&str, &cleave::types::traits_findings::Finding)> {
-    report
-        .files
-        .iter()
-        .flat_map(|file| {
-            file.findings
-                .iter()
-                .filter(|finding| {
-                    matches!(finding.crit, Criticality::Hostile | Criticality::Suspicious)
-                        && (finding.id.starts_with("objectives/")
-                            || finding.id.starts_with("well-known/"))
-                })
-                .map(move |finding| (file.path.as_str(), finding))
-        })
-        .collect()
-}
-
-/// Fixture expectations, loaded from `<traits>/testdata/expectations.toml`.
-///
-/// These travel with the traits (not the engine) so any build validates the
-/// exact fixture set + thresholds a given traits commit defines — the basis for
-/// meaningful cross-version validation.
-#[derive(Debug, Deserialize)]
-struct Expectations {
-    /// Per-file floors for direct files in `testdata/hostile/`.
-    hostile: Vec<HostileExpectation>,
-    /// Per-file score ceilings for direct files in `testdata/benign/`.
-    benign: Vec<BenignCap>,
-    /// Corpora whose every file must hit `min_hostile` hostile findings — the
-    /// inverse of does-nothing: floor scores from below rather than cap them.
-    walked_hostile: Vec<WalkedCorpus>,
-    /// Score caps for `testdata/does-nothing/` samples.
-    does_nothing: DoesNothing,
-}
-
-#[derive(Debug, Deserialize)]
-struct HostileExpectation {
-    name: String,
-    min_score: u32,
-    min_hostile: usize,
-    min_suspicious: usize,
-    #[serde(flatten)]
-    traits: TraitExpectations,
-}
-
-#[derive(Debug, Deserialize)]
-struct BenignCap {
-    name: String,
-    cap: u32,
-    /// Score floor (default 0): a real benign program still carries its
-    /// identity/functionality notables (usage surface, purpose-defining
-    /// syscalls); this catches them silently regressing to invisible.
-    #[serde(default)]
-    min_score: u32,
-    #[serde(flatten)]
-    traits: TraitExpectations,
-}
-
-/// Taxonomy prefixes, evaluated over the sample and its own archive members.
-/// Unlike score caps these semantic assertions cannot be bypassed.
-#[derive(Clone, Debug, Default, Deserialize)]
-struct TraitExpectations {
-    /// Enable byte-flow matching for this fixture, without disabling assertions.
-    #[serde(default)]
-    enable_yara: bool,
-    #[serde(default)]
-    required_analysis_gaps: Vec<cleave::types::AnalysisGap>,
-    #[serde(default)]
-    required_prefixes: Vec<String>,
-    #[serde(default)]
-    forbidden_prefixes: Vec<String>,
-    /// Exact trait/composite IDs, when a fixture needs to distinguish rules
-    /// within the same leaf. Prefixes intentionally remain hierarchy-only.
-    #[serde(default)]
-    required_traits: Vec<String>,
-    #[serde(default)]
-    forbidden_traits: Vec<String>,
-}
-
-fn prefix_matches(prefix: &str, id: &str) -> bool {
-    let hierarchy = id.split("::").next().unwrap_or(id);
-    let prefix = prefix.trim_end_matches('/');
-    hierarchy == prefix
-        || hierarchy
-            .strip_prefix(prefix)
-            .is_some_and(|suffix| suffix.starts_with('/'))
-}
-
-/// Top-level directories of the YAML trait tree. Every trait loaded from
-/// them is named `directory::id`; ids outside them are emitted by the engine.
-const YAML_TRAIT_TIERS: &[&str] = &[
-    "metadata",
-    "micro-behaviors",
-    "objectives",
-    "well-known",
-    "third-party",
-];
-
-fn trait_expectation_errors(expected: &TraitExpectations, ids: &HashSet<&str>) -> Vec<String> {
-    let mut errors = Vec::new();
-    for prefix in expected
-        .required_prefixes
-        .iter()
-        .chain(&expected.forbidden_prefixes)
-    {
-        if prefix.is_empty()
-            || prefix.contains(':')
-            || prefix.starts_with('/')
-            || prefix.split('/').any(|part| part == ".." || part == ".")
-        {
-            errors.push(format!(
-                "invalid hierarchy prefix {prefix:?}: use taxonomy paths, not leaf IDs"
-            ));
-        }
-    }
-    for id in expected
-        .required_traits
-        .iter()
-        .chain(&expected.forbidden_traits)
-    {
-        let Some((directory, leaf)) = id.split_once("::") else {
-            // Engine-emitted structural findings (`anti-static/packer/upx`)
-            // carry a bare path id: they are exact ids, not hierarchy
-            // prefixes. Only inside the YAML trait tiers is a bare path a
-            // prefix written where a leaf id belongs.
-            let tier = id.split('/').next().unwrap_or_default();
-            if YAML_TRAIT_TIERS.contains(&tier)
-                || id.is_empty()
-                || id.starts_with('/')
-                || id
-                    .split('/')
-                    .any(|part| part.is_empty() || part == ".." || part == ".")
+            if !exempt && size > 20 * 1024 && entry.path().extension().is_none_or(|ext| ext != "xz")
             {
-                errors.push(format!(
-                    "invalid exact trait ID {id:?}: expected directory::id"
+                unused.push(format!(
+                    "{}: {size} bytes; fixtures above 20 KiB must use xz storage compression",
+                    safe_path(relative)
                 ));
+                continue;
             }
-            continue;
-        };
-        if directory.is_empty()
-            || leaf.is_empty()
-            || leaf.contains("::")
-            || directory.starts_with('/')
-            || directory.split('/').any(|part| part == ".." || part == ".")
-        {
-            errors.push(format!(
-                "invalid exact trait ID {id:?}: expected directory::id"
-            ));
+            targets.push(Target {
+                path: entry.into_path(),
+                expected,
+            });
+        } else {
+            unused.push(safe_path(relative));
         }
     }
-    for prefix in &expected.required_prefixes {
-        if !ids.iter().any(|id| prefix_matches(prefix, id)) {
-            errors.push(format!("missing required trait hierarchy {prefix}"));
-        }
-    }
-    for prefix in &expected.forbidden_prefixes {
-        let mut matched: Vec<_> = ids
+    if !unused.is_empty() {
+        unused.sort_unstable();
+        let shown = unused
             .iter()
-            .copied()
-            .filter(|id| prefix_matches(prefix, id))
-            .collect();
-        matched.sort_unstable();
-        if !matched.is_empty() {
-            errors.push(format!(
-                "unexpected forbidden trait hierarchy {prefix}: {}",
-                matched.join(", ")
-            ));
-        }
+            .take(20)
+            .map(|p| format!("  {p}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        anyhow::bail!(
+            "{} unused or unsupported testdata file(s); every file must be a regular fixture under hostile/, suspicious/, notable/, or baseline/:\n{}{}",
+            unused.len(),
+            shown,
+            if unused.len() > 20 {
+                format!("\n  ... {} more", unused.len() - 20)
+            } else {
+                String::new()
+            }
+        );
     }
-    for id in &expected.required_traits {
-        if !ids.contains(id.as_str()) {
-            errors.push(format!("missing required trait {id}"));
-        }
+    if targets.is_empty() {
+        anyhow::bail!("no validation fixtures in {}", safe_path(root));
     }
-    for id in &expected.forbidden_traits {
-        if ids.contains(id.as_str()) {
-            errors.push(format!("unexpected forbidden trait {id}"));
-        }
-    }
-    errors
+    targets.sort_unstable_by(|a, b| a.path.cmp(&b.path));
+    Ok(targets)
 }
 
-fn judge_traits(path: &Path, expected: &TraitExpectations, report: &AnalysisReport) -> bool {
-    let ids = report
+fn report_severity(report: &AnalysisReport) -> Result<Criticality> {
+    if report.files.is_empty() {
+        anyhow::bail!("analysis produced no files");
+    }
+    Ok(report
         .files
         .iter()
-        .flat_map(|file| file.findings.iter())
-        .filter(|finding| finding.crit != Criticality::Filtered)
-        .map(|finding| finding.id.as_str())
-        .collect();
-    let mut errors = trait_expectation_errors(expected, &ids);
-    for gap in &expected.required_analysis_gaps {
-        if !report
-            .files
-            .iter()
-            .any(|f| f.analysis_gaps.iter().any(|actual| actual == *gap))
+        .flat_map(|file| &file.findings)
+        .map(|finding| finding.crit)
+        .max()
+        .unwrap_or(Criticality::Baseline)
+        .max(Criticality::Baseline))
+}
+
+fn evaluate(results: Vec<(Target, Result<AnalysisReport>)>) -> Result<FixtureSummary> {
+    let mut summary = FixtureSummary::default();
+    let mut failures = 0;
+    for (target, result) in results {
+        let count = summary.count_mut(target.expected);
+        count.total += 1;
+        match result.and_then(|report| report_severity(&report).map(|severity| (report, severity)))
         {
-            errors.push(format!("missing required analysis gap {}", gap.label()));
+            Ok((_, actual)) if actual == target.expected => count.passed += 1,
+            Ok((report, actual)) => {
+                eprintln!(
+                    "❌ {}: expected {}, found {}",
+                    safe_path(target.path()),
+                    target.expected.letter(),
+                    actual.letter()
+                );
+                for file in &report.files {
+                    if file.findings.iter().any(|f| f.crit >= Criticality::Notable) {
+                        eprintln!("  {}", safe_path(Path::new(&file.path)));
+                        print_contributing_findings(file, "     ");
+                    }
+                }
+                failures += 1;
+            }
+            Err(error) => {
+                eprintln!(
+                    "❌ {}: analysis failed: {error:#}",
+                    safe_path(target.path())
+                );
+                failures += 1;
+            }
         }
     }
-    for error in &errors {
-        eprintln!("❌ {}: {error}", safe_path(path));
+    if failures > 0 {
+        anyhow::bail!("{failures} validation fixture check(s) failed");
     }
-    errors.is_empty()
+    Ok(summary)
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
-mod trait_expectation_tests {
-    use super::{
-        HostileExpectation, NeutralStage, Target, TraitExpectations, judge_traits,
-        trait_expectation_errors,
-    };
-    use std::collections::HashSet;
-    use std::path::PathBuf;
+mod severity_fixture_tests {
+    use super::*;
+
+    fn write(root: &Path, name: &str) {
+        let path = root.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "fixture").unwrap();
+    }
+
     #[test]
-    fn explicit_fixture_yara_request_routes_hostile_and_benign() {
-        for (text, expected) in [("", false), ("enable_yara=true", true)] {
-            let traits: TraitExpectations = toml::from_str(text).unwrap();
-            let hostile = Target::Hostile {
-                path: PathBuf::from("fixture.bat"),
-                min_score: 1,
-                min_hostile: 1,
-                min_suspicious: 2,
-                traits: traits.clone(),
-            };
-            let benign = Target::Benign {
-                path: PathBuf::from("fixture.bat"),
-                cap: 1,
-                min_score: 0,
-                traits,
-            };
-            assert_eq!(hostile.requires_yara(), expected);
-            assert_eq!(benign.requires_yara(), expected);
-        }
+    fn discovery_uses_only_first_directory_and_includes_hidden_inputs() {
+        let root = tempfile::tempdir().unwrap();
+        write(root.path(), "hostile/generated/baseline/.payload.js");
+        write(root.path(), "baseline/.github/action.yml");
+        write(root.path(), "notable/scripts/build.py");
+        let targets = discover_targets(root.path()).unwrap();
+        assert_eq!(targets.len(), 3);
+        assert_eq!(targets[0].expected, Criticality::Baseline);
+        assert_eq!(targets[1].expected, Criticality::Hostile);
+        assert_eq!(targets[2].expected, Criticality::Notable);
+        // Gitignore, extensions and script directory names never exclude data.
+        write(root.path(), "notable/.gitignore");
+        assert_eq!(discover_targets(root.path()).unwrap().len(), 4);
+    }
+
+    #[test]
+    fn fresh_unknown_files_and_legacy_manifests_are_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        write(root.path(), "hostile/sample.js");
+        assert!(discover_targets(root.path()).is_ok());
+        write(root.path(), "triage/receipt.json");
+        let error = discover_targets(root.path()).err().unwrap().to_string();
+        assert!(error.contains("triage/receipt.json"), "{error}");
+        std::fs::remove_file(root.path().join("triage/receipt.json")).unwrap();
+        write(root.path(), "expectations.toml");
         assert!(
-            !Target::DoesNothing {
-                path: PathBuf::from("fixture.bat"),
-                dir: PathBuf::from("fixtures"),
-            }
-            .requires_yara()
+            discover_targets(root.path())
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("expectations.toml")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_are_errors_and_never_followed() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        write(root.path(), "baseline/real.txt");
+        std::os::unix::fs::symlink(outside.path(), root.path().join("baseline/link")).unwrap();
+        assert!(
+            discover_targets(root.path())
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("baseline/link")
         );
     }
 
     #[test]
-    fn defaults_preserve_existing_fixture_tables() {
-        let expected: HostileExpectation =
-            toml::from_str("name='x'\nmin_score=35\nmin_hostile=0\nmin_suspicious=1").unwrap();
-        assert!(trait_expectation_errors(&expected.traits, &HashSet::new()).is_empty());
+    fn empty_fixture_tree_is_not_a_passing_test_suite() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(discover_targets(root.path()).is_err());
     }
 
     #[test]
-    fn neutral_stage_keeps_dos_com_objective_findings_for_exact_expectations() {
-        let Ok(traits_dir) = cleave::traits_repo::try_resolve() else {
-            eprintln!("traits repo unavailable; skipping integration check");
-            return;
+    fn size_limits_have_exact_boundaries_and_only_noop_subtrees_are_exempt() {
+        let root = tempfile::tempdir().unwrap();
+        write(root.path(), "baseline/input.bin");
+        let input = root.path().join("baseline/input.bin");
+        std::fs::write(&input, vec![0; 20 * 1024]).unwrap();
+        assert!(discover_targets(root.path()).is_ok());
+        std::fs::write(&input, vec![0; 20 * 1024 + 1]).unwrap();
+        assert!(
+            discover_targets(root.path())
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("20 KiB")
+        );
+        let compressed = root.path().join("baseline/input.bin.xz");
+        std::fs::rename(&input, &compressed).unwrap();
+        std::fs::write(&compressed, vec![0; 500 * 1024]).unwrap();
+        assert!(discover_targets(root.path()).is_ok());
+        std::fs::write(&compressed, vec![0; 500 * 1024 + 1]).unwrap();
+        assert!(
+            discover_targets(root.path())
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("500 KiB")
+        );
+        let exempt = root.path().join("baseline/does-nothing/input.bin");
+        std::fs::create_dir_all(exempt.parent().unwrap()).unwrap();
+        std::fs::rename(&compressed, exempt).unwrap();
+        assert!(discover_targets(root.path()).is_ok());
+    }
+
+    #[test]
+    fn storage_compression_preserves_bytes_and_original_basename() {
+        use std::io::Write;
+        let root = tempfile::tempdir().unwrap();
+        let stage = NeutralStage::new(root.path()).unwrap();
+        let path = root.path().join("package.json.xz");
+        let input = b"{\"name\":\"fixture\"}";
+        let mut encoder = xz2::write::XzEncoder::new(Vec::new(), 6);
+        encoder.write_all(input).unwrap();
+        std::fs::write(&path, encoder.finish().unwrap()).unwrap();
+        let staged = stage.stage(&path).unwrap();
+        assert_eq!(staged.file_name().unwrap(), "package.json");
+        assert_eq!(std::fs::read(staged).unwrap(), input);
+        std::fs::write(&path, b"invalid xz").unwrap();
+        assert!(stage.stage(&path).is_err());
+    }
+
+    #[test]
+    fn severity_uses_members_and_ignores_scores_and_filtered_findings() {
+        let mut report = AnalysisReport::new(cleave::TargetInfo {
+            path: "bundle.zip".into(),
+            file_type: "zip".into(),
+            size_bytes: 1,
+            sha256: "abc".into(),
+            architectures: None,
+        });
+        report.finalize();
+        assert_eq!(report_severity(&report).unwrap(), Criticality::Baseline);
+        let mut member = report.files[0].clone();
+        member.path = "bundle.zip!!member.js##base64@1".into();
+        let mut finding = cleave::types::Finding::new("test", Default::default(), "test", 1.0);
+        finding.crit = Criticality::Hostile;
+        member.findings.push(finding);
+        report.files.push(member);
+        assert_eq!(report_severity(&report).unwrap(), Criticality::Hostile);
+        let target = Target {
+            path: "sample".into(),
+            expected: Criticality::Suspicious,
         };
-        let fixture =
-            traits_dir.join("testdata/hostile/dos-com/fuk-malformed-companion-overwriter.com");
-        if !fixture.is_file() {
-            eprintln!("FUK fixture unavailable; skipping integration check");
-            return;
-        }
-
-        let expected = TraitExpectations {
-            enable_yara: true,
-            required_traits: vec![
-                "objectives/impact/wipe/file/header::dos-dta-cell-sized-host-prefix-corruption"
-                    .into(),
-                "objectives/lateral-movement/worm/file-copy::dos-parent-directory-self-image-replication"
-                    .into(),
-                "objectives/evasion/file-hiding/attributes::dos-overwrite-installer-hidden-readonly-image"
-                    .into(),
-            ],
-            ..Default::default()
-        };
-        let mapper = std::sync::Arc::new(
-            // Exercise staging and exact findings with normal scan loading.
-            // Authoring issues elsewhere in the external rule pack must not
-            // prevent this regression check from reaching the fixture.
-            cleave::CapabilityMapper::try_new_with_load_options(
-                cleave::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
-                cleave::CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
-                false,
-                false,
-            )
-            .unwrap(),
-        );
-        let options = cleave::AnalysisOptions {
-            disable_yara: false,
-            disable_radare2: true,
-            disable_upx: true,
-            ..Default::default()
-        };
-        let stage = NeutralStage::new(&traits_dir).unwrap();
-        let report = stage
-            .analyze(&fixture, |path| {
-                cleave::analyze_file_with_mapper(path, &options, &mapper)
-            })
-            .unwrap();
-
-        let ids: HashSet<_> = report
-            .files
-            .iter()
-            .flat_map(|file| file.findings.iter())
-            .filter(|finding| finding.crit != super::Criticality::Filtered)
-            .map(|finding| finding.id.as_str())
-            .collect();
-        for id in &expected.required_traits {
-            assert!(ids.contains(id.as_str()), "missing {id}; findings: {ids:?}");
-        }
-        assert!(judge_traits(&fixture, &expected, &report));
+        assert!(evaluate(vec![(target, Ok(report))]).is_err());
     }
-
-    #[test]
-    fn gap_expectations_accept_only_known_diagnostics() {
-        let expected: TraitExpectations =
-            toml::from_str("required_analysis_gaps=['flow-query-incomplete']").unwrap();
-        assert_eq!(expected.required_analysis_gaps.len(), 1);
-        assert!(
-            toml::from_str::<TraitExpectations>("required_analysis_gaps=['a/b::local-trait']")
-                .is_err()
-        );
-    }
-    #[test]
-    fn hierarchy_positive_and_negative_assertions_survive_leaf_renames() {
-        let expected: TraitExpectations =
-            toml::from_str("required_prefixes=['objectives/exfiltration']\nforbidden_prefixes=['objectives/persistence']")
-                .unwrap();
-        for id in [
-            "objectives/exfiltration::old-name",
-            "objectives/exfiltration/stealer::renamed",
-        ] {
-            assert!(trait_expectation_errors(&expected, &HashSet::from([id])).is_empty());
-        }
-        assert_eq!(
-            trait_expectation_errors(
-                &expected,
-                &HashSet::from([
-                    "objectives/exfiltration-lookalike::x",
-                    "objectives/persistence/subtree::y"
-                ])
-            )
-            .len(),
-            2
-        );
-    }
-    #[test]
-    fn engine_emitted_ids_are_exact_trait_ids() {
-        // Structural findings the engine emits carry a bare path id; they
-        // are exact ids and must be usable in required_traits.
-        let expected: TraitExpectations =
-            toml::from_str("required_traits=['anti-static/packer/upx']").unwrap();
-        assert!(
-            trait_expectation_errors(&expected, &HashSet::from(["anti-static/packer/upx"]))
-                .is_empty()
-        );
-        assert_eq!(
-            trait_expectation_errors(&expected, &HashSet::from(["anti-static/packer/upx/x"])).len(),
-            1,
-            "still an exact id: a child does not satisfy it"
-        );
-        // Inside the YAML trait tiers a bare path is a prefix written where a
-        // leaf id belongs.
-        let expected: TraitExpectations =
-            toml::from_str("required_traits=['objectives/impact/wipe']").unwrap();
-        let errors =
-            trait_expectation_errors(&expected, &HashSet::from(["objectives/impact/wipe::x"]));
-        assert!(
-            errors.iter().any(|e| e.contains("expected directory::id")),
-            "{errors:?}"
-        );
-    }
-    #[test]
-    fn leaf_ids_are_rejected_in_expectations() {
-        let expected: TraitExpectations =
-            toml::from_str("required_prefixes=['a/b::leaf']").unwrap();
-        assert!(
-            trait_expectation_errors(&expected, &HashSet::from(["a/b::leaf"]))
-                .iter()
-                .any(|error| error.contains("invalid hierarchy"))
-        );
-    }
-
-    #[test]
-    fn exact_trait_expectations_distinguish_rules_in_one_leaf() {
-        let expected: TraitExpectations = toml::from_str(
-            "required_traits=['a/b::expected']\nforbidden_traits=['a/b::unexpected']",
-        )
-        .unwrap();
-        assert!(
-            trait_expectation_errors(
-                &expected,
-                &HashSet::from(["a/b::expected", "a/b::another-rule"])
-            )
-            .is_empty()
-        );
-        assert!(
-            trait_expectation_errors(
-                &expected,
-                &HashSet::from(["a/b::expected", "a/b::unexpected"])
-            )
-            .iter()
-            .any(|error| error == "unexpected forbidden trait a/b::unexpected")
-        );
-        assert!(
-            trait_expectation_errors(&expected, &HashSet::new())
-                .iter()
-                .any(|error| error == "missing required trait a/b::expected")
-        );
-    }
-
-    #[test]
-    fn exact_trait_expectations_require_a_well_formed_id() {
-        let expected: TraitExpectations =
-            toml::from_str("required_traits=['a/b::']\nforbidden_traits=['a/../b::leaf']").unwrap();
-        assert_eq!(
-            trait_expectation_errors(&expected, &HashSet::new())
-                .iter()
-                .filter(|error| error.starts_with("invalid exact trait ID"))
-                .count(),
-            2
-        );
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct WalkedCorpus {
-    corpus: String,
-    #[serde(default)]
-    min_score: u32,
-    min_hostile: usize,
-}
-
-#[derive(Debug, Deserialize)]
-struct DoesNothing {
-    /// Cap applied to any does-nothing sample without a specific override.
-    default_cap: u32,
-    /// Per-file caps, keyed by path relative to the does-nothing dir (may carry
-    /// an archive suffix, e.g. `"sample.ipa!!Payload/..."`).
-    #[serde(default)]
-    overrides: Vec<DoesNothingCap>,
-}
-
-#[derive(Debug, Deserialize)]
-struct DoesNothingCap {
-    path: String,
-    cap: u32,
-    /// Finding-id prefixes this sample genuinely carries and is allowed to
-    /// show despite the no-intent/no-notable invariant: a sample that really
-    /// writes to syslog, or a unit file that really enables itself at boot.
-    /// Each entry is an explicit, reviewed acknowledgement for one file.
-    #[serde(default)]
-    allowed_prefixes: Vec<String>,
-}
-
-/// The override entry for a file whose `path` may be either absolute (root
-/// file) or include an archive suffix (e.g. `"...sample.ipa!!Payload/..."`).
-fn does_nothing_override<'a>(
-    file_path: &str,
-    dir: &Path,
-    does_nothing: &'a DoesNothing,
-) -> Option<&'a DoesNothingCap> {
-    let dir_str = dir.to_string_lossy();
-    let rel = file_path
-        .strip_prefix(dir_str.as_ref())
-        .and_then(|s| s.strip_prefix('/'))
-        .unwrap_or(file_path);
-    does_nothing.overrides.iter().find(|o| o.path == rel)
-}
-
-/// The score cap for a does-nothing file: its override, else the default.
-fn does_nothing_cap(file_path: &str, dir: &Path, does_nothing: &DoesNothing) -> u32 {
-    does_nothing_override(file_path, dir, does_nothing).map_or(does_nothing.default_cap, |o| o.cap)
 }
 
 /// Substring that no path-derived value of a staged fixture may contain.
@@ -1625,15 +788,50 @@ impl NeutralStage {
         // Resolve symlinks first: a hard link to a relative symlink would dangle.
         let source = std::fs::canonicalize(fixture)
             .with_context(|| format!("resolving fixture {}", fixture.display()))?;
-        let data = std::fs::read(&source)
+        let stored = std::fs::read(&source)
             .with_context(|| format!("reading fixture {}", fixture.display()))?;
-        let dest = self.dir.path().join(neutral_relative_path(fixture, &data)?);
+        // A final .xz suffix is storage, not part of the sample's format.
+        // An XZ-format sample is therefore stored as name.xz.xz. Decode only
+        // one layer, retaining its logical basename for filename-sensitive rules.
+        let compressed = fixture.extension().is_some_and(|ext| ext == "xz");
+        let logical = if compressed {
+            fixture.with_extension("")
+        } else {
+            fixture.to_path_buf()
+        };
+        let data = if compressed {
+            let stream = xz2::stream::Stream::new_stream_decoder(
+                128 * 1024 * 1024,
+                xz2::stream::CONCATENATED,
+            )?;
+            let mut decoder = xz2::read::XzDecoder::new_stream(stored.as_slice(), stream)
+                .take(512 * 1024 * 1024 + 1);
+            let mut decoded = Vec::new();
+            decoder
+                .read_to_end(&mut decoded)
+                .with_context(|| format!("decoding fixture storage {}", safe_path(fixture)))?;
+            if decoded.len() > 512 * 1024 * 1024 {
+                anyhow::bail!("decoded fixture exceeds 512 MiB: {}", safe_path(fixture));
+            }
+            decoded
+        } else {
+            stored
+        };
+        let dest = self
+            .dir
+            .path()
+            .join(neutral_relative_path(&logical, &data)?);
         let Some(parent) = dest.parent() else {
             anyhow::bail!("neutral path has no parent: {}", dest.display());
         };
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
-        match std::fs::hard_link(&source, &dest) {
+        let placed = if compressed {
+            Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+        } else {
+            std::fs::hard_link(&source, &dest)
+        };
+        match placed {
             // Identical bytes under an identical name: another lane staged it.
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
@@ -2089,114 +1287,5 @@ mod neutral_stage_tests {
         assert_eq!(report.files[0].path, "/fix/a.js");
         assert_eq!(report.files[1].path, "/fix/a.js##base64@4");
         assert_eq!(report.files[2].path, "/t/h/a.jsx");
-    }
-}
-
-#[cfg(test)]
-#[allow(clippy::expect_used)]
-mod does_nothing_override_tests {
-    use super::{DoesNothing, does_nothing_cap, does_nothing_override};
-    use std::path::Path;
-
-    #[test]
-    fn overrides_carry_caps_and_reviewed_findings() {
-        let dn: DoesNothing = toml::from_str(
-            r#"
-            default_cap = 1
-            [[overrides]]
-            path = "artifacts/sample.c"
-            cap = 2
-            allowed_prefixes = ["micro-behaviors/os/telemetry/logging/syslog::"]
-            [[overrides]]
-            path = "artifacts/sample.js"
-            cap = 2
-            "#,
-        )
-        .expect("parse");
-        let dir = Path::new("/corpus/does-nothing");
-        let c = does_nothing_override("/corpus/does-nothing/artifacts/sample.c", dir, &dn)
-            .expect("sample.c override");
-        assert_eq!(c.cap, 2);
-        assert_eq!(c.allowed_prefixes.len(), 1);
-        let js = does_nothing_override("/corpus/does-nothing/artifacts/sample.js", dir, &dn)
-            .expect("sample.js override");
-        assert!(js.allowed_prefixes.is_empty(), "the field is optional");
-        assert_eq!(
-            does_nothing_cap("/corpus/does-nothing/artifacts/other.c", dir, &dn),
-            1
-        );
-    }
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used)]
-mod fixture_discovery_tests {
-    use super::{Target, walk_does_nothing, walk_hostile_corpus};
-    use std::collections::HashSet;
-    use std::path::Path;
-
-    fn paths(targets: &[Target], dir: &Path) -> HashSet<std::path::PathBuf> {
-        targets
-            .iter()
-            .map(|target| target.path().strip_prefix(dir).unwrap().to_path_buf())
-            .collect()
-    }
-
-    #[test]
-    fn fixture_walk_skips_hidden_directories_but_preserves_hidden_files() {
-        let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("fixtures");
-        for relative in [
-            ".claude/settings.local.json",
-            ".codex/settings.json",
-            ".git/config",
-            "artifacts/.scratch/fixture.txt",
-            "artifacts/.SRCINFO",
-            ".hidden-fixture",
-            "out/archive.tar",
-            "name with space.txt",
-            "scripts/generator.py",
-        ] {
-            let path = dir.join(relative);
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(path, "fixture").unwrap();
-        }
-        let expected: HashSet<_> = [
-            "artifacts/.SRCINFO",
-            ".hidden-fixture",
-            "out/archive.tar",
-            "name with space.txt",
-        ]
-        .into_iter()
-        .map(std::path::PathBuf::from)
-        .collect();
-        let mut targets = Vec::new();
-        walk_does_nothing(&dir, &mut targets).unwrap();
-        assert_eq!(paths(&targets, &dir), expected);
-        let mut targets = Vec::new();
-        walk_hostile_corpus(&dir, "fixture-corpus", 1, 1, &mut targets).unwrap();
-        let mut expected = expected;
-        expected.insert("scripts/generator.py".into());
-        assert_eq!(paths(&targets, &dir), expected);
-        assert!(dir.join(".claude/settings.local.json").is_file());
-    }
-
-    #[test]
-    fn fixture_walk_is_independent_of_git_state_and_admits_hidden_root() {
-        let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join(".fixtures");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("sample.local"), "fixture").unwrap();
-        let mut before = Vec::new();
-        walk_does_nothing(&dir, &mut before).unwrap();
-        // No Git process or repository is needed. Ignore rules and local
-        // metadata must not change which visible fixture files are selected.
-        std::fs::create_dir(dir.join(".git")).unwrap();
-        std::fs::write(dir.join(".git/index"), "invalid Git index").unwrap();
-        std::fs::write(root.path().join(".gitignore"), "*.local\n").unwrap();
-        let mut after = Vec::new();
-        walk_does_nothing(&dir, &mut after).unwrap();
-        assert_eq!(paths(&before, &dir), HashSet::from(["sample.local".into()]));
-        assert_eq!(paths(&after, &dir), paths(&before, &dir));
     }
 }

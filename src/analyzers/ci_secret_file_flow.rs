@@ -8,6 +8,17 @@ use std::sync::LazyLock;
 
 pub(crate) const FACT_ID: &str =
     "micro-behaviors/communications/http/upload::ci-secret-encoded-file-upload-flow";
+pub(crate) const COLLECTOR_FACT_ID: &str =
+    "micro-behaviors/communications/http/upload::ci-secret-request-collector-flow";
+/// The destination must itself be the matched request-collection service.
+pub(crate) fn is_request_collector(destination: &str) -> bool {
+    reqwest::Url::parse(destination).ok().is_some_and(|u| {
+        u.host_str()
+            .is_some_and(|host| host.eq_ignore_ascii_case("webhook.site"))
+            && u.username().is_empty()
+            && u.password().is_none()
+    })
+}
 pub(crate) struct Witness {
     pub(crate) secrets: BTreeSet<String>,
     pub(crate) source_path: String,
@@ -135,6 +146,20 @@ mod tests {
     }
     fn env() -> Value {
         serde_json::json!({"VALUE":"${{ secrets.ANY_KEY }}"})
+    }
+    #[test]
+    fn collector_host_is_bound_not_a_substring() {
+        assert!(is_request_collector("https://webhook.site/renamed-path"));
+        assert!(!is_request_collector(
+            "https://webhook.site.attacker.invalid/path"
+        ));
+        assert!(!is_request_collector(
+            "https://example.invalid/webhook.site"
+        ));
+        assert!(!is_request_collector(
+            "https://webhook.site@example.invalid/x"
+        ));
+        assert!(!is_request_collector("https://webhook.site@webhook.site/x"));
     }
     #[test]
     fn renamed_bound_chain() {

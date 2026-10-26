@@ -1467,6 +1467,10 @@ pub(crate) fn find_hostile_composites_with_too_few_notable_legs(
         crate::analyzers::ci_secret_file_flow::FACT_ID,
         Criticality::Notable,
     );
+    crit_by_id.insert(
+        crate::analyzers::ci_secret_file_flow::COLLECTOR_FACT_ID,
+        Criticality::Notable,
+    );
     let index = ReferenceIndex::new(crit_by_id.keys().copied().collect());
     let composite_by_id: HashMap<&str, &CompositeTrait> =
         composite_rules.iter().map(|c| (c.id.as_str(), c)).collect();

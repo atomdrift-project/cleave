@@ -93,7 +93,7 @@ pub fn analyze_subfile_bytes(
     // sub-analyzer's filefacts call uses the right path-based hints
     // (extension classification, etc.) without ever touching disk.
     let path = Path::new(virtual_path);
-    let report = match analyzer.analyze_input(&AnalysisInput::new(path, bytes, file_type)) {
+    let mut report = match analyzer.analyze_input(&AnalysisInput::new(path, bytes, file_type)) {
         Ok(r) => r,
         Err(e) => {
             tracing::debug!(virtual_path, error = %e, "sub-file analysis failed; skipping");
@@ -101,6 +101,11 @@ pub fn analyze_subfile_bytes(
         }
     };
 
+    // The dispatcher bypasses the top-level analysis orchestrator. Finish
+    // context on the child's own bytes before evidence gets semantic labels.
+    report.dedupe_findings();
+    let doomed = engine.rules().doomed_low_value_ids(&report.findings);
+    crate::context::capture(&mut report, bytes, file_type, &doomed);
     flatten_subreport(report, virtual_path, location_prefix, child_depth, engine)
 }
 
@@ -245,6 +250,17 @@ fn flatten_subreport(
 fn tag_findings(file: &mut FileAnalysis, location_prefix: &str) {
     for finding in &mut file.findings {
         for evidence in &mut finding.evidence {
+            // An archive-scoped leg already refers to a deeper child. Keep
+            // that provenance intact; local legs must retain their concrete
+            // offset before a decoded/embedded label replaces the location.
+            if evidence
+                .location
+                .as_deref()
+                .is_some_and(|loc| loc.starts_with("archive:"))
+            {
+                continue;
+            }
+            evidence.reanchor_offset(0);
             evidence.location = Some(match evidence.location.as_deref() {
                 Some(loc) => format!("{location_prefix}:{loc}"),
                 None => location_prefix.to_string(),

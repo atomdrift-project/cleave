@@ -6,6 +6,7 @@
 pub(crate) mod aes_payload;
 pub(crate) mod batch_self_hex;
 pub mod encoded_payload;
+pub(crate) mod fragment_gcm_pe;
 pub(crate) mod macho_chacha;
 pub(crate) mod metamorphic_graft;
 pub(crate) mod mpress;
@@ -15,6 +16,7 @@ pub(crate) mod powershell_literals;
 pub(crate) mod powershell_payloads;
 pub(crate) mod ps_to_exe;
 pub(crate) mod rc4_pe_table;
+pub(crate) mod skc3_pe;
 
 pub(crate) use aes_payload::extract_aes_payloads;
 pub(crate) use encoded_payload::extract_encoded_payloads;

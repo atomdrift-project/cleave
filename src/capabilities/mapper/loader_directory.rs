@@ -301,7 +301,28 @@ fn find_non_leaf_yaml_files(yaml_files: &[std::path::PathBuf], root: &Path) -> V
 
     let mut violations: Vec<String> = yaml_files
         .iter()
-        .filter(|file| file.parent().is_some_and(|dir| non_leaf.contains(dir)))
+        .filter(|file| {
+            let Some(dir) = file.parent() else {
+                return false;
+            };
+            if !non_leaf.contains(dir) {
+                return false;
+            }
+            // These item classes have useful observations whose predicates do
+            // not identify a subtype. Keep them at the supported ancestor,
+            // rather than inventing a miscellaneous subtype or overclaiming.
+            // This is an exact taxonomy contract, not a namespace exemption.
+            !matches!(
+                dir.strip_prefix(root).ok().and_then(Path::to_str),
+                Some(
+                    "objectives/exfiltration/stealer"
+                        | "objectives/exfiltration/stealer/credential"
+                        | "objectives/exfiltration/stealer/configuration"
+                        | "objectives/exfiltration/stealer/application-state"
+                        | "objectives/exfiltration/stealer/media"
+                )
+            )
+        })
         .map(|file| {
             file.strip_prefix(root)
                 .unwrap_or(file)
@@ -311,6 +332,26 @@ fn find_non_leaf_yaml_files(yaml_files: &[std::path::PathBuf], root: &Path) -> V
         .collect();
     violations.sort_unstable();
     violations
+}
+
+#[cfg(feature = "lint")]
+fn directory_trait_members<'a>(
+    ids: impl Iterator<Item = &'a String>,
+) -> HashMap<String, HashSet<String>> {
+    let mut members: HashMap<String, HashSet<String>> = HashMap::new();
+    for id in ids {
+        if let Some((directory, _)) = id.split_once("::") {
+            for ancestor in Path::new(directory).ancestors() {
+                if !ancestor.as_os_str().is_empty() {
+                    members
+                        .entry(ancestor.to_string_lossy().into_owned())
+                        .or_default()
+                        .insert(id.clone());
+                }
+            }
+        }
+    }
+    members
 }
 
 fn trait_local_id(id: &str) -> &str {
@@ -4042,17 +4083,16 @@ impl super::CapabilityMapper {
                 // only when the enumeration already covers all of them;
                 // short of that the advice widens the rule, so the check needs the
                 // directory's size as well as the reference count.
-                let mut dir_sizes: std::collections::HashMap<String, usize> =
-                    std::collections::HashMap::new();
-                for id in trait_definitions
+                let dir_members = directory_trait_members(
+                    trait_definitions
+                        .iter()
+                        .map(|t| &t.id)
+                        .chain(composite_rules.iter().map(|c| &c.id)),
+                );
+                let dir_sizes = dir_members
                     .iter()
-                    .map(|t| &t.id)
-                    .chain(composite_rules.iter().map(|c| &c.id))
-                {
-                    if let Some(idx) = id.find("::") {
-                        *dir_sizes.entry(id[..idx].to_string()).or_default() += 1;
-                    }
-                }
+                    .map(|(dir, members)| (dir.clone(), members.len()))
+                    .collect();
                 // Each rule is checked on its own, so the rules are checked in
                 // parallel here and in the three checks below; `collect` keeps
                 // their order.
@@ -4110,19 +4150,8 @@ impl super::CapabilityMapper {
                     crate::validation_controls::is_validator_disabled("directory-alias-composite");
                 if !disable_many_directory_references || !disable_dir_alias_composite {
                     // A positive directory reference includes composites too. An
-                    // atomic-only inventory can recommend a widening replacement.
-                    for id in trait_definitions
-                        .iter()
-                        .map(|t| &t.id)
-                        .chain(composite_rules.iter().map(|c| &c.id))
-                    {
-                        if let Some(idx) = id.find("::") {
-                            dir_traits
-                                .entry(id[..idx].to_string())
-                                .or_default()
-                                .insert(id.clone());
-                        }
-                    }
+                    // atomic-only or direct-child inventory widens the rule.
+                    dir_traits = dir_members;
                 }
                 let mut many_dir_ref_clauses = Vec::new();
                 if !disable_many_directory_references {
@@ -6390,6 +6419,50 @@ traits:
         assert_eq!(
             find_non_leaf_yaml_files(&files, Path::new("traits")),
             ["a/x.yaml", "top.yaml"]
+        );
+    }
+
+    #[cfg(feature = "lint")]
+    #[test]
+    fn directory_inventory_includes_descendants_without_prefix_siblings() {
+        let ids: Vec<String> = ["item::broad", "item/key::specific", "item-else::sibling"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let members = super::directory_trait_members(ids.iter());
+        assert_eq!(members["item"].len(), 2);
+        assert!(members["item"].contains("item::broad"));
+        assert!(members["item"].contains("item/key::specific"));
+        assert_eq!(members["item/key"].len(), 1);
+        assert_eq!(members["item-else"].len(), 1);
+    }
+
+    #[test]
+    fn reviewed_stolen_item_ancestors_allow_unspecialized_observations() {
+        let root = Path::new("traits");
+        let files: Vec<PathBuf> = [
+            "objectives/exfiltration/stealer/broad.yaml",
+            "objectives/exfiltration/stealer/credential/broad.yaml",
+            "objectives/exfiltration/stealer/credential/key/specific.yaml",
+            "objectives/exfiltration/stealer/configuration/broad.yaml",
+            "objectives/exfiltration/stealer/configuration/environment/specific.yaml",
+            "objectives/exfiltration/stealer/application-state/broad.yaml",
+            "objectives/exfiltration/stealer/application-state/cookie/specific.yaml",
+            "objectives/exfiltration/stealer/media/broad.yaml",
+            "objectives/exfiltration/stealer/media/image/specific.yaml",
+            "objectives/exfiltration/stealer/media/image/nested/specific.yaml",
+            "micro-behaviors/fs/path/broad.yaml",
+            "micro-behaviors/fs/path/credential/specific.yaml",
+        ]
+        .into_iter()
+        .map(|path| root.join(path))
+        .collect();
+        assert_eq!(
+            find_non_leaf_yaml_files(&files, root),
+            [
+                "micro-behaviors/fs/path/broad.yaml",
+                "objectives/exfiltration/stealer/media/image/specific.yaml",
+            ]
         );
     }
 

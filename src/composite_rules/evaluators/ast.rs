@@ -5,7 +5,9 @@
 //! - Tree-sitter query execution
 //! - Safe AST traversal with depth limits
 
-use super::ast_gate::{NodeTextIndex, RequiredLiterals, RequiredNodes, RequiredSubqueries};
+use super::ast_gate::{
+    DeferredPredicates, NodeTextIndex, RequiredLiterals, RequiredNodes, RequiredSubqueries,
+};
 use super::{build_regex, truncate_evidence};
 use crate::analyzers::ast_walker::{AST_QUERY_CPU_BUDGET, thread_cpu_time};
 use crate::composite_rules::ast_kinds::map_kind_to_node_types;
@@ -20,6 +22,24 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, LazyLock};
 use std::time::Instant;
 use streaming_iterator::StreamingIterator;
+
+/// Whole-command predicates belong after structural matching. Running a
+/// pipeline/command regex as soon as its root is visited pays regex costs on
+/// candidates whose command names/arguments later reject the pattern. Scalar
+/// captures retain early pruning; QueryMatches checks every text predicate on
+/// each completed match in both the independent and combined cursor paths.
+fn capture_satisfies_early_predicates(
+    query: &tree_sitter::Query,
+    deferred: &DeferredPredicates,
+    pattern: usize,
+    capture: u32,
+    node: tree_sitter::Node<'_>,
+    previous: &[tree_sitter::QueryCapture<'_>],
+    source: &[u8],
+) -> bool {
+    deferred.contains(pattern, capture)
+        || query.capture_satisfies_match_predicates(pattern, capture, node, previous, source)
+}
 
 /// Maximum number of compiled tree-sitter queries to cache.
 /// Process-wide compiled-query cache, keyed by (FileType, query_string).
@@ -70,6 +90,7 @@ struct CompiledAstQuery {
     literals: RequiredLiterals,
     nodes: RequiredNodes,
     subqueries: RequiredSubqueries,
+    deferred: DeferredPredicates,
 }
 
 impl CompiledAstQuery {
@@ -82,7 +103,7 @@ impl CompiledAstQuery {
         deadline: Option<Instant>,
         cancellation: Option<&AtomicBool>,
     ) {
-        if source.len() >= 256 * 1024
+        if source.len() >= 64 * 1024
             && let Some(index) = index
         {
             self.subqueries
@@ -102,6 +123,7 @@ impl CompiledAstQuery {
 /// is the index into that list for combined-query pattern `i`.
 struct CombinedAstQuery {
     query: Arc<tree_sitter::Query>,
+    deferred: DeferredPredicates,
     pattern_to_query: Vec<usize>,
 }
 
@@ -485,6 +507,63 @@ pub(super) fn eval_ast_query_with_budget<'a>(
     ctx: &EvaluationContext<'a>,
     cpu_budget: std::time::Duration,
 ) -> ConditionResult {
+    let before = crate::validation_performance::ast_cost_snapshot();
+    let result = eval_ast_query_once(query_str, ctx, cpu_budget);
+    if let (Some(before), Some(after)) =
+        (before, crate::validation_performance::ast_cost_snapshot())
+    {
+        let original = after.saturating_sub(before);
+        let bounded = |r: &ConditionResult| {
+            r.warnings.iter().any(|warning| {
+                matches!(
+                    warning,
+                    AnalysisWarning::AstTooDeep { max_depth: 0 }
+                        | AnalysisWarning::AstQueryLimited { .. }
+                )
+            })
+        };
+        let fence = crate::validation_performance::ast_confirmation_fence(&ctx.report.target.path);
+        if !original.is_zero()
+            && !bounded(&result)
+            && !ctx.is_cancelled()
+            && fence.is_none_or(|fence| original > fence)
+        {
+            let mut best = original;
+            // Seed the first peers with three observations. Later queries only
+            // need confirmation when they exceed the current relative fence.
+            let attempts = if fence.is_some() { 4 } else { 2 };
+            for _ in 0..attempts {
+                let probe = crate::validation_performance::AstProbe::begin();
+                let repeated = eval_ast_query_once(query_str, ctx, cpu_budget);
+                let measured = probe.cost();
+                drop(probe);
+                if bounded(&repeated)
+                    || repeated.matched != result.matched
+                    || repeated.match_count != result.match_count
+                    || ctx.is_cancelled()
+                {
+                    // Incomplete or inconsistent probes cannot certify a pass.
+                    best = original;
+                    break;
+                }
+                if let Some(cost) = measured {
+                    best = best.min(cost);
+                }
+                if fence.is_some_and(|fence| best <= fence) {
+                    break;
+                }
+            }
+            crate::validation_performance::confirm_ast_cost(original, best);
+        }
+    }
+    result
+}
+
+fn eval_ast_query_once<'a>(
+    query_str: &str,
+    ctx: &EvaluationContext<'a>,
+    cpu_budget: std::time::Duration,
+) -> ConditionResult {
     if let Some(cache) = ctx.ast_query_cache
         && let Some(cached) = cache.get(query_str)
     {
@@ -521,6 +600,13 @@ pub(super) fn eval_ast_query_with_budget<'a>(
     // Include necessary-child pruning in measured execution cost. Validation
     // uses the same semantics-preserving gate as ordinary scans, while still
     // executing queries independently rather than reusing a shared batch.
+    // Normal batches usually narrow a private query copy. Independent measured
+    // validation must also isolate regex cache pools: shared Regex instances
+    // contend on tiny inputs and charge that contention as AST execution.
+    // deep_clone reuses compiled regex code while giving caches private pools;
+    // copying stays outside cursor timing and inside the whole-rule deadline.
+    let measured_query =
+        crate::validation_performance::active().then(|| compiled.query.deep_clone());
     let _execution_timer = crate::validation_performance::ast_execution_started();
     if RequiredSubqueries::enabled() {
         let mut enabled = vec![true; compiled.query.pattern_count()];
@@ -536,7 +622,7 @@ pub(super) fn eval_ast_query_with_budget<'a>(
             return ConditionResult::no_match();
         }
     }
-    let query = &compiled.query;
+    let query = measured_query.as_ref().unwrap_or(&compiled.query);
 
     // Execute the query with safety limits
     let mut query_cursor = tree_sitter::QueryCursor::new();
@@ -583,7 +669,9 @@ pub(super) fn eval_ast_query_with_budget<'a>(
          capture,
          node: tree_sitter::Node<'_>,
          previous: &[tree_sitter::QueryCapture<'_>]| {
-            query.capture_satisfies_match_predicates(
+            capture_satisfies_early_predicates(
+                query,
+                &compiled.deferred,
                 pattern,
                 capture,
                 node,
@@ -719,8 +807,10 @@ fn cached_ast_query(
         } else {
             RequiredSubqueries::default()
         };
+        let deferred = DeferredPredicates::of(&query, query_str);
         Arc::new(CompiledAstQuery {
             query,
+            deferred,
             literals,
             nodes,
             subqueries,
@@ -920,7 +1010,9 @@ pub(crate) fn batch_ast_queries_with_index(
                 if query.pattern_count() != expected {
                     return None;
                 }
+                let deferred = DeferredPredicates::of(&query, &combined_source);
                 Some(Arc::new(CombinedAstQuery {
+                    deferred,
                     query: Arc::new(query),
                     pattern_to_query,
                 }))
@@ -1018,7 +1110,9 @@ pub(crate) fn batch_ast_queries_with_index(
          capture,
          node: tree_sitter::Node<'_>,
          previous: &[tree_sitter::QueryCapture<'_>]| {
-            query.capture_satisfies_match_predicates(
+            capture_satisfies_early_predicates(
+                query,
+                &combined.deferred,
                 pattern,
                 capture,
                 node,
@@ -1232,6 +1326,7 @@ mod cache_lock_tests {
             literals: RequiredLiterals::of(&query, pattern),
             nodes: RequiredNodes::of(&language, &query, pattern),
             subqueries: RequiredSubqueries::default(),
+            deferred: DeferredPredicates::of(&query, pattern),
             query,
         });
         QUERY_CACHE.write().insert(key, Some(compiled.clone()));

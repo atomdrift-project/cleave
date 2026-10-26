@@ -128,7 +128,36 @@ fn decoded_layer_findings(report: &AnalysisReport) -> Vec<Finding> {
         .files
         .iter()
         .filter(|file| file.path.starts_with(&prefix))
-        .flat_map(|file| file.findings.iter().cloned())
+        .flat_map(|file| {
+            file.findings.iter().cloned().map(|mut finding| {
+                // The subfile dispatcher uses decoded@/embedded@ labels whose
+                // offsets belong to its child buffer. Borrowed copies need
+                // member provenance; existing encoding_chain locations already
+                // have their own host-relative scope and must stay unchanged.
+                let dispatched = |location: Option<&str>| {
+                    location.is_some_and(|loc| {
+                        loc.starts_with("decoded@") || loc.starts_with("embedded@")
+                    })
+                };
+                if finding
+                    .evidence
+                    .iter()
+                    .any(|e| dispatched(e.location.as_deref()))
+                {
+                    finding.precomputed_spans = None;
+                    for evidence in &mut finding.evidence {
+                        if dispatched(evidence.location.as_deref()) {
+                            evidence.location = Some(format!(
+                                "archive:{}:{}",
+                                file.path,
+                                evidence.location.as_deref().unwrap_or_default()
+                            ));
+                        }
+                    }
+                }
+                finding
+            })
+        })
         .collect()
 }
 

@@ -492,6 +492,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 lower_name.as_str(),
                 "all"
                     | "*"
+                    | "archives"
                     | "binaries"
                     | "scripts"
                     | "source"
@@ -508,6 +509,9 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
 
             let variants = match lower_name.as_str() {
                 "all" | "*" => vec![],
+                // Explicit archive-family scope. This is an ordinary list of
+                // concrete types; it does not grant an applies_to bypass.
+                "archives" => RuleFileType::archive_family_types().to_vec(),
                 // Groups
                 "binaries" => vec![
                     RuleFileType::Elf,
@@ -2571,9 +2575,12 @@ mod tests {
     #[test]
     fn default_file_type_warnings_names_unknown_default_entries() {
         let path = std::path::Path::new("dir/x.yaml");
-        let w = super::default_file_type_warnings(&defaults_for(&["archives", "zip"]), path);
+        let w = super::default_file_type_warnings(&defaults_for(&["archive-typo", "zip"]), path);
         assert_eq!(w.len(), 1, "{w:?}");
-        assert!(w[0].starts_with("Unknown file type: 'archives'"), "{w:?}");
+        assert!(
+            w[0].starts_with("Unknown file type: 'archive-typo'"),
+            "{w:?}"
+        );
         assert!(w[0].contains("'defaults: for:' in dir/x.yaml"), "{w:?}");
 
         // Exclusions and comma-joined entries are checked too.
@@ -2596,16 +2603,17 @@ mod tests {
 
     #[test]
     fn inherited_unknown_default_is_not_repeated_per_rule() {
-        let defaults = defaults_for(&["archives", "zip"]);
+        let defaults = defaults_for(&["archive-typo", "zip"]);
         let (types, w) = trait_warnings(&defaults, None);
         assert_eq!(types, vec![RuleFileType::Zip]);
         assert!(w.is_empty(), "{w:?}");
 
         // A rule's own unknown name is still reported against the rule.
-        let (_, w) = trait_warnings(&defaults, Some(vec!["archives".into(), "zip".into()]));
+        let (_, w) = trait_warnings(&defaults, Some(vec!["archive-typo".into(), "zip".into()]));
         assert!(
             w.iter()
-                .any(|w| w.starts_with("Unknown file type: 'archives'") && w.contains("trait 't'")),
+                .any(|w| w.starts_with("Unknown file type: 'archive-typo'")
+                    && w.contains("trait 't'")),
             "{w:?}"
         );
     }
@@ -2613,7 +2621,7 @@ mod tests {
     #[test]
     fn empty_resolved_for_is_reported() {
         // Inherited default that resolves to nothing.
-        let (types, w) = trait_warnings(&defaults_for(&["archives"]), None);
+        let (types, w) = trait_warnings(&defaults_for(&["archive-typo"]), None);
         assert!(types.is_empty());
         assert!(
             w.iter()
@@ -2622,7 +2630,7 @@ mod tests {
         );
 
         // The rule's own list, including one excluded away to nothing.
-        for own in [vec!["archives"], vec!["python", "-python"]] {
+        for own in [vec!["archive-typo"], vec!["python", "-python"]] {
             let own = own.into_iter().map(String::from).collect();
             let (types, w) = trait_warnings(&defaults_for(&["zip"]), Some(own));
             assert!(types.is_empty());
@@ -2657,7 +2665,7 @@ mod tests {
         let mut warnings = Vec::new();
         let rule = super::apply_composite_defaults(
             raw,
-            &defaults_for(&["archives"]),
+            &defaults_for(&["archive-typo"]),
             &mut warnings,
             std::path::Path::new("x.yaml"),
         );
@@ -2676,16 +2684,23 @@ mod tests {
     }
 
     #[test]
-    fn test_archives_group_name_is_banned() {
-        // "archives" used to expand to every #[archive]-tagged type; it is
-        // banned as a `for:` spelling (like the old "archive" bucket) so
-        // authors name concrete types instead. It must fall through to the
-        // unknown-type warning, not silently resolve to the archive family.
+    fn test_archive_family_group_preserves_explicit_exclusions() {
         let mut warnings = Vec::new();
-        let result = parse_file_types(&["archives".to_string()], &mut warnings);
-
-        assert!(result.types.is_empty());
-        assert!(!warnings.is_empty(), "expected an unknown-type warning");
+        let parsed = parse_file_types(&["archives".into(), "-zip".into()], &mut warnings);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let expected: std::collections::HashSet<_> = RuleFileType::archive_family_types()
+            .iter()
+            .copied()
+            .filter(|t| *t != RuleFileType::Zip)
+            .collect();
+        assert_eq!(
+            parsed
+                .types
+                .into_iter()
+                .collect::<std::collections::HashSet<_>>(),
+            expected
+        );
+        assert!(parsed.from_groups);
     }
 
     #[test]

@@ -100,17 +100,16 @@ impl DoomedSkipIndex {
                 }
             }
 
-            // A fixed union has alternative partners, never individually
-            // mandatory members. Keep these candidates alive for evaluation.
+            // A directory can contribute multiple matches, so its peers are
+            // not necessarily mandatory even when needs equals the leg count.
             let multi_any = rule.any.as_ref().is_some_and(|conds| {
                 conds.iter().any(|c| {
-                    matches!(c, Condition::TraitSet { .. })
-                        || matches!(c,
+                    matches!(c,
                     Condition::Trait { id } if id.contains('/') && !id.contains("::"))
                 })
             });
             for cond in rule.all.iter().flatten().chain(rule.any.iter().flatten()) {
-                if matches!(cond, Condition::TraitSet { .. }) || multi_any {
+                if multi_any {
                     for id in cond.trait_references() {
                         mark_never(id);
                     }

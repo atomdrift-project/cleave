@@ -317,6 +317,7 @@ fn find_non_leaf_yaml_files(yaml_files: &[std::path::PathBuf], root: &Path) -> V
                 Some(
                     "objectives/exfiltration/stealer"
                         | "objectives/exfiltration/stealer/credential"
+                        | "objectives/exfiltration/stealer/credential/value"
                         | "objectives/exfiltration/stealer/configuration"
                         | "objectives/exfiltration/stealer/application-state"
                         | "objectives/exfiltration/stealer/media"
@@ -6352,13 +6353,13 @@ traits:
         );
     }
 
-    /// A banned name in `defaults: for:` is reported once for the file, under
+    /// An unknown name in `defaults: for:` is reported once for the file, under
     /// the same validator as a rule's own `for:`, even when every rule
     /// overrides `for:` and nothing inherits the default.
     #[test]
     fn unknown_default_for_is_reported_once_per_file() {
         let issues = file_type_issues(
-            "defaults:\n  for: [archives, zip]\n  platforms: [linux]\n\
+            "defaults:\n  for: [archive-typo, zip]\n  platforms: [linux]\n\
              traits:\n\
              - {id: a, desc: first trait here, for: [zip], if: {type: text, substr: aaaa}}\n\
              - {id: b, desc: second trait here, for: [zip], if: {type: text, substr: bbbb}}\n",
@@ -6366,7 +6367,7 @@ traits:
         assert_eq!(issues.len(), 1, "{issues:?}");
         let (id, message) = &issues[0];
         assert_eq!(*id, "unknown-file-type");
-        assert!(message.contains("'archives'"), "{message}");
+        assert!(message.contains("'archive-typo'"), "{message}");
         assert!(message.contains("defaults: for:"), "{message}");
         assert!(message.contains("traits/x/y.yaml"), "{message}");
     }
@@ -6376,7 +6377,7 @@ traits:
     #[test]
     fn default_for_resolving_to_nothing_is_empty_file_type() {
         let issues = file_type_issues(
-            "defaults:\n  for: [archives]\n  platforms: [linux]\n\
+            "defaults:\n  for: [archive-typo]\n  platforms: [linux]\n\
              traits:\n\
              - {id: a, desc: first trait here, if: {type: text, substr: aaaa}}\n\
              - {id: b, desc: second trait here, if: {type: text, substr: bbbb}}\n\
@@ -6443,7 +6444,8 @@ traits:
         let files: Vec<PathBuf> = [
             "objectives/exfiltration/stealer/broad.yaml",
             "objectives/exfiltration/stealer/credential/broad.yaml",
-            "objectives/exfiltration/stealer/credential/key/specific.yaml",
+            "objectives/exfiltration/stealer/credential/value/broad.yaml",
+            "objectives/exfiltration/stealer/credential/value/key/specific.yaml",
             "objectives/exfiltration/stealer/configuration/broad.yaml",
             "objectives/exfiltration/stealer/configuration/environment/specific.yaml",
             "objectives/exfiltration/stealer/application-state/broad.yaml",

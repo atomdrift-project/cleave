@@ -182,33 +182,6 @@ pub(crate) fn eval_basename(
     )
 }
 
-/// Evaluate a fixed selector without an intermediate composite finding. Input
-/// order and duplicate IDs do not change membership or threshold contribution.
-pub(crate) fn eval_trait_set(ids: &[String], ctx: &EvaluationContext<'_>) -> ConditionResult {
-    let selected: rustc_hash::FxHashSet<&str> = ids.iter().map(String::as_str).collect();
-    let matching: Vec<_> = ctx
-        .findings
-        .iter()
-        .filter(|f| selected.contains(f.id.as_str()) && ctx.origin_allows(&f.id))
-        .collect();
-    if matching.is_empty() {
-        return ConditionResult::no_match();
-    }
-    let evidence: Vec<_> = matching
-        .iter()
-        .flat_map(|f| f.evidence.iter().cloned())
-        .take(MAX_EVIDENCE_PER_TRAIT)
-        .collect();
-    ConditionResult {
-        matched: true,
-        match_count: evidence.len(),
-        evidence,
-        warnings: Vec::new(),
-        precision: 1.0,
-        matched_trait_ids: matching.iter().map(|f| f.id.clone()).collect(),
-    }
-}
-
 /// Final path component, treating `/`, `\`, and the archive-member separator
 /// `!` as boundaries.
 ///

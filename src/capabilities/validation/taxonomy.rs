@@ -986,7 +986,7 @@ fn composite_condition_lists(rule: &CompositeTrait) -> Vec<(&'static str, &[Cond
 /// `Condition` variant forces a decision here.
 fn condition_kind(cond: &Condition) -> &'static str {
     match cond {
-        Condition::Trait { .. } | Condition::TraitSet { .. } => "trait",
+        Condition::Trait { .. } => "trait",
         Condition::Symbol(_) => "symbol",
         Condition::Text(_) => "text",
         Condition::Comment(_) => "comment",
@@ -2815,7 +2815,7 @@ fn filetype_cap_for_condition(cond: &Condition) -> usize {
         // its own — it delegates to the referenced trait, which is capped per its
         // own matcher. The wrapper's `for:` is only an evaluation gate, so it is
         // exempt from the file-type cap.
-        Condition::Trait { .. } | Condition::TraitSet { .. } => usize::MAX,
+        Condition::Trait { .. } => usize::MAX,
         Condition::Metrics(MetricsQuery { .. }) => BROAD_FILETYPE_THRESHOLD_METRICS,
         // Full-path matchers use the dedicated path cap; `basename`/`dirname`-
         // scoped paths are filename-bounded and get the basename cap. A path
@@ -3313,7 +3313,18 @@ pub(crate) fn find_broad_filetype_traits(
         .iter()
         .filter_map(|t| {
             let count = effective_filetype_count(t);
-            let cap = filetype_cap_for_condition(&t.r#if);
+            // One archive producer supplies the same structural member fields
+            // for every container format. Scope follows that input contract,
+            // not the directory where a rule happens to live. Non-archive types
+            // or unrelated fact paths retain the ordinary value-query cap.
+            let cap = if matches!(&t.r#if, Condition::Kv(q) if q.path.starts_with("archive."))
+                && !t.r#for.is_empty()
+                && t.r#for.iter().all(FileType::is_archive)
+            {
+                FileType::archive_family_types().len()
+            } else {
+                filetype_cap_for_condition(&t.r#if)
+            };
             if count <= cap {
                 return None;
             }

@@ -1981,7 +1981,7 @@ checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 [[package]]
 name = "filefacts"
 version = "2.0.1"
-source = "git+https://github.com/atomdrift-project/filefacts.git#5946b7fa70681d81ba515d15d20f27597e9a95de"
+source = "git+https://github.com/atomdrift-project/filefacts.git#d4294371a4e63ecb2607c7f318bbf73752ff9cea"
 dependencies = [
  "aho-corasick",
  "cab",
@@ -3222,7 +3222,7 @@ version = "0.6.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57804b2c9b69967f1536a56f86297e367a33b19e98852ed624b84551cdbc0d90"
 dependencies = [
- "rustix 1.1.5",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -4605,9 +4605,9 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "1.1.5"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
+checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
  "bitflags 2.13.2",
  "errno",
@@ -5240,7 +5240,7 @@ dependencies = [
 [[package]]
 name = "stng"
 version = "2.1.1"
-source = "git+https://github.com/atomdrift-project/stng.git#12252770237ca3e5d0487b6c4b3a56e75e3e6435"
+source = "git+https://github.com/atomdrift-project/stng.git#7c3d704b971754d120e2f692cfb6f2a258dae88a"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5272,7 +5272,7 @@ dependencies = [
 [[package]]
 name = "stng-process"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/stng.git#12252770237ca3e5d0487b6c4b3a56e75e3e6435"
+source = "git+https://github.com/atomdrift-project/stng.git#7c3d704b971754d120e2f692cfb6f2a258dae88a"
 dependencies = [
  "libc",
 ]
@@ -5396,7 +5396,7 @@ dependencies = [
  "fastrand",
  "getrandom 0.4.3",
  "once_cell",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "windows-sys 0.61.2",
 ]
 
@@ -5415,7 +5415,7 @@ version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "windows-sys 0.61.2",
 ]
 
@@ -5871,7 +5871,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#5946b7fa70681d81ba515d15d20f27597e9a95de"
+source = "git+https://github.com/atomdrift-project/filefacts.git#d4294371a4e63ecb2607c7f318bbf73752ff9cea"
 dependencies = [
  "cc",
  "tree-sitter",
@@ -6464,7 +6464,7 @@ dependencies = [
  "once_cell",
  "postcard",
  "pulley-interpreter",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "serde",
  "serde_derive",
  "smallvec",
@@ -6563,7 +6563,7 @@ checksum = "b54c8c5b02ea985149a90f917e1761af99734c6c27e6d7fdd5b6f69fc1db3950"
 dependencies = [
  "cc",
  "libc",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "wasmtime-environ",
  "wasmtime-internal-versioned-export-macros",
  "windows-sys 0.61.2",
@@ -7025,7 +7025,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
 dependencies = [
  "libc",
- "rustix 1.1.5",
+ "rustix 1.1.6",
 ]
 
 [[package]]

@@ -149,3 +149,81 @@ fn artifact_subject_roots_are_admitted_with_narrow_platform_contracts() {
         }
     }
 }
+
+#[test]
+fn mixed_credential_values_can_occupy_the_item_ancestor_without_a_larger_budget() {
+    let temp = tempfile::tempdir().unwrap();
+    for (count, accepted) in [(100, true), (101, false)] {
+        write_catalog(
+            temp.path(),
+            "objectives/exfiltration/stealer/credential/value",
+            count,
+        );
+        write_catalog(
+            temp.path(),
+            "objectives/exfiltration/stealer/credential/value/key",
+            1,
+        );
+        let output = Command::new(env!("CARGO_BIN_EXE_cleave"))
+            .args([
+                "--traits-dir",
+                temp.path().to_str().unwrap(),
+                "validate",
+                "--exclude",
+                "validation",
+            ])
+            .env("CLEAVE_SKIP_CACHE", "1")
+            .env_remove("CLEAVE_VALIDATE_SOFT")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.success(), accepted, "{stderr}");
+        assert!(!stderr.contains("policy/leaf-yaml"), "{stderr}");
+        if !accepted {
+            assert!(stderr.contains("policy/oversized-dir"), "{stderr}");
+        }
+    }
+}
+
+#[test]
+fn archive_family_scope_follows_the_shared_fact_producer() {
+    for (path, extra, accepted) in [
+        ("archive.members[*].path", "", true),
+        ("archive.members[*].path", ", -zip", true),
+        ("archive.members[*].path", ", pe", false),
+        ("unrelated.name", "", false),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let leaf = temp.path().join("metadata/archive/member/path");
+        std::fs::create_dir_all(&leaf).unwrap();
+        std::fs::create_dir_all(temp.path().join("testdata/baseline")).unwrap();
+        std::fs::write(
+            temp.path().join("testdata/baseline/plain.txt"),
+            "ordinary input",
+        )
+        .unwrap();
+        std::fs::write(leaf.join("scope.yaml"), format!(
+            "defaults:\n  platforms: [unix, windows, android]\n  for: [archives{extra}]\n  crit: notable\ntraits:\n- id: recorded-path\n  desc: Recorded archive member path\n  if: {{type: value, path: '{path}', exact: sentinel}}\n"
+        )).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_cleave"))
+            .args([
+                "--traits-dir",
+                temp.path().to_str().unwrap(),
+                "validate",
+                "--exclude",
+                "validation",
+            ])
+            .env("CLEAVE_SKIP_CACHE", "1")
+            .env_remove("CLEAVE_VALIDATE_SOFT")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // The CLI currently reports broad-scope diagnostics without changing
+        // its exit status when validation is excluded, so inspect the report.
+        assert_eq!(
+            stderr.contains("traits exceed the file-type cap"),
+            !accepted,
+            "{path} {extra}: {stderr}"
+        );
+    }
+}

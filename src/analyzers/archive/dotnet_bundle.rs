@@ -341,7 +341,7 @@ mod tests {
             limited
                 .findings
                 .iter()
-                .any(|finding| finding.id == "metadata/file/archive::partial-extraction")
+                .any(|finding| finding.id == "metadata/archive/parsing::partial-extraction")
         );
     }
 }

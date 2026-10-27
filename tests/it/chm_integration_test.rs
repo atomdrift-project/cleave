@@ -243,7 +243,7 @@ fn run_cleave_json(path: &Path) -> Value {
     let mut bin = assert_cmd::cargo_bin_cmd!("cleave");
     let output = bin
         .env("CLEAVE_SKIP_YARA", "1")
-        .args(["--json", "--full-facts", "analyze", path.to_str().unwrap()])
+        .args(["--json", "analyze", path.to_str().unwrap()])
         .output()
         .expect("cleave run");
     assert!(

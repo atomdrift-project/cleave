@@ -523,16 +523,20 @@ pub(super) fn eval_ast_query_with_budget<'a>(
             })
         };
         let fence = crate::validation_performance::ast_confirmation_fence(&ctx.report.target.path);
-        if !original.is_zero()
-            && !bounded(&result)
-            && !ctx.is_cancelled()
-            && fence.is_none_or(|fence| original > fence)
-        {
+        if !original.is_zero() && !bounded(&result) && !ctx.is_cancelled() {
             let mut best = original;
-            // Seed the first peers with three observations. Later queries only
-            // need confirmation when they exceed the current relative fence.
-            let attempts = if fence.is_some() { 4 } else { 2 };
-            for _ in 0..attempts {
+            // Every peer needs confirmed execution cost: the final median can
+            // fall as later queries arrive, making an unconfirmed observation
+            // below the current fence look like an outlier at session end.
+            // Keep three observations for all queries and allow extra probes
+            // for candidates already above the running fence. Normal scans
+            // never enter this validation-only path.
+            let attempts = if fence.is_some_and(|fence| original > fence) {
+                4
+            } else {
+                2
+            };
+            for attempt in 0..attempts {
                 let probe = crate::validation_performance::AstProbe::begin();
                 let repeated = eval_ast_query_once(query_str, ctx, cpu_budget);
                 let measured = probe.cost();
@@ -549,7 +553,7 @@ pub(super) fn eval_ast_query_with_budget<'a>(
                 if let Some(cost) = measured {
                     best = best.min(cost);
                 }
-                if fence.is_some_and(|fence| best <= fence) {
+                if attempt >= 1 && fence.is_some_and(|fence| best <= fence) {
                     break;
                 }
             }

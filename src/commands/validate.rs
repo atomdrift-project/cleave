@@ -763,10 +763,21 @@ impl NeutralStage {
             TESTDATA.to_string(),
             traits_dir.to_string_lossy().to_lowercase(),
         ];
-        let dir = tempfile::Builder::new()
-            .prefix("cleave-validate-")
-            .tempdir()
-            .context("creating neutral fixture directory")?;
+        // The random suffix can itself contain `qa` or another test-path
+        // marker. Such a stage suppresses unrelated findings in every fixture.
+        let mut dir = None;
+        for _ in 0..64 {
+            let candidate = tempfile::Builder::new()
+                .prefix("cleave-validate-")
+                .tempdir()
+                .context("creating neutral fixture directory")?;
+            if !neutral_test_path(candidate.path())? {
+                dir = Some(candidate);
+                break;
+            }
+        }
+        let dir =
+            dir.context("could not create a fixture stage without a test-directory marker")?;
         // A stage that is itself tainted would trip the guard on every fixture.
         let root = dir.path().to_string_lossy().to_lowercase();
         if let Some(bad) = forbidden.iter().find(|f| root.contains(f.as_str())) {
@@ -899,7 +910,7 @@ impl NeutralStage {
     }
 }
 
-/// `<first 16 hex of SHA-256(content)>/<basename>`: the only path a fixture
+/// `<escaped first 16 hex of SHA-256(content)>/<basename>`: the only path a fixture
 /// is analyzed under, relative to the stage.
 fn neutral_relative_path(fixture: &Path, content: &[u8]) -> Result<PathBuf> {
     use sha2::Digest;
@@ -907,7 +918,21 @@ fn neutral_relative_path(fixture: &Path, content: &[u8]) -> Result<PathBuf> {
         .file_name()
         .with_context(|| format!("fixture has no file name: {}", fixture.display()))?;
     let digest = sha2::Sha256::digest(content);
-    Ok(Path::new(&hex::encode(&digest[..8])).join(name))
+    // `e2e` is a test-directory marker but also valid hexadecimal. Replace
+    // it with a spelling that cannot occur in a hex digest; this stays
+    // deterministic and collision-free for the same truncated digest.
+    let directory = hex::encode(&digest[..8]).replace("e2e", "e2g");
+    Ok(Path::new(&directory).join(name))
+}
+
+fn neutral_test_path(path: &Path) -> Result<bool> {
+    static RE: std::sync::OnceLock<std::result::Result<regex::Regex, regex::Error>> =
+        std::sync::OnceLock::new();
+    let pattern = RE.get_or_init(|| {
+        regex::Regex::new(r"(?i)(^|\W)\w*?(test|spec|e2e|qa|mock|fuzz|harness|vector)[-\w]*[\\/]")
+    });
+    let pattern = pattern.as_ref().context("compiling test-directory regex")?;
+    Ok(pattern.is_match(&format!("{}/", path.display())))
 }
 
 /// The file an archive member or decoded fragment path belongs to: everything
@@ -1117,7 +1142,8 @@ mod neutral_stage_tests {
         let parts: Vec<_> = rel.iter().map(|c| c.to_str().unwrap()).collect();
         assert_eq!(parts.len(), 2, "{rel:?}");
         assert_eq!(parts[0].len(), 16);
-        assert!(parts[0].bytes().all(|b| b.is_ascii_hexdigit()));
+        assert!(parts[0].bytes().all(|b| b.is_ascii_hexdigit() || b == b'g'));
+        assert!(!parts[0].contains("e2e"));
         assert_eq!(parts[1], "action.yml");
         for dir in [
             "testdata",
@@ -1138,6 +1164,25 @@ mod neutral_stage_tests {
             rel,
             neutral_relative_path(fixture, b"on: pull_request\n").unwrap()
         );
+    }
+
+    #[test]
+    fn neutral_stage_rejects_random_test_directory_markers() {
+        assert!(super::neutral_test_path(Path::new("/tmp/cleave-validate-qa1")).unwrap());
+        assert!(super::neutral_test_path(Path::new("/tmp/cleave-validate-e2e")).unwrap());
+        assert!(!super::neutral_test_path(Path::new("/tmp/cleave-validate-clean")).unwrap());
+    }
+
+    #[test]
+    fn digest_stage_directory_cannot_be_an_e2e_path() {
+        use sha2::{Digest, Sha256};
+        let data = (0u32..100_000)
+            .map(u32::to_le_bytes)
+            .find(|b| hex::encode(&Sha256::digest(b)[..8]).contains("e2e"))
+            .unwrap();
+        let rel = neutral_relative_path(Path::new("fixture.py"), &data).unwrap();
+        assert!(!super::neutral_test_path(&rel).unwrap());
+        assert!(!rel.to_string_lossy().contains("e2e"));
     }
 
     #[test]

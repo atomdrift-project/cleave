@@ -135,6 +135,7 @@ sevenz-rust = { version = "0.6", features = ["aes256"] }
 apple-xar = { version = "0.20", default-features = false }
 tar = "0.4"
 flate2 = "1.1"
+crc32fast = "1.5"
 bzip2 = "0.6"
 xz2 = "0.1"
 ar = "0.9"

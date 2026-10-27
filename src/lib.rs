@@ -1794,11 +1794,10 @@ pub fn graft_located_reference_outcome_traits(
         return Ok(0);
     };
     // Nothing was attributed to this file, so nothing new can fire.
-    if !file
-        .filefacts_metrics
-        .as_ref()
-        .is_some_and(|m| m.contains_key("references.declared_count"))
-    {
+    if !file.filefacts_metrics.as_ref().is_some_and(|m| {
+        m.contains_key("references.declared_count")
+            || m.contains_key("references.undeclared_import_count")
+    }) {
         return Ok(0);
     }
     let mapper = shared_resources::capability_mapper_with_options(options)?;
@@ -3119,6 +3118,17 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                     &slices,
                 );
             }
+
+            let archive_config =
+                analyzers::archive::ArchiveAnalyzerConfig::from_analysis_options(options)
+                    .with_depth(analysis_depth as usize);
+            analyzer.analyze_nuitka_payload(
+                path,
+                arch_data,
+                &mut report,
+                &archive_config,
+                yara_engine.cloned(),
+            );
 
             // Process YARA results and evaluate with inline evidence
             let inline_yara =

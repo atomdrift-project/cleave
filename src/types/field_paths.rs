@@ -170,6 +170,7 @@ pub(crate) const CLEAVE_OWNED_METRIC_FIELDS: &[&str] = &[
     // same `filefacts_metrics` map, so this is where they have to be declared
     // to stay inside the check. Absent entirely on an offline scan.
     "references.declared_count",
+    "references.undeclared_import_count",
     "references.unresolved_count",
     "references.unavailable_command_count",
     "references.unresolved_extension_count",

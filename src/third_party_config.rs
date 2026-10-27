@@ -33,6 +33,10 @@ struct RuleOverride {
     id: String,
     #[serde(default)]
     crit: Option<String>,
+    /// Reviewer-facing explanation when an upstream description overstates
+    /// what its signature establishes.
+    #[serde(default)]
+    desc: Option<String>,
     #[serde(default)]
     disable: bool,
     /// Named finding IDs that suppress this result in the same file, checked
@@ -137,6 +141,14 @@ impl Config {
                 .then(|| id.clone())
         })
     }
+
+    fn description_for(&self, trait_id: &str) -> Option<&str> {
+        self.overrides
+            .get(trait_id)?
+            .desc
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+    }
 }
 
 static CONFIG: OnceLock<Config> = OnceLock::new();
@@ -164,6 +176,12 @@ pub fn third_party_criticality(namespace: &str, trait_id: Option<&str>) -> Optio
     config().criticality_for(vendor, trait_id)
 }
 
+/// Override an upstream rule description without changing its provenance.
+#[must_use]
+pub fn third_party_description(trait_id: &str) -> Option<&'static str> {
+    config().description_for(trait_id)
+}
+
 /// Return the matched `unless` finding for a third-party YARA trait, if any.
 /// These guards are checked after YAML traits and composites for the same file.
 #[must_use]
@@ -187,6 +205,27 @@ pub fn disabled_rule_ids() -> std::collections::HashSet<String> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn descriptions_override_only_named_nonempty_rules() {
+        let config = Config::from_yaml(
+            r#"
+default_crit: "notable"
+overrides:
+  - id: third_party/example/one
+    desc: "Import hash similarity"
+  - id: third_party/example/empty
+    desc: "   "
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.description_for("third_party/example/one"),
+            Some("Import hash similarity")
+        );
+        assert_eq!(config.description_for("third_party/example/empty"), None);
+        assert_eq!(config.description_for("third_party/example/other"), None);
+    }
 
     #[test]
     fn test_parse_minimal_config() {

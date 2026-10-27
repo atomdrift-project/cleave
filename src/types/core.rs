@@ -2297,8 +2297,9 @@ fn shrink_member_capacity(file: &mut FileAnalysis, engine: &crate::Engine) {
 /// conversion reads them — finalize's cross-file passes consume findings,
 /// identity and `filefacts.references`, all of which stay — and holding tens
 /// of thousands of members' symbol tables through the archive ramp measured
-/// ~0.4 GB of the benchmark peak. `filefacts.symbols` is consumed into the
-/// `tgt`/`mbr` sets by the same projection; `references` are kept for
+/// ~0.4 GB of the benchmark peak. Module-load and downloader calls are retained for
+/// dependency discovery; other `filefacts.symbols` are consumed into the
+/// `tgt`/`mbr` sets by the same projection. `references` are kept for
 /// `link_flagged_references`. Root files never come through this path (they
 /// fold via `to_file_analysis`), so full-fidelity output is unaffected.
 fn precompact_member_facts(file: &mut FileAnalysis, engine: &crate::Engine) {
@@ -2315,8 +2316,48 @@ fn precompact_member_facts(file: &mut FileAnalysis, engine: &crate::Engine) {
     file.functions = Vec::new();
     file.sections = Vec::new();
     if let Some(view) = file.filefacts.as_mut() {
-        view.symbols = Vec::new();
+        retain_dependency_symbols(&mut view.symbols, &file.file_type);
     }
+}
+
+/// Keep the load and downloader calls the dependency hunter can use, without
+/// retaining the full AST symbol table for every archive member.
+fn retain_dependency_symbols(symbols: &mut Vec<filefacts::Symbol>, file_type: &str) {
+    symbols.retain(|symbol| match symbol {
+        filefacts::Symbol::Call {
+            target: Some(name),
+            args,
+            ..
+        } => {
+            (matches!(
+                name.as_str(),
+                "require" | "import" | "__import__" | "importlib.import_module"
+            ) && matches!(args.first(), Some(filefacts::Arg::String { .. })))
+                || matches!(
+                    name.rsplit(['/', '\\']).next(),
+                    Some("curl" | "wget" | "curl.exe" | "wget.exe")
+                )
+                || (file_type == "ruby"
+                    && matches!(
+                        name.as_str(),
+                        "system"
+                            | "exec"
+                            | "Kernel.system"
+                            | "Kernel.exec"
+                            | "::Kernel.system"
+                            | "::Kernel.exec"
+                    ))
+        }
+        filefacts::Symbol::Import { .. } => file_type == "python",
+        filefacts::Symbol::Function { name, .. } => {
+            file_type == "ruby" && matches!(name.as_str(), "system" | "exec")
+        }
+        filefacts::Symbol::Bind { target, .. } => {
+            file_type == "ruby" && target.strip_prefix("::").unwrap_or(target) == "Kernel"
+        }
+        _ => false,
+    });
+    symbols.shrink_to_fit();
 }
 
 /// Drop folded-file payloads that have no reader in compact-member mode.
@@ -2398,6 +2439,91 @@ fn retain_cargo_context_values(
             }),
             out,
         );
+    }
+}
+
+#[cfg(test)]
+mod module_load_retention_tests {
+    use super::retain_dependency_symbols;
+    use filefacts::{Arg, Symbol};
+
+    #[test]
+    fn compact_members_keep_literal_module_loads_and_fetch_calls() {
+        let call = |name: &str, args| Symbol::Call {
+            target: Some(name.into()),
+            args,
+            offset: None,
+        };
+        let literal = || {
+            vec![Arg::String {
+                value: "axios".into(),
+            }]
+        };
+        let mut symbols = vec![
+            call("require", literal()),
+            call("import", literal()),
+            call("__import__", literal()),
+            call("importlib.import_module", literal()),
+            call("require", vec![Arg::Identifier { name: "x".into() }]),
+            call("console.log", literal()),
+            call(
+                "curl",
+                vec![Arg::Identifier {
+                    name: "https://stage.test/a".into(),
+                }],
+            ),
+            call("/usr/bin/wget", literal()),
+        ];
+        retain_dependency_symbols(&mut symbols, "shell");
+        assert_eq!(symbols.len(), 6);
+    }
+
+    #[test]
+    fn folded_members_preserve_python_imports_and_ruby_process_shadow_context() -> anyhow::Result<()>
+    {
+        use super::{FileAnalysis, precompact_member_facts};
+        use crate::{Engine, analysis_context::AnalysisContext, types::FilefactsView};
+        use anyhow::Context;
+        let engine = Engine::empty().with_compact_members(true);
+        for (name, file_type, source) in [
+            ("entry.py", "python", "from provider.api import client\n"),
+            (
+                "entry.rb",
+                "ruby",
+                "def system(command); puts command; end\nKernel = Logger\nsystem('curl https://example.invalid/one')\nKernel.exec(\"curl #{url}\")\n",
+            ),
+        ] {
+            let context = AnalysisContext::open(std::path::Path::new(name), source.as_bytes());
+            let mut file = FileAnalysis {
+                path: name.into(),
+                file_type: file_type.into(),
+                filefacts: Some(FilefactsView::from_ctx(&context)),
+                ..Default::default()
+            };
+            precompact_member_facts(&mut file, &engine);
+            let symbols = &file.filefacts.as_ref().context("retained view")?.symbols;
+            if file_type == "python" {
+                assert!(
+                    symbols
+                        .iter()
+                        .any(|symbol| matches!(symbol, Symbol::Import { .. }))
+                );
+            } else {
+                assert!(symbols.iter().any(|symbol| matches!(symbol, Symbol::Call { target: Some(target), .. } if target == "system")));
+                // Preserve the receiver-qualified target and its call offset;
+                // dependency discovery distinguishes Kernel from other receivers.
+                let exec_offset = source.find("Kernel.exec").context("exec call")? as u64;
+                assert!(symbols.iter().any(|symbol| matches!(symbol, Symbol::Call { target: Some(target), offset: Some(offset), .. } if target == "Kernel.exec" && *offset == exec_offset)));
+                assert!(symbols.iter().any(
+                    |symbol| matches!(symbol, Symbol::Function { name, .. } if name == "system")
+                ));
+                assert!(symbols.iter().any(
+                    |symbol| matches!(symbol, Symbol::Bind { target, .. } if target == "Kernel")
+                ));
+                assert!(!symbols.iter().any(|symbol| matches!(symbol, Symbol::Call { target: Some(target), .. } if target == "puts")));
+            }
+        }
+        Ok(())
     }
 }
 

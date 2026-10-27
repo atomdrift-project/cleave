@@ -82,8 +82,8 @@ impl FilefactsView {
     ///
     /// Compact files serialize structural values through their flattened `kv`
     /// facts, so retaining the complete native tree here duplicates that data.
-    /// Only npm identity and lifecycle scripts have a post-evaluation reader
-    /// (dependency discovery); the remaining fields are still required by the
+    /// Dependency identity/scripts, runtime imports, and Maven coverage gaps
+    /// have post-evaluation readers; the remaining fields are still required by the
     /// symbol/flow evaluators and compact reference projection.
     #[must_use]
     pub(crate) fn from_ctx_compact(ctx: &crate::analysis_context::AnalysisContext<'_>) -> Self {
@@ -133,8 +133,22 @@ pub(super) fn retained_dependency_values(tree: &serde_json::Value) -> serde_json
         }
     }
     let mut retained = serde_json::Map::new();
+    // Typed references carry resolved declarations; unsupported POM model
+    // operations must also survive compact archive reports as coverage gaps.
+    if let Some(gaps) = tree.pointer("/jar/pom/dependency_gaps") {
+        retained.insert(
+            "jar".into(),
+            serde_json::json!({"pom":{"dependency_gaps":gaps}}),
+        );
+    }
     if !npm.is_empty() {
         retained.insert("npm".into(), serde_json::Value::Object(npm));
+    }
+    if let Some(imports) = tree.pointer("/source/js/runtime_imports") {
+        retained.insert(
+            "source".into(),
+            serde_json::json!({"js": {"runtime_imports": imports}}),
+        );
     }
     // PE augmentation reads this path after the view is attached so it can
     // derive a high-confidence builder username. Keep it through evaluation;
@@ -163,10 +177,12 @@ fn is_null_or_empty_object(v: &serde_json::Value) -> bool {
 
 /// Retain only the source-AST symbol kinds — `Call`, `Member`, `Bind`,
 /// `Identifier` — that the `type: symbol, kind: …` evaluators read back from
-/// this view. `Import`/`Export`/`Function` are dropped: they're already carried
-/// by `report.{imports,exports,functions}`, so mirroring them here duplicated
-/// the entire binary symbol table (thousands of entries) on every member.
+/// this view. Python imports and Ruby process-method definitions also have
+/// post-fold dependency readers: compact members drop the ordinary import and
+/// function vectors. Other Import/Export/Function records are already carried
+/// by the report; do not duplicate native symbol tables here.
 fn retained_symbols(parsed: &filefacts::ParsedFile<'_>) -> Vec<filefacts::Symbol> {
+    let file_type = parsed.fileid().file_type();
     parsed
         .symbols()
         .iter()
@@ -177,7 +193,8 @@ fn retained_symbols(parsed: &filefacts::ParsedFile<'_>) -> Vec<filefacts::Symbol
                     | filefacts::Symbol::Member { .. }
                     | filefacts::Symbol::Bind { .. }
                     | filefacts::Symbol::Identifier { .. }
-            )
+            ) || (file_type == filefacts::FileType::Python && matches!(s, filefacts::Symbol::Import { .. }))
+                || (file_type == filefacts::FileType::Ruby && matches!(s, filefacts::Symbol::Function { name, .. } if matches!(name.as_str(), "system" | "exec")))
         })
         .cloned()
         .collect()
@@ -213,6 +230,39 @@ mod tests {
         let round_tripped: FilefactsView = serde_json::from_str(&json_str).expect("deserialize");
         assert_eq!(round_tripped.symbols.len(), 1);
         assert!(round_tripped.errors.is_empty());
+    }
+
+    #[test]
+    fn compact_values_keep_runtime_imports_without_unrelated_source_values() {
+        let tree = serde_json::json!({"source":{"js":{"runtime_imports":[{"specifier":"axios","offset":4}]},"other":"discard"}});
+        let retained = retained_dependency_values(&tree);
+        assert_eq!(
+            retained
+                .pointer("/source/js/runtime_imports/0/specifier")
+                .and_then(|v| v.as_str()),
+            Some("axios")
+        );
+        assert!(retained.pointer("/source/other").is_none());
+    }
+
+    #[test]
+    fn compact_values_preserve_maven_coverage_gaps_without_duplicate_declarations() {
+        let mut view = FilefactsView {
+            values: serde_json::json!({"jar":{"pom":{
+                "group_id":"g", "dependencies":[{"purl":"pkg:maven/g/a@1"}],
+                "dependency_gaps":[{"member":"META-INF/maven/g/a/pom.xml","reason":"version unresolved"}]
+            }}}),
+            ..Default::default()
+        };
+        view.retain_compact_values();
+        assert_eq!(
+            view.values
+                .pointer("/jar/pom/dependency_gaps/0/reason")
+                .and_then(|v| v.as_str()),
+            Some("version unresolved")
+        );
+        assert!(view.values.pointer("/jar/pom/dependencies").is_none());
+        assert!(view.values.pointer("/jar/pom/group_id").is_none());
     }
 
     #[test]

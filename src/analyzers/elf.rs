@@ -257,11 +257,29 @@ impl ElfAnalyzer {
                 .get("elf.section_headers_truncated")
                 .is_some()
             {
-                report.findings.push(malformed_header_finding(
-                    &report.target.path,
-                    data,
-                    "section header table extends past end of file",
-                ));
+                if parsed_values
+                    .get("elf.segments")
+                    .is_some_and(|segments| has_unbacked_load_segment(segments, data.len() as u64))
+                {
+                    // An incomplete load image and missing section table can
+                    // both result from a truncated transfer or file carve.
+                    // Neither establishes an attempt to hinder analysis.
+                    report.findings.push(
+                        Finding::structural(
+                            "metadata/binary/header/parse::elf-unbacked-load-and-section-table"
+                                .to_string(),
+                            "ELF load segment and section table extend past file".to_string(),
+                            1.0,
+                        )
+                        .with_criticality(Criticality::Notable),
+                    );
+                } else {
+                    report.findings.push(malformed_header_finding(
+                        &report.target.path,
+                        data,
+                        "section header table extends past end of file",
+                    ));
+                }
             }
             let struct_ms = struct_start.elapsed().as_millis();
             tracing::info!(
@@ -1177,6 +1195,21 @@ impl Analyzer for ElfAnalyzer {
     }
 }
 
+fn has_unbacked_load_segment(segments: &serde_json::Value, file_len: u64) -> bool {
+    segments.as_array().is_some_and(|segments| {
+        segments.iter().any(|segment| {
+            segment.get("type").and_then(serde_json::Value::as_str) == Some("load")
+                && segment
+                    .get("file_offset")
+                    .and_then(serde_json::Value::as_u64)
+                    .zip(segment.get("file_size").and_then(serde_json::Value::as_u64))
+                    .is_some_and(|(offset, size)| {
+                        size > 0 && offset.saturating_add(size) > file_len
+                    })
+        })
+    })
+}
+
 /// The structural finding for an ELF header whose section metadata is
 /// unusable: goblin rejected it outright, or its section header table lies
 /// past end of file. IoT bots corrupt `e_shoff` to break analysis tools;
@@ -1772,5 +1805,15 @@ mod utf8_parser_limit_tests {
     fn broken_extent_remains_suspicious() {
         let f = malformed_header_finding("renamed.so", b"\x7fELF", "section exceeds file");
         assert_eq!(f.crit, Criticality::Suspicious);
+    }
+    #[test]
+    fn unbacked_load_extent_is_checked_without_overflow() {
+        let segments = serde_json::json!([
+            {"type":"load", "file_offset":0, "file_size":1092},
+            {"type":"gnu_stack", "file_offset":0, "file_size":0}
+        ]);
+        assert!(has_unbacked_load_segment(&segments, 992));
+        assert!(!has_unbacked_load_segment(&segments, 1092));
+        assert!(!has_unbacked_load_segment(&serde_json::json!([]), 0));
     }
 }

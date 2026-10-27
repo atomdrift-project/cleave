@@ -1982,7 +1982,7 @@ checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 [[package]]
 name = "filefacts"
 version = "2.0.1"
-source = "git+https://github.com/atomdrift-project/filefacts.git#313f0fd9778bb288556f7c3505a4b37a862eecd1"
+source = "git+https://github.com/atomdrift-project/filefacts.git#15f140ed36db8593fb202f458f43a9040606bafb"
 dependencies = [
  "aho-corasick",
  "cab",
@@ -2027,6 +2027,7 @@ dependencies = [
  "tree-sitter-c",
  "tree-sitter-c-sharp",
  "tree-sitter-clojure",
+ "tree-sitter-cpp",
  "tree-sitter-elixir",
  "tree-sitter-go",
  "tree-sitter-groovy",
@@ -2048,6 +2049,7 @@ dependencies = [
  "ts-parser-perl",
  "uuid",
  "x509-cert",
+ "xz2",
  "zip 2.6.1",
  "zstd",
 ]
@@ -5878,10 +5880,20 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#313f0fd9778bb288556f7c3505a4b37a862eecd1"
+source = "git+https://github.com/atomdrift-project/filefacts.git#15f140ed36db8593fb202f458f43a9040606bafb"
 dependencies = [
  "cc",
  "tree-sitter",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-cpp"
+version = "0.23.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df2196ea9d47b4ab4a31b9297eaa5a5d19a0b121dceb9f118f6790ad0ab94743"
+dependencies = [
+ "cc",
  "tree-sitter-language",
 ]
 

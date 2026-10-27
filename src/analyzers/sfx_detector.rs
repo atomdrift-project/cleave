@@ -293,11 +293,21 @@ pub(crate) fn analyze_sfx(
     );
     let extracted = extraction.archive_report.is_some();
 
-    let extraction_findings = extraction
+    let mut extraction_findings: Vec<Finding> = extraction
         .inno_diagnostics
         .iter()
         .map(build_innoextract_finding)
         .collect();
+    if kind == SfxKind::Nuitka && !extracted {
+        extraction_findings.push(
+            Finding::structural(
+                "metadata/file/format/nuitka::extraction-incomplete".to_string(),
+                "Nuitka payload was not extracted".to_string(),
+                1.0,
+            )
+            .with_criticality(Criticality::Notable),
+        );
+    }
 
     SfxResult {
         sfx_finding: build_finding(kind, extracted, marker_offset),
@@ -325,7 +335,9 @@ fn build_finding(kind: SfxKind, extracted: bool, marker_offset: Option<usize>) -
         conf: if extracted { 1.0 } else { 0.9 },
         crit: Criticality::Notable,
         mbc: None,
-        attack: (kind != SfxKind::IExpress).then(|| "T1059".into()),
+        // A Nuitka launcher establishes packaging, not that a command or
+        // script interpreter executed during this scan.
+        attack: (!matches!(kind, SfxKind::IExpress | SfxKind::Nuitka)).then(|| "T1059".into()),
         evidence: vec![Evidence {
             method: "marker_detection".to_string(),
             source: "sfx_detector".to_string(),
@@ -379,7 +391,10 @@ fn try_extract(
     marker_offset: Option<usize>,
 ) -> SfxExtraction {
     // Bound nested Nuitka bundles, including those reached through encoded PEs.
-    if kind == SfxKind::Nuitka && file_path.to_string_lossy().matches("!!").count() >= 8 {
+    if kind == SfxKind::Nuitka
+        && (file_path.to_string_lossy().matches("!!").count() >= 8
+            || archive_config.is_some_and(|config| config.depth() >= 3))
+    {
         return SfxExtraction {
             archive_report: None,
             inno_diagnostics: vec![],
@@ -429,9 +444,15 @@ fn try_extract(
     let mut inno_diagnostics = vec![];
     let extracted = match kind {
         SfxKind::Nsis | SfxKind::IExpress => run_7z(extraction_path, tmp.path()),
-        SfxKind::Nuitka => {
-            marker_offset.is_some_and(|offset| extract_nuitka_at(data, offset, tmp.path()).is_ok())
-        }
+        SfxKind::Nuitka => marker_offset.is_some_and(|offset| {
+            if data.starts_with(&[0xcf, 0xfa, 0xed, 0xfe])
+                || data.starts_with(&[0xce, 0xfa, 0xed, 0xfe])
+            {
+                extract_nuitka_posix_cached_at(data, offset, tmp.path()).is_ok()
+            } else {
+                extract_nuitka_at(data, offset, tmp.path()).is_ok()
+            }
+        }),
         SfxKind::InnoSetup => {
             if let Some(innoextract) = innoextract_cmd() {
                 let result = run_innoextract(&innoextract, extraction_path, tmp.path());
@@ -828,12 +849,205 @@ fn extract_nuitka_at(data: &[u8], offset: usize, out: &Path) -> std::io::Result<
     Err(std::io::Error::other("Nuitka member count limit"))
 }
 
+/// Cached POSIX Nuitka stream: UTF-8 name, flags, little-endian size,
+/// CRC32, then bytes. Reject links rather than creating filesystem links.
+/// Uncached and newer table-of-contents layouts are intentionally rejected;
+/// failing extraction must not be mistaken for complete coverage.
+fn extract_nuitka_posix_cached_at(data: &[u8], offset: usize, out: &Path) -> std::io::Result<()> {
+    use std::io::{Read, Write};
+    let frame = offset
+        .checked_add(3)
+        .and_then(|start| data.get(start..))
+        .ok_or_else(|| std::io::Error::other("invalid Nuitka frame offset"))?;
+    let decoder = zstd::stream::read::Decoder::new(frame)?.single_frame();
+    let mut reader = decoder.take(NUITKA_MAX_TOTAL + 1);
+    let mut total = 0u64;
+    let mut names = std::collections::HashSet::new();
+    for count in 0..4096 {
+        let mut name = Vec::new();
+        loop {
+            let mut byte = [0u8; 1];
+            reader.read_exact(&mut byte)?;
+            if byte[0] == 0 {
+                break;
+            }
+            if name.len() >= 4096 {
+                return Err(std::io::Error::other("Nuitka member name too long"));
+            }
+            name.push(byte[0]);
+        }
+        if name.is_empty() {
+            let mut trailing = [0u8; 1];
+            if count == 0 || reader.read(&mut trailing)? != 0 {
+                return Err(std::io::Error::other("invalid Nuitka record terminator"));
+            }
+            return Ok(());
+        }
+        let name = std::str::from_utf8(&name).map_err(|err| {
+            std::io::Error::other(format!("invalid Nuitka UTF-8 member name: {err}"))
+        })?;
+        let relative = nuitka_member_path(name)?;
+        if !names.insert(relative.to_string_lossy().to_lowercase()) {
+            return Err(std::io::Error::other("duplicate Nuitka member"));
+        }
+        let mut flag = [0u8; 1];
+        reader.read_exact(&mut flag)?;
+        if flag[0] & !1 != 0 {
+            return Err(std::io::Error::other("unsupported Nuitka member flags"));
+        }
+        let mut size_bytes = [0u8; 8];
+        let mut crc_bytes = [0u8; 4];
+        reader.read_exact(&mut size_bytes)?;
+        reader.read_exact(&mut crc_bytes)?;
+        let size = u64::from_le_bytes(size_bytes);
+        let expected_crc = u32::from_le_bytes(crc_bytes);
+        total = total
+            .checked_add(size)
+            .ok_or_else(|| std::io::Error::other("Nuitka size overflow"))?;
+        if size > NUITKA_MAX_MEMBER || total > NUITKA_MAX_TOTAL {
+            return Err(std::io::Error::other("Nuitka extraction byte limit"));
+        }
+        let path = out.join(relative);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)?;
+        let mut checksum = crc32fast::Hasher::new();
+        let mut remaining = size;
+        let mut buffer = [0u8; 32768];
+        while remaining > 0 {
+            let take = remaining.min(buffer.len() as u64) as usize;
+            reader.read_exact(&mut buffer[..take])?;
+            checksum.update(&buffer[..take]);
+            file.write_all(&buffer[..take])?;
+            remaining -= take as u64;
+        }
+        let actual = checksum.finalize();
+        if expected_crc != actual.max(1) {
+            return Err(std::io::Error::other("Nuitka member CRC mismatch"));
+        }
+    }
+    Err(std::io::Error::other("Nuitka member count limit"))
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    fn posix_nuitka_bundle(entries: &[(&str, &[u8], u8)]) -> std::io::Result<Vec<u8>> {
+        let mut records = Vec::new();
+        for (name, content, flag) in entries {
+            records.extend_from_slice(name.as_bytes());
+            records.push(0);
+            records.push(*flag);
+            records.extend_from_slice(&(content.len() as u64).to_le_bytes());
+            records.extend_from_slice(&crc32fast::hash(content).max(1).to_le_bytes());
+            records.extend_from_slice(content);
+        }
+        records.push(0);
+        let mut host = b"\xcf\xfa\xed\xfeNUITKA_ONEFILE_PARENT\0KAY".to_vec();
+        host.extend(zstd::stream::encode_all(records.as_slice(), 1)?);
+        host.extend_from_slice(b"host trailer");
+        Ok(host)
+    }
+
+    fn extract_posix_test(data: &[u8], out: &Path) -> std::io::Result<()> {
+        let offset = memmem::find(data, NUITKA_COMPRESSED)
+            .ok_or_else(|| std::io::Error::other("missing marker"))?;
+        extract_nuitka_posix_cached_at(data, offset, out)
+    }
+
+    #[test]
+    fn nuitka_posix_cached_extracts_regular_members() -> std::io::Result<()> {
+        let data = posix_nuitka_bundle(&[("main", b"code", 1), ("lib/caf\u{e9}.txt", b"text", 0)])?;
+        assert_eq!(detect_sfx(&data, &[]), Some(SfxKind::Nuitka));
+        let out = tempfile::tempdir()?;
+        extract_posix_test(&data, out.path())?;
+        assert_eq!(std::fs::read(out.path().join("main"))?, b"code");
+        assert_eq!(
+            std::fs::read(out.path().join("lib/caf\u{e9}.txt"))?,
+            b"text"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn nuitka_posix_cached_rejects_unsafe_or_corrupt_records() -> std::io::Result<()> {
+        for name in [
+            "../escape",
+            "/absolute",
+            "a/../escape",
+            "C:\\escape",
+            "a//b",
+        ] {
+            let out = tempfile::tempdir()?;
+            assert!(
+                extract_posix_test(&posix_nuitka_bundle(&[(name, b"x", 0)])?, out.path()).is_err()
+            );
+        }
+        let out = tempfile::tempdir()?;
+        assert!(
+            extract_posix_test(
+                &posix_nuitka_bundle(&[("a", b"x", 0), ("A", b"y", 0)])?,
+                out.path()
+            )
+            .is_err()
+        );
+        let out = tempfile::tempdir()?;
+        assert!(
+            extract_posix_test(&posix_nuitka_bundle(&[("link", b"target", 2)])?, out.path())
+                .is_err()
+        );
+        let mut records = b"file\0\0".to_vec();
+        records.extend_from_slice(&1u64.to_le_bytes());
+        records.extend_from_slice(&123u32.to_le_bytes());
+        records.extend_from_slice(b"x\0");
+        let mut bad_crc = b"KAY".to_vec();
+        bad_crc.extend(zstd::stream::encode_all(records.as_slice(), 1)?);
+        let out = tempfile::tempdir()?;
+        assert!(extract_posix_test(&bad_crc, out.path()).is_err());
+        let mut oversized = b"file\0\0".to_vec();
+        oversized.extend_from_slice(&(NUITKA_MAX_MEMBER + 1).to_le_bytes());
+        oversized.extend_from_slice(&1u32.to_le_bytes());
+        let mut oversized_frame = b"KAY".to_vec();
+        oversized_frame.extend(zstd::stream::encode_all(oversized.as_slice(), 1)?);
+        let out = tempfile::tempdir()?;
+        assert!(extract_posix_test(&oversized_frame, out.path()).is_err());
+        let mut truncated = posix_nuitka_bundle(&[("main", b"content", 0)])?;
+        truncated.truncate(truncated.len() - 16);
+        let out = tempfile::tempdir()?;
+        assert!(extract_posix_test(&truncated, out.path()).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn nuitka_depth_limit_reports_incomplete_extraction() -> std::io::Result<()> {
+        let data = posix_nuitka_bundle(&[("main", b"code", 1)])?;
+        let config = ArchiveAnalyzerConfig::default().with_depth(3);
+        let result = analyze_sfx(
+            Path::new("nested"),
+            SfxKind::Nuitka,
+            &data,
+            &crate::Engine::empty(),
+            None,
+            Some(&config),
+            &[],
+        );
+        assert!(result.archive_report.is_none());
+        assert!(
+            result
+                .extraction_findings
+                .iter()
+                .any(|f| f.id == "metadata/file/format/nuitka::extraction-incomplete")
+        );
+        Ok(())
+    }
 
     fn nuitka_bundle(entries: &[(&str, &[u8])]) -> std::io::Result<Vec<u8>> {
         let mut records = Vec::new();

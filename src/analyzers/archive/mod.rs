@@ -1348,6 +1348,16 @@ pub(crate) struct ArchiveAnalyzerConfig {
 
 impl ArchiveAnalyzerConfig {
     #[must_use]
+    pub(crate) fn with_depth(mut self, depth: usize) -> Self {
+        self.current_depth = depth;
+        self
+    }
+
+    pub(crate) fn depth(&self) -> usize {
+        self.current_depth
+    }
+
+    #[must_use]
     pub(crate) fn from_analysis_options(options: &crate::AnalysisOptions) -> Self {
         Self {
             current_depth: 0,

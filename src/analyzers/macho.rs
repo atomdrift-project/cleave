@@ -114,6 +114,57 @@ impl MachOAnalyzer {
         self
     }
 
+    /// Inspect an embedded Nuitka distribution on both the direct and
+    /// top-level Mach-O paths. Only the preferred thin slice is passed here.
+    pub(crate) fn analyze_nuitka_payload(
+        &self,
+        path: &Path,
+        data: &[u8],
+        report: &mut AnalysisReport,
+        config: &crate::analyzers::archive::ArchiveAnalyzerConfig,
+        yara: Option<std::sync::Arc<crate::yara_engine::YaraEngine>>,
+    ) {
+        if crate::analyzers::sfx_detector::detect_sfx(data, &[])
+            != Some(crate::analyzers::sfx_detector::SfxKind::Nuitka)
+        {
+            return;
+        }
+        let sfx = crate::analyzers::sfx_detector::analyze_sfx(
+            path,
+            crate::analyzers::sfx_detector::SfxKind::Nuitka,
+            data,
+            &self.engine,
+            yara,
+            Some(config),
+            &[],
+        );
+        report.findings.push(sfx.sfx_finding);
+        report.findings.extend(sfx.extraction_findings);
+        if let Some(child) = sfx.archive_report {
+            report.findings.extend(child.findings);
+            let parent = path.to_string_lossy();
+            let parent_prefix =
+                format!("{parent}{}", crate::types::file_analysis::ARCHIVE_DELIMITER);
+            for mut file in child.files {
+                if !file.path.starts_with(&parent_prefix) {
+                    file.path =
+                        crate::types::file_analysis::encode_archive_path(&parent, &file.path);
+                }
+                report.files.push(file);
+            }
+            for mut entry in child.archive_contents {
+                if !entry
+                    .path
+                    .contains(crate::types::file_analysis::ARCHIVE_DELIMITER)
+                {
+                    entry.path =
+                        crate::types::file_analysis::encode_archive_path(&parent, &entry.path);
+                }
+                report.archive_contents.push(entry);
+            }
+        }
+    }
+
     /// Structural analysis of a thin Mach-O binary (no YARA scan, no trait evaluation).
     /// Only handles thin binaries — fat binary dispatch is done by the caller.
     /// Callers are responsible for running YARA and calling `evaluate_and_merge_findings`.
@@ -1838,6 +1889,17 @@ impl Analyzer for MachOAnalyzer {
             Self::rebase_slice_offsets(&mut report, preferred_offset as u64);
             self.union_supplementary_arches(&mut report, input.data, preferred_offset, &slices);
         }
+
+        let archive_config = crate::analyzers::archive::ArchiveAnalyzerConfig::default()
+            .with_depth(input.depth as usize)
+            .with_cancellation(input.cancellation.clone());
+        self.analyze_nuitka_payload(
+            input.path,
+            preferred_data,
+            &mut report,
+            &archive_config,
+            None,
+        );
 
         // Direct calls also serve archive and decoded children. Scan full-file
         // bytes before traits, including every FAT slice.

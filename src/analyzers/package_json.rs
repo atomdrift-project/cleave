@@ -839,7 +839,15 @@ impl PackageJsonAnalyzer {
                 let hidden_files: Vec<&str> = script
                     .split_whitespace()
                     .filter(|s| {
+                        // Package-manager authentication config has a mandated
+                        // dotfile name; mentioning it alone is not concealment.
+                        let path = s.trim_end_matches([';', ',', '\'', '"', ')']);
+                        let config_dotfile = path
+                            .rsplit('/')
+                            .next()
+                            .is_some_and(|name| matches!(name, ".npmrc" | ".pypirc" | ".netrc"));
                         s.contains("/.")
+                            && !config_dotfile
                             && !(installs_opencode_command && s.contains("/opencode/command"))
                             && !s.contains("node_modules/.bin/")
                             && !s.contains("/.husky")
@@ -1146,7 +1154,9 @@ impl PackageJsonAnalyzer {
         content: &str,
         report: &mut AnalysisReport,
     ) {
-        // These hooks run automatically during npm install
+        // npm lifecycle scripts have different triggers and vary with the
+        // package source and command. A declaration alone does not establish
+        // that any hook ran during installation.
         let install_hooks = [
             "preinstall",
             "install",
@@ -1165,7 +1175,7 @@ impl PackageJsonAnalyzer {
                 report.add_finding(
                     Finding::indicator(
                         format!("supply-chain/install-hook/{}", hook),
-                        format!("Package has '{}' hook that runs during install", hook),
+                        format!("Package declares '{}' lifecycle script", hook),
                         0.8,
                     )
                     .with_criticality(Criticality::Notable)
@@ -1689,6 +1699,22 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_findings_do_not_claim_a_script_ran() {
+        let content = r#"{"name":"sample","version":"1.0.0","scripts":{"prepare":"husky install","postuninstall":"cleanup"}}"#;
+        let report = PackageJsonAnalyzer::new()
+            .analyze_package(Path::new("package.json"), content)
+            .unwrap();
+        for hook in ["prepare", "postuninstall"] {
+            let id = format!("supply-chain/install-hook/{hook}");
+            let finding = report.findings.iter().find(|f| f.id == id).unwrap();
+            assert_eq!(
+                finding.desc,
+                format!("Package declares '{hook}' lifecycle script")
+            );
+        }
+    }
+
+    #[test]
     fn test_hidden_file_in_docs_script_is_not_evasion() {
         let content = r#"{
             "name": "nan",
@@ -1753,6 +1779,24 @@ mod tests {
 
         assert!(
             report
+                .findings
+                .iter()
+                .any(|f| f.id == "evasion/hidden-file")
+        );
+    }
+
+    #[test]
+    fn test_registry_dotfile_is_not_hidden_payload() {
+        let content = r#"{
+            "name": "temporary-config",
+            "version": "1.0.0",
+            "scripts": {"postinstall": "echo token > $d/.npmrc; rm -rf $d"}
+        }"#;
+        let report = PackageJsonAnalyzer::new()
+            .analyze_package(Path::new("package.json"), content)
+            .unwrap();
+        assert!(
+            !report
                 .findings
                 .iter()
                 .any(|f| f.id == "evasion/hidden-file")

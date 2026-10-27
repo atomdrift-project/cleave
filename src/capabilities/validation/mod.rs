@@ -63,6 +63,9 @@ pub(super) mod shared {
         pub(super) match_type: String,     // "exact", "substr", "word", "regex"
         pub(super) encoding: Option<Vec<String>>,
         pub(super) original_value: String, // Original pattern before normalization
+        /// Matcher predicates appended to the display/comparison key. These
+        /// are structured data, never part of the regex being canonicalized.
+        pub(super) discriminator: String,
         /// The literal alone, normalized, with any symbol discriminator
         /// (`#kind:`/`#arg:`/`#alias:`) removed. `normalized` keeps the
         /// discriminator so a call and a definition stay distinct atoms; this

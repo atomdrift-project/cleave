@@ -1638,25 +1638,32 @@ fn all_filters_match_distinct_with(
 ) -> bool {
     // Explicitly selected, distinct named fields are distinct logical
     // arguments even when the producer stores them in one keyword object.
-    // Keep the positional matcher unchanged for unspecified/mixed selectors.
-    let named: Option<Vec<_>> = filters
-        .iter()
-        .map(|f| Some((f.index?, f.from.as_ref()?.field.as_ref()?, f)))
-        .collect();
-    if let Some(named) = named.filter(|n| !n.is_empty()) {
-        let mut seen = std::collections::BTreeSet::new();
-        return named.into_iter().all(|(index, field, filter)| {
-            seen.insert((index, field))
-                && args.get(index).is_some_and(|a| arg_matches(a, filter))
-                && extra(index, filter)
-        });
+    // Resolve explicit named-field selectors first, including in a mixture
+    // with positional selectors. Two fields of argument 1 must not consume
+    // two physical argument positions or displace the positional URL at 0.
+    let mut seen = std::collections::BTreeSet::new();
+    let mut positional = Vec::new();
+    for filter in filters {
+        if let (Some(index), Some(field)) = (
+            filter.index,
+            filter.from.as_ref().and_then(|from| from.field.as_ref()),
+        ) {
+            if !seen.insert((index, field))
+                || !args.get(index).is_some_and(|arg| arg_matches(arg, filter))
+                || !extra(index, filter)
+            {
+                return false;
+            }
+        } else {
+            positional.push(filter);
+        }
     }
-    if filters.len() > args.len() {
+    if positional.len() > args.len() {
         return false;
     }
     // Precompute candidates once, including any bounded provenance queries.
     // Augmenting paths avoid factorial backtracking on overlapping filters.
-    let candidates: Vec<Vec<usize>> = filters
+    let candidates: Vec<Vec<usize>> = positional
         .iter()
         .map(|filter| {
             args.iter()
@@ -1671,9 +1678,9 @@ fn all_filters_match_distinct_with(
         })
         .collect();
     let mut owners: Vec<Option<usize>> = vec![None; args.len()];
-    for start in 0..filters.len() {
+    for start in 0..positional.len() {
         let mut queue = std::collections::VecDeque::from([start]);
-        let mut previous: Vec<Option<(usize, usize)>> = vec![None; filters.len()];
+        let mut previous: Vec<Option<(usize, usize)>> = vec![None; positional.len()];
         let mut seen_args = vec![false; args.len()];
         let mut end = None;
         while let Some(filter) = queue.pop_front() {
@@ -3950,6 +3957,107 @@ mod validator_wiring_tests {
                     &ctx
                 )
                 .matched
+            );
+        }
+    }
+
+    #[test]
+    fn positional_and_named_argument_filters_join_on_the_same_call() {
+        use crate::composite_rules::{
+            condition::ArgFilter, context::EvaluationContext, types::FileType,
+        };
+        use crate::types::{AnalysisReport, FilefactsView, TargetInfo};
+        let filters: Vec<ArgFilter> = serde_yaml::from_str(
+            r#"
+- index: 0
+  kind: identifier
+  name_regex: '^(endpoint|url|target)$'
+- index: 1
+  kind: object
+  from: {field: method, whole_value: '^POST$'}
+- index: 1
+  kind: object
+  from: {field: body, call: '^JSON\.stringify$'}
+"#,
+        )
+        .unwrap();
+        for (source, expected) in [
+            (
+                r#"fetch(endpoint, {method:'POST', body:JSON.stringify(data)});"#,
+                true,
+            ),
+            (
+                r#"fetch(url, {body:JSON.stringify(data), method:'POST'});"#,
+                true,
+            ),
+            (
+                r#"fetch(endpoint, {method:'GET', body:JSON.stringify(data)});"#,
+                false,
+            ),
+            (
+                r#"fetch(endpoint, {method:'POST', body:'JSON.stringify(data)'});"#,
+                false,
+            ),
+            (
+                r#"fetch(endpoint, {method:'POST'}); fetch(url, {body:JSON.stringify(data)});"#,
+                false,
+            ),
+            (
+                r#"fetch(other, {method:'POST', body:JSON.stringify(data)});"#,
+                false,
+            ),
+            (
+                r#"fetch(endpoint, {method:'POST', body:JSON.stringify(data), method:'GET'});"#,
+                false,
+            ),
+            (
+                r#"const opts={method:'POST',body:JSON.stringify(data)}; opts.body='static'; fetch(target,opts);"#,
+                false,
+            ),
+        ] {
+            let parsed = filefacts::OpenOptions::new()
+                .path(std::path::Path::new("request.js"))
+                .open(source.as_bytes());
+            let mut report = AnalysisReport::new(TargetInfo {
+                path: "request.js".into(),
+                file_type: "javascript".into(),
+                size_bytes: source.len() as u64,
+                sha256: String::new(),
+                architectures: None,
+            });
+            report.filefacts = Some(FilefactsView {
+                flow: parsed.flow().cloned(),
+                symbols: parsed.symbols().iter().cloned().collect(),
+                ..Default::default()
+            });
+            let ctx = EvaluationContext::new(
+                &report,
+                source.as_bytes(),
+                FileType::JavaScript,
+                &[],
+                None,
+                None,
+            );
+            let evaluate = |filters: &[ArgFilter]| {
+                super::eval_call(
+                    Some(&"fetch".into()),
+                    None,
+                    None,
+                    None,
+                    Some(filters),
+                    super::CallSite::default(),
+                    &ctx,
+                )
+                .matched
+            };
+            assert_eq!(evaluate(&filters), expected, "{source}");
+            assert!(
+                !evaluate(&[filters[0].clone(), filters[0].clone()]),
+                "duplicate position: {source}"
+            );
+            assert!(
+                !evaluate(&[filters[0].clone(), filters[1].clone(), filters[1].clone()]),
+                "duplicate field: {source}"
             );
         }
     }

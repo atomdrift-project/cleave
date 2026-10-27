@@ -3150,6 +3150,12 @@ impl YaraEngine {
                 &namespace,
                 trait_id.as_deref(),
             )?;
+            if let Some(desc) = trait_id
+                .as_deref()
+                .and_then(crate::third_party_config::third_party_description)
+            {
+                description = desc.to_owned();
+            }
         }
 
         // Not every rule set writes a `description`. Elastic's, for one, labels

@@ -985,7 +985,8 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
                            encoding: Option<Vec<String>>| {
         let is_regex = match_type == "regex";
         let keyed = format!("{value}{discriminator}");
-        let normalized = normalize_pattern_for_comparison(&keyed, is_regex);
+        let plain_normalized = normalize_pattern_for_comparison(&value, is_regex);
+        let normalized = format!("{plain_normalized}{discriminator}");
         // Reference/call kinds may be dropped when comparing search surfaces.
         // Definition/export kinds instead identify a provider, not a use.
         // Arguments and aliases also change the fact: require('fs') is not
@@ -1000,14 +1001,12 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
         if is_non_reusable_atom(condition_type, match_type, &normalized) {
             return;
         }
-        let value = keyed;
-
         // If the regex contained only literal text (after stripping anchors
         // and decoding `\<punct>` escapes), `normalize_pattern_for_comparison`
         // returned the substr-equivalent literal. Treat the trait as if it
         // were authored as a substr match so cross-matcher duplicates are
         // surfaced by `matcher_context_reusable_as_is`.
-        let effective_match_type = if is_regex && normalized != normalize_regex(&value) {
+        let effective_match_type = if is_regex && plain_normalized != normalize_regex(&value) {
             "substr"
         } else {
             match_type
@@ -1021,7 +1020,8 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
                 condition_type: condition_type.to_string(),
                 match_type: effective_match_type.to_string(),
                 encoding,
-                original_value: value,
+                original_value: keyed,
+                discriminator: discriminator.to_owned(),
                 bare_normalized,
                 suppressed_by: suppressed_by.clone(),
                 for_types: for_types.clone(),
@@ -1627,6 +1627,7 @@ pub(crate) fn check_overlapping_regex_patterns(
     // Collect all regex patterns with their pre-computed alternatives
     struct RegexWithAlternatives<'a> {
         location: &'a PatternLocation,
+        source_len: usize,
         alternatives: FxHashSet<String>,
         /// HIR-canonical form of the whole pattern (`None` if it does not parse).
         /// Equal canonical forms mean the two regexes match the same language.
@@ -1661,12 +1662,16 @@ pub(crate) fn check_overlapping_regex_patterns(
         .map(|(_, location)| location)
         .filter(|location| location.match_type == "regex")
         .map(|location| {
-            let whole = location.original_value.trim();
+            let whole = location
+                .original_value
+                .strip_suffix(&location.discriminator)
+                .unwrap_or(&location.original_value)
+                .trim();
             let canonical = canonical_regex_form(whole);
             let key = |branch: &str| alternative_key(branch, whole, &canonical);
 
             // Pre-compute canonical keys for each meaningful alternative.
-            let alts: FxHashSet<String> = split_top_level_alternation(&location.original_value)
+            let alts: FxHashSet<String> = split_top_level_alternation(whole)
                 .into_iter()
                 .filter_map(key)
                 .collect();
@@ -1674,7 +1679,7 @@ pub(crate) fn check_overlapping_regex_patterns(
             // If no alternatives, key on the whole pattern instead.
             let alternatives = if alts.is_empty() {
                 let mut set = FxHashSet::default();
-                if let Some(key) = key(&location.original_value) {
+                if let Some(key) = key(whole) {
                     set.insert(key);
                 }
                 set
@@ -1682,9 +1687,10 @@ pub(crate) fn check_overlapping_regex_patterns(
                 alts
             };
 
-            let has_alternation = location.original_value.contains('|');
+            let has_alternation = whole.contains('|');
             RegexWithAlternatives {
                 location,
+                source_len: whole.len(),
                 alternatives,
                 canonical,
                 has_alternation,
@@ -1755,6 +1761,10 @@ pub(crate) fn check_overlapping_regex_patterns(
             continue;
         }
 
+        if a.location.discriminator != b.location.discriminator {
+            continue;
+        }
+
         if a.location.encoding.is_some()
             && b.location.encoding.is_some()
             && a.location.encoding != b.location.encoding
@@ -1817,14 +1827,9 @@ pub(crate) fn check_overlapping_regex_patterns(
         // Allow overlaps when patterns differ significantly in length (>33%)
         // AND at least one regex has no alternation (|). This permits different
         // specificity levels like "\.exe$" vs "7z\.exe" while catching duplicates.
-        let max_len = a
-            .location
-            .original_value
-            .len()
-            .max(b.location.original_value.len());
+        let max_len = a.source_len.max(b.source_len);
         let len_diff_pct = if max_len > 0 {
-            (a.location.original_value.len() as f32 - b.location.original_value.len() as f32).abs()
-                / max_len as f32
+            (a.source_len as f32 - b.source_len as f32).abs() / max_len as f32
         } else {
             0.0
         };
@@ -5185,6 +5190,7 @@ pub(crate) fn find_structural_regex_duplicates(
                 match_type: "regex".to_string(),
                 encoding: None,
                 original_value: regex.clone(),
+                discriminator: String::new(),
                 // This collector only ever holds regexes, which carry no symbol
                 // discriminator, so the literal and the key are the same string.
                 bare_normalized: regex.clone(),
@@ -5502,6 +5508,32 @@ mod overlapping_scope_duplicate_tests {
 )]
 mod literal_regex_tests {
     use super::*;
+
+    #[test]
+    fn regex_overlap_keeps_structured_argument_filters_out_of_regex_syntax() {
+        let rule = |id: &str, callee: &str, setting: &str| -> TraitDefinition {
+            serde_yaml::from_str(&format!(
+                "id: {id}\ndesc: test\nfor: [shell]\nif:\n  type: symbol\n  kind: call\n  regex: '{callee}'\n  args:\n    - index: 2\n      kind: string\n      regex: '^echo 0 > /proc/sys/kernel/{setting}([ \\t;]|$)'\n"
+            )).unwrap()
+        };
+        let first = rule("first", "(^|/)sudo$", "kptr_restrict");
+        let different_arg = rule("different", "(^|/)sudo$", "perf_event_paranoid");
+        let mut warnings = Vec::new();
+        check_overlapping_regex_patterns(
+            &ExtractedPatterns::of(&[first.clone(), different_arg]),
+            &mut warnings,
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let equivalent = rule("equivalent", "(^|/)(?:sudo)$", "kptr_restrict");
+        check_overlapping_regex_patterns(
+            &ExtractedPatterns::of(&[first, equivalent]),
+            &mut warnings,
+        );
+        assert!(
+            !warnings.is_empty(),
+            "equivalent callee and argument predicates must still be detected"
+        );
+    }
 
     #[test]
     fn symbol_arguments_keep_positions_shapes_and_provenance_distinct() {

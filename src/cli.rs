@@ -142,11 +142,6 @@ pub struct Args {
     #[arg(short, long, global = true)]
     pub output: Option<String>,
 
-    /// Keep every fact in JSON output — imports, exports, functions and
-    /// sections — not only the ones cleave's models read.
-    #[arg(long, global = true)]
-    pub full_facts: bool,
-
     /// Verbose logging
     #[arg(short, long)]
     pub verbose: bool,
@@ -245,16 +240,6 @@ impl Args {
             DisabledComponents::default()
         } else {
             DisabledComponents::parse(&self.disable)
-        }
-    }
-
-    /// Which facts JSON output keeps: the models' inputs unless `--full-facts`.
-    #[must_use]
-    pub fn facts(&self) -> crate::types::Facts {
-        if self.full_facts {
-            crate::types::Facts::Full
-        } else {
-            crate::types::Facts::Model
         }
     }
 
@@ -1025,6 +1010,12 @@ pub enum OutputFormat {
 mod tests {
     use super::*;
     use clap::ValueEnum;
+
+    #[test]
+    fn full_facts_flag_is_not_accepted() {
+        let error = Args::try_parse_from(["cleave", "--full-facts", "file.bin"]).unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
 
     #[test]
     fn render_accepts_local_format_and_output_options() {

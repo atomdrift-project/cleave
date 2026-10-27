@@ -130,23 +130,17 @@ fn run() -> Result<()> {
     // the original sample. Keep this before all analysis bootstrap work.
     if let Some(cli::Command::Render { args: render_args }) = &args.command {
         let format = args.format();
-        let facts = args.facts();
         let rendered = cleave::report_input::run(render_args, |loaded| {
             let report = &loaded.report;
             match format {
                 cli::OutputFormat::Json | cli::OutputFormat::Jsonl => {
-                    anyhow::ensure!(
-                        facts == cleave::types::Facts::Model || loaded.fact_profile.is_none(),
-                        "--full-facts cannot restore facts this report was reduced to"
-                    );
-                    // Rendering stored reduced facts cannot upgrade their contract.
-                    let output_facts = if loaded.fact_profile.is_some() {
+                    // Preserve an existing profile: omitted facts cannot be restored.
+                    let facts = if loaded.fact_profile.is_some() {
                         cleave::types::Facts::Full
                     } else {
-                        facts
+                        cleave::types::Facts::Model
                     };
-                    let mut compact =
-                        cleave::types::compact_from_files(&report.files, output_facts);
+                    let mut compact = cleave::types::compact_from_files(&report.files, facts);
                     if loaded.fact_profile.is_some() {
                         compact.fp.clone_from(&loaded.fact_profile);
                     }
@@ -326,7 +320,7 @@ fn run() -> Result<()> {
         max_crit: args.max_crit,
         min_file_crit: args.min_file_crit,
         max_file_crit: args.max_file_crit,
-        facts: args.facts(),
+        facts: cleave::types::Facts::Model,
         all_files: args.all_files,
     });
 

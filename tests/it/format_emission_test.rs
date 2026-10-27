@@ -23,8 +23,8 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 
-/// Run `cleave --json --full-facts analyze <path>` and return the compact
-/// report with every fact (trait authors read the full surface).
+/// Run `cleave --json analyze <path>` and return the compact
+/// report with the complete metric map.
 /// Skips YARA + cache for speed and determinism. Returns `None` when the
 /// fixture is not present on the test host (binary fixtures are gitignored;
 /// we test what the host can extract, not require every one).
@@ -37,7 +37,7 @@ fn analyze_report(path: &Path) -> Option<Value> {
     let output = cmd
         .env("CLEAVE_SKIP_YARA", "1")
         .env("CLEAVE_SKIP_CACHE", "1")
-        .args(["--json", "--full-facts", "analyze", path.to_str().unwrap()])
+        .args(["--json", "analyze", path.to_str().unwrap()])
         .output()
         .expect("cleave run");
     assert!(
@@ -50,7 +50,12 @@ fn analyze_report(path: &Path) -> Option<Value> {
         .lines()
         .find(|l| l.trim_start().starts_with('{'))
         .expect("no JSON line in cleave output");
-    Some(serde_json::from_str(line).unwrap_or_else(|e| panic!("bad JSON: {e}")))
+    let report: Value = serde_json::from_str(line).unwrap_or_else(|e| panic!("bad JSON: {e}"));
+    assert_eq!(
+        report["fp"].as_str(),
+        Some(cleave::model_facts::profile_id())
+    );
+    Some(report)
 }
 
 /// Run `cleave --json analyze <path>` and return the first file's compact view.

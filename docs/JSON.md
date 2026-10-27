@@ -69,13 +69,12 @@ The top-level object is:
 | ---- | ---- | ------- |
 | `v` | string | Compact schema version, currently `"9"`. |
 | `rev` | string | Traits-repo revision (first 8 chars of commit hash). Omitted if unknown. |
-| `fp` | string | The fact profile `facts` was reduced to (see [Compact facts](#compact-facts-facts)). Omitted with `--full-facts`. |
+| `fp` | string | The fact profile `facts` was reduced to (see [Compact facts](#compact-facts-facts)). Omitted for full facts. |
 | `files` | array | Per-file compact records. |
 
-v9 differs from v8 in three ways: `facts` keeps only what cleave's models read
-unless you pass `--full-facts`; context bytes are readable text (`s`) instead of
-Z85 (`b`); and context windows carry no annotations. Readers of v8 keep working
-on v8 reports; cleave reads both.
+v9 supports reduced fact profiles. Context bytes are readable text (`s`) instead
+of Z85 (`b`), and context windows carry no annotations. Cleave reads both v8
+and v9 reports.
 
 Byte offsets in the compact report are **bare integers**, not `0x`-prefixed hex
 strings — a standalone JSON integer is smaller than a quoted hex string. (The
@@ -195,11 +194,11 @@ what cleave's renderer does.
 
 ### Compact facts (`facts`)
 
-By default `facts` keeps the complete metric maps used for numeric and categorical vocabulary discovery and
-all import, export, function, call-target and member-chain rows used by symbol
-vocabularies. Existing import/export/function caps still apply. Sections are
-omitted, and `fp` identifies the exact retention contract. Pass `--full-facts`
-to retain sections and other facts too.
+By default `facts` retains the complete metric map and all import, export,
+function, call-target and member-chain rows used by symbol vocabularies.
+Existing import/export/function caps still apply. Sections are omitted, and
+`fp` identifies the exact retention contract. Rendering a reduced report
+preserves its profile because omitted facts cannot be recovered.
 
 The contract is generated from shipping and candidate training layouts. From
 the cleave checkout, audit candidate layouts and refresh its inventory:

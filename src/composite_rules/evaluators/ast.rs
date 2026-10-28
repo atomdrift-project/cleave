@@ -91,6 +91,7 @@ struct CompiledAstQuery {
     nodes: RequiredNodes,
     subqueries: RequiredSubqueries,
     deferred: DeferredPredicates,
+    ignore_comments: bool,
 }
 
 impl CompiledAstQuery {
@@ -588,17 +589,68 @@ fn eval_ast_query_once<'a>(
     };
     let lang = &*tree.language();
 
-    // Track parse errors but continue — tree-sitter recovers from minor errors
-    let has_parse_errors = tree.root_node().has_error();
-
     let Some(compiled) = cached_ast_query(lang, ctx.file_type, query_str) else {
         return ConditionResult::no_match();
     };
-    if !compiled.may_match(source.as_bytes())
-        || ctx
-            .ast_node_text
-            .is_some_and(|index| !compiled.nodes.may_match(index))
-    {
+    // Required literal predicates read the original source in both views.
+    // Reject impossible queries before walking or reparsing for comment removal.
+    if !compiled.may_match(source.as_bytes()) {
+        return ConditionResult::no_match();
+    }
+    let normalization_start = thread_cpu_time();
+    if compiled.ignore_comments && ctx.cached_commentless_ast.get().is_none() {
+        let _timer = crate::validation_performance::ast_execution_started();
+        let view = super::ast_comment_view::build(
+            tree,
+            source,
+            AST_QUERY_BYTE_LIMIT,
+            cpu_budget,
+            ctx.deadline,
+            ctx.cancellation,
+        );
+        match view {
+            Ok(view) => {
+                let _ = ctx.cached_commentless_ast.set(view);
+            }
+            Err(reason) => {
+                let warnings = match reason {
+                    super::ast_comment_view::ViewError::Limited => {
+                        vec![AnalysisWarning::AstTooDeep { max_depth: 0 }]
+                    }
+                    super::ast_comment_view::ViewError::ParseChanged => {
+                        vec![AnalysisWarning::AstParseError]
+                    }
+                    super::ast_comment_view::ViewError::Cancelled => vec![],
+                };
+                return ConditionResult {
+                    matched: false,
+                    evidence: vec![],
+                    warnings,
+                    match_count: 0,
+                    ..ConditionResult::no_match()
+                };
+            }
+        }
+    }
+    let cpu_budget = if compiled.ignore_comments {
+        cpu_budget.saturating_sub(thread_cpu_time().saturating_sub(normalization_start))
+    } else {
+        cpu_budget
+    };
+    let alternate = compiled
+        .ignore_comments
+        .then(|| ctx.cached_commentless_ast.get())
+        .flatten()
+        .and_then(Option::as_ref);
+    let tree = alternate.unwrap_or(tree);
+    // Original-tree structure indexes cannot certify an alternate-tree negative.
+    let node_text = if alternate.is_some() {
+        None
+    } else {
+        ctx.ast_node_text
+    };
+    let has_parse_errors = tree.root_node().has_error();
+    if node_text.is_some_and(|index| !compiled.nodes.may_match(index)) {
         return ConditionResult::no_match();
     }
     // Include necessary-child pruning in measured execution cost. Validation
@@ -617,7 +669,7 @@ fn eval_ast_query_once<'a>(
         compiled.prune_subqueries(
             tree,
             source,
-            ctx.ast_node_text,
+            node_text,
             &mut enabled,
             ctx.deadline,
             ctx.cancellation,
@@ -827,12 +879,14 @@ fn cached_ast_query(
             RequiredSubqueries::default()
         };
         let deferred = DeferredPredicates::of(&query, query_str);
+        let ignore_comments = super::ast_comment_view::requested(&query);
         Arc::new(CompiledAstQuery {
             query,
             deferred,
             literals,
             nodes,
             subqueries,
+            ignore_comments,
         })
     });
     if let Some(started) = compile_started {
@@ -949,6 +1003,11 @@ pub(crate) fn batch_ast_queries_with_index(
         // early and their matches later in the file came and went with load.
         // Left out of the map, it runs alone under its own budget.
         if let Some(compiled) = cached_ast_query(lang, file_type, q) {
+            // This query needs a different tree. Leave it out of the raw-tree
+            // bank so the ordinary per-query path can use its cached view.
+            if compiled.ignore_comments {
+                continue;
+            }
             let mut enabled: Vec<bool> = (0..compiled.query.pattern_count())
                 .map(|pattern| {
                     compiled.nodes.pattern_may_match(pattern, node_text)
@@ -1176,9 +1235,9 @@ pub(crate) fn batch_ast_queries_with_index(
             continue;
         };
         let evidence_capture = evidence_captures[qi];
-        if evidence_capture.is_some_and(|selected| {
-            !m.captures().iter().any(|capture| capture.index == selected)
-        }) {
+        if evidence_capture
+            .is_some_and(|selected| !m.captures().iter().any(|capture| capture.index == selected))
+        {
             continue;
         }
         let bucket = &mut buckets[qi];
@@ -1371,6 +1430,7 @@ mod cache_lock_tests {
             literals: RequiredLiterals::of(&query, pattern),
             nodes: RequiredNodes::of(&language, &query, pattern),
             subqueries: RequiredSubqueries::default(),
+            ignore_comments: false,
             deferred: DeferredPredicates::of(&query, pattern),
             query,
         });

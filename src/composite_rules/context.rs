@@ -160,6 +160,7 @@ pub(crate) struct FileEvalCaches {
     literal_string_indices: Arc<OnceLock<Vec<u32>>>,
     flow_call_index: Arc<OnceLock<FxHashMap<(u64, usize), Vec<usize>>>>,
     html_comment_free_source: Arc<OnceLock<Option<Vec<u8>>>>,
+    commentless_ast: Arc<OnceLock<Option<tree_sitter::Tree>>>,
 }
 
 /// Context for evaluating composite rules
@@ -233,6 +234,9 @@ pub(crate) struct EvaluationContext<'a> {
     /// Lazily masked copy used only by `type: text` rules that explicitly
     /// ignore markup comments. `None` means the file had no such comments.
     pub cached_html_comment_free_source: Arc<OnceLock<Option<Vec<u8>>>>,
+    /// Offset-preserving AST view for queries that explicitly ignore comments.
+    /// Only successful views (including no comments) are cached per input.
+    pub cached_commentless_ast: Arc<OnceLock<Option<tree_sitter::Tree>>>,
     /// Hard deadline for rule evaluation.
     pub deadline: Option<Instant>,
     /// Cooperative cancellation flag (set by litmus timeout).
@@ -376,6 +380,7 @@ impl<'a> EvaluationContext<'a> {
             literal_string_indices: Arc::new(OnceLock::new()),
             flow_call_index: Arc::new(OnceLock::new()),
             cached_html_comment_free_source: Arc::new(OnceLock::new()),
+            cached_commentless_ast: Arc::new(OnceLock::new()),
             deadline: None,
             cancellation: None,
             arch_ranges: None,
@@ -406,6 +411,7 @@ impl<'a> EvaluationContext<'a> {
         self.literal_string_indices = Arc::clone(&caches.literal_string_indices);
         self.flow_call_index = Arc::clone(&caches.flow_call_index);
         self.cached_html_comment_free_source = Arc::clone(&caches.html_comment_free_source);
+        self.cached_commentless_ast = Arc::clone(&caches.commentless_ast);
         self
     }
 
@@ -755,6 +761,7 @@ impl<'a> EvaluationContext<'a> {
             literal_string_indices: Arc::new(OnceLock::new()),
             flow_call_index: Arc::new(OnceLock::new()),
             cached_html_comment_free_source: Arc::new(OnceLock::new()),
+            cached_commentless_ast: Arc::new(OnceLock::new()),
             deadline: None,
             cancellation: None,
             arch_ranges: None,

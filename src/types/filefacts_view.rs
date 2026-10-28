@@ -150,6 +150,23 @@ pub(super) fn retained_dependency_values(tree: &serde_json::Value) -> serde_json
             serde_json::json!({"js": {"runtime_imports": imports}}),
         );
     }
+    // Fixed Batch program recipes need their complete source after archive or
+    // decoded-layer folding. Never retain unrelated source/Batch properties.
+    for key in ["command_sites", "command_sites_truncated"] {
+        if let Some(value) = tree.pointer(&format!("/source/batch/{key}")) {
+            let source = retained
+                .entry("source")
+                .or_insert_with(|| serde_json::json!({}));
+            if let Some(source) = source.as_object_mut() {
+                let batch = source
+                    .entry("batch")
+                    .or_insert_with(|| serde_json::json!({}));
+                if let Some(batch) = batch.as_object_mut() {
+                    batch.insert(key.to_owned(), value.clone());
+                }
+            }
+        }
+    }
     // PE augmentation reads this path after the view is attached so it can
     // derive a high-confidence builder username. Keep it through evaluation;
     // compact folding drops it with the other non-dependency values later.
@@ -243,6 +260,30 @@ mod tests {
             Some("axios")
         );
         assert!(retained.pointer("/source/other").is_none());
+    }
+
+    #[test]
+    fn compact_values_keep_batch_program_source_and_coverage_after_roundtrip() {
+        let tree = serde_json::json!({"source":{"batch":{
+            "command_sites":[{"name":"mshta", "text":"mshta https://program.test/a.hta", "offset":0,"name_offset":0,"name_end":5}],
+            "command_sites_truncated":true, "unrelated":"discard"}, "other":"discard"}});
+        let retained = retained_dependency_values(&tree);
+        let view = FilefactsView {
+            values: retained,
+            ..Default::default()
+        };
+        let view: FilefactsView =
+            serde_json::from_slice(&serde_json::to_vec(&view).unwrap()).unwrap();
+        assert_eq!(
+            view.values.pointer("/source/batch/command_sites/0/name"),
+            Some(&"mshta".into())
+        );
+        assert_eq!(
+            view.values.pointer("/source/batch/command_sites_truncated"),
+            Some(&true.into())
+        );
+        assert!(view.values.pointer("/source/batch/unrelated").is_none());
+        assert!(view.values.pointer("/source/other").is_none());
     }
 
     #[test]

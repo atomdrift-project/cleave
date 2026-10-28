@@ -654,6 +654,20 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Raise those legs to the composite's crit:, or add the all:/needs:/unless:/for: that earns the higher tier.",
     },
     ValidatorSpec {
+        id: "wellknown-basename-crit",
+        category: ValidatorCategory::Policy,
+        display_id: "wk-name-crit",
+        description: "A well-known filename-only observation exceeds notable.",
+        fix: "Use notable for the filename fact and require corroborating content or behavior for a stronger claim.",
+    },
+    ValidatorSpec {
+        id: "wellknown-baseline",
+        category: ValidatorCategory::Policy,
+        display_id: "wk-baseline",
+        description: "A well-known rule uses baseline criticality.",
+        fix: "Review the evidence: use notable for a meaningful identity or filename fact, component for an incomplete fragment, or move a general property to its actual subject.",
+    },
+    ValidatorSpec {
         id: "suppression-only-building-block",
         category: ValidatorCategory::Policy,
         display_id: "supp-only",

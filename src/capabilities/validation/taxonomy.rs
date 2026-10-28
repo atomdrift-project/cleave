@@ -296,6 +296,62 @@ const BANNED_SEGMENT_EXCEPTIONS: &[(&str, &str)] = &[
 /// Every directory uses the same limit; there are no path-specific budgets.
 pub(crate) const MAX_TRAITS_PER_DIRECTORY: usize = 100;
 
+/// Baseline findings are too broad to represent a named entity. Components are
+/// still allowed when they are incomplete evidence for an identity.
+#[must_use]
+pub(crate) fn find_wellknown_baseline_rules(
+    traits: &[TraitDefinition],
+    composites: &[CompositeTrait],
+    sources: &HashMap<String, String>,
+) -> Vec<(String, String)> {
+    let mut violations: Vec<_> = traits
+        .iter()
+        .map(|r| (&r.id, r.crit))
+        .chain(composites.iter().map(|r| (&r.id, r.crit)))
+        .filter(|(id, crit)| id.starts_with("well-known/") && *crit == Criticality::Baseline)
+        .map(|(id, _)| {
+            (
+                id.clone(),
+                sources
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| "unknown".to_string()),
+            )
+        })
+        .collect();
+    violations.sort_unstable();
+    violations
+}
+
+/// A basename fact observes the scanned name, not the identity of its owner.
+fn is_basename_fact(trait_def: &TraitDefinition) -> bool {
+    matches!(&trait_def.r#if, Condition::Path(query) if query.basename && !query.dirname)
+}
+
+/// A filename alone cannot establish suspicious or hostile identity.
+#[must_use]
+pub(crate) fn find_wellknown_high_criticality_basenames(
+    traits: &[TraitDefinition],
+    sources: &HashMap<String, String>,
+) -> Vec<(String, String)> {
+    let mut violations: Vec<_> = traits
+        .iter()
+        .filter(|t| {
+            t.id.starts_with("well-known/")
+                && t.crit > Criticality::Notable
+                && is_basename_fact(t)
+        })
+        .map(|t| {
+            (
+                t.id.clone(),
+                sources.get(&t.id).cloned().unwrap_or_else(|| "unknown".to_string()),
+            )
+        })
+        .collect();
+    violations.sort_unstable();
+    violations
+}
+
 /// Maximum number of immediate subdirectories allowed in one directory.
 /// Past this, a level has stopped being a taxonomy and become a flat list:
 /// authors can no longer tell whether a sibling already covers their case, and
@@ -3477,6 +3533,8 @@ pub(crate) fn find_wellknown_missing_size_filter(
         .filter(|t| {
             extract_trait_tier(&t.id) == "well-known"
                 && trait_targets_binaries(t)
+                && !(is_basename_fact(t)
+                    && matches!(t.crit, Criticality::Component | Criticality::Notable))
                 && t.size_min.is_none()
                 && t.size_max.is_none()
         })

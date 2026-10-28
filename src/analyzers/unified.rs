@@ -904,6 +904,24 @@ impl UnifiedSourceAnalyzer {
         // (e.g. decoding a -EncodedCommand payload), skip to avoid infinite loops.
         if !self.skip_embedded_detection {
             let parent = file_path.display().to_string();
+            if self.file_type == FileType::Python
+                && let Some(ast) = source_ast
+            {
+                for command in super::python_encoded_command::decode(ast) {
+                    if let Some(layer) = super::embedded_code_detector::analyze_decoded_script_layer(
+                        &parent,
+                        &command.text,
+                        command.offset,
+                        FileType::Shell,
+                        command.chain,
+                        &self.engine,
+                        0,
+                        false,
+                    ) {
+                        report.files.push(layer);
+                    }
+                }
+            }
             // stng already found/decoded obfuscated script blobs during string
             // extract, but it shreds `DeobfuscationResult.decoded` into
             // `ScriptDecode` fragments. Keep the full payload as a typed

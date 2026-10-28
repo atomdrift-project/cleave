@@ -1238,6 +1238,57 @@ fn batch_ast_queries_keeps_text_predicates() {
 }
 
 #[test]
+fn ast_query_evidence_capture_selects_sites_without_filtering_sibling_queries() {
+    let selected = "(call function: (identifier) @callee arguments: (argument_list) @args) @evidence";
+    let legacy = "(call function: (identifier) @callee arguments: (argument_list) @args) @call";
+    let _count = super::symbol_string::MatchCountGuard::set(true);
+    let source = "emit(123)\nother(456)\n";
+    let report = create_test_report("/test/sites.py");
+    let parsed = parsed_for_test("sites.py", source.as_bytes());
+    let ctx = create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::Python);
+    let single = eval_ast(None, None, None, None, None, Some(selected), false, &ctx);
+    assert_eq!(single.match_count, 2);
+    assert_eq!(single.evidence.len(), 2);
+    assert_eq!(single.evidence[0].value, "emit(123)");
+    assert_eq!(single.evidence[0].offsets, vec![0]);
+    assert_eq!(single.evidence[1].value, "other(456)");
+    assert_eq!(single.evidence[1].offsets, vec![10]);
+    let tree = parsed.source_ast().unwrap().tree;
+    let grouped = super::ast::batch_ast_queries(
+        tree, source, FileType::Python, &[selected, legacy], None, None,
+    ).unwrap();
+    assert_eq!(grouped[selected].match_count, 2);
+    assert_eq!(grouped[selected].evidence.len(), 2);
+    assert_eq!(grouped[selected].evidence[0].offsets, vec![0]);
+    assert_eq!(grouped[selected].evidence[1].offsets, vec![10]);
+    assert_eq!(grouped[legacy].match_count, 2);
+    assert_eq!(grouped[legacy].evidence.len(), 6);
+}
+
+#[test]
+fn ast_query_evidence_capture_requires_the_selected_site_to_be_bound() {
+    let selected = "(call function: (identifier) @callee) @evidence\n(identifier) @support";
+    let sibling = "(identifier) @identifier";
+    let _count = super::symbol_string::MatchCountGuard::set(true);
+    for (source, expected) in [("value = 1\n", 0), ("emit(1)\n", 1)] {
+        let report = create_test_report("/test/optional-site.py");
+        let parsed = parsed_for_test("optional-site.py", source.as_bytes());
+        let ctx = create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::Python);
+        let single = eval_ast(None, None, None, None, None, Some(selected), false, &ctx);
+        assert_eq!(single.match_count, expected);
+        assert_eq!(single.matched, expected > 0);
+        assert_eq!(single.evidence.len(), expected);
+        let tree = parsed.source_ast().unwrap().tree;
+        let grouped = super::ast::batch_ast_queries(
+            tree, source, FileType::Python, &[selected, sibling], None, None,
+        ).unwrap();
+        assert_eq!(grouped[selected].match_count, expected);
+        assert_eq!(grouped[selected].evidence.len(), expected);
+        assert!(grouped[sibling].matched, "a sibling keeps its ordinary captures");
+    }
+}
+
+#[test]
 fn ast_query_counts_occurrences_not_captures_in_single_and_batch_paths() {
     let query = "(call function: (identifier) @callee arguments: (argument_list) @args) @call";
     let sibling = "(identifier) @id";

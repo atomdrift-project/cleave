@@ -2337,6 +2337,13 @@ fn retain_dependency_symbols(symbols: &mut Vec<filefacts::Symbol>, file_type: &s
                     name.rsplit(['/', '\\']).next(),
                     Some("curl" | "wget" | "curl.exe" | "wget.exe")
                 )
+                // GLib can write a stylesheet that imports an external asset.
+                // The dependency reader needs the complete body argument after
+                // archive folding; unrelated writes need no retained symbols.
+                || (matches!(file_type, "javascript" | "typescript")
+                    && name == "GLib.file_set_contents"
+                    && matches!(args.get(1), Some(filefacts::Arg::String { value })
+                        if value.len() <= 16_384 && value.contains("@import")))
                 || (file_type == "ruby"
                     && matches!(
                         name.as_str(),

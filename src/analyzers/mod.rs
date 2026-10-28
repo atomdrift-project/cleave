@@ -64,6 +64,7 @@ pub(crate) mod js_joined_module;
 pub(crate) mod js_literal_catalog;
 pub(crate) mod js_string_table;
 pub(crate) mod literal_program;
+pub(crate) mod python_encoded_command;
 pub(crate) mod macho;
 pub(crate) mod media;
 pub(crate) mod office;

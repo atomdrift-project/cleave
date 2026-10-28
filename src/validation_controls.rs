@@ -594,7 +594,7 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         id: "sparse-siblings",
         category: ValidatorCategory::Policy,
         display_id: "sparse-siblings",
-        description: "Sibling branches have fewer than 35 combined rules.",
+        description: "Sibling branches have fewer than 35 combined rules, or a parent is split into many branches of three or fewer rules.",
         fix: "Review defining traits and merge only when separate branches do not add precision.",
     },
     ValidatorSpec {

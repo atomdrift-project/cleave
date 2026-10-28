@@ -2032,6 +2032,9 @@ fn arg_matches(
     {
         return false;
     }
+    if filter.is.is_some() && !arg_text(arg).is_some_and(|t| validate_match(t, filter.is)) {
+        return false;
+    }
     match arg {
         Arg::Number { value, radix, .. } => {
             if let Some(want_value) = filter.value
@@ -2081,6 +2084,17 @@ fn arg_matches(
         _ => {}
     }
     true
+}
+
+/// The literal text an argument carries, if any: a string or template value,
+/// or an identifier's name.
+fn arg_text(arg: &filefacts::Arg) -> Option<&str> {
+    use filefacts::Arg;
+    match arg {
+        Arg::String { value } | Arg::Template { value } => Some(value),
+        Arg::Identifier { name } => Some(name),
+        _ => None,
+    }
 }
 
 /// Lowercase shape tag for an [`filefacts::Arg`], matching the `shape:` /
@@ -3276,7 +3290,7 @@ pub(crate) fn eval_encoded<'a>(
     clippy::cloned_ref_to_slice_refs
 )]
 mod multi_arg_tests {
-    use super::all_filters_match_distinct;
+    use super::{all_filters_match_distinct, arg_matches};
     use crate::composite_rules::condition::ArgFilter;
 
     fn s(v: &str) -> filefacts::Arg {
@@ -3347,6 +3361,32 @@ mod multi_arg_tests {
         let args = [s("a.png"), s("b.exe")];
         let filters = [rx(r"\.png$"), rx(r"\.exe$")];
         assert!(all_filters_match_distinct(&args, &filters));
+    }
+
+    #[test]
+    fn is_validates_the_arguments_own_text() {
+        use crate::composite_rules::condition::StringValidator;
+        let external = ArgFilter {
+            is: Some(StringValidator::ExternalIp),
+            ..Default::default()
+        };
+        assert!(arg_matches(&s("http://93.184.216.34/x"), &external));
+        assert!(!arg_matches(&s("http://10.0.0.5/x"), &external));
+        assert!(!arg_matches(&s("http://example.com/x"), &external));
+        // A shell word is recorded as an identifier; its name is its text.
+        let word = filefacts::Arg::Identifier {
+            name: "http://93.184.216.34/x".to_string(),
+        };
+        assert!(arg_matches(&word, &external));
+        // An argument without literal text cannot satisfy the check.
+        assert!(!arg_matches(&filefacts::Arg::Expression, &external));
+        // It composes with the other fields: both must hold.
+        let narrowed = ArgFilter {
+            regex: Some("^https?://".to_string()),
+            ..external
+        };
+        assert!(arg_matches(&s("http://93.184.216.34/x"), &narrowed));
+        assert!(!arg_matches(&s("ftp://93.184.216.34/x"), &narrowed));
     }
 
     #[test]

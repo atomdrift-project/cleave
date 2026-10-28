@@ -173,7 +173,8 @@ pub(crate) use taxonomy::{
     find_new_metadata_file_literal_ids, find_new_metadata_file_string_ids,
     find_objectives_wellknown_violations, find_oversized_trait_directories,
     find_parent_duplicate_segments, find_permuted_directory_paths, find_platform_named_directories,
-    find_redundant_unix_platforms, find_sibling_name_restatement, find_sparse_sibling_cohorts,
+    find_fragmented_sibling_cohorts, find_redundant_unix_platforms,
+    find_sibling_name_restatement, find_sparse_sibling_cohorts,
     find_stale_filetype_allowlist_entries, find_suppression_only_building_blocks,
     find_unanchored_wellknown_composites, find_unreferenced_exceptions,
     find_wellknown_category_violations, find_wellknown_missing_section_filter,
@@ -184,7 +185,8 @@ pub(crate) use taxonomy::{
 // Logic constraint validation
 #[allow(unused_imports)] // find_needs_zero used by binary target
 pub(crate) use constraints::{
-    LegRole, MAX_NOTABLE_DOWNGRADE_DIRECT, MAX_NOTABLE_DOWNGRADE_EXPANDED, MISSING_CONDITIONS,
+    LegRole, MAX_AGGREGATE_SUPPRESSIONS, MAX_NOTABLE_DOWNGRADE_DIRECT,
+    MAX_NOTABLE_DOWNGRADE_EXPANDED, MAX_OWN_SUPPRESSIONS, MISSING_CONDITIONS,
     find_broad_notable_downgrades, find_container_name_convictions,
     find_convictions_without_content, find_dangling_directory_refs, find_dead_any_alternatives,
     find_dead_composites, find_dead_downgrades, find_directory_shadowed_refs,

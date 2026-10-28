@@ -1807,10 +1807,6 @@ mod tests {
                 "micro-behaviors/process/work",
             ),
             (
-                "objectives/command-and-control/dropper/file-exec",
-                "objectives/execution/payload",
-            ),
-            (
                 "objectives/command-and-control/dropper/staging",
                 "objectives/execution/staging",
             ),

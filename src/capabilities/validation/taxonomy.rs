@@ -1557,19 +1557,13 @@ pub(crate) fn find_deep_taxonomy_directories(trait_dirs: &[String]) -> Vec<(Stri
     candidates
 }
 
-/// Find sparse sibling cohorts that may be over-fragmented in the taxonomy.
-///
-/// A cohort produces a soft warning when a parent has at least two rule-bearing child
-/// branches and their combined subtree contains fewer than 35 rules.
-/// This does not prove the branches should be flattened: the child
-/// techniques may be genuinely distinct. It identifies places where cap pressure
-/// does not explain the extra branching and a human should check whether breadth
-/// could preserve precision with a simpler visible path.
-#[must_use]
-pub(crate) fn find_sparse_sibling_cohorts(
+/// Group directories' subtree rule counts by parent, for the sibling-cohort
+/// checks. Only `micro-behaviors/` and `objectives/` are considered, and the
+/// tier plus first category layer are skipped: they are too broad to be useful
+/// as local organization advice.
+fn sibling_cohorts(
     direct_rule_counts: &HashMap<String, usize>,
-) -> Vec<(String, usize, usize)> {
-    const SPARSE_SIBLING_RULE_THRESHOLD: usize = 35;
+) -> HashMap<String, Vec<(String, usize)>> {
     let mut subtree_counts: HashMap<String, usize> = HashMap::new();
 
     for (directory, count) in direct_rule_counts {
@@ -1588,20 +1582,34 @@ pub(crate) fn find_sparse_sibling_cohorts(
     let mut children_by_parent: HashMap<String, Vec<(String, usize)>> = HashMap::new();
     for (directory, count) in &subtree_counts {
         if let Some((parent, child)) = directory.rsplit_once('/') {
+            if parent.split('/').count() < 3 {
+                continue;
+            }
             children_by_parent
                 .entry(parent.to_string())
                 .or_default()
                 .push((child.to_string(), *count));
         }
     }
+    children_by_parent
+}
+
+/// Find sparse sibling cohorts that may be over-fragmented in the taxonomy.
+///
+/// A cohort produces a soft warning when a parent has at least two rule-bearing child
+/// branches and their combined subtree contains fewer than 35 rules.
+/// This does not prove the branches should be flattened: the child
+/// techniques may be genuinely distinct. It identifies places where cap pressure
+/// does not explain the extra branching and a human should check whether breadth
+/// could preserve precision with a simpler visible path.
+#[must_use]
+pub(crate) fn find_sparse_sibling_cohorts(
+    direct_rule_counts: &HashMap<String, usize>,
+) -> Vec<(String, usize, usize)> {
+    const SPARSE_SIBLING_RULE_THRESHOLD: usize = 35;
 
     let mut candidates = Vec::new();
-    for (parent, children) in children_by_parent {
-        // Ignore the tier and first category layer; they are too broad to be
-        // useful as local organization advice.
-        if parent.split('/').count() < 3 {
-            continue;
-        }
+    for (parent, children) in sibling_cohorts(direct_rule_counts) {
         if children.len() < 2 {
             continue;
         }
@@ -1611,6 +1619,40 @@ pub(crate) fn find_sparse_sibling_cohorts(
         }
     }
     candidates.sort_by(|a, b| (a.1, &a.0).cmp(&(b.1, &b.0)));
+    candidates
+}
+
+/// Find parents split into many tiny branches that a large sibling hides.
+///
+/// [`find_sparse_sibling_cohorts`] sums a parent's whole subtree, so a few big
+/// children keep their one- and two-rule neighbours above the 35-rule bar.
+/// A parent is reported here when at least five of its children hold
+/// three or fewer rules each and those children are at least half of all
+/// children. Parents under 35 rules are left to the sum check. Returns
+/// `(parent, tiny_children, children, rules)`, fewest rules first.
+#[must_use]
+pub(crate) fn find_fragmented_sibling_cohorts(
+    direct_rule_counts: &HashMap<String, usize>,
+) -> Vec<(String, usize, usize, usize)> {
+    const TINY_CHILD_RULE_LIMIT: usize = 3;
+    const MIN_TINY_CHILDREN: usize = 5;
+    const SPARSE_SIBLING_RULE_THRESHOLD: usize = 35;
+
+    let mut candidates = Vec::new();
+    for (parent, children) in sibling_cohorts(direct_rule_counts) {
+        let rules: usize = children.iter().map(|(_, count)| count).sum();
+        if rules < SPARSE_SIBLING_RULE_THRESHOLD {
+            continue;
+        }
+        let tiny = children
+            .iter()
+            .filter(|(_, count)| *count <= TINY_CHILD_RULE_LIMIT)
+            .count();
+        if tiny >= MIN_TINY_CHILDREN && tiny * 2 >= children.len() {
+            candidates.push((parent, tiny, children.len(), rules));
+        }
+    }
+    candidates.sort_by(|a, b| (a.3, &a.0).cmp(&(b.3, &b.0)));
     candidates
 }
 

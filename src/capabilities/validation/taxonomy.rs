@@ -1622,37 +1622,29 @@ pub(crate) fn find_sparse_sibling_cohorts(
     candidates
 }
 
-/// Find parents split into many tiny branches that a large sibling hides.
-///
-/// [`find_sparse_sibling_cohorts`] sums a parent's whole subtree, so a few big
-/// children keep their one- and two-rule neighbours above the 35-rule bar.
-/// A parent is reported here when at least five of its children hold
-/// three or fewer rules each and those children are at least half of all
-/// children. Parents under 35 rules are left to the sum check. Returns
-/// `(parent, tiny_children, children, rules)`, fewest rules first.
+/// Find parents with many child directories that are sparse on average.
+/// Ten branches indicate a broad directory taxonomy, and an average of eight
+/// rules or fewer per branch merits review for needless fragmentation. This
+/// is a review signal only: distinct techniques remain separate. Returns
+/// `(parent, children, total_rules, average_rules)`, lowest average first.
 #[must_use]
 pub(crate) fn find_fragmented_sibling_cohorts(
     direct_rule_counts: &HashMap<String, usize>,
-) -> Vec<(String, usize, usize, usize)> {
-    const TINY_CHILD_RULE_LIMIT: usize = 3;
-    const MIN_TINY_CHILDREN: usize = 5;
-    const SPARSE_SIBLING_RULE_THRESHOLD: usize = 35;
-
+) -> Vec<(String, usize, usize, f64)> {
+    const MIN_CHILDREN: usize = 10;
+    const MAX_AVERAGE_RULES: f64 = 8.0;
     let mut candidates = Vec::new();
     for (parent, children) in sibling_cohorts(direct_rule_counts) {
-        let rules: usize = children.iter().map(|(_, count)| count).sum();
-        if rules < SPARSE_SIBLING_RULE_THRESHOLD {
+        if children.len() < MIN_CHILDREN {
             continue;
         }
-        let tiny = children
-            .iter()
-            .filter(|(_, count)| *count <= TINY_CHILD_RULE_LIMIT)
-            .count();
-        if tiny >= MIN_TINY_CHILDREN && tiny * 2 >= children.len() {
-            candidates.push((parent, tiny, children.len(), rules));
+        let rules: usize = children.iter().map(|(_, count)| count).sum();
+        let average = rules as f64 / children.len() as f64;
+        if average <= MAX_AVERAGE_RULES {
+            candidates.push((parent, children.len(), rules, average));
         }
     }
-    candidates.sort_by(|a, b| (a.3, &a.0).cmp(&(b.3, &b.0)));
+    candidates.sort_by(|a, b| a.3.total_cmp(&b.3).then_with(|| a.0.cmp(&b.0)));
     candidates
 }
 
@@ -2920,7 +2912,7 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // types; narrowing it to seven would discard existing call facts. This
     // exact-file exception applies only to symbol matchers, and changes no
     // parsing, decoding, match predicates, or runtime behavior.
-    "symbol:micro-behaviors/os/env/enumeration/query.yaml",
+    "symbol:micro-behaviors/os/env/enumerate/enumeration-query.yaml",
     // A declared digest label and hexadecimal value has the same meaning in
     // bootstrap source and manifests. Preserve its existing scope when the
     // declaration moves from hash operations to integrity metadata.
@@ -2954,7 +2946,7 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // Preserve the same four carriers when the neutral find-next opcode
     // moves out of infection objectives. This exact source-file exception
     // does not broaden the remaining filesystem-search rules.
-    "hex:micro-behaviors/fs/search/dos-find-next.yaml",
+    "hex:micro-behaviors/fs/search/command/dos-find-next.yaml",
     // IP addresses and port numbers are embedded in binaries, scripts, manifests, docs
     "text:micro-behaviors/communications/ip/",
     // URLs and URL fragments appear in any file type
@@ -3013,7 +3005,6 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     "text:metadata/lang/locale/",
     "text:metadata/file/string/",
     "text:metadata/file/extension/",
-    "text:micro-behaviors/data/encoded/",
     "text:micro-behaviors/data/format/media/",
     "text:micro-behaviors/data/runtime/keywords/",
     "text:micro-behaviors/communications/http/keywords/",
@@ -3073,7 +3064,7 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     "literal:metadata/file/string/",
     "literal:objectives/impact/destroy/keywords/",
     "literal:objectives/command-and-control/remote-command/llm/",
-    "literal:objectives/credential-access/theft/keywords/",
+    "literal:objectives/credential-access/theft/authentication/",
     // Archive-member structural matchers (a vim-swap file, go.mod, .go source,
     // or Package.swift shipped inside a package) legitimately span the whole
     // archive family — the same member can appear in an npm tarball, gem, whl,

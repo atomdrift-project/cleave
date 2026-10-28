@@ -574,7 +574,7 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         category: ValidatorCategory::Policy,
         display_id: "oversized-dir",
         description: "Directory is too broad for useful ML directory signal.",
-        fix: "Audit this directory for duplicate or redundant traits first; then reorganize the remaining traits into meaningful subdirectories only when each child adds precision under TAXONOMY.md. Merely moving the same broad set to another location is not a fix; keep the split technique-based and platform-neutral where possible, and stay within the uniform 100-rule limit. Review parent and peer categories before adding a level.",
+        fix: "Audit this directory for duplicate or redundant traits first; then reorganize the remaining traits into meaningful subdirectories only when each child adds precision under TAXONOMY.md. Merely moving the same broad set to another location is not a fix; keep the split technique-based and platform-neutral where possible, and stay within the configured rule limit. Review parent and peer categories before adding a level.",
     },
     ValidatorSpec {
         id: "sibling-restate",
@@ -594,8 +594,8 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         id: "sparse-siblings",
         category: ValidatorCategory::Policy,
         display_id: "sparse-siblings",
-        description: "Sibling branches have fewer than 35 combined rules, or a parent is split into many branches of three or fewer rules.",
-        fix: "Review defining traits and merge only when separate branches do not add precision.",
+        description: "Parent has more than three child directories averaging fewer than ten rules each.",
+        fix: "Review the child directories; merge only branches that answer the same taxonomy question.",
     },
     ValidatorSpec {
         id: "wide-dir",

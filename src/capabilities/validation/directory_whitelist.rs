@@ -942,10 +942,8 @@ const ALLOWED_METADATA_DOCUMENT: &[&str] = &[
 /// These are primarily component traits used as building blocks in composite rules.
 const ALLOWED_METADATA_FILE: &[&str] = &[
     "archive",           // Member counts of the archive itself
-    "arithmetic",        // Density of arithmetic operator nodes
     "catalog",           // File/catalog identity and generated registries
     "comment",           // Comment volume and span
-    "data-blob", // Bytes that read as an opaque blob (entropy, NUL domination, one huge string)
     "encoded",   // Encoded content presence (base64); migrating to encoding
     "encoding",  // Encoded content representation without a decoding operation
     "entropy",   // Whole-file byte entropy; decoded-image measurements stay in image/
@@ -964,6 +962,7 @@ const ALLOWED_METADATA_FILE: &[&str] = &[
     "profile",   // Text profile and wrapper shapes
     "size",      // Degenerate file size and shape: tiny scripts, sparse strings
     "string",    // Neutral string identities
+    "system-info", // System-information field-name vocabulary in file content
 ];
 
 /// Allowed subdirectories in metadata/image/
@@ -1081,7 +1080,6 @@ const ALLOWED_METADATA_PACKAGE: &[&str] = &[
     "scaffold",       // Unedited `npm init` scaffolding published as-is
     "scripts",        // Package scripts
     "testing",        // Testing detection
-    "tooling",        // Benign package-manager, bundler, and generated-source contexts
     "versioning",     // Version detection
 ];
 

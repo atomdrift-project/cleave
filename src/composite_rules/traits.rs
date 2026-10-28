@@ -27,8 +27,20 @@ use smallvec::SmallVec;
 use std::time::Duration;
 
 /// Hard deadline for a single rule evaluation (90 seconds).
-/// When exceeded, evaluation is interrupted and a timeout finding is emitted.
+/// When exceeded, evaluation is incomplete; this is not evidence of an attack.
 const MAX_RULE_EVAL_DURATION: Duration = Duration::from_secs(90);
+
+// A deadline belongs to this analysis run, not to the artifact's threat
+// taxonomy. Mark it transient so an overloaded run cannot poison the cache.
+fn record_rule_timeout(report: &crate::types::AnalysisReport, elapsed: Duration) -> bool {
+    if elapsed <= MAX_RULE_EVAL_DURATION {
+        return false;
+    }
+    report
+        .analysis_gaps
+        .record(crate::types::AnalysisGap::EvaluationDeadline);
+    true
+}
 
 /// Debug log threshold for rule evaluation (500ms).
 /// Rules exceeding this emit an info-level log.
@@ -1752,8 +1764,8 @@ impl TraitDefinition {
         let result = self.eval_condition(&self.r#if, ctx);
         let duration = start.elapsed();
 
-        // Hard timeout: emit a timeout finding and skip the actual result
-        if duration > MAX_RULE_EVAL_DURATION {
+        // A timeout is incomplete analysis, not an analysis-evasion finding.
+        if record_rule_timeout(ctx.report, duration) {
             eprintln!(
                 "WARN: Rule {} exceeded hard timeout: {}ms > {}ms",
                 self.id,
@@ -1761,43 +1773,7 @@ impl TraitDefinition {
                 MAX_RULE_EVAL_DURATION.as_millis()
             );
 
-            let timeout_warning = Finding {
-                precomputed_spans: None,
-                src: None,
-                id: "objectives/anti-analysis/analysis-bomb/rule-timeout"
-                    .to_string()
-                    .into(),
-                desc: format!(
-                    "Rule evaluation timeout: {} took {}ms (limit: {}ms)",
-                    self.id,
-                    duration.as_millis(),
-                    MAX_RULE_EVAL_DURATION.as_millis()
-                )
-                .into(),
-                crit: Criticality::Suspicious,
-                kind: FindingKind::Indicator,
-                conf: 0.9,
-                mbc: Some("B0003.005".into()), // Obfuscated Files or Information: Analysis Evasion
-                attack: None,
-                trait_refs: vec![],
-                evidence: vec![crate::types::Evidence {
-                    method: "timeout-detection".to_string(),
-                    source: "cleave-evaluator".to_string(),
-                    value: format!(
-                        "Rule '{}' exceeded {}ms hard timeout, took {}ms",
-                        self.id,
-                        MAX_RULE_EVAL_DURATION.as_millis(),
-                        duration.as_millis()
-                    ),
-                    location: Some("0x0".to_string()),
-                    ..Default::default()
-                }],
-                match_count: 0,
-                source_file: get_relative_source_file(&self.defined_in),
-                downgraded: false,
-            };
-
-            return Some(timeout_warning);
+            return None;
         }
 
         // Info log: rules taking >500ms
@@ -3273,7 +3249,7 @@ impl CompositeTrait {
 
             // Check for timeout violations before returning
             let duration = start.elapsed();
-            if duration > MAX_RULE_EVAL_DURATION {
+            if record_rule_timeout(ctx.report, duration) {
                 eprintln!(
                     "WARN: Composite rule {} exceeded timeout: {}ms > {}ms",
                     self.id,
@@ -3281,41 +3257,7 @@ impl CompositeTrait {
                     MAX_RULE_EVAL_DURATION.as_millis()
                 );
 
-                return Some(Finding {
-                    precomputed_spans: None,
-                    src: None,
-                    id: "objectives/anti-analysis/analysis-bomb/rule-timeout"
-                        .to_string()
-                        .into(),
-                    desc: format!(
-                        "Composite rule evaluation timeout: {} took {}ms (limit: {}ms)",
-                        self.id,
-                        duration.as_millis(),
-                        MAX_RULE_EVAL_DURATION.as_millis()
-                    )
-                    .into(),
-                    crit: Criticality::Suspicious,
-                    kind: FindingKind::Indicator,
-                    conf: 0.9,
-                    mbc: Some("B0003.005".into()), // Obfuscated Files or Information: Analysis Evasion
-                    attack: None,
-                    trait_refs: vec![],
-                    evidence: vec![crate::types::Evidence {
-                        method: "timeout-detection".to_string(),
-                        source: "cleave-evaluator".to_string(),
-                        value: format!(
-                            "Composite rule '{}' exceeded {}ms timeout, took {}ms",
-                            self.id,
-                            MAX_RULE_EVAL_DURATION.as_millis(),
-                            duration.as_millis()
-                        ),
-                        location: Some("0x0".to_string()),
-                        ..Default::default()
-                    }],
-                    match_count: 0,
-                    source_file: get_relative_source_file(&self.defined_in),
-                    downgraded: false,
-                });
+                return None;
             }
 
             Some(Finding {
@@ -5389,5 +5331,30 @@ mod scope_tests {
         ];
 
         assert!(rule.apply_scope_filter(evidence, tags, &[], "").is_none());
+    }
+}
+
+#[cfg(test)]
+mod timeout_diagnostic_tests {
+    use super::*;
+    use crate::types::{AnalysisGap, AnalysisReport, TargetInfo};
+
+    #[test]
+    fn rule_timeout_records_a_transient_gap_without_a_threat_finding() {
+        let report = AnalysisReport::new(TargetInfo::default());
+        assert!(!record_rule_timeout(&report, MAX_RULE_EVAL_DURATION));
+        assert!(report.analysis_gaps.is_empty());
+        assert!(record_rule_timeout(
+            &report,
+            MAX_RULE_EVAL_DURATION + Duration::from_millis(1)
+        ));
+        assert!(
+            report
+                .analysis_gaps
+                .contains(AnalysisGap::EvaluationDeadline)
+        );
+        assert!(report.findings.is_empty());
+        let other = AnalysisReport::new(TargetInfo::default());
+        assert!(other.analysis_gaps.is_empty());
     }
 }

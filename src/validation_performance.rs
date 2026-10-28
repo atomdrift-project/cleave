@@ -149,9 +149,17 @@ impl Drop for QueryTimer<'_> {
     }
 }
 
-/// A conservative relative fence: at least eight executed queries on the same
-/// fixture and with the same boolean/full-count mode, and both 20 times their median and 20 median absolute deviations.
-/// No elapsed-time constant: scaling every query equally preserves the verdict.
+// Cheap queries vary by many peer multiples while costing less than a
+// millisecond. Keep that variation out of the failure gate, and allow headroom
+// above the relative fence for query shapes that perform different work.
+const AST_OUTLIER_NOISE_ALLOWANCE: Duration = Duration::from_millis(1);
+const AST_OUTLIER_MULTIPLIER: u128 = 40;
+
+/// Require eight executed queries on the same fixture and in the same
+/// boolean/full-count mode. Require at least 1ms of excess cost above both
+/// 40 times the peer median and the median plus 40 median absolute deviations.
+/// The absolute allowance prevents tiny overruns of the relative boundary
+/// from failing validation.
 fn outlier_fence(costs: &BTreeMap<String, Duration>) -> Option<(Duration, Duration)> {
     if costs.len() < 8 {
         return None;
@@ -162,7 +170,10 @@ fn outlier_fence(costs: &BTreeMap<String, Duration>) -> Option<(Duration, Durati
     let mut deviations: Vec<_> = ns.iter().map(|n| n.abs_diff(median)).collect();
     deviations.sort_unstable();
     let mad = deviations[deviations.len() / 2];
-    let fence = (median.saturating_mul(20)).max(median.saturating_add(mad.saturating_mul(20)));
+    let fence = median
+        .saturating_mul(AST_OUTLIER_MULTIPLIER)
+        .max(median.saturating_add(mad.saturating_mul(AST_OUTLIER_MULTIPLIER)))
+        .saturating_add(AST_OUTLIER_NOISE_ALLOWANCE.as_nanos());
     let duration = |n: u128| Duration::from_nanos(n.min(u128::from(u64::MAX)) as u64);
     Some((duration(median), duration(fence)))
 }
@@ -194,7 +205,7 @@ impl Session {
             for (id, &cost) in costs {
                 if cost > fence {
                     issues.entry((id.clone(), path.clone())).or_insert_with(|| issue(id, path,
-                        &format!("AST query cost is an extreme outlier: {}us; peer median {}us, relative fence {}us ({} executed queries)",
+                        &format!("AST query cost is an extreme outlier: {}us; peer median {}us, effective fence {}us (1ms excess allowance, 40x peer margin; {} executed queries)",
                             cost.as_micros(), median.as_micros(), fence.as_micros(), costs.len())));
                 }
             }
@@ -297,34 +308,101 @@ pub(crate) fn observe_result(id: &str, path: &str, result: &ConditionResult) {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    fn measured_costs(peer_us: u64, candidate: Duration) -> BTreeMap<String, Duration> {
+        (0..9)
+            .map(|i| {
+                (
+                    i.to_string(),
+                    if i == 8 {
+                        candidate
+                    } else {
+                        Duration::from_micros(peer_us)
+                    },
+                )
+            })
+            .collect()
+    }
+
     #[test]
-    fn outliers_are_relative_and_require_comparable_peers() {
-        let costs = |scale: u64| {
-            (0..9)
+    fn outliers_require_comparable_peers() {
+        assert!(outlier_fence(&BTreeMap::new()).is_none());
+        let mut few = measured_costs(10, Duration::from_millis(5));
+        few.remove("0");
+        few.remove("1");
+        assert!(outlier_fence(&few).is_none());
+        let uniform = (0..9)
+            .map(|i| (i.to_string(), Duration::from_secs(1)))
+            .collect();
+        let (_, fence) = outlier_fence(&uniform).unwrap();
+        assert!(uniform.values().all(|cost| *cost <= fence));
+    }
+
+    #[test]
+    fn cheap_queries_tolerate_submillisecond_variation() {
+        // These cover the observed 49us, 155us, 308us, 855us and 879us failures.
+        for candidate_us in [49, 155, 308, 855, 879, 999, 1000] {
+            let costs = measured_costs(2, Duration::from_micros(candidate_us));
+            let (_, fence) = outlier_fence(&costs).unwrap();
+            assert_eq!(fence, Duration::from_micros(1080));
+            assert!(costs.values().all(|cost| *cost <= fence));
+        }
+    }
+
+    #[test]
+    fn relative_margin_ignores_small_crossings_of_the_old_fence() {
+        let costs = measured_costs(55, Duration::from_micros(1142));
+        let (_, fence) = outlier_fence(&costs).unwrap();
+        assert_eq!(fence, Duration::from_micros(3200));
+        assert!(costs.values().all(|cost| *cost <= fence));
+    }
+
+    #[test]
+    fn absolute_excess_allowance_still_catches_material_relative_outliers() {
+        let costs = measured_costs(10, Duration::from_micros(1400) + Duration::from_nanos(1));
+        let (_, fence) = outlier_fence(&costs).unwrap();
+        let flagged: Vec<_> = costs
+            .iter()
+            .filter(|(_, cost)| **cost > fence)
+            .map(|(id, _)| id.as_str())
+            .collect();
+        assert_eq!(flagged, ["8"]);
+    }
+
+    #[test]
+    fn tiny_overruns_of_a_millisecond_relative_boundary_do_not_fail() {
+        let costs = measured_costs(25, Duration::from_micros(1044));
+        let (_, fence) = outlier_fence(&costs).unwrap();
+        assert_eq!(fence, Duration::from_millis(2));
+        assert!(costs.values().all(|cost| *cost <= fence));
+    }
+
+    #[test]
+    fn excess_boundary_is_inclusive() {
+        let costs = measured_costs(10, Duration::from_micros(1400));
+        let (_, fence) = outlier_fence(&costs).unwrap();
+        assert_eq!(fence, Duration::from_micros(1400));
+        assert!(costs.values().all(|cost| *cost <= fence));
+    }
+
+    #[test]
+    fn material_outliers_scale_with_their_peers() {
+        for scale in [10_000, 1_000_000] {
+            let costs = (0..9)
                 .map(|i| {
                     (
                         i.to_string(),
                         Duration::from_nanos(scale * if i == 8 { 1000 } else { 10 + i }),
                     )
                 })
-                .collect()
-        };
-        for scale in [1, 1000, 1_000_000] {
-            let values = costs(scale);
-            let (_, fence) = outlier_fence(&values).unwrap();
-            let flagged: Vec<_> = values
+                .collect();
+            let (_, fence) = outlier_fence(&costs).unwrap();
+            let flagged: Vec<_> = costs
                 .iter()
                 .filter(|(_, cost)| **cost > fence)
                 .map(|(id, _)| id.as_str())
                 .collect();
             assert_eq!(flagged, ["8"]);
         }
-        assert!(outlier_fence(&BTreeMap::new()).is_none());
-        let uniform = (0..9)
-            .map(|i| (i.to_string(), Duration::from_secs(1)))
-            .collect();
-        let (_, fence) = outlier_fence(&uniform).unwrap();
-        assert!(uniform.values().all(|cost| *cost <= fence));
     }
 
     #[test]

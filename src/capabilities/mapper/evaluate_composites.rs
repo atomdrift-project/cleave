@@ -40,6 +40,70 @@ fn immediate_parent_path(path: &str) -> Option<&str> {
 }
 
 impl super::CapabilityMapper {
+    /// A decoded layer belongs to its source file for file-scoped exclusions.
+    /// Never import context through an archive-member edge: reference data in
+    /// one member must not suppress executable code in another member.
+    fn recheck_decoded_file_exclusions(&self, report: &mut AnalysisReport) {
+        use rustc_hash::FxHashSet;
+        let mut order: Vec<usize> = (0..report.files.len()).collect();
+        order.sort_by_key(|&idx| report.files[idx].depth);
+        let mut path_order: Vec<usize> = (0..report.files.len()).collect();
+        path_order.sort_unstable_by(|&a, &b| report.files[a].path.cmp(&report.files[b].path));
+        for idx in order {
+            let child_path = &report.files[idx].path;
+            let Some(split) = child_path.rfind("##") else {
+                continue;
+            };
+            // The last edge must be a decoding, not a member of a decoded archive.
+            if child_path.rfind("!!").is_some_and(|member| member > split) {
+                continue;
+            }
+            let parent_path = &child_path[..split];
+            let parent_findings = if parent_path == report.target.path {
+                report.findings.clone()
+            } else if let Ok(position) =
+                path_order.binary_search_by(|&i| report.files[i].path.as_str().cmp(parent_path))
+            {
+                report.files[path_order[position]].findings.clone()
+            } else {
+                continue;
+            };
+            let original: FxHashSet<_> = report.files[idx]
+                .findings
+                .iter()
+                .map(|f| f.id.clone())
+                .collect();
+            let mut context: Vec<_> = report.files[idx]
+                .findings
+                .iter()
+                .chain(&parent_findings)
+                .map(|f| {
+                    let mut slim = Finding::new(f.id.clone(), f.kind.clone(), "", f.conf);
+                    slim.crit = f.crit;
+                    slim
+                })
+                .collect();
+            self.apply_retroactive_unless_suppression_to_findings(&mut context, None);
+            let surviving: FxHashSet<_> = context.iter().map(|f| f.id.clone()).collect();
+            let removed: FxHashSet<_> = original.difference(&surviving).cloned().collect();
+            if removed.is_empty() {
+                continue;
+            }
+            let child_id = report.files[idx].id;
+            report.files[idx]
+                .findings
+                .retain(|f| !removed.contains(&f.id));
+            // Remove only copies explicitly attributed to this decoded child.
+            report
+                .findings
+                .retain(|f| f.src != Some(child_id) || !removed.contains(&f.id));
+            for file in &mut report.files {
+                file.findings
+                    .retain(|f| f.src != Some(child_id) || !removed.contains(&f.id));
+            }
+        }
+    }
+
     /// Re-evaluate explicit parent-aware downgrades throughout the flat file
     /// tree. Root children use the root report; deeper children use only their
     /// immediate parent's findings. Process parents before children so a
@@ -53,6 +117,7 @@ impl super::CapabilityMapper {
         if report.files.is_empty() {
             return;
         }
+        self.recheck_decoded_file_exclusions(report);
 
         // Most members have no explicit parent-aware downgrade at all. Avoid
         // evaluating every archive member just to discover there is nothing
@@ -521,6 +586,29 @@ impl super::CapabilityMapper {
         file_type: RuleFileType,
         section_map: &SectionMap,
     ) {
+        self.reeval_downgrades_cross_scope_at_path(
+            target_findings,
+            extra_findings,
+            report,
+            binary_data,
+            file_type,
+            section_map,
+            None,
+        );
+    }
+
+    /// Container findings may gate a downgrade, but inline path conditions
+    /// still describe the member whose finding is being reconsidered.
+    pub(crate) fn reeval_downgrades_cross_scope_at_path(
+        &self,
+        target_findings: &mut [crate::types::Finding],
+        extra_findings: &[crate::types::Finding],
+        report: &AnalysisReport,
+        binary_data: &[u8],
+        file_type: RuleFileType,
+        section_map: &SectionMap,
+        target_path: Option<&str>,
+    ) {
         if target_findings.is_empty() {
             return;
         }
@@ -534,7 +622,7 @@ impl super::CapabilityMapper {
         // shape exactly.
         let target_snapshot: Vec<crate::types::Finding> = target_findings.to_vec();
         let file_caches = crate::composite_rules::context::FileEvalCaches::default();
-        let ctx = EvaluationContext::new(
+        let mut ctx = EvaluationContext::new(
             report,
             binary_data,
             file_type,
@@ -545,6 +633,7 @@ impl super::CapabilityMapper {
         .with_mid_findings(&target_snapshot)
         .with_section_map(section_map)
         .with_file_caches(&file_caches);
+        ctx.target_path_override = target_path;
 
         // Shared lazy rule-ID index: this runs once per archive member in the
         // container phase, so a per-call map build dominated small-member
@@ -1391,6 +1480,65 @@ mod tests {
 
     #[test]
     #[allow(clippy::expect_used)]
+    fn decoded_exclusions_inherit_only_their_source_file() {
+        let yaml = r#"
+traits:
+  - id: "test/context::reference"
+    desc: "Reference document"
+    crit: notable
+    if: {type: text, substr: "reference"}
+  - id: "test/target::command"
+    desc: "Request-fed command"
+    crit: hostile
+    if: {type: text, substr: "system"}
+    unless: [{id: "test/context::reference"}]
+"#;
+        let source = write_test_traits(yaml);
+        let mapper = super::super::CapabilityMapper::from_yaml(source.path()).expect("mapper");
+        let mut report = make_test_report();
+        report.target.path = "bundle.zip".into();
+        let context = make_test_finding("test/context::reference", Criticality::Notable);
+        let command = make_test_finding("test/target::command", Criticality::Hostile);
+        report.files = vec![
+            crate::types::FileAnalysis {
+                id: 1,
+                path: "bundle.zip!!reference.json".into(),
+                depth: 1,
+                findings: vec![context],
+                ..Default::default()
+            },
+            crate::types::FileAnalysis {
+                id: 2,
+                path: "bundle.zip!!reference.json##hex@100".into(),
+                parent_id: Some(1),
+                depth: 2,
+                findings: vec![command.clone()],
+                ..Default::default()
+            },
+            crate::types::FileAnalysis {
+                id: 3,
+                path: "bundle.zip!!public/shell.php".into(),
+                depth: 1,
+                findings: vec![command.clone()],
+                ..Default::default()
+            },
+            crate::types::FileAnalysis {
+                id: 4,
+                path: "bundle.zip!!public/shell.php##hex@0".into(),
+                parent_id: Some(3),
+                depth: 2,
+                findings: vec![command],
+                ..Default::default()
+            },
+        ];
+        mapper.recheck_decoded_file_exclusions(&mut report);
+        assert!(report.files[1].findings.is_empty());
+        assert_eq!(report.files[2].findings.len(), 1);
+        assert_eq!(report.files[3].findings.len(), 1);
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)]
     fn borrowed_members_preserve_atomic_self_and_archive_value_rules() {
         let yaml = r#"
 defaults:
@@ -2170,6 +2318,86 @@ traits:
         let mapper = make_basename_mapper();
         let findings = mapper.evaluate_basename_traits_for_entries(&[]);
         assert!(findings.is_empty());
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn test_cross_scope_downgrade_uses_member_path() {
+        use crate::composite_rules::SectionMap;
+        let yaml = r#"
+traits:
+  - id: "test/target::atomic"
+    desc: "encoded execution"
+    crit: suspicious
+    if: {type: text, substr: "exec"}
+    downgrade:
+      scope: archive
+      all:
+        - id: "test/gate::static-reader"
+        - type: path
+          regex: '(^|/)tests/fixtures/'
+  - id: "test/gate::static-reader"
+    desc: "static reader gate"
+    crit: notable
+    if: {type: text, substr: "scanner"}
+composite_rules:
+  - id: "test/target::composite"
+    desc: "encoded execution composite"
+    crit: suspicious
+    all:
+      - id: "test/target::atomic"
+    downgrade:
+      scope: archive
+      all:
+        - id: "test/gate::static-reader"
+        - type: path
+          regex: '(^|/)tests/fixtures/'
+"#;
+        let file = write_test_traits(yaml);
+        let mapper = super::super::CapabilityMapper::from_yaml(file.path()).expect("load mapper");
+        let mut report = make_test_report();
+        // A fixture-looking container name must not change a runtime member.
+        report.target.path = "/tests/fixtures/package.crate".into();
+        for id in ["test/target::atomic", "test/target::composite"] {
+            for (member, gate, expected) in [
+                (
+                    "package.crate!!src/runtime.py",
+                    true,
+                    Criticality::Suspicious,
+                ),
+                (
+                    "package.crate!!tests/fixtures/payload.py",
+                    true,
+                    Criticality::Notable,
+                ),
+                (
+                    "package.crate!!tests/fixtures/payload.py",
+                    false,
+                    Criticality::Suspicious,
+                ),
+            ] {
+                let extras = if gate {
+                    vec![make_test_finding(
+                        "test/gate::static-reader",
+                        Criticality::Notable,
+                    )]
+                } else {
+                    vec![]
+                };
+                let mut findings = vec![make_test_finding(id, Criticality::Suspicious)];
+                mapper.reeval_downgrades_cross_scope_at_path(
+                    &mut findings,
+                    &extras,
+                    &report,
+                    &[],
+                    RuleFileType::All,
+                    &SectionMap::default(),
+                    Some(member),
+                );
+                assert_eq!(findings[0].crit, expected, "{id} at {member}, gate={gate}");
+                assert_eq!(findings[0].downgraded, expected == Criticality::Notable);
+            }
+        }
     }
 
     /// Cross-scope downgrade pass — the central behavior used to demote

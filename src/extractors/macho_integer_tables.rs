@@ -275,6 +275,11 @@ pub(crate) fn inline_applescript(command: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::panic,
+        reason = "invalid fixtures should fail the test"
+    )]
     use super::*;
 
     fn fixture(command: &[u8], permuted: bool) -> (Vec<u8>, Vec<Section>) {

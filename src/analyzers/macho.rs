@@ -1870,12 +1870,14 @@ impl MachOAnalyzer {
                 precomputed_spans: None,
                 src: None,
                 kind: FindingKind::Structural,
-                id: "anti-analysis/malformed/macho-header".to_string().into(),
-                desc: format!("Malformed Mach-O header: {}", msg).into(),
+                id: "metadata/analysis/limitation::macho-parse-failed"
+                    .to_string()
+                    .into(),
+                desc: format!("Mach-O structural parsing failed: {}", msg).into(),
                 conf: 1.0,
-                crit: Criticality::Suspicious,
-                mbc: Some("B0001".into()),
-                attack: Some("T1027".into()),
+                crit: Criticality::Notable,
+                mbc: None,
+                attack: None,
                 evidence: vec![],
                 match_count: 0,
                 trait_refs: vec![],
@@ -2097,6 +2099,31 @@ impl Analyzer for MachOAnalyzer {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn parser_failure_reports_limitation_without_evasion_intent() {
+        let analyzer = MachOAnalyzer::new();
+        let bytes = vec![0u8; 4096];
+        let report = analyzer.analyze_macho_fallback(
+            Path::new("unparsed.macho"),
+            Path::new("unparsed.macho"),
+            &bytes,
+            "sha".into(),
+            Some("parser could not recover header".into()),
+            None,
+            std::time::Instant::now(),
+        );
+        assert_eq!(report.metadata.errors.len(), 1);
+        assert_eq!(report.findings.len(), 1);
+        let finding = &report.findings[0];
+        assert_eq!(
+            finding.id.as_str(),
+            "metadata/analysis/limitation::macho-parse-failed"
+        );
+        assert_eq!(finding.crit, Criticality::Notable);
+        assert!(finding.attack.is_none());
+        assert!(finding.mbc.is_none());
+    }
 
     /// A fat binary's slice table comes from the parse the caller already
     /// holds. Each range helper used to reopen the file, and reading a fat

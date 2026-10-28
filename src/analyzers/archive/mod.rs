@@ -2823,13 +2823,14 @@ impl ArchiveAnalyzer {
                         .apply_retroactive_unless_suppression_to_findings(&mut file.findings, None);
                 }
             }
-            mapper.reeval_downgrades_cross_scope(
+            mapper.reeval_downgrades_cross_scope_at_path(
                 &mut file.findings,
                 &container_snapshot,
                 report,
                 &[],
                 container_file_type,
                 &empty_section_map,
+                Some(&file.path),
             );
             if has_builtin_anti_analysis_finding(&file.findings) {
                 // No sink: this pass runs at archive assembly over an aggregated
@@ -2845,6 +2846,37 @@ impl ArchiveAnalyzer {
             files.iter_mut().for_each(reeval_file);
         }
         report.files = files;
+        // The aggregate was copied before member downgrades. Refresh its
+        // severity from every retained member, preserving the strongest one.
+        // At the member retention ceiling an omitted contributor may still
+        // justify the original tier, so leave aggregates conservative there.
+        if report.files.len() < 100_000 {
+            let mut member_criticality = rustc_hash::FxHashMap::default();
+            for file in &report.files {
+                for finding in &file.findings {
+                    member_criticality
+                        .entry(finding.id.as_str())
+                        .and_modify(|state: &mut (Criticality, bool)| {
+                            if finding.crit > state.0
+                                || finding.crit == state.0 && !finding.downgraded
+                            {
+                                *state = (finding.crit, finding.downgraded);
+                            }
+                        })
+                        .or_insert((finding.crit, finding.downgraded));
+                }
+            }
+            for finding in &mut report.findings {
+                // Container-owned detections have their own evidence and must
+                // not be demoted to the tier of a similarly named member fact.
+                if !container_suppression_targets.contains(finding.id.as_str())
+                    && let Some(&(crit, downgraded)) = member_criticality.get(finding.id.as_str())
+                {
+                    finding.crit = crit;
+                    finding.downgraded = downgraded;
+                }
+            }
+        }
         // Container composites are assembled after the ordinary per-file
         // pipeline. Re-check their `unless:` legs now that every archive-level
         // finding is available; otherwise an exception composite discovered
@@ -3673,6 +3705,96 @@ mod tests {
             root_finding.evidence[0].location.as_deref(),
             Some("archive:")
         );
+    }
+
+    #[test]
+    fn archive_member_downgrade_refreshes_aggregate_without_hiding_runtime_code() {
+        let yaml = r#"
+defaults:
+  for: [zip, python]
+  platforms: [unix, windows]
+traits:
+  - id: "test/member::encoded"
+    desc: "encoded execution"
+    crit: suspicious
+    if: {type: raw, substr: "PAYLOAD"}
+    downgrade:
+      scope: archive
+      all:
+        - id: "test/gate::static-reader"
+        - type: path
+          regex: '(^|/)tests/fixtures/'
+  - id: "test/gate::static-reader"
+    desc: "static reader"
+    crit: notable
+    if: {type: text, substr: "READER"}
+"#;
+        for (runtime, own_payload, expected) in [
+            (false, false, Criticality::Notable),
+            (true, false, Criticality::Suspicious),
+            (false, true, Criticality::Suspicious),
+        ] {
+            let traits_file = write_test_traits(yaml);
+            let mapper = CapabilityMapper::from_yaml(traits_file.path()).expect("load mapper");
+            let mut report = AnalysisReport::new(TargetInfo {
+                path: if own_payload {
+                    "/ordinary/outer.zip"
+                } else {
+                    "/tests/fixtures/outer.zip"
+                }
+                .to_string(),
+                file_type: "zip".to_string(),
+                size_bytes: if own_payload { 7 } else { 4 },
+                ..TargetInfo::default()
+            });
+            let mut finding = archive_scope_test_finding("test/member::encoded", None);
+            finding.crit = Criticality::Suspicious;
+            report.findings.push(finding.clone());
+            let mut gate = archive_scope_test_finding("test/gate::static-reader", None);
+            gate.crit = Criticality::Notable;
+            report.findings.push(gate);
+            for path in ["pkg/tests/fixtures/payload.py", "pkg/src/runtime.py"] {
+                if path.contains("runtime") && !runtime {
+                    continue;
+                }
+                let mut member =
+                    FileAnalysis::new(0, path.to_string(), "python".to_string(), String::new(), 0);
+                member.findings.push(finding.clone());
+                report.files.push(member);
+            }
+            let bytes = if own_payload {
+                b"PAYLOAD".as_slice()
+            } else {
+                b"ROOT".as_slice()
+            };
+            if own_payload {
+                assert!(
+                    mapper
+                        .evaluate_traits_with_ast(&report, bytes, None, None)
+                        .iter()
+                        .any(|f| f.id.as_ref() == "test/member::encoded"),
+                    "container-owned raw detection must match the supplied bytes"
+                );
+            }
+            ArchiveAnalyzer::new()
+                .with_capability_mapper(mapper)
+                .evaluate_container_findings(&mut report, bytes, FileType::Zip);
+            let aggregate = report
+                .findings
+                .iter()
+                .find(|f| f.id.as_ref() == "test/member::encoded")
+                .expect("aggregate retained");
+            assert_eq!(
+                aggregate.crit, expected,
+                "runtime={runtime}, own_payload={own_payload}"
+            );
+            let fixture = report
+                .files
+                .iter()
+                .find(|f| f.path.contains("tests/fixtures"))
+                .expect("fixture retained");
+            assert_eq!(fixture.findings[0].crit, Criticality::Notable);
+        }
     }
 
     #[test]

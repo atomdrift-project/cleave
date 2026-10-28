@@ -627,6 +627,14 @@ fn eval_ast_query_once<'a>(
         }
     }
     let query = measured_query.as_ref().unwrap_or(&compiled.query);
+    // Predicate captures establish relationships; an explicit @evidence
+    // capture chooses the source occurrence a proximity consumer may join.
+    // Queries without it retain their existing all-captures behavior.
+    let evidence_capture = query
+        .capture_names()
+        .iter()
+        .position(|name| *name == "evidence")
+        .and_then(|index| u32::try_from(index).ok());
 
     // Execute the query with safety limits
     let mut query_cursor = tree_sitter::QueryCursor::new();
@@ -701,7 +709,11 @@ fn eval_ast_query_once<'a>(
         }
         // Standalone predicate patterns can yield empty-capture matches.
         // They are not an observed source occurrence and must not satisfy a trait.
-        if m.captures().is_empty() {
+        if m.captures().is_empty()
+            || evidence_capture.is_some_and(|selected| {
+                !m.captures().iter().any(|capture| capture.index == selected)
+            })
+        {
             continue;
         }
         // QueryMatches already checks the built-in text predicates.
@@ -719,6 +731,9 @@ fn eval_ast_query_once<'a>(
                 break 'matches;
             }
             capture_count += 1;
+            if evidence_capture.is_some_and(|selected| capture.index != selected) {
+                continue;
+            }
             if let Ok(text) = capture.node.utf8_text(source.as_bytes())
                 && evidence.len() < MAX_EVIDENCE_PER_TRAIT
             {
@@ -1042,6 +1057,23 @@ pub(crate) fn batch_ast_queries_with_index(
         query
     });
     let query = narrowed.as_ref().unwrap_or(&combined.query);
+    let shared_evidence_capture = query
+        .capture_names()
+        .iter()
+        .position(|name| *name == "evidence")
+        .and_then(|index| u32::try_from(index).ok());
+    // Capture names are shared by a query bank. Opt-in belongs to each
+    // original query, so one query cannot hide a sibling's evidence.
+    let evidence_captures: Vec<Option<u32>> = compiling
+        .iter()
+        .map(|(_, compiled)| {
+            if compiled.query.capture_names().contains(&"evidence") {
+                shared_evidence_capture
+            } else {
+                None
+            }
+        })
+        .collect();
 
     struct Bucket {
         evidence: Vec<Evidence>,
@@ -1143,6 +1175,12 @@ pub(crate) fn batch_ast_queries_with_index(
         let Some(&qi) = combined.pattern_to_query.get(m.pattern_index) else {
             continue;
         };
+        let evidence_capture = evidence_captures[qi];
+        if evidence_capture.is_some_and(|selected| {
+            !m.captures().iter().any(|capture| capture.index == selected)
+        }) {
+            continue;
+        }
         let bucket = &mut buckets[qi];
         if bucket.complete || bucket.capture_limited || bucket.match_limited {
             let pattern = m.pattern_index;
@@ -1169,6 +1207,9 @@ pub(crate) fn batch_ast_queries_with_index(
                 break;
             }
             bucket.capture_count += 1;
+            if evidence_capture.is_some_and(|selected| capture.index != selected) {
+                continue;
+            }
             if let Ok(text) = capture.node.utf8_text(source.as_bytes())
                 && bucket.evidence.len() < MAX_EVIDENCE_PER_TRAIT
             {

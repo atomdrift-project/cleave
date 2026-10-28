@@ -902,6 +902,7 @@ dependencies = [
  "criterion",
  "ctrlc",
  "cu-bincode",
+ "data-encoding",
  "des",
  "dirs",
  "dmgwiz",
@@ -1982,7 +1983,7 @@ checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 [[package]]
 name = "filefacts"
 version = "2.0.1"
-source = "git+https://github.com/atomdrift-project/filefacts.git#15f140ed36db8593fb202f458f43a9040606bafb"
+source = "git+https://github.com/atomdrift-project/filefacts.git#b42adfd549524659133b830de6cbd789bc860d9c"
 dependencies = [
  "aho-corasick",
  "cab",
@@ -5880,7 +5881,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#15f140ed36db8593fb202f458f43a9040606bafb"
+source = "git+https://github.com/atomdrift-project/filefacts.git#b42adfd549524659133b830de6cbd789bc860d9c"
 dependencies = [
  "cc",
  "tree-sitter",

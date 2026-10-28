@@ -35,7 +35,8 @@ use crate::capabilities::validation::{
     find_exception_atomic_traits, find_exception_inline_conditions,
     find_exception_non_notable_members, find_exception_positive_refs, find_excessive_file_types,
     find_excessive_skip_conditions, find_exhaustive_suppressors, find_for_only_duplicates,
-    find_generic_wellknown_leaf_dirs, find_hex_binary_missing_section, find_hostile_cap_rules,
+    find_fragmented_sibling_cohorts, find_generic_wellknown_leaf_dirs,
+    find_hex_binary_missing_section, find_hostile_cap_rules,
     find_hostile_composites_with_too_few_notable_legs, find_hostile_meta_rules,
     find_impossible_composite_filetypes, find_impossible_count_constraints,
     find_impossible_length_bounds, find_impossible_needs, find_impossible_size_constraints,
@@ -58,18 +59,16 @@ use crate::capabilities::validation::{
     find_regex_literal_overlap_issues, find_scope_without_valid_container,
     find_self_referencing_composites, find_self_referencing_traits, find_self_suppressing_traits,
     find_short_pattern_warnings, find_should_use_defaults, find_sibling_name_restatement,
-    find_fragmented_sibling_cohorts, find_single_item_clauses, find_slow_regex_patterns,
-    find_stale_filetype_allowlist_entries, find_string_content_collisions,
-    find_string_literal_should_use_text, find_string_pattern_duplicates,
-    find_structural_regex_duplicates, find_subsumed_required_legs,
+    find_single_item_clauses, find_slow_regex_patterns, find_stale_filetype_allowlist_entries,
+    find_string_content_collisions, find_string_literal_should_use_text,
+    find_string_pattern_duplicates, find_structural_regex_duplicates, find_subsumed_required_legs,
     find_suppression_only_building_blocks, find_too_short_patterns,
     find_unanchored_wellknown_composites, find_uncallable_symbol_matchers,
-    find_uncompilable_ast_queries, find_unreferenced_exceptions,
-    find_wellknown_baseline_rules, find_wellknown_category_violations,
-    find_wellknown_high_criticality_basenames,
-    find_wellknown_missing_section_filter,
-    find_wellknown_missing_size_filter, find_wellknown_version_path_traits,
-    find_wide_trait_directories, validate_composite_trait_only, validate_directory_structure,
+    find_uncompilable_ast_queries, find_unreferenced_exceptions, find_wellknown_baseline_rules,
+    find_wellknown_category_violations, find_wellknown_high_criticality_basenames,
+    find_wellknown_missing_section_filter, find_wellknown_missing_size_filter,
+    find_wellknown_version_path_traits, find_wide_trait_directories, validate_composite_trait_only,
+    validate_directory_structure,
 };
 use crate::composite_rules::{CompositeTrait, Condition, Platform, TraitDefinition};
 #[cfg(feature = "lint")]
@@ -3069,7 +3068,9 @@ impl super::CapabilityMapper {
                         "\n❌ ERROR: {} baseline rules in well-known/",
                         wellknown_baseline.len()
                     );
-                    eprintln!("   Review the evidence: use notable for a meaningful identity or filename fact, component for an incomplete fragment, or move a general property to its actual subject.\n");
+                    eprintln!(
+                        "   Review the evidence: use notable for a meaningful identity or filename fact, component for an incomplete fragment, or move a general property to its actual subject.\n"
+                    );
                     for (id, source) in &wellknown_baseline {
                         eprintln!("   {source}: '{id}'");
                     }
@@ -3082,11 +3083,20 @@ impl super::CapabilityMapper {
                 if !wellknown_high_basename.is_empty()
                     && !crate::validation_controls::is_validator_disabled("wellknown-basename-crit")
                 {
-                    eprintln!("\n❌ ERROR: {} well-known filename observations exceed notable", wellknown_high_basename.len());
+                    eprintln!(
+                        "\n❌ ERROR: {} well-known filename observations exceed notable",
+                        wellknown_high_basename.len()
+                    );
                     for (id, source) in &wellknown_high_basename {
                         eprintln!("   {source}: '{id}'");
                     }
-                    warnings.push_id("wellknown-basename-crit", format!("{} well-known filename observations exceed notable", wellknown_high_basename.len()));
+                    warnings.push_id(
+                        "wellknown-basename-crit",
+                        format!(
+                            "{} well-known filename observations exceed notable",
+                            wellknown_high_basename.len()
+                        ),
+                    );
                 }
 
                 // Validate that baseline/component building blocks in objectives/ or well-known/

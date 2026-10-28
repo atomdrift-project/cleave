@@ -165,6 +165,99 @@ impl MachOAnalyzer {
         }
     }
 
+    /// Scan recovered text in this slice, including supplementary FAT slices.
+    fn analyze_integer_table_scripts(
+        &self,
+        logical_path: &Path,
+        data: &[u8],
+        ctx: &Ctx<'_>,
+        report: &mut AnalysisReport,
+        base_offset: usize,
+    ) {
+        for payload in crate::extractors::macho_integer_tables::recover(data, &ctx.parsed) {
+            if self
+                .cancellation
+                .as_ref()
+                .is_some_and(|c| c.load(std::sync::atomic::Ordering::Acquire))
+            {
+                break;
+            }
+            let Ok(command) = std::str::from_utf8(&payload.data) else {
+                continue;
+            };
+            // Strip only this complete quoted interpreter wrapper. Other
+            // recovered text remains visible without guessing its language.
+            let Some(source) = crate::extractors::macho_integer_tables::inline_applescript(command)
+            else {
+                continue;
+            };
+            let chain = vec![
+                "integer-sub-xor".to_string(),
+                "hex".to_string(),
+                "custom-base64".to_string(),
+            ];
+            let path = crate::types::encode_decoded_path(
+                &logical_path.display().to_string(),
+                &chain,
+                report.files.len(),
+            );
+            let child_input = AnalysisInput::new(
+                Path::new(&path),
+                source.as_bytes(),
+                crate::FileType::AppleScript,
+            )
+            .at_depth(1);
+            match crate::analyzers::applescript::AppleScriptAnalyzer::new()
+                .with_engine(self.engine.clone())
+                .analyze_input(&child_input)
+            {
+                Ok(mut child_report) => {
+                    child_report.dedupe_findings();
+                    let doomed = self
+                        .engine
+                        .rules()
+                        .doomed_low_value_ids(&child_report.findings);
+                    crate::context::capture(
+                        &mut child_report,
+                        source.as_bytes(),
+                        crate::FileType::AppleScript,
+                        &doomed,
+                    );
+                    let (mut child, nested, _) = child_report.into_file_analysis(0, &self.engine);
+                    child.path = path;
+                    child.depth = 1;
+                    child.encoding = Some(chain);
+                    child.compute_summary();
+                    report.files.push(child);
+                    report.files.extend(nested);
+                    report.structure.push(StructuralFeature {
+                        id: "data/integer-table-script".to_string(),
+                        desc: "Script data recovered from integer tables and custom alphabet"
+                            .to_string(),
+                        evidence: vec![Evidence {
+                            method: "static-decode".to_string(),
+                            source: "macho_integer_tables".to_string(),
+                            value: format!(
+                                "{} recovered script bytes; no specimen code executed",
+                                source.len()
+                            ),
+                            location: Some(format!(
+                                "offset:{}",
+                                payload.offset.saturating_add(base_offset)
+                            )),
+                            offsets: vec![payload.offset.saturating_add(base_offset) as u64],
+                            ..Evidence::default()
+                        }],
+                    });
+                }
+                Err(error) => report
+                    .metadata
+                    .errors
+                    .push(format!("integer-table-script: {error:#}")),
+            }
+        }
+    }
+
     /// Structural analysis of a thin Mach-O binary (no YARA scan, no trait evaluation).
     /// Only handles thin binaries — fat binary dispatch is done by the caller.
     /// Callers are responsible for running YARA and calling `evaluate_and_merge_findings`.
@@ -387,6 +480,7 @@ impl MachOAnalyzer {
             );
         report.files.extend(encoded_layers);
         report.findings.extend(plain_findings);
+        self.analyze_integer_table_scripts(logical_path, data, ctx, &mut report, 0);
         for payload in crate::extractors::macho_chacha::recover(data, &ctx.parsed) {
             if self
                 .cancellation
@@ -1669,6 +1763,14 @@ impl MachOAnalyzer {
                 slice_bytes,
             );
             arches_parsed = arches_parsed.saturating_add(1);
+            let logical_path = report.target.path.clone();
+            self.analyze_integer_table_scripts(
+                Path::new(&logical_path),
+                slice_bytes,
+                &slice_ctx,
+                report,
+                offset,
+            );
 
             for mut imp in slice_ctx.imports_from_filefacts() {
                 let key = (imp.symbol.clone(), imp.library.clone());

@@ -85,8 +85,7 @@ impl<'tree> Context<'_, 'tree> {
                 "assignment" | "augmented_assignment" | "for_statement" | "for_in_clause" => {
                     Some("left")
                 }
-                "named_expression" => Some("name"),
-                "function_definition" | "class_definition" => Some("name"),
+                "named_expression" | "function_definition" | "class_definition" => Some("name"),
                 _ => None,
             };
             let target = field.and_then(|f| node.child_by_field_name(f)).or_else(|| {
@@ -488,6 +487,11 @@ pub(crate) fn decode(ast: filefacts::SourceAst<'_>) -> Vec<Command> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        reason = "invalid fixtures should fail the test"
+    )]
     use super::*;
     const PAYLOAD: &str =
         "OBZGS3TUMYQCOJLTLRXCOIBHNBQXE3LMMVZXGIDEMVRW6ZDFOIQGG33OORZG63BAN5XGY6JH";

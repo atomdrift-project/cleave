@@ -14,8 +14,9 @@ use crate::analyzers::embedded_code_detector::{EMBEDDED_LANG_NAMES, ENCODED_LAYE
 use crate::analyzers::macho::{ENTITLEMENT_CATEGORIES, entitlement_category};
 use crate::analyzers::pe::normalize_signer_name;
 
-/// Exact ids emitted by the Mach-O and ELF analyzers.
+/// Fixed structural ids emitted by the analyzers.
 const EXACT_IDS: &[&str] = &[
+    crate::analyzers::embedded_code_detector::HEURISTIC_QUOTED_ORIGIN_ID,
     crate::analyzers::ci_secret_file_flow::FACT_ID,
     crate::analyzers::ci_secret_file_flow::COLLECTOR_FACT_ID,
     "objectives/anti-static/pack/upx::standard-unpack-refused",

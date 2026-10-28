@@ -4338,9 +4338,11 @@ mod taxonomy_tests {
         find_metadata_cross_tier_refs, find_objectives_wellknown_violations,
         find_fragmented_sibling_cohorts, find_oversized_trait_directories,
         find_sparse_sibling_cohorts, find_suppression_only_building_blocks,
+        find_wellknown_baseline_rules, find_wellknown_high_criticality_basenames,
+        find_wellknown_missing_size_filter,
     };
     use crate::composite_rules::traits::CompositeTrait;
-    use crate::composite_rules::{Arch, Condition, FileType, Platform, TraitDefinition};
+    use crate::composite_rules::{Arch, Condition, FileType, PathQuery, Platform, TraitDefinition};
     use crate::types::Criticality;
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -4846,6 +4848,64 @@ mod taxonomy_tests {
 
     fn ids(v: &[(String, String)]) -> Vec<&str> {
         v.iter().map(|(id, _)| id.as_str()).collect()
+    }
+
+    #[test]
+    fn wellknown_baseline_is_invalid_even_when_used() {
+        let traits = vec![
+            leaf("well-known/tool/demo::baseline", Criticality::Baseline),
+            leaf("well-known/tool/demo::component", Criticality::Component),
+            leaf("well-known/tool/demo::notable", Criticality::Notable),
+            leaf("metadata/file/size::baseline", Criticality::Baseline),
+        ];
+        let composites = vec![
+            comp("well-known/tool/demo::base-composite", Criticality::Baseline, &[], &[]),
+            comp("well-known/tool/demo::identity", Criticality::Notable, &["well-known/tool/demo::baseline"], &[]),
+            comp("well-known/tool/demo::exception", Criticality::Exception, &["well-known/tool/demo::notable"], &[]),
+            comp("objectives/demo::baseline", Criticality::Baseline, &[], &[]),
+        ];
+        let violations = find_wellknown_baseline_rules(&traits, &composites, &HashMap::new());
+        assert_eq!(ids(&violations), vec!["well-known/tool/demo::base-composite", "well-known/tool/demo::baseline"]);
+    }
+
+    #[test]
+    fn exception_composites_are_not_suppression_only_violations() {
+        let traits = vec![leaf("well-known/tool/demo::evidence", Criticality::Notable)];
+        let composites = vec![
+            comp("well-known/tool/demo::context", Criticality::Exception,
+                &["well-known/tool/demo::evidence"], &[]),
+            comp("objectives/evasion/demo::detection", Criticality::Suspicious,
+                &["micro-behaviors/demo::evidence"], &["well-known/tool/demo::context"]),
+        ];
+        assert!(find_suppression_only_building_blocks(&traits, &composites, &HashMap::new()).is_empty());
+    }
+
+    #[test]
+    fn wellknown_basename_facts_have_a_notable_ceiling_and_need_no_size() {
+        let mut name = leaf("well-known/tool/demo::filename", Criticality::Notable);
+        name.r#for = vec![FileType::Elf];
+        name.r#if = Condition::Path(PathQuery {
+            exact: Some("demo".into()),
+            basename: true,
+            ..Default::default()
+        });
+        assert!(find_wellknown_missing_size_filter(&[name.clone()], &HashMap::new()).is_empty());
+        assert!(find_wellknown_high_criticality_basenames(&[name.clone()], &HashMap::new()).is_empty());
+        name.crit = Criticality::Suspicious;
+        assert_eq!(ids(&find_wellknown_high_criticality_basenames(&[name.clone()], &HashMap::new())), vec!["well-known/tool/demo::filename"]);
+        assert_eq!(ids(&find_wellknown_missing_size_filter(&[name], &HashMap::new())), vec!["well-known/tool/demo::filename"]);
+
+        let mut content = leaf("well-known/tool/demo::content", Criticality::Notable);
+        content.r#for = vec![FileType::Elf];
+        assert_eq!(ids(&find_wellknown_missing_size_filter(&[content], &HashMap::new())), vec!["well-known/tool/demo::content"]);
+
+        let mut full_path = leaf("well-known/tool/demo::path", Criticality::Notable);
+        full_path.r#for = vec![FileType::Elf];
+        full_path.r#if = Condition::Path(PathQuery {
+            exact: Some("/usr/bin/demo".into()),
+            ..Default::default()
+        });
+        assert_eq!(ids(&find_wellknown_missing_size_filter(&[full_path], &HashMap::new())), vec!["well-known/tool/demo::path"]);
     }
 
     #[test]

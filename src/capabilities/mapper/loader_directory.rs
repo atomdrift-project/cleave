@@ -65,7 +65,9 @@ use crate::capabilities::validation::{
     find_suppression_only_building_blocks, find_too_short_patterns,
     find_unanchored_wellknown_composites, find_uncallable_symbol_matchers,
     find_uncompilable_ast_queries, find_unreferenced_exceptions,
-    find_wellknown_category_violations, find_wellknown_missing_section_filter,
+    find_wellknown_baseline_rules, find_wellknown_category_violations,
+    find_wellknown_high_criticality_basenames,
+    find_wellknown_missing_section_filter,
     find_wellknown_missing_size_filter, find_wellknown_version_path_traits,
     find_wide_trait_directories, validate_composite_trait_only, validate_directory_structure,
 };
@@ -1293,6 +1295,8 @@ impl super::CapabilityMapper {
             let mut cap_wk_violations = Vec::new();
             let mut obj_wk_violations = Vec::new();
             let mut suppression_only = Vec::new();
+            let mut wellknown_baseline = Vec::new();
+            let mut wellknown_high_basename = Vec::new();
             let mut atomic_exceptions = Vec::new();
             let mut inline = Vec::new();
             let mut positive = Vec::new();
@@ -1549,6 +1553,13 @@ impl super::CapabilityMapper {
                     scope.spawn(|_| {
                         suppression_only =
                             find_suppression_only_building_blocks(traits, rules, sources)
+                    });
+                    scope.spawn(|_| {
+                        wellknown_baseline = find_wellknown_baseline_rules(traits, rules, sources)
+                    });
+                    scope.spawn(|_| {
+                        wellknown_high_basename =
+                            find_wellknown_high_criticality_basenames(traits, sources)
                     });
                     scope.spawn(|_| {
                         if enabled("exception-atomic") {
@@ -3049,6 +3060,33 @@ impl super::CapabilityMapper {
                         "{} objectives/ → well-known/ references violate the tier policy",
                         obj_wk_violations.len()
                     ));
+                }
+
+                if !wellknown_baseline.is_empty()
+                    && !crate::validation_controls::is_validator_disabled("wellknown-baseline")
+                {
+                    eprintln!(
+                        "\n❌ ERROR: {} baseline rules in well-known/",
+                        wellknown_baseline.len()
+                    );
+                    eprintln!("   Review the evidence: use notable for a meaningful identity or filename fact, component for an incomplete fragment, or move a general property to its actual subject.\n");
+                    for (id, source) in &wellknown_baseline {
+                        eprintln!("   {source}: '{id}'");
+                    }
+                    warnings.push_id(
+                        "wellknown-baseline",
+                        format!("{} baseline rules in well-known/", wellknown_baseline.len()),
+                    );
+                }
+
+                if !wellknown_high_basename.is_empty()
+                    && !crate::validation_controls::is_validator_disabled("wellknown-basename-crit")
+                {
+                    eprintln!("\n❌ ERROR: {} well-known filename observations exceed notable", wellknown_high_basename.len());
+                    for (id, source) in &wellknown_high_basename {
+                        eprintln!("   {source}: '{id}'");
+                    }
+                    warnings.push_id("wellknown-basename-crit", format!("{} well-known filename observations exceed notable", wellknown_high_basename.len()));
                 }
 
                 // Validate that baseline/component building blocks in objectives/ or well-known/

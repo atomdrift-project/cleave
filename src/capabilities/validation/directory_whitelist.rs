@@ -391,7 +391,6 @@ const ALLOWED_MB_FS: &[&str] = &[
     "quota",
     "read",
     "search",
-    "shell-ops",
     "swap",
     "sync",
     "temp",

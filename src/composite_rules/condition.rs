@@ -1069,6 +1069,11 @@ pub(crate) struct ArgFilter {
     /// Regex over an identifier argument's syntactic name, not its value.
     #[serde(default)]
     pub name_regex: Option<String>,
+    /// High-fidelity check on the argument's literal text, as on text
+    /// conditions: a string or template value, or an identifier's name (shell
+    /// words such as a curl URL are recorded as identifiers).
+    #[serde(default)]
+    pub is: Option<StringValidator>,
 }
 
 /// Source-call selection and explicit, policy-owned library transfers.

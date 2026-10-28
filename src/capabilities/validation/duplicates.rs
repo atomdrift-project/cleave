@@ -5190,9 +5190,17 @@ pub(crate) fn find_structural_regex_duplicates(
                 match_type: "regex".to_string(),
                 encoding: None,
                 original_value: regex.clone(),
-                discriminator: String::new(),
-                // This collector only ever holds regexes, which carry no symbol
-                // discriminator, so the literal and the key are the same string.
+                // The callee regex and its structured predicates name a fact.
+                // Reuse the same discriminator as the other duplicate checks.
+                discriminator: if scope == Scope::Symbol {
+                    extract_patterns(trait_def)
+                        .into_iter()
+                        .find(|(_, p)| p.condition_type == "symbol" && p.match_type == "regex")
+                        .map(|(_, p)| p.discriminator)
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                },
                 bare_normalized: regex.clone(),
                 suppressed_by: Vec::new(),
                 for_types,
@@ -5278,6 +5286,9 @@ pub(crate) fn find_structural_regex_duplicates(
                 let a = &entries[indices[i]].location;
                 let b = &entries[indices[j]].location;
 
+                if a.discriminator != b.discriminator {
+                    continue;
+                }
                 if a.original_value == b.original_value {
                     // Already caught by find_duplicate_traits_and_composites.
                     continue;
@@ -5533,6 +5544,23 @@ mod literal_regex_tests {
             !warnings.is_empty(),
             "equivalent callee and argument predicates must still be detected"
         );
+    }
+
+    #[test]
+    fn structural_regex_duplicates_preserve_symbol_argument_provenance() {
+        let rule = |id: &str, callee: &str, source: &str| -> TraitDefinition {
+            serde_yaml::from_str(&format!(
+                "id: {id}\ndesc: test\ncrit: notable\nfor: [javascript]\nif:\n  type: symbol\n  kind: call\n  regex: '{callee}'\n  arg:\n    index: 0\n    from:\n      call: {source}\n"
+            )).unwrap()
+        };
+        let first = rule("remote", "^(exec|execSync)$", "fetchRemoteText");
+        let different = rule("local", "(^|\\.)(exec|execSync)$", "readFileSync");
+        let mut warnings = Vec::new();
+        find_structural_regex_duplicates(&[first.clone(), different], &mut warnings);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let equivalent = rule("remote-alias", "(^|\\.)(exec|execSync)$", "fetchRemoteText");
+        find_structural_regex_duplicates(&[first, equivalent], &mut warnings);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
     }
 
     #[test]

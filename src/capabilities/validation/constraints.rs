@@ -904,8 +904,55 @@ impl SuppressionBranch {
 /// a rule that suppresses on a 45-leg cluster carries that weight whether or not the
 /// cluster is shared. Sharing is a DRY property of the composite, not a discount on the
 /// burden it imposes on each referrer.
+/// Composite lookup for suppression expansion.
+///
+/// Rule ids are directory-qualified when loaded, but the ids written inside
+/// `unless:`/`downgrade:` stay as the author wrote them, and the engine resolves a bare
+/// one to a rule at runtime: the referrer's own directory first, then a unique short
+/// name. Looking a bare reference up by exact string misses every aggregator it names,
+/// so it was counted as a single leaf and the aggregator's real burden went unchecked.
+struct SuppressionIndex<'a> {
+    composites: HashMap<&'a str, &'a CompositeTrait>,
+    by_leaf: HashMap<&'a str, Vec<&'a str>>,
+}
+
+impl<'a> SuppressionIndex<'a> {
+    fn new(rules: &'a [CompositeTrait]) -> Self {
+        let mut by_leaf: HashMap<&'a str, Vec<&'a str>> = HashMap::new();
+        for r in rules {
+            let id = r.id.as_str();
+            let leaf = id.rsplit_once("::").map_or(id, |(_, leaf)| leaf);
+            by_leaf.entry(leaf).or_default().push(id);
+        }
+        Self {
+            composites: rules.iter().map(|r| (r.id.as_str(), r)).collect(),
+            by_leaf,
+        }
+    }
+
+    /// The composite id a reference names, or the reference itself when it names no
+    /// composite. An exact id always wins, so a qualified reference is unaffected.
+    fn resolve(&self, raw: &'a str, referrer: &str) -> &'a str {
+        if self.composites.contains_key(raw) || raw.contains("::") || raw.contains('/') {
+            return raw;
+        }
+        if let Some((directory, _)) = referrer.rsplit_once("::")
+            && let Some((key, _)) = self
+                .composites
+                .get_key_value(format!("{directory}::{raw}").as_str())
+        {
+            return key;
+        }
+        match self.by_leaf.get(raw).map(Vec::as_slice) {
+            Some([only]) => only,
+            _ => raw,
+        }
+    }
+}
+
 struct SuppressionExpander<'a> {
-    composite_map: &'a HashMap<&'a str, &'a CompositeTrait>,
+    index: &'a SuppressionIndex<'a>,
+    referrer: String,
     seen_aggregators: HashSet<&'a str>,
     seen_leaves: HashSet<&'a str>,
 }
@@ -920,7 +967,7 @@ impl<'a> SuppressionExpander<'a> {
                 children: Vec::new(),
             };
         };
-        let key = id.as_str();
+        let key = self.index.resolve(id.as_str(), &self.referrer);
 
         // A `*-known-benign-context` composite is a named exception group, not an
         // ad-hoc reference: authors write one to hold "the benign shapes this
@@ -941,6 +988,31 @@ impl<'a> SuppressionExpander<'a> {
             };
         }
 
+        // A `metadata/` property or a `well-known/` identity named in `unless:` is a
+        // stated fact about the artifact ("this file is a test", "this package is
+        // octokit"), one condition however many ways the fact is recognized. Expanding it
+        // charged the referrer with the property's evidence -- 84 legs for the shared
+        // test-file classifier -- as if each were a carve-out. Exception lists
+        // (`exception`, `component`) in those tiers still expand: they are carve-outs.
+        if let Some(c) = self.index.composites.get(key)
+            && (key.starts_with("metadata/") || key.starts_with("well-known/"))
+            && c.crit >= crate::types::Criticality::Baseline
+        {
+            return if self.seen_leaves.insert(key) {
+                SuppressionBranch {
+                    label: format!("{key} (stated property or identity)"),
+                    count: 1,
+                    children: Vec::new(),
+                }
+            } else {
+                SuppressionBranch {
+                    label: format!("{key} (dup)"),
+                    count: 0,
+                    children: Vec::new(),
+                }
+            };
+        }
+
         // A suspicious or hostile composite named in `unless:` is a verdict, not an
         // exception list: the rule stands down because a stronger detection already
         // fired on the file, which is one condition however many legs that
@@ -948,7 +1020,7 @@ impl<'a> SuppressionExpander<'a> {
         // detection -- 73 for one wallet-stealer rule -- as if each were a benign
         // carve-out. (Unmarked composites default to notable and are often benign
         // groups, so only the stronger tiers are taken as verdicts.)
-        if let Some(c) = self.composite_map.get(key)
+        if let Some(c) = self.index.composites.get(key)
             && c.crit >= crate::types::Criticality::Suspicious
         {
             return if self.seen_leaves.insert(key) {
@@ -968,7 +1040,7 @@ impl<'a> SuppressionExpander<'a> {
 
         // An aggregator composite expands into its legs; a leaf or directory reference
         // (no exact composite) counts as one.
-        if self.composite_map.contains_key(key) {
+        if self.index.composites.contains_key(key) {
             if !self.seen_aggregators.insert(key) {
                 return SuppressionBranch {
                     label: format!("{key} (already counted)"),
@@ -976,7 +1048,7 @@ impl<'a> SuppressionExpander<'a> {
                     children: Vec::new(),
                 };
             }
-            let c = self.composite_map[key];
+            let c = self.index.composites[key];
             let children: Vec<SuppressionBranch> = c
                 .all
                 .iter()
@@ -1014,15 +1086,18 @@ impl<'a> SuppressionExpander<'a> {
 /// `any:`/`all:` legs enumerate dozens of benign indicators. Counting the reference as
 /// one would understate the real burden, so an entry that points at a composite is
 /// expanded (recursively). A leaf or directory reference (no exact composite) counts as
-/// one. Everything is deduplicated across the rule, so cycles terminate and a shared
+/// one, as does a detection verdict (suspicious+), a named exception group, and a
+/// `metadata/` property or `well-known/` identity that is not itself an exception list. Everything is deduplicated across the rule, so cycles terminate and a shared
 /// aggregator is counted once.
 fn expand_suppressions<'a>(
     unless: Option<&'a Vec<Condition>>,
     downgrade: Option<&'a DowngradeConditions>,
-    composite_map: &'a HashMap<&'a str, &'a CompositeTrait>,
+    index: &'a SuppressionIndex<'a>,
+    referrer: &str,
 ) -> (usize, Vec<SuppressionBranch>) {
     let mut expander = SuppressionExpander {
-        composite_map,
+        index,
+        referrer: referrer.to_string(),
         seen_aggregators: HashSet::new(),
         seen_leaves: HashSet::new(),
     };
@@ -1057,13 +1132,13 @@ pub(crate) struct ExcessiveSkip {
 }
 
 /// Exceptions a single rule may write directly on itself.
-const MAX_OWN_SUPPRESSIONS: usize = 10;
+pub(crate) const MAX_OWN_SUPPRESSIONS: usize = 10;
 
 /// Effective exceptions a rule may carry once aggregator references in its
 /// `unless:`/`downgrade:` are recursively expanded. Higher than the direct cap because
 /// one reference can legitimately stand in for a handful of related benign indicators;
 /// this only catches rules whose true exception burden is runaway.
-const MAX_AGGREGATE_SUPPRESSIONS: usize = 32;
+pub(crate) const MAX_AGGREGATE_SUPPRESSIONS: usize = 48;
 
 /// Find traits/rules with excessive `unless:`/`downgrade:` suppressions.
 ///
@@ -1073,7 +1148,7 @@ const MAX_AGGREGATE_SUPPRESSIONS: usize = 32;
 /// - **Own** (`MAX_OWN_SUPPRESSIONS`, 10): `unless:`/`downgrade:` entries written
 ///   literally on the rule. A rule this heavily patched usually has poor precision and
 ///   should be improved rather than suppressed.
-/// - **Expanded** (`MAX_AGGREGATE_SUPPRESSIONS`, 32): the effective exception count once
+/// - **Expanded** (`MAX_AGGREGATE_SUPPRESSIONS`, 48): the effective exception count once
 ///   any `unless:`/`downgrade:` entry that references an aggregator composite is
 ///   recursively expanded to its underlying conditions. This catches a large exception
 ///   list hidden behind one reference, even when the aggregator is shared by several
@@ -1084,8 +1159,7 @@ pub(crate) fn find_excessive_skip_conditions<'a>(
     trait_definitions: &'a [TraitDefinition],
     composite_rules: &'a [CompositeTrait],
 ) -> Vec<ExcessiveSkip> {
-    let composite_map: HashMap<&'a str, &'a CompositeTrait> =
-        composite_rules.iter().map(|r| (r.id.as_str(), r)).collect();
+    let index = SuppressionIndex::new(composite_rules);
 
     let mut violations = Vec::new();
 
@@ -1095,7 +1169,7 @@ pub(crate) fn find_excessive_skip_conditions<'a>(
                     is_composite: bool| {
         let (u, d) = direct_suppression_counts(unless, downgrade);
         let own = u + d;
-        let (expanded, branches) = expand_suppressions(unless, downgrade, &composite_map);
+        let (expanded, branches) = expand_suppressions(unless, downgrade, &index, id);
         if own >= MAX_OWN_SUPPRESSIONS || expanded >= MAX_AGGREGATE_SUPPRESSIONS {
             violations.push(ExcessiveSkip {
                 id: id.to_string(),
@@ -2300,8 +2374,7 @@ pub(crate) fn find_broad_notable_downgrades<'a>(
     trait_definitions: &'a [TraitDefinition],
     composite_rules: &'a [CompositeTrait],
 ) -> Vec<BroadNotableDowngrade> {
-    let composite_map: HashMap<&'a str, &'a CompositeTrait> =
-        composite_rules.iter().map(|r| (r.id.as_str(), r)).collect();
+    let index = SuppressionIndex::new(composite_rules);
 
     let mut violations = Vec::new();
 
@@ -2329,7 +2402,7 @@ pub(crate) fn find_broad_notable_downgrades<'a>(
         let conjunction = usize::from(all_len > 0);
         let (_, direct) = direct_suppression_counts(None, Some(&widening));
         let direct = direct + conjunction;
-        let (expanded, _) = expand_suppressions(None, Some(&widening), &composite_map);
+        let (expanded, _) = expand_suppressions(None, Some(&widening), &index, id);
         let expanded = expanded + conjunction;
         if direct > MAX_NOTABLE_DOWNGRADE_DIRECT || expanded > MAX_NOTABLE_DOWNGRADE_EXPANDED {
             violations.push(BroadNotableDowngrade {

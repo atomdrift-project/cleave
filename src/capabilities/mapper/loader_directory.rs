@@ -58,7 +58,8 @@ use crate::capabilities::validation::{
     find_regex_literal_overlap_issues, find_scope_without_valid_container,
     find_self_referencing_composites, find_self_referencing_traits, find_self_suppressing_traits,
     find_short_pattern_warnings, find_should_use_defaults, find_sibling_name_restatement,
-    find_single_item_clauses, find_slow_regex_patterns, find_sparse_sibling_cohorts,
+    find_fragmented_sibling_cohorts, find_single_item_clauses, find_slow_regex_patterns,
+    find_sparse_sibling_cohorts,
     find_stale_filetype_allowlist_entries, find_string_content_collisions,
     find_string_literal_should_use_text, find_string_pattern_duplicates,
     find_structural_regex_duplicates, find_subsumed_required_legs,
@@ -2357,6 +2358,34 @@ impl super::CapabilityMapper {
                     );
                     for (parent, rules, children) in &sparse_cohorts {
                         eprintln!("   {parent} ({children} sibling branches, {rules} rules)");
+                    }
+                }
+
+                // A large sibling keeps the sum above the bar and hides the
+                // tiny branches next to it; count those directly.
+                let fragmented_cohorts = find_fragmented_sibling_cohorts(&direct_rule_counts);
+                if !fragmented_cohorts.is_empty()
+                    && !crate::validation_controls::is_validator_disabled("sparse-siblings")
+                {
+                    warnings.push_count(
+                        "sparse-siblings",
+                        fragmented_cohorts.len(),
+                        format!(
+                            "{} parents are split into many tiny branches",
+                            fragmented_cohorts.len()
+                        ),
+                    );
+                    eprintln!(
+                        "\n⚠️ SOFT WARNING: {} parents are split into many tiny branches",
+                        fragmented_cohorts.len()
+                    );
+                    eprintln!(
+                        "   Fold branches of three or fewer rules into the sibling that already answers their question."
+                    );
+                    for (parent, tiny, children, rules) in &fragmented_cohorts {
+                        eprintln!(
+                            "   {parent} ({tiny} of {children} branches hold three or fewer rules; {rules} rules)"
+                        );
                     }
                 }
 
@@ -5105,11 +5134,13 @@ impl super::CapabilityMapper {
                     crate::validation_controls::is_validator_disabled("excessive-suppression");
 
                 // Validate: excessive unless:/downgrade: suppressions
-                // (8+ on the rule itself, or 32+ once referenced aggregators are expanded)
+                // (on the rule itself, or once referenced aggregators are expanded)
                 if !disable_excessive_suppression_validation && !excessive_skips.is_empty() {
                     eprintln!(
-                        "\n❌ ERROR: {} rules exceed a suppression limit (8+ written on the rule, or 32+ after expanding aggregator references)",
-                        excessive_skips.len()
+                        "\n❌ ERROR: {} rules exceed a suppression limit ({}+ written on the rule, or {}+ after expanding aggregator references)",
+                        excessive_skips.len(),
+                        crate::capabilities::validation::MAX_OWN_SUPPRESSIONS,
+                        crate::capabilities::validation::MAX_AGGREGATE_SUPPRESSIONS
                     );
                     eprintln!(
                         "   A heavy suppression list usually means the rule is fighting its own breadth."

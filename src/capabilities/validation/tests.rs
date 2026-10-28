@@ -4336,8 +4336,8 @@ mod taxonomy_tests {
         MAX_TRAITS_PER_DIRECTORY, ObjectivesWellknownViolation, find_cap_obj_violations,
         find_cap_wellknown_violations, find_deep_taxonomy_directories,
         find_metadata_cross_tier_refs, find_objectives_wellknown_violations,
-        find_oversized_trait_directories, find_sparse_sibling_cohorts,
-        find_suppression_only_building_blocks,
+        find_fragmented_sibling_cohorts, find_oversized_trait_directories,
+        find_sparse_sibling_cohorts, find_suppression_only_building_blocks,
     };
     use crate::composite_rules::traits::CompositeTrait;
     use crate::composite_rules::{Arch, Condition, FileType, Platform, TraitDefinition};
@@ -5118,6 +5118,47 @@ mod taxonomy_tests {
             find_sparse_sibling_cohorts(&rules),
             vec![("objectives/evasion/technique-small".to_string(), 34, 2)]
         );
+    }
+
+    #[test]
+    fn fragmented_cohorts_count_tiny_branches_a_large_sibling_would_hide() {
+        // Five one-rule branches beside a 100-rule branch: the subtree sum
+        // (105) clears the sparse bar, so only the fragmentation check sees it.
+        let mut rules = HashMap::from([("micro-behaviors/crypto/hash/digest".to_string(), 100)]);
+        for name in ["a", "b", "c", "d", "e"] {
+            rules.insert(format!("micro-behaviors/crypto/hash/{name}"), 1);
+        }
+        assert!(find_sparse_sibling_cohorts(&rules).is_empty());
+        assert_eq!(
+            find_fragmented_sibling_cohorts(&rules),
+            vec![("micro-behaviors/crypto/hash".to_string(), 5, 6, 105)]
+        );
+
+        // Four tiny branches is below the minimum.
+        rules.remove("micro-behaviors/crypto/hash/e");
+        assert!(find_fragmented_sibling_cohorts(&rules).is_empty());
+
+        // Tiny branches that are a minority of a wide parent are not reported.
+        let mut wide = HashMap::new();
+        for i in 0..6 {
+            wide.insert(format!("objectives/evasion/wide/big{i}"), 20);
+        }
+        for i in 0..5 {
+            wide.insert(format!("objectives/evasion/wide/tiny{i}"), 2);
+        }
+        assert!(find_fragmented_sibling_cohorts(&wide).is_empty());
+
+        // A parent under 35 rules belongs to the sum check, not this one.
+        let small: HashMap<String, usize> = (0..6)
+            .map(|i| (format!("objectives/evasion/small/s{i}"), 1))
+            .collect();
+        assert!(find_fragmented_sibling_cohorts(&small).is_empty());
+
+        // The tier is respected: well-known catalogues are not scanned.
+        let wk: HashMap<String, usize> = (0..6)
+            .map(|i| (format!("well-known/tool/dev/t{i}"), 3))
+            .collect();
+        assert!(find_fragmented_sibling_cohorts(&wk).is_empty());
     }
 
     /// Composite rules count toward the directory cap alongside atomic traits:
@@ -7103,11 +7144,11 @@ mod excessive_skip_tests {
         assert!(find_excessive_skip_conditions(&traits, &[]).is_empty());
     }
 
-    // The expanded limit (32) catches an exception list hidden behind one reference:
-    // `unless: [agg]` where `agg` enumerates 45 benign indicators. Own count is 1.
+    // The expanded limit (48) catches an exception list hidden behind one reference:
+    // `unless: [agg]` where `agg` enumerates 80 benign indicators. Own count is 1.
     #[test]
     fn expanded_aggregator_reference_flags_rule() {
-        let leaves = leaf_ids("a", 45);
+        let leaves = leaf_ids("a", 80);
         let leaf_refs: Vec<&str> = leaves.iter().map(String::as_str).collect();
         let composites = vec![
             aggregator("agg", &leaf_refs),
@@ -7119,9 +7160,123 @@ mod excessive_skip_tests {
             .iter()
             .find(|e| e.id == "comp")
             .expect("flagged on expanded count");
-        assert_eq!((comp.own, comp.expanded), (1, 45));
+        assert_eq!((comp.own, comp.expanded), (1, 80));
         // The aggregator itself carries no suppressions, so it is not flagged.
         assert!(!v.iter().any(|e| e.id == "agg"));
+    }
+
+    // A bare reference names an aggregator the way the engine resolves it: the referrer's
+    // own directory first, then a unique short name. Looking it up by exact string
+    // counted it as one leaf, so a rule hiding a 80-leg exception list behind a bare
+    // reference was never flagged.
+    #[test]
+    fn bare_aggregator_reference_expands_like_a_qualified_one() {
+        let leaves = leaf_ids("a", 80);
+        let leaf_refs: Vec<&str> = leaves.iter().map(String::as_str).collect();
+
+        // Same directory: the reference resolves to `dir/x::agg`.
+        let same_dir = vec![
+            aggregator("dir/x::agg", &leaf_refs),
+            rule_unless("dir/x::comp", refs(&["agg"])),
+        ];
+        let v = find_excessive_skip_conditions(&[], &same_dir);
+        let comp = v
+            .iter()
+            .find(|e| e.id == "dir/x::comp")
+            .expect("a bare same-directory reference must expand");
+        assert_eq!((comp.own, comp.expanded), (1, 80));
+
+        // Another directory: the short name is unique, so it still resolves.
+        let other_dir = vec![
+            aggregator("dir/x::agg", &leaf_refs),
+            rule_unless("elsewhere::comp", refs(&["agg"])),
+        ];
+        let v = find_excessive_skip_conditions(&[], &other_dir);
+        assert!(
+            v.iter().any(|e| e.id == "elsewhere::comp" && e.expanded == 80),
+            "a unique short name must resolve to its aggregator"
+        );
+    }
+
+    // A metadata property or well-known identity is one stated fact; an exception list
+    // in the same tier is still a list of carve-outs and still expands.
+    #[test]
+    fn stated_property_counts_one_but_exception_list_expands() {
+        let leaves = leaf_ids("a", 80);
+        let leaf_refs: Vec<&str> = leaves.iter().map(String::as_str).collect();
+        let mut property = aggregator("metadata/package/testing::is-test", &leaf_refs);
+        property.crit = Criticality::Baseline;
+        let mut identity = aggregator("well-known/lib/net/x::identity", &leaf_refs);
+        identity.crit = Criticality::Notable;
+        let mut carve_outs = aggregator("metadata/package/empty::benign-context", &leaf_refs);
+        carve_outs.crit = Criticality::Exception;
+        // A notable capability group outside metadata/well-known keeps expanding.
+        let mut capability = aggregator("micro-behaviors/x::group", &leaf_refs);
+        capability.crit = Criticality::Notable;
+        let composites = vec![
+            property,
+            identity,
+            carve_outs,
+            capability,
+            rule_unless("p::r1", refs(&["metadata/package/testing::is-test"])),
+            rule_unless("p::r2", refs(&["well-known/lib/net/x::identity"])),
+            rule_unless("p::r3", refs(&["metadata/package/empty::benign-context"])),
+            rule_unless("p::r4", refs(&["micro-behaviors/x::group"])),
+        ];
+        let v = find_excessive_skip_conditions(&[], &composites);
+        assert!(!v.iter().any(|e| e.id == "p::r1"), "a property is one fact");
+        assert!(!v.iter().any(|e| e.id == "p::r2"), "an identity is one fact");
+        assert!(v.iter().any(|e| e.id == "p::r3" && e.expanded == 80), "an exception list expands");
+        assert!(v.iter().any(|e| e.id == "p::r4" && e.expanded == 80), "a capability group expands");
+    }
+
+    // The expanded limit is inclusive: exactly the limit flags, one fewer does not.
+    #[test]
+    fn expanded_limit_boundary() {
+        use crate::capabilities::validation::MAX_AGGREGATE_SUPPRESSIONS as LIMIT;
+        for (n, flagged) in [(LIMIT - 1, false), (LIMIT, true)] {
+            let leaves = leaf_ids("a", n);
+            let leaf_refs: Vec<&str> = leaves.iter().map(String::as_str).collect();
+            let composites = vec![aggregator("agg", &leaf_refs), rule_unless("comp", refs(&["agg"]))];
+            let v = find_excessive_skip_conditions(&[], &composites);
+            assert_eq!(v.iter().any(|e| e.id == "comp"), flagged, "{n} expanded");
+        }
+        assert_eq!(LIMIT, 48);
+    }
+
+    // An ambiguous short name resolves to nothing: guessing between two aggregators
+    // would charge a rule with a list it may not mean. It stays a single leaf.
+    #[test]
+    fn ambiguous_bare_reference_is_not_guessed() {
+        let leaves = leaf_ids("a", 80);
+        let leaf_refs: Vec<&str> = leaves.iter().map(String::as_str).collect();
+        let composites = vec![
+            aggregator("one::agg", &leaf_refs),
+            aggregator("two::agg", &leaf_refs),
+            rule_unless("elsewhere::comp", refs(&["agg"])),
+        ];
+        let v = find_excessive_skip_conditions(&[], &composites);
+        assert!(
+            !v.iter().any(|e| e.id == "elsewhere::comp"),
+            "an ambiguous short name must not be expanded"
+        );
+    }
+
+    // The referrer's own directory wins over a same-named aggregator elsewhere.
+    #[test]
+    fn bare_reference_prefers_the_referrers_directory() {
+        let big = leaf_ids("a", 80);
+        let big_refs: Vec<&str> = big.iter().map(String::as_str).collect();
+        let composites = vec![
+            aggregator("near::agg", &["only-one"]),
+            aggregator("far::agg", &big_refs),
+            rule_unless("near::comp", refs(&["agg"])),
+        ];
+        let v = find_excessive_skip_conditions(&[], &composites);
+        assert!(
+            !v.iter().any(|e| e.id == "near::comp"),
+            "must resolve to near::agg (1 leg), not far::agg (80 legs)"
+        );
     }
 
     // The KEY property: `all:`/`any:` MATCHING references are never counted as
@@ -7149,11 +7304,11 @@ mod excessive_skip_tests {
     }
 
     // A suspicious/hostile detection named in `unless:` stands the rule down when a
-    // stronger verdict fired: one condition, not its 45 legs. A component aggregator
+    // stronger verdict fired: one condition, not its 80 legs. A component aggregator
     // with the same legs is still an exception list and still expands.
     #[test]
     fn detection_verdict_in_unless_counts_one() {
-        let leaves = leaf_ids("a", 45);
+        let leaves = leaf_ids("a", 80);
         let leaf_refs: Vec<&str> = leaves.iter().map(String::as_str).collect();
         let mut verdict = aggregator("stealer", &leaf_refs);
         verdict.crit = Criticality::Hostile;
@@ -7172,15 +7327,15 @@ mod excessive_skip_tests {
         let listed = v
             .iter()
             .find(|e| e.id == "uses-exception-list")
-            .expect("a 45-leg exception list is still over the cap");
-        assert_eq!((listed.own, listed.expanded), (1, 45));
+            .expect("a 80-leg exception list is still over the cap");
+        assert_eq!((listed.own, listed.expanded), (1, 80));
     }
 
     // Leaf and `dir/` references inside `unless:` each count as one — only aggregator
-    // composites expand. Here 39 expanded + 1 dir + 1 leaf = 41 trips the limit.
+    // composites expand. Here 71 expanded + 1 dir + 1 leaf = 73 trips the limit.
     #[test]
     fn leaf_and_directory_references_count_one() {
-        let leaves = leaf_ids("a", 39);
+        let leaves = leaf_ids("a", 71);
         let leaf_refs: Vec<&str> = leaves.iter().map(String::as_str).collect();
         let composites = vec![
             aggregator("agg", &leaf_refs),
@@ -7189,15 +7344,15 @@ mod excessive_skip_tests {
 
         let v = find_excessive_skip_conditions(&[], &composites);
         let comp = v.iter().find(|e| e.id == "comp").expect("flagged");
-        assert_eq!((comp.own, comp.expanded), (3, 41));
+        assert_eq!((comp.own, comp.expanded), (3, 73));
     }
 
     // An aggregator is expanded for every referrer, shared or not: the recursive cap
-    // measures each rule's exception burden, and sharing a 45-leg cluster does not make
-    // the 45 conditions weigh less on the rule that pulls them in. Both users are flagged.
+    // measures each rule's exception burden, and sharing a 80-leg cluster does not make
+    // the 80 conditions weigh less on the rule that pulls them in. Both users are flagged.
     #[test]
     fn shared_aggregator_is_expanded_for_every_referrer() {
-        let leaves = leaf_ids("a", 45);
+        let leaves = leaf_ids("a", 80);
         let leaf_refs: Vec<&str> = leaves.iter().map(String::as_str).collect();
         let composites = vec![
             aggregator("agg", &leaf_refs),
@@ -7208,7 +7363,7 @@ mod excessive_skip_tests {
         let v = find_excessive_skip_conditions(&[], &composites);
         for id in ["r1", "r2"] {
             let e = v.iter().find(|e| e.id == id).expect("flagged");
-            assert_eq!((e.own, e.expanded), (1, 45));
+            assert_eq!((e.own, e.expanded), (1, 80));
         }
     }
 

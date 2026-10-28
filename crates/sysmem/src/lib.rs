@@ -9,6 +9,9 @@
 
 use std::sync::OnceLock;
 
+#[cfg(any(target_os = "macos", test))]
+mod macos_cpu;
+
 /// Bytes in one gibibyte.
 const GB: u64 = 1024 * 1024 * 1024;
 
@@ -1035,9 +1038,7 @@ fn sysctlbyname_u32(name: &core::ffi::CStr) -> Option<u32> {
 
 #[cfg(target_os = "macos")]
 fn physical_cpu_count_impl() -> Option<usize> {
-    // Prefer the performance-core count on asymmetric Apple Silicon; fall back
-    // to all physical cores on uniform (Intel) Macs, where perflevel0 is absent.
-    sysctlbyname_int(c"hw.perflevel0.physicalcpu").or_else(|| sysctlbyname_int(c"hw.physicalcpu"))
+    macos_cpu::physical_core_count()
 }
 
 #[cfg(target_os = "freebsd")]

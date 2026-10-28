@@ -4335,8 +4335,8 @@ mod taxonomy_tests {
     use crate::capabilities::validation::taxonomy::{
         MAX_TRAITS_PER_DIRECTORY, ObjectivesWellknownViolation, find_cap_obj_violations,
         find_cap_wellknown_violations, find_deep_taxonomy_directories,
-        find_metadata_cross_tier_refs, find_objectives_wellknown_violations,
-        find_fragmented_sibling_cohorts, find_oversized_trait_directories,
+        find_fragmented_sibling_cohorts, find_metadata_cross_tier_refs,
+        find_objectives_wellknown_violations, find_oversized_trait_directories,
         find_sparse_sibling_cohorts, find_suppression_only_building_blocks,
         find_wellknown_baseline_rules, find_wellknown_high_criticality_basenames,
         find_wellknown_missing_size_filter,
@@ -7239,7 +7239,8 @@ mod excessive_skip_tests {
         ];
         let v = find_excessive_skip_conditions(&[], &other_dir);
         assert!(
-            v.iter().any(|e| e.id == "elsewhere::comp" && e.expanded == 80),
+            v.iter()
+                .any(|e| e.id == "elsewhere::comp" && e.expanded == 80),
             "a unique short name must resolve to its aggregator"
         );
     }
@@ -7271,9 +7272,18 @@ mod excessive_skip_tests {
         ];
         let v = find_excessive_skip_conditions(&[], &composites);
         assert!(!v.iter().any(|e| e.id == "p::r1"), "a property is one fact");
-        assert!(!v.iter().any(|e| e.id == "p::r2"), "an identity is one fact");
-        assert!(v.iter().any(|e| e.id == "p::r3" && e.expanded == 80), "an exception list expands");
-        assert!(v.iter().any(|e| e.id == "p::r4" && e.expanded == 80), "a capability group expands");
+        assert!(
+            !v.iter().any(|e| e.id == "p::r2"),
+            "an identity is one fact"
+        );
+        assert!(
+            v.iter().any(|e| e.id == "p::r3" && e.expanded == 80),
+            "an exception list expands"
+        );
+        assert!(
+            v.iter().any(|e| e.id == "p::r4" && e.expanded == 80),
+            "a capability group expands"
+        );
     }
 
     // The expanded limit is inclusive: exactly the limit flags, one fewer does not.
@@ -7283,7 +7293,10 @@ mod excessive_skip_tests {
         for (n, flagged) in [(LIMIT - 1, false), (LIMIT, true)] {
             let leaves = leaf_ids("a", n);
             let leaf_refs: Vec<&str> = leaves.iter().map(String::as_str).collect();
-            let composites = vec![aggregator("agg", &leaf_refs), rule_unless("comp", refs(&["agg"]))];
+            let composites = vec![
+                aggregator("agg", &leaf_refs),
+                rule_unless("comp", refs(&["agg"])),
+            ];
             let v = find_excessive_skip_conditions(&[], &composites);
             assert_eq!(v.iter().any(|e| e.id == "comp"), flagged, "{n} expanded");
         }

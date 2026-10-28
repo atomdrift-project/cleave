@@ -268,7 +268,9 @@ pub(crate) fn eval_path(
         }
     }
 
-    let full = ctx.report.target.path.as_str();
+    let full = ctx
+        .target_path_override
+        .unwrap_or(ctx.report.target.path.as_str());
 
     // `basename` already collapses to the last component, which is identical
     // for both spellings, so only the full/dirname scopes need the second try.

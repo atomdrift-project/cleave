@@ -744,16 +744,12 @@ impl super::CapabilityMapper {
         // results plus everything later iterations add, which is exactly what
         // the previous report clone spliced into `report.findings`.
         const MAX_ITERATIONS: usize = 10;
-        // Dedup scope for the loop below: everything the report already
-        // carried plus everything this call accumulates. Doubles as the
-        // settled set for re-iterations — a settled trait's re-evaluation
-        // would be deduped away, so it's skipped at the filter.
-        let mut settled: rustc_hash::FxHashSet<crate::types::Istr> = report
-            .findings
-            .iter()
-            .map(|f| f.id.clone())
-            .chain(findings.iter().map(|f| f.id.clone()))
-            .collect();
+        // Deduplicate only findings emitted by this evaluation. Input findings
+        // supply context, but may belong to another subject: an archive carries
+        // member findings with the same IDs as its own raw-byte detections.
+        // Treating those IDs as settled discarded the fresh container match.
+        let mut settled: rustc_hash::FxHashSet<crate::types::Istr> =
+            findings.iter().map(|f| f.id.clone()).collect();
         let mut changed: Vec<crate::types::Istr> = Vec::new();
         for iteration in 0..MAX_ITERATIONS {
             let pass = if iteration == 0 {

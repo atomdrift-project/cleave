@@ -168,6 +168,8 @@ pub(crate) struct FileEvalCaches {
 pub(crate) struct EvaluationContext<'a> {
     /// The analysis report produced for this file
     pub report: &'a AnalysisReport,
+    /// Local member path during archive downgrade re-evaluation.
+    pub target_path_override: Option<&'a str>,
     /// A container assembled from existing file nodes can borrow its immediate
     /// members for sibling-value lookups instead of cloning their reports.
     /// `None` uses `report.files`; `Some(&[])` intentionally has no members.
@@ -354,6 +356,7 @@ impl<'a> EvaluationContext<'a> {
 
         Self {
             report,
+            target_path_override: None,
             member_files: None,
             binary_data,
             file_type,
@@ -735,6 +738,7 @@ impl<'a> EvaluationContext<'a> {
     ) -> Self {
         Self {
             report,
+            target_path_override: None,
             member_files: None,
             binary_data,
             file_type,

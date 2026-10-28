@@ -5121,38 +5121,24 @@ mod taxonomy_tests {
     }
 
     #[test]
-    fn fragmented_cohorts_count_tiny_branches_a_large_sibling_would_hide() {
-        // Five one-rule branches beside a 100-rule branch: the subtree sum
-        // (105) clears the sparse bar, so only the fragmentation check sees it.
-        let mut rules = HashMap::from([("micro-behaviors/crypto/hash/digest".to_string(), 100)]);
-        for name in ["a", "b", "c", "d", "e"] {
-            rules.insert(format!("micro-behaviors/crypto/hash/{name}"), 1);
-        }
-        assert!(find_sparse_sibling_cohorts(&rules).is_empty());
+    fn sparse_siblings_require_ten_children_and_average_at_most_eight() {
+        let rules: HashMap<String, usize> = (0..10)
+            .map(|i| (format!("micro-behaviors/data/codec/c{i}"), 8))
+            .collect();
         assert_eq!(
             find_fragmented_sibling_cohorts(&rules),
-            vec![("micro-behaviors/crypto/hash".to_string(), 5, 6, 105)]
+            vec![("micro-behaviors/data/codec".to_string(), 10, 80, 8.0)]
         );
 
-        // Four tiny branches is below the minimum.
-        rules.remove("micro-behaviors/crypto/hash/e");
-        assert!(find_fragmented_sibling_cohorts(&rules).is_empty());
-
-        // Tiny branches that are a minority of a wide parent are not reported.
-        let mut wide = HashMap::new();
-        for i in 0..6 {
-            wide.insert(format!("objectives/evasion/wide/big{i}"), 20);
-        }
-        for i in 0..5 {
-            wide.insert(format!("objectives/evasion/wide/tiny{i}"), 2);
-        }
-        assert!(find_fragmented_sibling_cohorts(&wide).is_empty());
-
-        // A parent under 35 rules belongs to the sum check, not this one.
-        let small: HashMap<String, usize> = (0..6)
-            .map(|i| (format!("objectives/evasion/small/s{i}"), 1))
+        let nine_children: HashMap<String, usize> = (0..9)
+            .map(|i| (format!("micro-behaviors/data/codec/c{i}"), 1))
             .collect();
-        assert!(find_fragmented_sibling_cohorts(&small).is_empty());
+        assert!(find_fragmented_sibling_cohorts(&nine_children).is_empty());
+
+        let above_boundary: HashMap<String, usize> = (0..10)
+            .map(|i| (format!("micro-behaviors/data/codec/c{i}"), 9))
+            .collect();
+        assert!(find_fragmented_sibling_cohorts(&above_boundary).is_empty());
 
         // The tier is respected: well-known catalogues are not scanned.
         let wk: HashMap<String, usize> = (0..6)
@@ -5190,7 +5176,7 @@ mod taxonomy_tests {
     }
 
     #[test]
-    fn all_former_budget_paths_reject_rule_101() {
+    fn all_former_budget_paths_reject_rule_99() {
         for directory in [
             "metadata/filename",
             "metadata/file/archive",
@@ -5207,12 +5193,12 @@ mod taxonomy_tests {
             "micro-behaviors/fs/write/file/full",
             "micro-behaviors/os/user/account",
         ] {
-            let traits: Vec<_> = (0..101)
+            let traits: Vec<_> = (0..99)
                 .map(|i| make_trait(&format!("{directory}::rule-{i}"), "other::t"))
                 .collect();
             assert_eq!(
                 find_oversized_trait_directories(&traits, &[]),
-                vec![(directory.to_string(), 101)]
+                vec![(directory.to_string(), 99)]
             );
         }
     }

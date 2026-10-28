@@ -59,7 +59,6 @@ use crate::capabilities::validation::{
     find_self_referencing_composites, find_self_referencing_traits, find_self_suppressing_traits,
     find_short_pattern_warnings, find_should_use_defaults, find_sibling_name_restatement,
     find_fragmented_sibling_cohorts, find_single_item_clauses, find_slow_regex_patterns,
-    find_sparse_sibling_cohorts,
     find_stale_filetype_allowlist_entries, find_string_content_collisions,
     find_string_literal_should_use_text, find_string_pattern_duplicates,
     find_structural_regex_duplicates, find_subsumed_required_legs,
@@ -2327,8 +2326,8 @@ impl super::CapabilityMapper {
                     }
                 }
 
-                // Rule counts alone do not prove branches are redundant, but a
-                // small sibling cohort merits a placement review.
+                // Count direct rules in every leaf, then report only parents
+                // fragmented into many tiny sibling directories.
                 tracing::trace!("Checking sparse taxonomy sibling cohorts");
                 let mut direct_rule_counts: HashMap<String, usize> = HashMap::new();
                 for id in rule_source_files.keys() {
@@ -2337,32 +2336,6 @@ impl super::CapabilityMapper {
                     };
                     *direct_rule_counts.entry(directory.to_string()).or_default() += 1;
                 }
-                let sparse_cohorts = find_sparse_sibling_cohorts(&direct_rule_counts);
-                if !sparse_cohorts.is_empty()
-                    && !crate::validation_controls::is_validator_disabled("sparse-siblings")
-                {
-                    warnings.push_count(
-                        "sparse-siblings",
-                        sparse_cohorts.len(),
-                        format!(
-                            "{} sibling groups contain fewer than 35 combined rules",
-                            sparse_cohorts.len()
-                        ),
-                    );
-                    eprintln!(
-                        "\n⚠️ SOFT WARNING: {} sibling groups contain fewer than 35 combined rules",
-                        sparse_cohorts.len()
-                    );
-                    eprintln!(
-                        "   Consider whether broader sibling placement would preserve precision."
-                    );
-                    for (parent, rules, children) in &sparse_cohorts {
-                        eprintln!("   {parent} ({children} sibling branches, {rules} rules)");
-                    }
-                }
-
-                // A large sibling keeps the sum above the bar and hides the
-                // tiny branches next to it; count those directly.
                 let fragmented_cohorts = find_fragmented_sibling_cohorts(&direct_rule_counts);
                 if !fragmented_cohorts.is_empty()
                     && !crate::validation_controls::is_validator_disabled("sparse-siblings")
@@ -2371,20 +2344,20 @@ impl super::CapabilityMapper {
                         "sparse-siblings",
                         fragmented_cohorts.len(),
                         format!(
-                            "{} parents are split into many tiny branches",
+                            "{} parents have ten or more child directories averaging 8 or fewer rules",
                             fragmented_cohorts.len()
                         ),
                     );
                     eprintln!(
-                        "\n⚠️ SOFT WARNING: {} parents are split into many tiny branches",
+                        "\n⚠️ SOFT WARNING: {} parents have ten or more child directories averaging 8 or fewer rules",
                         fragmented_cohorts.len()
                     );
                     eprintln!(
-                        "   Fold branches of three or fewer rules into the sibling that already answers their question."
+                        "   Review the child directories; merge only branches that answer the same taxonomy question."
                     );
-                    for (parent, tiny, children, rules) in &fragmented_cohorts {
+                    for (parent, children, rules, average) in &fragmented_cohorts {
                         eprintln!(
-                            "   {parent} ({tiny} of {children} branches hold three or fewer rules; {rules} rules)"
+                            "   {parent} ({children} child directories, {rules} rules, {average:.1} rules per child)"
                         );
                     }
                 }
@@ -5612,7 +5585,7 @@ impl super::CapabilityMapper {
                         "   Then reorganize the remaining traits into meaningful subdirectories only when each child adds precision under TAXONOMY.md."
                     );
                     eprintln!(
-                        "   Merely moving the same broad set to another location is not a fix; keep splits technique-based and platform-neutral where possible. Every directory has a 100-rule limit; there are no path-specific exceptions.\n"
+                        "   Merely moving the same broad set to another location is not a fix; keep splits technique-based and platform-neutral where possible. Every directory has a configured rule limit; exceptions require explicit approval after a complete relevance audit.\n"
                     );
                     for (dir_path, count) in &oversized_dirs {
                         eprintln!("   {}: {} rules", dir_path, count);

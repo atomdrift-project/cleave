@@ -384,8 +384,9 @@ opt-level = 3
 [patch.crates-io]
 # tree-sitter carries an illumos build fix not yet released upstream; both
 # crates must come from the same fork because tree-sitter uses its in-tree
-# tree-sitter-language and Cargo links only one copy. tree-sitter-bash is
-# patched here, not in filefacts, because [patch] applies only in the root.
+# tree-sitter-language and Cargo links only one copy. Each root manifest
+# carries these fork patches because Cargo does not inherit dependency patches.
+# Use bare fork URLs across siblings; Cargo.lock records the selected commits.
 tree-sitter-bash = { git = "https://github.com/tstromberg/tree-sitter-bash" }
 tree-sitter = { git = "https://github.com/tstromberg/tree-sitter" }
 tree-sitter-language = { git = "https://github.com/tstromberg/tree-sitter" }

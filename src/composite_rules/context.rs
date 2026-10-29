@@ -241,7 +241,7 @@ pub(crate) struct EvaluationContext<'a> {
     pub cached_commentless_ast: Arc<OnceLock<Option<tree_sitter::Tree>>>,
     /// Hard deadline for rule evaluation.
     pub deadline: Option<Instant>,
-    /// Cooperative cancellation flag (set by litmus timeout).
+    /// Cooperative cancellation flag, set by the caller (e.g. on a timeout).
     pub cancellation: Option<&'a std::sync::atomic::AtomicBool>,
     /// Per-architecture byte ranges for fat/universal binaries.
     pub arch_ranges: Option<&'a [(Arch, std::ops::Range<usize>)]>,

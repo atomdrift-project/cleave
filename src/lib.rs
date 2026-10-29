@@ -80,7 +80,7 @@ pub mod commands;
 pub mod composite_rules;
 pub mod diff;
 pub mod env_mapper;
-pub mod malecule_bridge;
+mod formula;
 pub mod model_facts;
 pub mod output;
 pub mod path_mapper;
@@ -108,9 +108,8 @@ mod rayon_nest;
 
 /// This crate's version, captured from `Cargo.toml` at compile time.
 ///
-/// Exposed so an embedding binary (e.g. litmus, which links cleave as a
-/// library) can read the cleave version it was built against, rather than its
-/// own. `env!` resolves the version of the crate it is compiled in, so this
+/// Exposed so a binary that links cleave as a library can read the cleave
+/// version it was built against, rather than its own. `env!` resolves the version of the crate it is compiled in, so this
 /// constant always reflects cleave's `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -120,8 +119,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Without it, a long-running analysis exhausts `vm.max_map_count` and dies:
 /// `mmap` starts returning `ENOMEM`, Rust's allocator gets a null back and
 /// `handle_alloc_error` aborts with `memory allocation of N bytes failed` — a
-/// message that reads like OOM but is not (on 2026-08-10 an atomscan worker hit
-/// this with RSS at 19-36 GB against a 108 GiB cgroup limit and no OOM kill).
+/// message that reads like OOM but is not.
 ///
 /// Two settings together bound the mapping count, and neither suffices alone:
 ///
@@ -132,41 +130,12 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 ///   and re-mmaps small ones, so live extents scatter into separate VMAs
 ///   instead. Purging rarely lets them be reused in place.
 ///
-/// Measured on a live worker, 10 minutes per config after a full restart
-/// (2026-08-10), archive-heavy workload:
-///
-/// | config                            | mappings  | growth/min | RSS   |
-/// |-----------------------------------|-----------|------------|-------|
-/// | `retain:false,muzzy_decay_ms:-1`  |     7,501 |       +360 | 37 GB |
-/// | `retain:false`                    |   366,585 |    +32,109 | 17 GB |
-/// | `retain:true,dirty=10s,muzzy=10s` |   531,228 |    +47,664 | 37 GB |
-/// | unconfigured (control)            | 1,034,683 |    +74,935 | 29 GB |
-///
-/// The control reached the 1048576 ceiling inside ten minutes, reproducing the
-/// abort. Only the first row plateaus; the others merely grow more slowly.
-///
-/// `-1` (never purge) wins on mappings but not overall: muzzy pages are never
-/// returned, so RSS climbs toward the true peak working set — ~10 GB over 20
-/// minutes and 68-74 GB over 13 hours, against a 72 GB worker budget. A second
-/// 20-minute round under verified load compared decay values (2026-08-11):
-///
-/// | `muzzy_decay_ms` | mappings         | RSS                      |
-/// |------------------|------------------|--------------------------|
-/// | `600000` (10 min)| ~83,000, flat    | ~4.5 GB, stable/declining|
-/// | `-1` (never)     | ~8,000, flat     | ~10 GB, climbing         |
-/// | `60000` (1 min)  | ~350,000, noisy  | ~15-21 GB                |
-///
-/// `600000` is the chosen point: more mappings than `-1`, in exchange for RSS
-/// that holds steady instead of growing into the memory budget. Purging often
-/// (`60000`) is the worst of both — it reintroduces the unmap/remap churn.
-///
-/// Treat the absolute counts as load-dependent, not as constants. The same
-/// `600000` config that plateaued near 83,000 in the table above settled around
-/// 500,000 (oscillating 484k-612k, RSS 23-27 GB) when the worker was draining a
-/// 3.7 M-item backlog after an outage. What holds across load is the shape: the
-/// count oscillates around a plateau instead of climbing. Size the ceiling for
-/// the busy case — under that backlog the stock 1048576 limit would have left
-/// under 2x margin.
+/// Under sustained archive-heavy load an unconfigured worker reaches the
+/// default 1,048,576-mapping ceiling within minutes. Never purging muzzy pages
+/// (`-1`) keeps the count lowest but lets RSS climb toward the peak working
+/// set; purging every minute reintroduces the unmap/remap churn. Ten minutes
+/// holds the mapping count on a plateau with steady RSS. The plateau moves
+/// with load, so size the ceiling for the busy case.
 ///
 /// Four arenas suit a bounded analysis pool and avoid multiplying dirty extents
 /// across jemalloc's CPU-scaled default; one-second dirty decay returns
@@ -587,8 +556,8 @@ pub struct AnalysisOptions {
     /// Not included in the analysis cache key.
     pub cancellation: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// Optional phase tracker for observability. When set, cleave updates this
-    /// string at key analysis stages so callers (e.g. litmus `/_/requests`) can
-    /// report what a stuck request is actually doing.
+    /// string at key analysis stages so a caller's diagnostics can report what
+    /// a stuck request is actually doing.
     pub phase: Option<PhaseTracker>,
     /// This analysis runs on a rayon pool of its own (the caller `install`ed
     /// it there), so it neither competes with sibling analyses for the shared
@@ -623,10 +592,10 @@ impl std::fmt::Debug for SkipPredicate {
 
 /// Lightweight handle for reporting the current analysis phase.
 ///
-/// Callers (e.g. litmus) create one per request and pass it via
+/// Callers (e.g. an embedding host) create one per request and pass it via
 /// [`AnalysisOptions::phase`]. Cleave updates it at each major stage
 /// (archive extraction, YARA, structural analysis, …) so the caller
-/// can expose the current phase in diagnostic endpoints like `/_/requests`.
+/// can expose the current phase in its own diagnostics.
 ///
 /// Trackers created via [`PhaseTracker::with_label`] register themselves
 /// in a process-global list so [`start_rayon_diagnostics`] can enumerate
@@ -976,7 +945,7 @@ pub fn prefetch_shared_resources(enable_third_party: bool) {
 ///
 /// The prewarm compiled every pattern in a persisted memo -- the union of all
 /// patterns any earlier scan had compiled, ~79k of them -- and held them for
-/// the life of the process. Measured 2026-09-25 it paid for itself nowhere: a
+/// the life of the process, and it paid for itself nowhere: a
 /// one-shot scan of a 12-byte file went from 4.8 GiB and 44 s of CPU to
 /// 0.8 GiB and 6.4 s without it, and a long-lived server lost no first-request
 /// latency while its peak fell by 2.6 GiB. Recording the memo also cost every
@@ -1026,7 +995,7 @@ pub fn regex_store_usage() -> [(usize, usize, usize, u64); 2] {
 
 /// Read one archive member's raw bytes by its in-archive path.
 ///
-/// A differential consumer (e.g. isomer) needs the *old* text of a changed
+/// A differential consumer needs the *old* text of a changed
 /// member to show which lines a new release added; the diff carries only
 /// analysis metadata, so the bytes have to come from the archive itself. Reuses
 /// the same decoders as analysis (gzip / bzip2 / xz / zstd tarballs and zip).
@@ -2179,7 +2148,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
 
     // Caller skip hook: consulted with the sha256 right after hashing, before any
     // analysis. A `true` short-circuits to a minimal target-only report — the
-    // caller (e.g. litmus' known-good bloom filter) already has a verdict and
+    // caller (e.g. an embedding host's known-good bloom filter) already has a verdict and
     // recognizes the skip by re-checking the sha. Cheaper than the cache lookup,
     // and bloom-agnostic.
     if let Some(predicate) = &options.skip_predicate
@@ -3744,7 +3713,7 @@ where
     })
 }
 
-/// Compute a malecule formula string from an [`AnalysisReport`].
+/// Compute the findings formula string for an [`AnalysisReport`].
 ///
 /// Aggregates findings by directory path, removes baseline and low-confidence
 /// entries, then produces the chemical formula notation. Returns an empty string
@@ -3761,8 +3730,7 @@ pub fn formula_from_report(report: &AnalysisReport) -> String {
         return String::new();
     };
 
-    let filtered = output::filter_findings_for_formula(findings);
-    malecule_bridge::formula_from_findings(&filtered)
+    formula::of(findings).unwrap_or_default()
 }
 
 /// Compare two paths (files or directories) for supply-chain attack detection.

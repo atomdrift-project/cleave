@@ -29,7 +29,6 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 /// The tree caps a single trait at four platforms; a wider union is a
 /// deliberate per-platform split, not a duplicate.
 const MAX_TRAIT_PLATFORMS: usize = 4;
-use std::sync::OnceLock;
 
 const RELAXED_DATA_TEXT_ALTERNATION_LIMIT: usize = 6;
 
@@ -4819,9 +4818,7 @@ fn extract_match_signature(condition: &Condition) -> Option<(bool, MatchSignatur
 }
 
 fn prefix_regex() -> Option<&'static regex::Regex> {
-    static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"^(\^?)([a-zA-Z_][a-zA-Z0-9_-]*)(.*)$").ok())
-        .as_ref()
+    static_regex!(r"^(\^?)([a-zA-Z_][a-zA-Z0-9_-]*)(.*)$")
 }
 
 /// Check for duplicate basename patterns in atomic traits
@@ -5078,17 +5075,11 @@ fn structural_shape(pattern: &str) -> String {
 /// so `\beval`, `(^|[NCC])eval`, `(?:^|\s)eval` and friends all collapse to
 /// just `eval` for shape comparison.
 fn strip_leading_boundary(s: &str) -> &str {
-    static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
-    let re = RE
-        .get_or_init(|| {
-            // Matches: \b | ^ | (^|X) | (?:^|X)
-            // X is a single char class placeholder, escape, or literal up to 8 chars
-            // (long enough to cover [NCC]/[CC]/\s/\W/\b/[!/]/etc., short enough to
-            // avoid eating real content).
-            regex::Regex::new(r"^(?:\\b|\^|\(\?:\^\|[^()]{1,8}\)|\(\^\|[^()]{1,8}\))").ok()
-        })
-        .as_ref();
-    if let Some(re) = re
+    // Matches: \b | ^ | (^|X) | (?:^|X)
+    // X is a single char class placeholder, escape, or literal up to 8 chars
+    // (long enough to cover [NCC]/[CC]/\s/\W/\b/[!/]/etc., short enough to
+    // avoid eating real content).
+    if let Some(re) = static_regex!(r"^(?:\\b|\^|\(\?:\^\|[^()]{1,8}\)|\(\^\|[^()]{1,8}\))")
         && let Some(m) = re.find(s)
     {
         return &s[m.end()..];
@@ -5099,10 +5090,7 @@ fn strip_leading_boundary(s: &str) -> &str {
 /// Strip a leading inline-flag block like `(?i)`, `(?is)`, `(?-i)` so flag-only
 /// differences don't prevent shape collapse.
 fn strip_leading_flags(s: &str) -> &str {
-    static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
-    let re = RE
-        .get_or_init(|| regex::Regex::new(r"^\(\?[a-zA-Z\-]{1,8}\)").ok())
-        .as_ref();
+    let re = static_regex!(r"^\(\?[a-zA-Z\-]{1,8}\)");
     if let Some(re) = re
         && let Some(m) = re.find(s)
     {

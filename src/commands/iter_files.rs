@@ -2,14 +2,13 @@
 //!
 //! Walks the given targets and emits one JSONL record per file that cleave
 //! considers a recognized program file. The output is intentionally minimal
-//! (`{path, type, sz}`): callers like hopper own their own hashing and
+//! (`{path, type, sz}`): callers like a report store own their own hashing and
 //! caching, so they only need to know *which* files exist and what cleave
 //! would classify them as.
 //!
 //! No archive descent in v1. Top-level archives are reported (so the caller
 //! can submit them for analysis), but their contents are not enumerated here
-//! — that work happens during full analysis and is split out by the caller
-//! (see hopper's ExplodeArchiveMembers).
+//! — that work happens during full analysis and is split out by the caller.
 
 use crate::analyzers::{FileTypeExt, detect_file_type, is_analyzable};
 use anyhow::Result;
@@ -48,9 +47,8 @@ pub struct IterFilesConfig<'a> {
 /// for every file whose detected type is a recognized program type. Files
 /// larger than `max_file_size` (when nonzero) are skipped. Per-file errors
 /// are logged at debug level and otherwise ignored.
-pub fn run(config: &IterFilesConfig<'_>) -> Result<()> {
-    let stdout = std::io::stdout();
-    let mut out = BufWriter::new(stdout.lock());
+pub fn run(config: &IterFilesConfig<'_>, out: impl Write) -> Result<()> {
+    let mut out = BufWriter::new(out);
 
     for target in config.targets {
         let path = Path::new(target.as_str());

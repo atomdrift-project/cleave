@@ -678,11 +678,7 @@ func main() {
     /// `s.replace(/a/g,'b').replace(/c/g,'d')` is the symbol
     /// `s.replace.replace`. A call contributes the name of what it called and
     /// nothing else -- no parentheses, no argument text -- so one call shape
-    /// is one symbol however it is spelled.
-    ///
-    /// This reverses B1g, which kept a locally-synthesised name because
-    /// filefacts reported `Call.target: None` for this shape. filefacts names
-    /// it now, and one renderer is the point: `cleave facts` prints the same
+    /// is one symbol however it is spelled, and `cleave facts` prints the same
     /// string a `type: symbol` matcher has to equal.
     #[test]
     fn chained_replace_calls_keep_dotted_name() {

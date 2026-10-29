@@ -332,7 +332,7 @@ fn has_traits(path: &Path) -> bool {
 /// tree.
 ///
 /// The fallback is not cosmetic. This value becomes `CompactReport::traits_version`,
-/// serialized as `rev` and omitted entirely when `None`. Downstream, hopper's
+/// serialized as `rev` and omitted entirely when `None`. Downstream, a report store's
 /// `/api/known` reports a stored verdict "current" only when its recorded traits
 /// version matches the producer's, and scan skips re-posting exactly those — so a
 /// producer that reports no version has that negotiation silently disabled and
@@ -691,7 +691,7 @@ mod tests {
 
     /// A git-managed traits checkout must still report a version. It carries no
     /// bundle sidecar (`update` refuses to touch a git tree), and a `None` here
-    /// omits `rev` from every emitted report, which silently disables hopper's
+    /// omits `rev` from every emitted report, which silently disables a report store's
     /// `/api/known` currency negotiation and makes producers re-post verdicts
     /// forever. Covers the three on-disk shapes that actually occur.
     #[test]
@@ -754,7 +754,7 @@ mod tests {
 
         // A short or non-hex value must be rejected rather than reported as a
         // version: a bogus `rev` is worse than none, because it would make
-        // hopper call an unrelated verdict current.
+        // a report store call an unrelated verdict current.
         std::fs::write(git.join("HEAD"), "not-a-hash\n").unwrap();
         assert_eq!(git_head_commit(&tmp), None, "garbage HEAD");
         std::fs::write(git.join("HEAD"), "abc123\n").unwrap();

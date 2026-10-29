@@ -101,11 +101,14 @@ test test-fast test-unit: export CLEAVE_SKIP_CACHE := 1
 # in the shared `cargo test --test it` process, where their leaked state corrupts
 # sibling tests. Kept in sync with `support::ISOLATED_MODULES`; the
 # `shared_bucket_has_no_global_state_mutation` guard test fails if they drift.
-IT_ISOLATED := archive_determinism_test archive_tmp_regression binary_traits_test \
-	embedded_code_detection_test subfile_pipeline_test symbol_extraction_test \
-	tiny_manifest_value_traits_test trait_migration_regression_test \
-	traits_override_isolation_test \
-	utf16_text_normalization_test yara_init_no_deadlock
+IT_ISOLATED := archive_determinism_test archive_partial_taxonomy archive_tmp_regression binary_traits_test \
+	cache_path_context cpio_members cpio_rpm declared_sources \
+	decoded_evidence_provenance directory_selector_threshold embedded_code_detection_test explicit_scan_order \
+	facts_cli_json follow_outcomes follow_outcomes_batch nuitka_macho \
+	packed_rules_cli rpm_scriptlets security_hold_outcomes shell_ast_predicates \
+	source_compound_flow subfile_pipeline_test symbol_extraction_test taxonomy_catalog_budgets \
+	tiny_manifest_value_traits_test trait_migration_regression_test traits_override_isolation_test utf16_text_normalization_test \
+	validation_performance validation_severity xor_macho_payload yara_init_no_deadlock
 empty :=
 space := $(empty) $(empty)
 IT_SKIP := $(foreach m,$(IT_ISOLATED),--skip $(m)::)

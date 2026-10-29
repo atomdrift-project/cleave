@@ -18,8 +18,8 @@
 //!
 //! # Parallelism
 //!
-//! Archive member analysis runs on the global rayon thread pool (previously a
-//! separate pool — merged to halve YARA scanner cache memory). Multiple
+//! Archive member analysis runs on the global rayon thread pool, so the
+//! per-thread YARA scanner caches are not duplicated across pools. Multiple
 //! concurrent archives compete for the same rayon threads, so individual
 //! member analyses must be bounded to avoid stalling the entire pool.
 
@@ -208,9 +208,8 @@ fn read_member_tolerant<R: Read>(
 /// thread in a parallel member window (see `par_filter_fold_members`).
 /// How many heavy members one archive analyzes at a time
 /// (`CLEAVE_HEAVY_MEMBER_PARALLEL`, default 32; 1 restores the serial walk).
-/// Measured on BootstrapBlazor alone: serial 76.8 s, 8-wide 35.0 s, 32-wide
-/// 26.6 s at +4% peak RSS; on the 55-zip corpus 32 costs ~1 GB more peak
-/// than 8 and was the only width that reached 71 s.
+/// Wider is faster on archives of many large bundles, at a modest cost in
+/// peak RSS.
 fn heavy_member_parallelism() -> usize {
     static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *N.get_or_init(|| {
@@ -386,12 +385,12 @@ fn with_nested_archive_stack<T>(work: impl FnOnce() -> Result<T>) -> Result<T> {
 /// they're not", and it fills the long tail of a directory scan when only one
 /// big archive remains (the other scan threads would otherwise sit idle). It
 /// does *not* depend on being the outermost rayon context: under `cleave scan`'s
-/// `par_bridge` walk (or a litmus slot pool) the top archive is already inside a
+/// `par_bridge` walk (or an embedding host's slot pool) the top archive is already inside a
 /// rayon thread, yet still benefits from fanning members out to drain the tail.
 ///
 /// Nested archives (`depth >= 1`) stay serial: their members already run inside
 /// a parallel member task, so a second fan-out level only deepens rayon nesting
-/// — extra deadlock pressure on small pools (litmus runs 4-thread slots sized
+/// — extra deadlock pressure on small pools (an embedding host runs 4-thread slots sized
 /// precisely for the recursion chain) — without exposing usable parallelism.
 fn par_filter_map_members<T, U, F>(items: &[T], parallel: bool, f: F) -> Vec<U>
 where
@@ -404,7 +403,7 @@ where
     // shared pool that includes *other* in-flight analyses' member tasks — and
     // runs it on top of its current stack. Each stolen task can block and
     // steal again, so frames from independent deep analyses compound without
-    // bound; no fixed thread stack survives that (litmus overflowed 64 MB
+    // bound; no fixed thread stack survives that (an embedding host overflowed 64 MB
     // with 4 large archives in flight). maybe_grow moves the member task onto
     // a fresh heap-allocated stack segment whenever headroom is low, making
     // the compounding harmless. The red zone must cover one member's full
@@ -563,10 +562,9 @@ fn par_filter_fold_members<T, U, F>(
         }
         // `join`'s left side runs here; the right side is the only stealable
         // job. Heavy members run a bounded number at a time rather than one
-        // after another: a module zip with ~30 multi-MB minified bundles spent
-        // 55 of its 77 s on one thread walking them serially while the pool
-        // idled (BootstrapBlazor, 2026-09-19); fully parallel it took 28 s at
-        // +4% peak RSS. The bound keeps the concurrent working set of big
+        // after another: an archive of dozens of multi-MB minified bundles
+        // otherwise spends most of its wall on one thread while the pool
+        // idles. The bound keeps the concurrent working set of big
         // members — each holds its strings, parse tree and regex scratch —
         // from multiplying across every archive in flight.
         rayon::join(
@@ -677,26 +675,7 @@ fn archive_entry_metadata(
 }
 
 fn byte_entropy(data: &[u8]) -> Option<f64> {
-    if data.is_empty() {
-        return None;
-    }
-
-    let mut counts = [0usize; 256];
-    for &byte in data {
-        counts[byte as usize] += 1;
-    }
-
-    let len = data.len() as f64;
-    let entropy = counts
-        .iter()
-        .filter(|&&count| count != 0)
-        .map(|&count| {
-            let p = count as f64 / len;
-            -p * p.log2()
-        })
-        .sum::<f64>();
-
-    Some((entropy * 1000.0).round() / 1000.0)
+    (!data.is_empty()).then(|| (crate::entropy::shannon(data) * 1000.0).round() / 1000.0)
 }
 
 fn magic_prefix(data: &[u8]) -> Option<String> {
@@ -1177,7 +1156,7 @@ struct MemberCounts {
 /// Window sizing is a memory/straggler tradeoff: every window ends by waiting
 /// on its slowest member, so the idle cost of that straggler is paid once per
 /// window. Small windows spend a large fraction of wall waiting — on a
-/// 16k-member TypeScript corpus (8 cores, 2026-07-24) the old 256-member/32 MB
+/// 16k-member TypeScript corpus (8 cores) the old 256-member/32 MB
 /// windows held the whole scan to 4.3 of 8 cores, and raising the caps to
 /// 2048/256 MB cut wall 40% (777 s -> 464 s) with identical output and +3%
 /// RSS. The count cap is the binding one for small-member archives (2048 of
@@ -1280,7 +1259,7 @@ fn member_window_count() -> usize {
 fn pipeline_member_windows() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| {
-        // Opt-in (=1), not opt-out: measured 2026-07-24 on the typed corpus,
+        // Opt-in (=1), not opt-out: measured on the typed corpus,
         // handing windows to the consumer thread was a wash at 63k members and
         // 24% SLOWER at 16k — the consumer is an external thread rayon won't
         // run pool work on, and the producer parked in a channel send is a
@@ -1314,7 +1293,7 @@ struct WindowPipeline<'scope> {
 /// window N+1. Decompression is inherently serial per archive, and the
 /// blocking flush made it strictly alternate with analysis — the pool sat
 /// idle while the producer inflated and vice versa, which on a 63k-member
-/// archive left ~30% of even an 8-core box unused (2026-07-24 typed
+/// archive left ~30% of even an 8-core box unused (typed
 /// benchmark). The bounded channel keeps at most one window in flight, so
 /// resident bytes stay within one window budget of the inline path.
 struct MemberWindow<'a, 'scope> {
@@ -1839,7 +1818,7 @@ impl ArchiveAnalyzer {
     /// slots are free, effectively serial when they're not — which drains the
     /// long tail of a directory scan when only one big archive remains. Memory
     /// is not a reason to serialize here: a single top-level analysis has RAM to
-    /// spare, and litmus bounds the memory of *concurrent* top-level analyses
+    /// spare, and an embedding host bounds the memory of *concurrent* top-level analyses
     /// with its admission controller, not by streaming one member at a time.
     ///
     /// Whether a batch of `member_count` members runs parallel at this depth.
@@ -1862,7 +1841,7 @@ impl ArchiveAnalyzer {
     ///   mixed member types spread across every pool thread.
     ///
     /// The historical reason nested was *always* serial — deadlock pressure on
-    /// litmus's tiny 4-thread per-slot pools — is gone: on the shared
+    /// an embedding host's tiny 4-thread per-slot pools — is gone: on the shared
     /// process-global pool work-stealing joins cannot deadlock, the `stacker`
     /// red-zone absorbs stolen-frame stack compounding, and the member window
     /// bounds in-flight bytes. `CLEAVE_NESTED_PARALLEL_MIN_MEMBERS` tunes the
@@ -2031,7 +2010,7 @@ impl ArchiveAnalyzer {
             // owner of a small member's flight can be diverted for tens of
             // seconds — a rayon `join` inside its analysis steals whatever
             // is pending, a 30 s bundle included — and seven lanes then sat
-            // 180 s on a README.md flight (2026-09-02). Below the floor the
+            // 180 s on a README.md flight. Below the floor the
             // duplicate is cheaper than any wait.
             if on_pool && data.len() < FLIGHT_WAIT_MIN_BYTES {
                 tracing::debug!(
@@ -2068,7 +2047,7 @@ impl ArchiveAnalyzer {
             // than that: the owner may be a worker in another pool (a whale
             // on its private pool, whose members share a LICENSE or vendored
             // file with everyone) that is saturated with its own heavy
-            // members. Measured 2026-09-05 on a scan server at concurrency
+            // members. Measured on a scan server at concurrency
             // 8: three unrelated small packages each stalled 15–18 s on a
             // member the whale in flight owned, then finished within 0.4 s
             // of each other — on a pool worker and off it alike.
@@ -2378,7 +2357,7 @@ impl ArchiveAnalyzer {
 
                 // If we're already running on a rayon worker, run the nested
                 // archive analysis directly on this thread. Rayon workers are
-                // configured with a large stack by the caller (litmus installs
+                // configured with a large stack by the caller (an embedding host installs
                 // a 256 MB global pool), and par_filter_map_members grows onto
                 // a fresh heap segment when headroom runs low, so we don't
                 // need the 8 MB std::thread for stack headroom.

@@ -8,7 +8,7 @@
 //! overlapping counter and the state is the set of all live counters. On a
 //! real bundle the production lazy DFA then fills and clears its cache
 //! over and over, gives up, and falls back to the PikeVM at 20–100 ms per
-//! MB — against ~0.05 ms for a well-formed rule (2026-09-02 npm corpus: 37
+//! MB — against ~0.05 ms for a well-formed rule (npm corpus: 37
 //! such patterns were 39% of a 10 MB bundle's trait time).
 //!
 //! Whether that happens depends on how often the opening byte occurs, so
@@ -50,8 +50,8 @@ pub(crate) const LEG_BYTES: usize = 64 << 10;
 /// of warm-up means the automaton is still minting a state for most
 /// positions — unbounded growth, which on a real bundle fills the cache,
 /// clears it repeatedly and ends in the PikeVM. A bounded automaton
-/// plateaus during warm-up and adds nothing. Swept over the trait corpus
-/// (2026-09-02): last-leg growth median 0, p90 0, p99 22 KB; the patterns
+/// plateaus during warm-up and adds nothing. Swept over the trait corpus:
+/// last-leg growth median 0, p90 0, p99 22 KB; the patterns
 /// that give up on real 10 MB bundles add 100 KB to a full megabyte.
 pub(crate) const GROWTH_BYTES_LIMIT: usize = LEG_BYTES / 2;
 
@@ -849,7 +849,7 @@ mod tests {
         assert!(longest > 2000, "longest line: {longest}");
     }
 
-    /// The 2026-09-02 rewrites: each pathological original is flagged,
+    /// These rewrites: each pathological original is flagged,
     /// each presence-equivalent rewrite is not.
     #[test]
     fn rewritten_patterns_stop_exploding() {

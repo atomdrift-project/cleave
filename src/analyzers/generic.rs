@@ -498,14 +498,10 @@ impl GenericAnalyzer {
 
     fn extract_strings_regex(&self, content: &str, report: &mut AnalysisReport) {
         fn double_quote_re() -> Option<&'static regex::Regex> {
-            static RE: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
-            RE.get_or_init(|| regex::Regex::new(r#""([^"\\]|\\.){0,1000}""#).ok())
-                .as_ref()
+            static_regex!(r#""([^"\\]|\\.){0,1000}""#)
         }
         fn single_quote_re() -> Option<&'static regex::Regex> {
-            static RE: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
-            RE.get_or_init(|| regex::Regex::new(r#"'([^'\\]|\\.){0,1000}'"#).ok())
-                .as_ref()
+            static_regex!(r#"'([^'\\]|\\.){0,1000}'"#)
         }
 
         if let Some(re) = double_quote_re() {

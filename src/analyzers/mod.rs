@@ -639,7 +639,7 @@ pub(crate) trait FileTypeExt {
 impl FileTypeExt for FileType {
     fn report_file_type(&self) -> String {
         // filefacts is the single source of truth for the canonical label.
-        // The report `type`, litmus's routing keys, and collimator's tokens
+        // The report `type`, an embedding host's routing keys, and the ML pipeline's tokens
         // are all this one string — no separate hand-rolled vocabulary, and
         // no fragile Debug-lowercase fallback that silently drops underscores.
         self.label().to_string()

@@ -20,7 +20,7 @@ default-run = "cleave"
 workspace = true
 
 [workspace]
-members = [".", "crates/scpt", "crates/malecule", "crates/sysmem", "crates/yara-classify", "crates/pyinstx", "crates/lzx", "cleave-macros"]
+members = [".", "crates/scpt", "crates/sysmem", "crates/yara-classify", "crates/pyinstx", "crates/lzx", "cleave-macros"]
 
 [workspace.package]
 edition = "2024"
@@ -105,8 +105,6 @@ cfb = "0.14"  # Microsoft OLE2/CFBF compound document parsing
 # AppleScript parsing
 scpt = { path = "crates/scpt" }
 
-# Molecular visualization
-malecule = { path = "crates/malecule" }
 
 # System memory queries
 sysmem = { path = "crates/sysmem" }

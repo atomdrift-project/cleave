@@ -10,7 +10,7 @@
 //!
 //! This module gives each worker thread its own breadcrumb — `(analyzer,
 //! target)` plus how long it has been there — registered in a process-global
-//! table that a caller (e.g. litmus's wedge dump) reads via [`snapshot`]. Writes
+//! table that a caller (e.g. an embedding host's wedge dump) reads via [`snapshot`]. Writes
 //! touch only the calling thread's own lock, so the hot per-member path stays
 //! contention-free.
 

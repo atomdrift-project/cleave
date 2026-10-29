@@ -3,8 +3,7 @@
 //! Every PE-internal helper takes a non-optional
 //! [`crate::analysis_context::AnalysisContext`]: structural data
 //! (sections, imports, exports, characteristics) is read from
-//! `filefacts`'s typed views rather than re-walked with goblin. The
-//! analyzer no longer carries its own goblin parse path.
+//! `filefacts`'s typed views; this analyzer never parses the file itself.
 // Parses attacker-controlled bytes: index and offset arithmetic must be
 // checked, so a forged header is a parse error rather than a panic.
 #![warn(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
@@ -109,15 +108,11 @@ fn section_is_prose(bytes: &[u8]) -> bool {
 /// These exist because a PE can be restructured — padded, renamed,
 /// stuffed — without a single instruction changing, and every behavioural
 /// signal cleave has will keep describing the original, benign program.
-/// The 2026-08-08 VirusSign sample
-/// (702e2b42f58ac93fa622db6161bdd116a5ce6fd7c59e7e733dc64d19ac2c2832) is
-/// the worked example: a genuine Sysinternals RootkitRevealer 1.70 build,
-/// stock MSVC CRT entry, no packer, whose container had been given a
-/// 10 MB `SizeOfHeaders` (97% of the file is a zero hole the loader maps),
-/// its section names shuffled off their contents, ten sections stuffed with
-/// Oracle and Microsoft licence-agreement prose (two of them flagged
-/// executable), its Authenticode stripped and its checksum zeroed. cleave
-/// scored it 29/benign; ClamAV and VirusTotal (23/68) called it malware.
+/// For example, a genuine signed utility can be given a 10 MB
+/// `SizeOfHeaders` (a zero hole the loader maps), section names shuffled off
+/// their contents, sections stuffed with licence prose, its Authenticode
+/// stripped and its checksum zeroed: every behavioural signal still reads
+/// benign, and only the container's shape gives it away.
 ///
 /// Emitted onto the flat metric map alongside filefacts's own `pe.*` keys,
 /// same as the recursive-scan counters below.

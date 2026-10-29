@@ -1548,7 +1548,7 @@ impl TraitDefinition {
     /// has a count/density filter. When false, raw/text matching may stop at the
     /// first match (the dominant RSS lever; see `eval_raw`'s `needs_count`). The
     /// exact count is consumed only by these filters: no other consumer reads it
-    /// and the ML pipeline (collimator) does not feature on `match_count`.
+    /// and the ML pipeline does not feature on `match_count`.
     pub(crate) fn needs_match_count(&self) -> bool {
         self.count_min.is_some()
             || self.count_max.is_some()

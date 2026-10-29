@@ -424,7 +424,7 @@ fn reload_mapper_into(slot: &MapperSlot, source: Option<&Path>) -> Result<(usize
 ///
 /// Prefer warming this once from a non-rayon thread before any rayon worker can
 /// reach it. `cleave::prefetch_yara_engine` does that by spawning a
-/// `std::thread`, and cleave/litmus entry points call it at startup.
+/// `std::thread`, and cleave and embedder entry points call it at startup.
 ///
 /// Why the contract exists: `load_all_rules` uses rayon `par_iter` internally.
 /// If the first caller to win `get_or_init` is itself a rayon worker, peers call

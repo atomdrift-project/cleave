@@ -4,7 +4,7 @@
 //! finishes in ~66 s). Each member then nests again — Aho-Corasick chunks,
 //! YARA buckets, trait eval, composite rules. Under a directory scan those
 //! inner joins steal workers from sibling archives and inflate member wall
-//! 5–17× (S3/S4/S2w on `C:\data\faster`). A bounded number of top-level
+//! several-fold. A bounded number of top-level
 //! owners retain member fan-out while their siblings make serial progress on
 //! independent blocking threads. Nested Rayon workers do not inherit
 //! ownership, so one tree cannot multiply recursively. All public single-file
@@ -23,9 +23,7 @@ static TOPLEVEL_IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 /// threads the lanes are about to idle, and the bounded-owner rule that
 /// keeps sibling archives serial no longer buys anything: every in-flight
 /// analysis may fan out. Without this the scan's tail is one whale walking
-/// its members one by one on one thread while fifteen workers sleep —
-/// overdrive-db's two ELF libraries (24 s + 9 s of rizin) back to back were
-/// a 49 s critical path in a 51 s scan.
+/// its members one by one on one thread while the other workers sleep.
 static TOPLEVEL_PENDING: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 pub(crate) fn set_toplevel_pending(n: usize) {
@@ -241,7 +239,7 @@ pub(crate) fn wait_work_runs() -> usize {
 // work can never hold the slots an interactive analysis needs. Before this
 // split there was one pair for the whole process, and on a 16-thread server
 // the inner-parallel cap is one: the idle worker held it, and the server's
-// own archive analyses ran serial behind it (measured 2026-09-05: 173s waits
+// own archive analyses ran serial behind it (measured: 173s waits
 // on the gate; a 341s interactive analysis of a repository that took 30s on
 // an idle host).
 static INNER_PARALLEL_OWNERS: AtomicUsize = AtomicUsize::new(0);
@@ -365,7 +363,7 @@ impl Drop for ToplevelInFlightGuard {
 /// has nobody else to starve) and is not counted among the shared pool's
 /// in-flight analyses, so a long whale on a private pool neither takes one of
 /// the bounded owner slots nor makes the shared pool's small analyses go
-/// serial for its duration. Measured 2026-09-05 on a 128-thread scan server:
+/// serial for its duration. Measured on a 128-thread scan server:
 /// four 36–254 MB wheels on private pools held all four owner slots for
 /// 30 s each, and every 1–5 MB package that arrived meanwhile analyzed its
 /// members serially, 2.5× slower than alone.

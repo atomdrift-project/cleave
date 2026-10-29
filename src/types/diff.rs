@@ -11,7 +11,7 @@
 //! plus per-file detail in [`DiffReportV1::files`]. Pooled counts mean overall
 //! ROCs are honest across mixed-size files.
 //!
-//! Litmus consumes the structured added/removed/changed lists; prism reads
+//! Embedding hosts consume the structured added/removed/changed lists; a report viewer reads
 //! `summary` for headlines and `files` for the per-file UI.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

@@ -254,7 +254,7 @@ impl TraitBitSet {
 /// no-literal symbol fallbacks run pattern-major over every symbol of every
 /// member on every worker at once, and the crate's pool has one owner
 /// thread — every other worker takes its mutex on each `is_match`. Measured
-/// 2026-09-06 on a scan server: 3% of all CPU in that pool's `get`, 87% of
+/// on a scan server: 3% of all CPU in that pool's `get`, 87% of
 /// it from this loop.
 #[derive(Clone, Debug)]
 pub(crate) struct ScratchRegex {
@@ -948,8 +948,8 @@ impl StringMatchIndex {
         };
 
         // Build regex literal automaton for pre-filtering (kept as Aho-Corasick)
-        // Stay case-sensitive. `ascii_case_insensitive(true)` here reproduced
-        // the B1h/B1s Zencoder cascade (lost microsoft-corp-marker / many-imports).
+        // Stay case-sensitive: a case-insensitive prefilter here dropped
+        // case-sensitive literal traits (microsoft-corp-marker, many-imports).
         // Source `type: text` regex is not skipped by this automaton (exact-only
         // raw-haystack prefilter); CI source regexes still run through eval_raw.
         let regex_literal_automaton = if !regex_literals.is_empty() {
@@ -1323,8 +1323,8 @@ impl StringMatchIndex {
     }
 
     /// Floor for the source exact-as-substr skip. Independent of the 256 B
-    /// `eval_raw` window floor: extra exact ACs on sub-16 KiB members were a
-    /// tax (S2n / five-AC trial). Windowing uses `MIN_HAYSTACK_TO_WINDOW`.
+    /// `eval_raw` window floor: extra exact automata on sub-16 KiB members cost
+    /// more than they save. Windowing uses `MIN_HAYSTACK_TO_WINDOW`.
     pub(crate) const MIN_SOURCE_TEXT_PREFILTER_BYTES: usize = 16 * 1024;
     pub(crate) const MAX_SOURCE_TEXT_PREFILTER_BYTES: usize = 3 << 20;
 
@@ -1456,10 +1456,7 @@ pub(crate) struct RawGateHits {
 /// 512, up from 64: on overflow the recorder DROPS the trait's offsets, which
 /// forces `eval_raw` back to a full-content scan — and a common atom ("curl",
 /// "http") overflows precisely in the large members where the full scan is
-/// most expensive. Measured on the poppy-q worker benchmark (2026-08-31),
-/// full scans walked 117 GB per run vs 3.5 GB windowed, with `no_atoms`
-/// (this overflow among its causes) the top fallback at 3.3M evaluations.
-/// Windows are merged after sorting, so a dense atom degrades toward one big
+/// most expensive. Windows are merged after sorting, so a dense atom degrades toward one big
 /// window — i.e. toward today's full scan — never past it.
 const MAX_ATOM_OFFSETS: usize = 512;
 
@@ -3035,7 +3032,7 @@ impl RawContentRegexIndex {
     ) -> RawGateHits {
         // Windowing is disabled below [`MIN_HAYSTACK_TO_WINDOW`]. Recording
         // every atom occurrence on sub-floor stubs is extra gate work that
-        // `eval_raw` would never use (S2n). The floor is 256 B so 256 B–1 KiB
+        // `eval_raw` would never use. The floor is 256 B so 256 B–1 KiB
         // source members can window bounded regexes.
         if !record_offsets || binary_data.len() < MIN_HAYSTACK_TO_WINDOW {
             let (traits, _) = self.find_matches_classified(binary_data, file_type);
@@ -4046,8 +4043,7 @@ mod gate_repro_tests {
         assert_eq!(start, atom_at + 6);
     }
 
-    /// Sub-floor stubs still gate on presence, but skip offset recording
-    /// (S2n: offsets without windowing were a tax).
+    /// Sub-floor stubs still gate on presence, but skip offset recording.
     #[test]
     fn does_not_record_atom_offsets_below_window_floor() {
         let index = css_font_family_index();

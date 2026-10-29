@@ -3,8 +3,7 @@
 //! Every ELF-internal helper takes a non-optional
 //! [`crate::analysis_context::AnalysisContext`]: structural data
 //! (sections, segments, dynamic-section facts, notes) is read from
-//! `filefacts`'s typed views rather than re-walked with goblin. The
-//! analyzer no longer carries its own goblin parse path.
+//! `filefacts`'s typed views; this analyzer never parses the file itself.
 
 // Parses attacker-controlled bytes: index and offset arithmetic must be
 // checked, so a forged header is a parse error rather than a panic.
@@ -27,10 +26,9 @@ type Ctx<'a> = crate::analysis_context::AnalysisContext<'a>;
 
 /// Analyzer for Linux ELF binaries (executables, shared objects, kernel modules).
 ///
-/// Wave B routed deep-binary signal through `filefacts::open`: function
-/// CFG fields and recovered symbols for stripped binaries arrive on
-/// `ctx.parsed.symbols()` (filtered by kind) /
-/// `sections()`. The analyzer no longer spawns rizin itself.
+/// Function CFG fields and recovered symbols for stripped binaries arrive
+/// through `filefacts::open` on `ctx.parsed.symbols()` (filtered by kind)
+/// and `sections()`; the analyzer never spawns rizin itself.
 #[derive(Debug)]
 pub(crate) struct ElfAnalyzer {
     engine: crate::Engine,

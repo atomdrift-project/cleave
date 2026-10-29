@@ -3,9 +3,8 @@
 //! A scan of a member-heavy archive holds the same few thousand distinct
 //! trait ids and descriptions in hundreds of thousands of `Finding`s, the
 //! `Note`s that re-own them per context line, and the `CompactTrait`s the
-//! output carries — each copy a separate small heap allocation. Measured on
-//! the gauntlet peak, that duplication is the core of jemalloc's small-class
-//! fragmentation (1.75 GB active−allocated, concentrated in the ≤4 KB bins).
+//! output carries — each copy a separate small heap allocation, and on large
+//! archives that duplication drives jemalloc's small-class fragmentation.
 //!
 //! [`Istr`] is an `Arc<str>` behind a newtype whose ergonomics match
 //! `String` closely enough that field conversions rarely touch call sites:
@@ -38,7 +37,7 @@ const SWEEP_THRESHOLD: usize = 262_144;
 /// rare however many strings remain live. `sweep_at` doubles from what the
 /// last sweep kept, which bounds sweeping to amortized O(1) per intern. A
 /// fixed threshold did not: once more strings than that stayed live, every
-/// miss swept the whole pool. Measured 2026-09-24 on a 128-thread worker
+/// miss swept the whole pool. Measured on a 128-thread worker
 /// holding 601k live import ids: a 10 ms sweep per miss, the lock held 99.9%
 /// of the time, and a 3 KB archive member taking 48 s.
 struct Pool {

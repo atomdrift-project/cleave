@@ -1,7 +1,7 @@
 //! Parsing and resolution for the hosted update manifests.
 //!
-//! Each tool publishes a small static TOML file (e.g. `cleave.toml`,
-//! `litmus.toml`) under a well-known base URL. A manifest names the newest
+//! Each tool publishes a small static TOML file (e.g. `cleave.toml`) under a
+//! well-known base URL. A manifest names the newest
 //! released version — used for a once-a-day update notice — and carries an
 //! ordered list of rules mapping an installed version line to the git ref its
 //! data repository (traits or models) should track.

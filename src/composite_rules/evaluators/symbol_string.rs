@@ -2247,8 +2247,8 @@ fn source_raw_windows(
     };
     // Offsets were recorded for this trait's *indexed* regex (usually `if:`).
     // `unless:` / extra `type: text` regexes share `current_trait_idx` but not
-    // those atoms — windowing them around the `if` hits is a false-negative
-    // machine (B1n: extra `loopback-http-url-reference` / `bearer-token`).
+    // those atoms — windowing them around the `if` hits misses their matches
+    // (`loopback-http-url-reference`, `bearer-token`).
     if !super::hits_are_pattern_atoms(ctx.binary_data, hits, pattern) {
         ws::bump(&ws::ATOM_MISMATCH);
         ws::LAST_REASON.with(|r| r.set(3));

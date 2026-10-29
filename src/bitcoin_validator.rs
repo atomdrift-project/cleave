@@ -1,8 +1,6 @@
 //! Bitcoin address validation with checksum verification.
 //! Supports Legacy (P2PKH), P2SH, and SegWit (Bech32/Bech32m).
 
-use std::sync::OnceLock;
-
 /// Base58 alphabet used by Bitcoin
 const BASE58_ALPHABET: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
@@ -11,17 +9,11 @@ const BECH32_ALPHABET: &[u8] = b"qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 
 /// Regex pattern to find potential Bitcoin addresses in text.
 fn btc_addr_pattern() -> Option<&'static regex::Regex> {
-    static PATTERN: OnceLock<Option<regex::Regex>> = OnceLock::new();
-    PATTERN
-        .get_or_init(|| {
-            // Legacy/P2SH: [13][a-km-zA-HJ-NP-Z1-9]{25,34}
-            // Bech32/Bech32m: bc1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{6,87}
-            regex::Regex::new(
-            r"\b([13][1-9A-HJ-NP-Za-km-z]{25,34}|bc1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{6,87})\b",
-        )
-        .ok()
-        })
-        .as_ref()
+    // Legacy/P2SH: [13][a-km-zA-HJ-NP-Z1-9]{25,34}
+    // Bech32/Bech32m: bc1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{6,87}
+    static_regex!(
+        r"\b([13][1-9A-HJ-NP-Za-km-z]{25,34}|bc1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{6,87})\b"
+    )
 }
 
 /// Validate if a string is a valid Bitcoin address (with checksum).

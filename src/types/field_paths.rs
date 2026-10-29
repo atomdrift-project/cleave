@@ -21,11 +21,10 @@ pub trait ValidFieldPaths {
     }
 }
 
-// The metric surface is no longer described here. filefacts declares every
-// key it emits at the emission site and enumerates them through
-// `known_metrics()`; cleave declares only the metrics its own analyzers
-// compute. The lists that used to live here were a hand-maintained copy of
-// filefacts' emitters, and a copy is exactly what drifts.
+// filefacts declares every metric key it emits at the emission site and
+// enumerates them through `known_metrics()`; cleave declares only the
+// metrics its own analyzers compute. Keeping no copy here means nothing can
+// drift.
 
 /// Returns all valid metric field paths for use in YAML rules
 /// Returns paths like "binary.code_to_data_ratio", "text.line_count", etc.
@@ -41,9 +40,9 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
     };
 
     // Everything filefacts can emit, declared at its emission sites and
-    // enumerated through `known_metrics()`. This used to be a hand-copied
-    // manifest here, which drifted the moment filefacts renamed a key: the
-    // rule still validated and simply stopped matching. filefacts now fails
+    // enumerated through `known_metrics()`. A hand-copied manifest would
+    // drift the moment filefacts renamed a key: the rule would still
+    // validate and simply stop matching. filefacts fails
     // its own build on an undeclared key, so this list is derived, not
     // maintained. Templated keys (`ast.op.<operator>`) are matched
     // separately, by shape.

@@ -212,7 +212,7 @@ pub struct CompactTrait {
     /// It used to be omitted at 0.5 (and 0.0), which saved ~2% of findings
     /// twelve bytes each and cost far more than that: the round trip was lossy,
     /// and each reader invented its own value for the absence — 0.5 in one
-    /// place, 1.0 in the featurizer and collimator. A finding scored 0.5 was
+    /// place, 1.0 in the featurizer and the ML pipeline. A finding scored 0.5 was
     /// therefore read as 1.0 downstream, clearing a 0.65 inclusion gate it
     /// should have failed. Writing the number is cheaper than agreeing on what
     /// its absence meant.
@@ -315,14 +315,14 @@ pub struct CompactSource {
 }
 
 /// One reference a file declares — what it points at, how it was expressed, and
-/// where in the file it sits. Lets a downstream consumer (prism's galaxy view)
+/// where in the file it sits. Lets a downstream consumer (a report viewer's galaxy view)
 /// draw byte-anchored edges from each file to what it references.
 ///
 /// The target is either *external* — a package/URL named by `to` — or
 /// *internal* — another file in the same bundle, named by `file` (its `files[]`
 /// id). External today; `file` is reserved so that when cleave resolves
 /// intra-bundle references (a relative `require`/`import`, an HTML `src`, a
-/// manifest pointing at a sibling) — work that currently lives in prism — those
+/// manifest pointing at a sibling) — work that currently lives in a report viewer — those
 /// file→file edges ride the same list instead of being re-derived downstream.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompactRef {
@@ -983,11 +983,10 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32, facts: Facts
     // Compute formula if not already present. Use the canonical filter so the
     // JSON `f` field stays in lockstep with the CLI header — both must reflect
     // notable-or-higher findings only.
-    let formula = file.formula.clone().or_else(|| {
-        let filtered = crate::output::filter_findings_for_formula(&file.findings);
-        let f = crate::malecule_bridge::formula_from_findings(&filtered);
-        (!f.is_empty()).then_some(f)
-    });
+    let formula = file
+        .formula
+        .clone()
+        .or_else(|| crate::formula::of(&file.findings));
 
     let refs = refs_from_file(file);
 
@@ -1060,7 +1059,7 @@ pub(crate) fn refs_from_file(file: &super::FileAnalysis) -> Vec<CompactRef> {
                         locator,
                         kind: ref_kind_str(r.kind).to_string(),
                         offset: r.offset,
-                        // External today; intra-bundle resolution (prism's job for
+                        // External today; intra-bundle resolution (a report viewer's job for
                         // now) will fill this when it moves into cleave.
                         target_file: None,
                     })

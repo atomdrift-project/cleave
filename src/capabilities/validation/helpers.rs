@@ -74,16 +74,43 @@ pub(crate) fn extract_tier(id: &str) -> Option<&str> {
     }
 }
 
-/// Find the line number of a search string in a file.
+/// The 1-indexed line in `file_path` that `search_str` refers to.
 ///
-/// Returns `Some(line_number)` if found (1-indexed), or `None` if not found or file can't be read.
+/// A rule ID (local, or qualified as `dir::id`) resolves to the line that
+/// declares it, `id: <name>`, so an ID that prefixes another or appears in a
+/// comment does not claim the wrong line. Anything else resolves to the first
+/// line containing it.
 #[must_use]
 pub(crate) fn find_line_number(file_path: &str, search_str: &str) -> Option<usize> {
     let content = std::fs::read_to_string(file_path).ok()?;
-    for (line_num, line) in content.lines().enumerate() {
-        if line.contains(search_str) {
-            return Some(line_num + 1); // 1-indexed
-        }
+    line_number_in(&content, search_str)
+}
+
+fn line_number_in(content: &str, search_str: &str) -> Option<usize> {
+    let local_id = search_str.rsplit("::").next().unwrap_or(search_str);
+    let declares_id = |line: &str| {
+        line.trim_start()
+            .trim_start_matches("- ")
+            .strip_prefix("id:")
+            .is_some_and(|v| v.trim().trim_matches(['"', '\'']) == local_id)
+    };
+    let lines = || content.lines().enumerate();
+    lines()
+        .find(|(_, line)| declares_id(line))
+        .or_else(|| lines().find(|(_, line)| line.contains(search_str)))
+        .map(|(i, _)| i + 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::line_number_in;
+
+    #[test]
+    fn rule_ids_resolve_to_their_declaration() {
+        let yaml = "# id: net is mentioned here\ntraits:\n  - id: network\n  - id: net\n";
+        assert_eq!(line_number_in(yaml, "net"), Some(4));
+        assert_eq!(line_number_in(yaml, "micro-behaviors/x::net"), Some(4));
+        assert_eq!(line_number_in(yaml, "network"), Some(3));
+        assert_eq!(line_number_in(yaml, "traits:"), Some(2));
     }
-    None
 }

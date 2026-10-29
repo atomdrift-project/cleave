@@ -538,8 +538,33 @@ impl AnalysisReport {
     /// `trait_refs` across every node) keeps the building-block traits it fired
     /// on, wherever they live.
     pub fn graft_findings(&mut self, target_sha: &str, findings: Vec<Finding>) -> usize {
+        let added = self.graft_findings_deferred(target_sha, findings);
+        if added > 0 {
+            self.refresh_grafted_findings();
+        }
+        added
+    }
+
+    // Batched follow evaluation updates file-local formulas immediately, but
+    // defers the report-wide summary and source index until all files land.
+    pub(crate) fn graft_findings_deferred(
+        &mut self,
+        target_sha: &str,
+        findings: Vec<Finding>,
+    ) -> usize {
+        let Some(index) = self.files.iter().position(|f| f.sha256 == target_sha) else {
+            return 0;
+        };
+        self.graft_file_findings_deferred(index, findings)
+    }
+
+    pub(crate) fn graft_file_findings_deferred(
+        &mut self,
+        index: usize,
+        findings: Vec<Finding>,
+    ) -> usize {
         let mut added = 0;
-        if let Some(file) = self.files.iter_mut().find(|f| f.sha256 == target_sha) {
+        if let Some(file) = self.files.get_mut(index) {
             for finding in findings {
                 if !file
                     .findings
@@ -555,17 +580,12 @@ impl AnalysisReport {
                 file.compute_summary();
             }
         }
-        if added > 0 {
-            self.summary = Some(ReportSummary::from_files(&self.files));
-            // `finalize()` resolved composite source trails before this graft, so
-            // the just-added package composites have none. Re-run the attribution
-            // (merge, not replace — see `attach_composite_sources`) so each picks
-            // up the `↳ member:line` provenance of the legs it fired on, including
-            // a registry/provenance child linked to this node. Cheap: graft runs
-            // once per correlated artifact, before `strip` drops the legs it reads.
-            Self::attach_composite_sources(&mut self.files);
-        }
         added
+    }
+
+    pub(crate) fn refresh_grafted_findings(&mut self) {
+        self.summary = Some(ReportSummary::from_files(&self.files));
+        Self::attach_composite_sources(&mut self.files);
     }
 
     /// Merge a per-format kv subtree into `values_tree` under `namespace`.

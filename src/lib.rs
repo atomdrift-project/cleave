@@ -4280,7 +4280,6 @@ pub fn scan_files<F>(
 where
     F: Fn(ScanEvent) + Sync,
 {
-    use rayon::prelude::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     let engine = load_scan_resources(options)?;
@@ -4294,7 +4293,7 @@ where
     });
 
     let mem_gate = scan_mem_gate::ScanMemGate::new();
-    paths.par_iter().for_each(|file_path| {
+    for_each_ordered(paths, &|file_path| {
         // Cancellation fast path: once SIGINT flips the flag, remaining slots
         // return immediately so the scan drains in-flight work rather than
         // starting new files. Mirrors scan_directory's par_bridge fast path.
@@ -4502,6 +4501,43 @@ pub fn regex_explodes(pattern: &str, case_insensitive: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    /// The explicit-list scanner shares this dispatcher with directory scans.
+    /// On a two-thread pool its final two roots must be allowed to fan out,
+    /// even with multiple top-level analyses still in flight.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn ordered_scan_releases_inner_parallelism_when_the_batch_drains() {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap();
+        let visits = std::sync::atomic::AtomicUsize::new(0);
+        pool.install(|| {
+            use rayon::prelude::*;
+            // Reproduce the old explicit-list policy with the same two roots.
+            [0, 1].par_iter().for_each(|_| {
+                let _isolation = crate::rayon_nest::isolate_counters();
+                let _first = crate::rayon_nest::enter_toplevel_analysis_on(false);
+                let _second = crate::rayon_nest::enter_toplevel_analysis_on(false);
+                assert!(
+                    !crate::pool_has_headroom(),
+                    "old dispatcher never marks draining"
+                );
+            });
+            super::for_each_ordered(&[0, 1], &|_| {
+                let _isolation = crate::rayon_nest::isolate_counters();
+                let _first = crate::rayon_nest::enter_toplevel_analysis_on(false);
+                let _second = crate::rayon_nest::enter_toplevel_analysis_on(false);
+                assert!(
+                    crate::pool_has_headroom(),
+                    "idle lanes must be usable by inner work"
+                );
+                visits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            });
+        });
+        assert_eq!(visits.load(std::sync::atomic::Ordering::Relaxed), 2);
+    }
     use super::*;
 
     #[test]

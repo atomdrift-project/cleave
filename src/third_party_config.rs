@@ -5,7 +5,8 @@
 
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::path::PathBuf;
+use std::sync::{Arc, PoisonError, RwLock};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -83,20 +84,19 @@ impl Config {
         })
     }
 
-    fn load() -> Self {
-        Self::load_from(&crate::cache::third_party_path().join("config.yaml"))
-    }
-
     /// Read the config at `config_path`, falling back to the defaults (with a
     /// warning) when it is missing or does not parse.
     fn load_from(config_path: &std::path::Path) -> Self {
         match std::fs::read_to_string(config_path) {
             Ok(yaml) => match Self::from_yaml(&yaml) {
                 Ok(config) => config,
+                // Every disable, crit and unless override is lost with it, so
+                // this is an error, not a warning.
                 Err(e) => {
-                    tracing::warn!(
-                        "Failed to parse third_party/config.yaml: {}, using defaults",
-                        e
+                    tracing::error!(
+                        path = %config_path.display(),
+                        error = %e,
+                        "third-party YARA config does not parse; using defaults, without any overrides"
                     );
                     Self::default()
                 }
@@ -151,10 +151,22 @@ impl Config {
     }
 }
 
-static CONFIG: OnceLock<Config> = OnceLock::new();
-
-fn config() -> &'static Config {
-    CONFIG.get_or_init(Config::load)
+/// The config for the traits directory in use, reloaded when that directory
+/// changes (`--traits-dir`, `reload_capability_mapper`).
+fn config() -> Arc<Config> {
+    static CONFIG: RwLock<Option<(PathBuf, Arc<Config>)>> = RwLock::new(None);
+    let path = crate::cache::third_party_path().join("config.yaml");
+    if let Some((loaded, config)) = CONFIG
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+        && *loaded == path
+    {
+        return Arc::clone(config);
+    }
+    let config = Arc::new(Config::load_from(&path));
+    *CONFIG.write().unwrap_or_else(PoisonError::into_inner) = Some((path, Arc::clone(&config)));
+    config
 }
 
 fn extract_vendor(namespace: &str) -> &str {
@@ -178,8 +190,8 @@ pub fn third_party_criticality(namespace: &str, trait_id: Option<&str>) -> Optio
 
 /// Override an upstream rule description without changing its provenance.
 #[must_use]
-pub fn third_party_description(trait_id: &str) -> Option<&'static str> {
-    config().description_for(trait_id)
+pub fn third_party_description(trait_id: &str) -> Option<String> {
+    config().description_for(trait_id).map(str::to_owned)
 }
 
 /// Return the matched `unless` finding for a third-party YARA trait, if any.

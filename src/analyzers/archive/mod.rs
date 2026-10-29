@@ -3528,7 +3528,7 @@ mod tests {
     /// The compact-retention path clears `FileAnalysis::imports` on every
     /// member and keeps only the precompacted names, so a member reaching this
     /// function that way carries no live imports at all. That is what every
-    /// `atomscan` caller does, and it silently zeroed this metric: with no
+    /// scan-worker caller does, and it silently zeroed this metric: with no
     /// imports observed the "cannot distinguish unused from unparsed" guard
     /// returned `None`, and the phantom-dependency trait — and the hostile
     /// composite built on it — could never fire outside plain `cleave`.
@@ -5941,7 +5941,7 @@ traits:
         whole
     }
 
-    /// A truncated gzip stream is the 2026-08-01 production failure: an
+    /// A truncated gzip stream is a real-world failure: an
     /// extensionless blob, gzip magic, tar inside, cut off mid-member. It used
     /// to abort the whole analysis with "unexpected end of file" and emit no
     /// result at all, discarding megabytes of already-decoded members.

@@ -12,7 +12,6 @@
 //! - `--summary`: Quick classification only
 
 #[allow(unused_imports)] // Used by binary target via format_human_single
-use crate::malecule_bridge;
 use crate::types::{
     AnalysisGap, AnalysisReport, ContextLine, Criticality, FileAnalysis, Finding, Note,
 };
@@ -196,14 +195,14 @@ pub(crate) fn filter_findings_for_formula(findings: &[Finding]) -> Vec<Finding> 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HeaderStyle {
     /// `path  type • formula` plus a rule — cleave's terminal view, and the
-    /// base litmus extends with a verdict badge + subtitle.
+    /// base an embedding host extends with a verdict badge + subtitle.
     Rich,
     /// `path\ttype size score` — the compact machine/LLM line.
     Minimal,
 }
 
 /// Options for the context view, shared by cleave's terminal output and
-/// litmus's `--format tiny`. Both render the same way; only the knobs differ.
+/// an embedding host's `--format tiny`. Both render the same way; only the knobs differ.
 #[derive(Clone, Copy, Debug)]
 pub struct TinyOpts {
     /// Max findings shown per file, ranked by `crit × conf` (highest first).
@@ -221,7 +220,7 @@ pub struct TinyOpts {
     pub context_lines: Option<usize>,
     /// Show surrounding context: a line of leading source context (with `⋯` gap
     /// markers between windows) and the rows either side of a hex match. cleave
-    /// sets this; litmus shows only the hit lines/rows.
+    /// sets this; an embedding host shows only the hit lines/rows.
     pub full_context: bool,
     /// The header drawn above the context block.
     pub header: HeaderStyle,
@@ -244,7 +243,7 @@ pub struct TinyOpts {
     /// traits (imports, capabilities, structure), so a downstream grader can
     /// judge the program's functionality instead of receiving zero bytes.
     pub low_tier_fill: usize,
-    /// Focused selection and rendering (litmus's compact terminal view).
+    /// Focused selection and rendering (an embedding host's compact terminal view).
     /// `Some(fc)` changes two things:
     ///   - selection: when a file carries any finding at or above `fc`, only
     ///     those findings — plus the components they reference via
@@ -284,7 +283,7 @@ pub struct TinyOpts {
     /// the match, instead of the criticality-sized margin either side. The
     /// leading rows were machine code and padding a model reads nothing from.
     pub lean_rows: bool,
-    /// Card layout (litmus's terminal view). The caller prints the artifact's
+    /// Card layout (an embedding host's terminal view). The caller prints the artifact's
     /// own header (verdict rule, name, hash), so cleave renders only the body:
     /// the root file gets *no* header or divider rule, every file renders
     /// flat (no depth indent), members open with a `📄 path · TYPE · size`
@@ -374,7 +373,7 @@ impl TinyOpts {
     }
 }
 
-/// `CLEAVE_TINY_LEGACY_WINDOWS=1` restores the pre-2026-09-06 LLM windows —
+/// `CLEAVE_TINY_LEGACY_WINDOWS=1` restores the earlier LLM windows —
 /// every captured location, no per-file cap, margin rows either side of a byte
 /// match — for A/B runs.
 fn legacy_windows() -> bool {
@@ -398,7 +397,7 @@ pub struct HeaderBadge<'a> {
 
 /// Max files that draw source/hex context in the LLM/tiny view, highest score
 /// first. The long tail still lists its findings as bare notes, but spends no
-/// budget on context windows — mirroring `../prism`, which renders content for
+/// budget on context windows — mirroring a report viewer, which renders content for
 /// only its top-scoring files.
 const MAX_CONTEXT_FILES: usize = 5;
 
@@ -1374,7 +1373,7 @@ fn withheld_composite_support<'a>(
 }
 
 /// `CLEAVE_TINY_NO_RELABEL=1` leaves withheld composites' notes unassigned
-/// (the pre-2026-09-06 render) for A/B runs.
+/// (the earlier render) for A/B runs.
 fn relabel_disabled() -> bool {
     static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *OFF.get_or_init(|| crate::env::flag("CLEAVE_TINY_NO_RELABEL"))
@@ -1493,7 +1492,7 @@ fn file_has_output(file: &FileAnalysis, opts: &TinyOpts) -> bool {
     file.findings.iter().any(|f| tiny_should_show(f, file))
 }
 
-/// cleave's own terminal view: the rich header, without litmus's card layout.
+/// cleave's own terminal view: the rich header, without an embedding host's card layout.
 /// The one view whose height is spent on a human reading a verdict at a
 /// terminal, so the one that trims hardest.
 fn is_terminal_view(opts: &TinyOpts) -> bool {
@@ -1522,7 +1521,7 @@ fn has_shown_suppressions(file: &FileAnalysis, opts: &TinyOpts) -> bool {
 /// show in total. The guaranteed set (notable+, and components a composite drew
 /// on) is never truncated by the budget. This is what keeps an undetected file
 /// legible to an LLM: with nothing notable to show, its strongest low-tier
-/// traits still convey what the program *does* (matching `../prism`, whose
+/// traits still convey what the program *does* (matching a report viewer, whose
 /// headline ranks traits verdict-agnostically).
 fn select_ids<'a>(file: &'a FileAnalysis, opts: &TinyOpts, low_tier_fill: usize) -> Vec<&'a str> {
     // Focused mode: when the file carries any native finding at or above
@@ -2316,7 +2315,7 @@ const UTF16_RUN: usize = 4;
 /// What the model reads in a window is the strings: a path, a method name, a
 /// key, an import. Machine-code bytes between them are not evidence it can
 /// use, but rendered as `\xNN` escapes they cost three to four tokens each,
-/// and a 54 MB ELF's 107 windows came to 40k tokens. Measured 2026-09-06 on
+/// and a 54 MB ELF's 107 windows came to 40k tokens. Measured on
 /// 32 benchmark renders graded by the fleet's model, five runs each: this
 /// projection cut the prompts 21% overall (a binary-heavy render 41.5k →
 /// 27.6k tokens) with every grade unchanged, where dropping the context rows
@@ -3125,7 +3124,7 @@ fn render_hex_unit(out: &mut String, line: &ContextLine, notes: &[Note], layout:
         let row_notes = &row_notes_by_row[idx];
         let trail_here = row_notes.is_empty() && hit_rows == 1;
         // A note-less row inside some hit's margin; only the full-context views
-        // draw these at all (litmus shows hit rows only).
+        // draw these at all (an embedding host shows hit rows only).
         let margin_here = full_context && row_notes.is_empty() && (!trim || margin_keep[idx]);
         if row_notes.is_empty() {
             hit_rows = 0;
@@ -3137,7 +3136,7 @@ fn render_hex_unit(out: &mut String, line: &ContextLine, notes: &[Note], layout:
         } else {
             hit_rows = 0;
         }
-        // Without surrounding context (litmus), emit only rows that carry a
+        // Without surrounding context (an embedding host), emit only rows that carry a
         // match — full rows, just none of the padding rows around them — plus
         // the single trailing row a one-row focused hit earned. With it, the
         // margin rows around each hit (the terminal view: nothing further).
@@ -3803,7 +3802,7 @@ fn embedded_label(segment: &str, size: u64) -> Option<String> {
 }
 
 /// Render the rich file header. Plain (cleave): `path  type • formula  legend`.
-/// With a [`HeaderBadge`] (litmus): a single lean line `stamp path · type
+/// With a [`HeaderBadge`] (an embedding host): a single lean line `stamp path · type
 /// trailer`, plus the badge's subtitle beneath. Then a rule sized to the widest
 /// line of the header and the `body` it sits above (capped at the terminal).
 /// Card-layout member header: ` 📄 path · TYPE · size` — bright path shown
@@ -3835,7 +3834,7 @@ fn card_header(out: &mut String, file: &FileAnalysis, colorize: bool) {
 }
 
 /// One-decimal human size for card headers (`5.4KB`, `42.6KB`) — matches the
-/// artifact header litmus prints above, so the two levels read as one system.
+/// artifact header an embedding host prints above, so the two levels read as one system.
 fn card_size(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = 1024 * KB;
@@ -3856,7 +3855,7 @@ fn rich_header(
     badge: HeaderBadge<'_>,
     body: &str,
 ) {
-    // A badge means a verdict-led view (litmus): keep the header lean — the file
+    // A badge means a verdict-led view (an embedding host): keep the header lean — the file
     // type after a `·`, no formula or legend. cleave's own header keeps both.
     let badged = badge.badge.is_some();
     let file_type_display = display_file_type(&file.file_type);
@@ -3879,10 +3878,7 @@ fn rich_header(
     let embedded = (file.depth > 0)
         .then(|| embedded_label(display_path, file.size))
         .flatten();
-    let formula = || {
-        let formula_findings = filter_findings_for_formula(&file.findings);
-        malecule_bridge::formula_from_findings(&formula_findings)
-    };
+    let formula = || crate::formula::of(&file.findings).unwrap_or_default();
     let type_display = if badged {
         // Litmus verdict view stays lean — type only, no identity/formula.
         format!("\u{00b7} {file_type_display}")
@@ -4025,7 +4021,7 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
-/// Get terminal width, defaulting to 100 if unavailable. Public so litmus can
+/// Get terminal width, defaulting to 100 if unavailable. Public so an embedding host can
 /// size its card rules to the same width this module sizes rows to.
 #[must_use]
 pub fn terminal_width() -> usize {
@@ -4586,7 +4582,7 @@ mod tests {
         }
     }
 
-    /// litmus's focused terminal knobs: hard cap of 5, selection narrowed to
+    /// an embedding host's focused terminal knobs: hard cap of 5, selection narrowed to
     /// suspicious+ and their legs, colorless for deterministic assertions.
     fn focused_opts() -> TinyOpts {
         TinyOpts {

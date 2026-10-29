@@ -10,7 +10,6 @@ use serde::{Deserialize, Deserializer};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
-use std::sync::OnceLock;
 
 /// npm package.json analyzer for detecting supply chain attacks
 #[derive(Debug)]
@@ -1548,9 +1547,7 @@ impl PackageJsonAnalyzer {
 
     fn extract_urls(&self, text: &str) -> Vec<String> {
         fn url_pattern() -> Option<&'static regex::Regex> {
-            static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
-            RE.get_or_init(|| regex::Regex::new(r#"https?://[^\s'")\]}>]{1,2048}"#).ok())
-                .as_ref()
+            static_regex!(r#"https?://[^\s'")\]}>]{1,2048}"#)
         }
         url_pattern()
             .into_iter()
@@ -1561,9 +1558,7 @@ impl PackageJsonAnalyzer {
 
     fn extract_ips(&self, text: &str) -> Vec<String> {
         fn ip_pattern() -> Option<&'static regex::Regex> {
-            static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
-            RE.get_or_init(|| regex::Regex::new(r"\b(?:\d{1,3}\.){3}\d{1,3}\b").ok())
-                .as_ref()
+            static_regex!(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
         }
         ip_pattern()
             .into_iter()
@@ -1582,11 +1577,7 @@ impl PackageJsonAnalyzer {
 
     fn extract_paths(&self, text: &str) -> Vec<String> {
         fn path_pattern() -> Option<&'static regex::Regex> {
-            static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
-            RE.get_or_init(|| {
-                regex::Regex::new(r#"(?-u)/[a-zA-Z0-9_./-]+|(?-u)\\[a-zA-Z0-9_.\\-]+"#).ok()
-            })
-            .as_ref()
+            static_regex!(r#"(?-u)/[a-zA-Z0-9_./-]+|(?-u)\\[a-zA-Z0-9_.\\-]+"#)
         }
         path_pattern()
             .into_iter()

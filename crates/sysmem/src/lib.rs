@@ -63,8 +63,8 @@ pub fn current_rss() -> Option<u64> {
 /// - ≤ 8 GiB: total − 512 MiB
 /// - > 8 GiB: 85% of total
 ///
-/// 85% matches litmus's worker RSS policy so the two never disagree about what
-/// "too much" means. There is deliberately no absolute cap: an earlier 32 GiB
+/// 85% matches the RSS policy of the workers that embed cleave, so the two
+/// never disagree about what "too much" means. There is deliberately no absolute cap: an earlier 32 GiB
 /// ceiling flooded large hosts (which legitimately use 100 GB+ across a big
 /// worker fleet) with false "High memory usage" warnings while enforcing
 /// nothing.
@@ -418,7 +418,7 @@ fn cgroup_memory_headroom() -> Option<u64> {
     // figure this is reconciled against in `available_memory_impl` — does not.
     // Subtracting it raw reports a process that has merely *read* a lot of files
     // as nearly out of memory, and since the two are combined with `min`, that
-    // wrong number always wins inside a cgroup. Observed 2026-09-05: 48.4 GiB
+    // wrong number always wins inside a cgroup. Observed: 48.4 GiB
     // "used" of a 64 GiB limit, of which 3.1 GiB was anon and 39.3 GiB was cold
     // page cache — 15.6 GiB reported against ~55 GiB actually available.
     let reclaimable =
@@ -1464,7 +1464,7 @@ cpu_info:5:cpu_info5:state\ton-line
     #[cfg(target_os = "linux")]
     #[test]
     fn parse_cgroup_reclaimable_reads_cold_page_cache() {
-        // Shape of a real memory.stat: the wedged service on 2026-09-05.
+        // Shape of a real memory.stat: a wedged service.
         let stat = "anon 3364188160\nfile 46862876672\nkernel_stack 851968\n\
                     inactive_file 42156023808\nactive_file 515813376\nslab 1752777984\n";
         assert_eq!(parse_cgroup_reclaimable(stat), 42_156_023_808);

@@ -813,7 +813,7 @@ impl From<filefacts::FileType> for FileType {
     ///    to one bucket (the three `pkg_*` ecosystems → [`Pkg`], the two `apk_*`
     ///    → [`Apk`], `typescript` → [`JavaScript`] mirroring `parse_file_types`,
     ///    `svg` → [`Xml`] since SVG is scanned as XML). The fine-grained label
-    ///    still rides along in the report string for litmus/collimator.
+    ///    still rides along in the report string for embedders and ML pipelines.
     /// 2. Deliberate fallback — only filefacts types without a corresponding
     ///    routing bucket (including future non-exhaustive variants) route to
     ///    [`Unknown`], which honours every rule's `for:` without claiming a
@@ -1574,7 +1574,7 @@ impl FileType {
             "egg" => FileType::Egg,
             // The `.pkg` ecosystems share one trait-targeting bucket (like the
             // two apk ecosystems share `Apk`); the fine-grained distinction
-            // lives in the report string for litmus / collimator.
+            // lives in the report string for embedders and ML pipelines.
             "pkg_macos" | "pkg_freebsd" | "pkg_arch" => FileType::Pkg,
             "gem" => FileType::Gem,
             "whl" => FileType::Whl,

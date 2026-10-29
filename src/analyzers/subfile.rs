@@ -8,17 +8,11 @@
 //! analyzer, merge findings back, attach the result as a nested
 //! file at the next depth."
 //!
-//! Before this module existed, four sites in the codebase had each
-//! re-implemented that loop — `analyze_vba_subfiles`,
-//! `analyze_embedded_executables`, `embedded_code_detector`'s
-//! payload routing, and the new PDF JS extractor. Each had its own
-//! drift on (a) which analyzers to dispatch to, (b) how to tag
-//! evidence locations, (c) how to bound recursion. The unified
-//! helper here collapses the dispatch decision to one match
-//! statement and one merge routine — caller still owns *when* to
-//! call (it knows the virtual path, source location, and the
-//! parent report it wants to merge into), but *how* analysis runs
-//! is no longer scattered.
+//! Every producer routes through here, so which analyzer runs, how
+//! evidence locations are tagged, and how recursion is bounded are
+//! decided in one place. The caller still owns *when* to call: it
+//! knows the virtual path, source location, and the parent report it
+//! wants to merge into.
 //!
 //! ## Recursion bound
 //!

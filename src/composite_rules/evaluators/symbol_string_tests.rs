@@ -3661,7 +3661,7 @@ fn test_eval_raw_window_later_hit_after_false_candidate() {
 }
 
 /// Offsets from a different regex on the same trait (the `if:` atom) must not
-/// window an `unless:` regex — that was B1n's extra loopback/bearer hits.
+/// window an `unless:` regex.
 #[test]
 fn test_eval_raw_foreign_offsets_do_not_window() {
     let mut content = b"window.location.origin\n".to_vec();

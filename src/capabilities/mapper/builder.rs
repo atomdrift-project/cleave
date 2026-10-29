@@ -17,7 +17,7 @@ impl super::CapabilityMapper {
     }
 
     /// Default minimum precision for hostile rules.
-    /// Calibrated on 2026-03-26 to downgrade roughly the lowest 5% of hostile scores.
+    /// Calibrated to downgrade roughly the lowest 5% of hostile scores.
     pub const DEFAULT_MIN_HOSTILE_PRECISION: f32 = 1.6;
     /// Default minimum precision for suspicious rules.
     /// Suspicious scores currently floor at 1.0, so 0.0 disables broad low-end downgrades.

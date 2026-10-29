@@ -99,20 +99,15 @@ struct Output {
     facts: types::Facts,
 }
 
-/// Analyze a single file or directory and render the result in the requested format.
-pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
-    let path = Path::new(config.target);
-
-    if !path.exists() {
-        anyhow::bail!("Path does not exist: {}", config.target);
-    }
-
+/// The [`cleave::AnalysisOptions`] the CLI's global flags select.
+#[must_use]
+pub fn analysis_options(config: &AnalyzeConfig<'_>) -> cleave::AnalysisOptions {
     let platforms_lib: Vec<cleave::Platform> = if config.platforms.is_empty() {
         vec![cleave::Platform::All]
     } else {
         config.platforms.to_vec()
     };
-    let options = cleave::AnalysisOptions {
+    cleave::AnalysisOptions {
         enable_third_party_yara: config.enable_third_party && !config.disabled.third_party,
         zip_passwords: config.zip_passwords.to_vec(),
         disable_yara: config.disabled.yara,
@@ -137,7 +132,18 @@ pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
         phase: None,
         dedicated_pool: false,
         skip_predicate: None,
-    };
+    }
+}
+
+/// Analyze a single file or directory and render the result in the requested format.
+pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
+    let path = Path::new(config.target);
+
+    if !path.exists() {
+        anyhow::bail!("Path does not exist: {}", config.target);
+    }
+
+    let options = analysis_options(config);
 
     let out = Output {
         format: *config.format,

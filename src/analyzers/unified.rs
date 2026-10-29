@@ -573,11 +573,6 @@ impl UnifiedSourceAnalyzer {
             // versus this walk's `open("/tmp/x","w").read`, which embedded the
             // caller's argument text and so could never be matched by a fixed
             // string at all.
-            //
-            // This reverses B1g, which kept the local names because filefacts
-            // reported `Call.target: None` for a method on a call result.
-            // filefacts now returns `s.replace().replace` for that shape, so
-            // the reason no longer holds.
             let mapper = Arc::clone(self.engine.rules());
             let rule_ft = mapper.detect_file_type(self.config.file_type);
             let (required, call_types) = mapper.ast_kind_cache_plan(rule_ft);
@@ -1049,8 +1044,8 @@ impl UnifiedSourceAnalyzer {
                     }
                 }
             }
-            // Borrow the host haystack (B1r: Python-in-Rust) instead of
-            // `content.to_string()` + `report.strings.clone()` per member.
+            // Borrow the host haystack instead of copying `content` and
+            // `report.strings` per member.
             // A module containing only immutable quoted constants has no
             // executable use of those strings. Keep its encoded layers, but
             // do not infer program behavior from plain quoted source examples.

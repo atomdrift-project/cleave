@@ -52,13 +52,10 @@ pub(crate) struct EncodedLanguageMetrics {
     pub unicode_escape_count: u32,
 }
 
-// `EncodedMetrics::increment` / `EncodedLanguageMetrics::increment` /
-// `normalize_encoding` were the producer side of these structs, called
-// from cleave's pre-migration `UnifiedSourceAnalyzer::populate_text_metrics`.
-// That call site retired with the cleave→filefacts Text/AST migration;
-// the structs themselves remain on the schema (referenced by
-// `field_paths.rs` for trait-author auto-completion) but no longer
-// gain new state.
+// Nothing populates `EncodedMetrics`: neither cleave nor filefacts emits an
+// `encoded.*` metric. The structs exist only so `field_paths.rs` keeps
+// accepting the `encoded.*` paths existing rules name; those rules load but
+// never match until the paths are retired or an emitter returns.
 
 // =============================================================================
 // COMPOSITE SCORES

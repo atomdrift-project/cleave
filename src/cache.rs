@@ -11,9 +11,8 @@
 //! - compiled-rule caches (`yara-rules-*.bin`, `capability-mapper-*.bin`)
 //! - the SQLite analysis-report cache (`crate::analysis_cache`)
 //!
-//! Rizin disassembly results are no longer cached here: rizin moved into
-//! filefacts, which owns its own cache (`filefacts::cache`). The legacy
-//! `re/` tree is retired by `maintain_filefacts_cache`.
+//! Rizin disassembly results are cached by filefacts (`filefacts::cache`),
+//! not here; `maintain_filefacts_cache` deletes the obsolete `re/` tree.
 //!
 //! # Cleanup
 //!

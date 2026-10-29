@@ -74,10 +74,15 @@ const REGEX_CACHE_MAX_SIZE: usize = 16_384;
 /// too small it evicts states or the meta engine falls back to another
 /// match-equivalent engine, so results are identical by construction — only
 /// speed is at stake. 256 KiB measured wall-neutral on the trait corpus at
-/// the time; on the 2026-08-13 demo.zip corpus (many small text members) it
+/// the time; on a corpus (many small text members) it
 /// forced measurable PikeVM fallback, and 1 MiB bought −8.5% total CPU for
 /// +8% RSS. 2 MiB added RSS without further CPU gain.
 pub(crate) const REGEX_DFA_CACHE_BYTES: usize = 1 << 20;
+
+/// Compiled-program ceiling for every rule regex engine, the `regex` facade's
+/// default. Validation rejects patterns over it (`validation::patterns`), since
+/// at evaluation time they would fail to compile and never match.
+pub(crate) const REGEX_SIZE_LIMIT: usize = 10 << 20;
 
 /// Global bounded LRU cache for compiled regex patterns to avoid repeated compilation.
 /// Key is (pattern, case_insensitive), value is compiled Regex.
@@ -260,7 +265,7 @@ pub(crate) fn compile_bytes_regex(pattern: &str, case_insensitive: bool) -> Opti
                     .onepass(false)
                     .dfa(true)
                     .which_captures(regex_automata::nfa::thompson::WhichCaptures::Implicit)
-                    .nfa_size_limit(Some(10 * (1 << 20)))
+                    .nfa_size_limit(Some(REGEX_SIZE_LIMIT))
                     .hybrid_cache_capacity(REGEX_DFA_CACHE_BYTES),
             )
             .syntax(
@@ -613,8 +618,7 @@ pub(crate) fn mandatory_atom_set(pattern: &str) -> Option<Vec<(String, bool)>> {
 }
 
 /// Don't window haystacks this small: offset recording plus tiny windows
-/// is a net tax (S2n recorded offsets below 16 KiB *without* windowing and
-/// lost wall). 256 B is large enough for bounded-pattern windows to beat a
+/// costs more than it saves. 256 B is large enough for bounded-pattern windows to beat a
 /// full `eval_raw` scan on 256 B–1 KiB JS stubs, and small enough that
 /// 100-byte files still full-scan. Pair with `find_matches_detailed`: do
 /// not record offsets below this floor.
@@ -1077,10 +1081,14 @@ pub(crate) fn log_regex_cache_stats() {
     );
 }
 
-/// Create a Scanner for the given Rules.
+/// A scanner for an inline rule, bounded like the engine's own: a scan that
+/// runs past the timeout fails instead of stalling the analysis.
 #[must_use]
-pub(crate) fn get_or_create_scanner(rules: &yara_x::Rules) -> yara_x::Scanner<'_> {
-    yara_x::Scanner::new(rules)
+pub(crate) fn inline_scanner(rules: &yara_x::Rules) -> yara_x::Scanner<'_> {
+    let mut scanner = yara_x::Scanner::new(rules);
+    scanner.set_timeout(crate::yara_engine::SCAN_TIMEOUT);
+    scanner.max_matches_per_pattern(crate::yara_engine::MAX_SCANNER_PATTERN_MATCHES);
+    scanner
 }
 
 /// Borrow `binary_data[range]` as a UTF-8 `str` with **zero copy** when the
@@ -1715,12 +1723,12 @@ mod mandatory_atom_set_probe {
                 regex::bytes::RegexBuilder::new(p)
                     .unicode(false)
                     .multi_line(true)
-                    .size_limit(10 << 20)
+                    .size_limit(super::REGEX_SIZE_LIMIT)
                     .build()
                     .or_else(|_| {
                         regex::bytes::RegexBuilder::new(p)
                             .multi_line(true)
-                            .size_limit(10 << 20)
+                            .size_limit(super::REGEX_SIZE_LIMIT)
                             .build()
                     })
                     .ok()

@@ -78,7 +78,7 @@ impl Drop for Engine {
 /// `unicode(false).utf8(false)`): the automata skip UTF-8 sub-automaton
 /// expansion, which made Unicode NFAs 5-10x larger and dominated peak RSS. The
 /// cost is that `\w`, `.`, `\s` and `\b` are ASCII-only against non-ASCII
-/// content — a deliberate trade (2026-08-06), and the one YARA rules have
+/// content — a deliberate trade, and the one YARA rules have
 /// always lived with.
 #[derive(Debug)]
 pub(crate) struct TraitRegex {
@@ -97,13 +97,13 @@ pub(crate) struct TraitRegex {
 
 /// Shared meta-engine options: no onepass DFA (capture extraction only —
 /// trait evaluation is bounds-only), implicit-only capture states (smaller
-/// NFAs), the facade's 10 MB size limit, and the tunable lazy-DFA budget.
+/// NFAs), the shared `REGEX_SIZE_LIMIT`, and the tunable lazy-DFA budget.
 fn engine_config() -> regex_automata::meta::Config {
     regex_automata::meta::Regex::config()
         .onepass(false)
         .dfa(true)
         .which_captures(regex_automata::nfa::thompson::WhichCaptures::Implicit)
-        .nfa_size_limit(Some(10 * (1 << 20)))
+        .nfa_size_limit(Some(super::evaluators::REGEX_SIZE_LIMIT))
         .hybrid_cache_capacity(super::evaluators::REGEX_DFA_CACHE_BYTES)
 }
 
@@ -4511,7 +4511,7 @@ is: curl
 
     /// One byte-searching engine per pattern, selected at compile time.
     ///
-    /// Pins the deliberate 2026-08-06 semantic change: pure-ASCII patterns get
+    /// Pins the deliberate semantic change: pure-ASCII patterns get
     /// byte semantics (YARA's model), while patterns carrying non-ASCII text
     /// keep codepoint semantics so `(?i)` still folds their case.
     #[test]

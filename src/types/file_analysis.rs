@@ -231,7 +231,7 @@ pub struct FileAnalysis {
     pub env_vars: Vec<EnvVarInfo>,
 
     /// Molecular formula representing the file's behavioral fingerprint
-    /// Generated from findings using the malecule library
+    /// Generated from findings by `crate::formula`
     #[serde(skip_serializing_if = "Option::is_none")]
     pub formula: Option<String>,
 
@@ -265,7 +265,7 @@ pub struct FileAnalysis {
     /// `a.b[0].c` notation as `cleave value`. Auto-populated at
     /// `finalize()` time from the analyzer's `values_tree`. Type-default
     /// leaves (`false` / `0` / `""` / `null` / empty containers) are
-    /// skipped — collimator-style ML pipelines treat absent features
+    /// skipped — ML pipelines treat absent features
     /// as default, so omitting them halves the per-file payload
     /// without losing signal.
     #[serde(
@@ -397,7 +397,7 @@ impl FileAnalysis {
 
     /// Clear `source` fields from all nested types — internal metadata not needed in output
     /// Drop fields that the compact output (`compact::convert_file`) never
-    /// reads. Every report consumer — the CLI and litmus's
+    /// reads. Every report consumer — the CLI and an embedding host's
     /// feature extractor — serializes through `compact_from_files`, which pulls
     /// only findings, imports, exports, functions, sections, metrics, kv, and
     /// the already-rendered context. The fields cleared here are populated

@@ -3,8 +3,7 @@
 //! Every Mach-O helper takes a non-optional
 //! [`crate::analysis_context::AnalysisContext`]: structural data
 //! (segments, dylibs, code signature, header bits) is read from
-//! `filefacts`'s typed views rather than re-walked with goblin. The
-//! analyzer no longer carries its own goblin parse path.
+//! `filefacts`'s typed views; this analyzer never parses the file itself.
 // Parses attacker-controlled bytes: index and offset arithmetic must be
 // checked, so a forged header is a parse error rather than a panic.
 #![warn(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
@@ -25,11 +24,9 @@ type Ctx<'a> = crate::analysis_context::AnalysisContext<'a>;
 
 /// Analyzer for macOS Mach-O binaries (executables, dylibs, bundles).
 ///
-/// Wave B routed deep-binary signal through `filefacts::open`: function
-/// CFG fields and rizin-recovered symbols arrive on
-/// `ctx.parsed.symbols()` (filtered by kind). The analyzer
-/// no longer merges its own rizin import augment over goblin's view —
-/// filefacts's typed Mach-O imports cover what cleave needed previously.
+/// Function CFG fields and rizin-recovered symbols arrive through
+/// `filefacts::open` on `ctx.parsed.symbols()` (filtered by kind), and
+/// imports come from filefacts's typed Mach-O view.
 #[derive(Debug)]
 pub(crate) struct MachOAnalyzer {
     engine: crate::Engine,
@@ -1928,9 +1925,8 @@ impl MachOAnalyzer {
         // `Functions` view (if rizin was usable) by the time the
         // fallback path runs — the analysis context here is built
         // by the caller and projected through `open_with_path`.
-        // Wave B drops the cleave-side `extract_batched` spawn; if
-        // a future caller needs to opt into rizin from this branch
-        // it should pass an `AnalysisContext` instead of bytes.
+        // A caller that needs rizin data here should pass an
+        // `AnalysisContext` instead of bytes.
         report
     }
 }

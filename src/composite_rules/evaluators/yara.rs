@@ -6,7 +6,7 @@
 //! - Hex pattern matching with wildcards and gaps
 //! - Atom extraction for efficient pattern searching
 
-use super::{get_or_create_scanner, truncate_evidence};
+use super::{inline_scanner, truncate_evidence};
 use crate::composite_rules::condition::NotException;
 use crate::composite_rules::context::{AnalysisWarning, ConditionResult, EvaluationContext};
 use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT};
@@ -89,10 +89,17 @@ pub(crate) fn eval_yara_inline<'a>(
     // Medium path: use per-condition pre-compiled rules (unless/composite conditions).
     if let Some(pre_compiled) = compiled {
         let scan_start = std::time::Instant::now();
-        let mut scanner = get_or_create_scanner(pre_compiled.as_ref());
+        let mut scanner = inline_scanner(pre_compiled.as_ref());
         let evidence = match scanner.scan(ctx.binary_data) {
             Ok(results) => collect_yara_evidence(&results, ctx.binary_data),
-            Err(_) => Vec::new(),
+            Err(e) => {
+                tracing::warn!(
+                    source_preview = source.lines().next().unwrap_or(""),
+                    error = %e,
+                    "inline YARA scan failed; treating the condition as unmatched"
+                );
+                Vec::new()
+            }
         };
 
         let scan_duration = scan_start.elapsed();

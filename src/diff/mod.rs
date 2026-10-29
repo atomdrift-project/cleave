@@ -387,7 +387,7 @@ fn normalize_archive_member_root(
 }
 
 /// Remove the most complete `major.minor[.patch…]` token from a name.
-/// Mirrors isomer's conservative filename-version detector: maximal runs of
+/// Mirrors a diff consumer's conservative filename-version detector: maximal runs of
 /// digits and dots are candidates, and at least two numeric components are
 /// required. The remaining non-version text is the package identity.
 fn stable_versioned_name(name: &str) -> Option<String> {
@@ -702,9 +702,7 @@ fn identity_diff(old: &DiffUnit, new: &DiffUnit) -> Option<crate::types::Identit
 }
 
 fn side_formula(findings: &[Finding]) -> Option<String> {
-    let filtered = crate::output::filter_findings_for_formula(findings);
-    let f = crate::malecule_bridge::formula_from_findings(&filtered);
-    (!f.is_empty()).then_some(f)
+    crate::formula::of(findings)
 }
 
 fn visible_diff_file(file: &FileDiffEntry) -> bool {

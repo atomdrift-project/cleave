@@ -50,7 +50,7 @@ fn marks_disabled() -> bool {
 /// Proof that this build fully validated this exact traits tree and found
 /// nothing to report.
 ///
-/// Full validation is a gate on the tree, not on each scan: cyclotron runs
+/// Full validation is a gate on the tree, not on each scan: a training pipeline runs
 /// every agent tool with `CLEAVE_VALIDATE=1`, so a tree an agent broke refuses
 /// to load until it is fixed. Re-proving an unchanged tree on every one of
 /// those loads cost minutes and gigabytes per scan -- 399 s and 7.2 GiB peak

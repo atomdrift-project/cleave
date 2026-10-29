@@ -332,7 +332,7 @@ pub(crate) fn configure_rayon_thread_pool(validating: bool) {
     }
 
     // build_global fails if a pool is already installed (e.g. by a parent
-    // binary like litmus). That's the desired behaviour — we only configure
+    // binary like an embedding host). That's the desired behaviour — we only configure
     // the pool when cleave owns it.
     let installed = builder.build_global().is_ok();
     let active = rayon::current_num_threads();

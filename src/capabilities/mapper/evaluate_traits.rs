@@ -51,7 +51,7 @@ pub(crate) struct TraitEvalCache<'a> {
 /// it needs those findings in scope. Carrying them here — rather than handing
 /// evaluation a report clone with the findings spliced in — matters at
 /// container scope, where cloning an archive report copies every member's
-/// `FileAnalysis` and strings (2026-07-24: gigabytes per call on a
+/// `FileAnalysis` and strings (gigabytes per call on a
 /// 63k-member archive, and a top single-threaded finalize cost).
 #[derive(Clone, Copy)]
 pub(crate) struct TraitPass<'a> {
@@ -539,7 +539,7 @@ impl super::CapabilityMapper {
         // A pattern that needs a non-ASCII byte cannot match ASCII-only
         // content. These patterns have no literal atom to index, so without
         // this they full-scan every source member: 103 such traits reach C#,
-        // ~1.3M full scans on one 12.5k-member module zip (2026-09-19).
+        // ~1.3M full scans on one 12.5k-member module zip.
         if has_content_regex && cache.content_is_ascii && trait_def.requires_non_ascii() {
             if gate_stats_enabled() {
                 RAW_GATE_SKIPPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

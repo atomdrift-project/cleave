@@ -3,7 +3,7 @@
 //! Both inputs run through the cached analyze pipeline, so a re-diff after a
 //! fresh analyze is effectively free. The output envelope is the v3
 //! [`cleave::AnalysisReport`] with `diff` populated; JSON consumers
-//! (prism, litmus) read `diff.scopes` and `diff.files` directly, terminal
+//! (report viewers, embedding hosts) read `diff.scopes` and `diff.files` directly, terminal
 //! consumers go through [`cleave::diff::format::format_terminal`].
 use std::path::Path;
 
@@ -16,23 +16,19 @@ use crate::cli;
 /// `old` and `new` may each be a file or a directory. `scope_spec` is a
 /// comma-separated list parsed by [`cleave::diff::ScopeMask::parse`];
 /// `limit_changes` caps the per-scope item lists for legibility
-/// (`0` disables the cap).
+/// (`0` disables the cap). `options` carries the global analysis flags
+/// (`--disable`, `--zip-password`, `--platforms`, size limits, Ctrl-C).
 pub fn run(
     old: &str,
     new: &str,
     scope_spec: &str,
     limit_changes: usize,
     format: &cli::OutputFormat,
+    options: &cleave::AnalysisOptions,
 ) -> Result<String> {
     let mask = cleave::diff::ScopeMask::parse(scope_spec)?;
-    let options = cleave::AnalysisOptions::default();
-    let report = cleave::diff::diff_paths(
-        Path::new(old),
-        Path::new(new),
-        &options,
-        mask,
-        limit_changes,
-    )?;
+    let report =
+        cleave::diff::diff_paths(Path::new(old), Path::new(new), options, mask, limit_changes)?;
 
     match format {
         cli::OutputFormat::Json | cli::OutputFormat::Jsonl | cli::OutputFormat::Snapshot => {

@@ -35,34 +35,39 @@ pub(crate) struct DispatchContext<'a> {
     analyze: AnalyzeDispatchContext<'a>,
 }
 
+/// The analysis settings the global flags select, for `target`.
+fn analyze_config<'a>(ctx: &'a AnalyzeDispatchContext<'a>, target: &'a str) -> AnalyzeConfig<'a> {
+    AnalyzeConfig {
+        target,
+        enable_third_party: ctx.enable_third_party_global,
+        format: ctx.format,
+        zip_passwords: ctx.zip_passwords,
+        disabled: ctx.disabled,
+        all_files: ctx.all_files,
+        platforms: ctx.platforms,
+        min_hostile_precision: cleave::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
+        min_suspicious_precision: cleave::CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
+        max_memory_file_size: ctx.max_memory_file_size,
+        enable_full_validation: false,
+        slow_rule_ms: ctx.slow_rule_ms,
+        output_to_file: ctx.output_to_file,
+        output_path: ctx.output_path,
+        max_scan_file_size: ctx.max_scan_file_size,
+        min_crit: ctx.min_crit,
+        max_crit: ctx.max_crit,
+        min_file_crit: ctx.min_file_crit,
+        max_file_crit: ctx.max_file_crit,
+        facts: ctx.facts,
+    }
+}
+
 fn analyze_targets(targets: &[String], ctx: &AnalyzeDispatchContext<'_>) -> Result<String> {
     if *ctx.format == cli::OutputFormat::Json && targets.len() > 1 {
         anyhow::bail!("--format json writes one report; use --format jsonl for several targets");
     }
     let mut results = Vec::with_capacity(targets.len());
     for target in targets {
-        results.push(analyze_command(&AnalyzeConfig {
-            target,
-            enable_third_party: ctx.enable_third_party_global,
-            format: ctx.format,
-            zip_passwords: ctx.zip_passwords,
-            disabled: ctx.disabled,
-            all_files: ctx.all_files,
-            platforms: ctx.platforms,
-            min_hostile_precision: cleave::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
-            min_suspicious_precision: cleave::CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
-            max_memory_file_size: ctx.max_memory_file_size,
-            enable_full_validation: false,
-            slow_rule_ms: ctx.slow_rule_ms,
-            output_to_file: ctx.output_to_file,
-            output_path: ctx.output_path,
-            max_scan_file_size: ctx.max_scan_file_size,
-            min_crit: ctx.min_crit,
-            max_crit: ctx.max_crit,
-            min_file_crit: ctx.min_file_crit,
-            max_file_crit: ctx.max_file_crit,
-            facts: ctx.facts,
-        })?);
+        results.push(analyze_command(&analyze_config(ctx, target))?);
     }
     Ok(results.join(""))
 }
@@ -189,20 +194,27 @@ pub(crate) fn dispatch_command(
             targets,
             newer_than,
         }) => {
-            iter_files_command(&IterFilesConfig {
+            let config = IterFilesConfig {
                 targets: &targets,
                 max_file_size: ctx.analyze.max_scan_file_size,
                 newer_than,
-            })?;
-            return Ok(None);
+            };
+            // Stream straight to the destination: a large tree's listing is
+            // never buffered, and write_output skips the empty result.
+            match ctx.analyze.output_path {
+                Some(path) => iter_files_command(
+                    &config,
+                    fs::File::create(path)
+                        .with_context(|| format!("Failed to create output file {path}"))?,
+                )?,
+                None => iter_files_command(&config, std::io::stdout().lock())?,
+            }
+            String::new()
         }
-        Some(cli::Command::Version) => {
-            println!(
-                "{}",
-                cleave::version_report("cleave", env!("CARGO_PKG_VERSION"))
-            );
-            return Ok(None);
-        }
+        Some(cli::Command::Version) => format!(
+            "{}\n",
+            cleave::version_report("cleave", env!("CARGO_PKG_VERSION"))
+        ),
         #[cfg(feature = "lint")]
         Some(cli::Command::RegexCost { case_insensitive }) => {
             use std::io::BufRead;
@@ -235,7 +247,14 @@ pub(crate) fn dispatch_command(
             new,
             scope,
             limit_changes,
-        }) => diff_command(&old, &new, &scope, limit_changes, ctx.format)?,
+        }) => diff_command(
+            &old,
+            &new,
+            &scope,
+            limit_changes,
+            ctx.format,
+            &cleave::commands::analysis_options(&analyze_config(&ctx.analyze, "")),
+        )?,
         Some(cli::Command::Strings {
             target,
             min_length,

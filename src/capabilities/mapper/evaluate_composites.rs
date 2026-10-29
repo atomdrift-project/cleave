@@ -268,9 +268,8 @@ impl super::CapabilityMapper {
 
         // A container report aggregates tens of thousands of members' strings,
         // kv, and evidence, and evaluating the rule set over that value pool is
-        // the dominant single-threaded finalize cost — 2026-07-24: ~330 s of a
-        // 1,870 s DefinitelyTyped archive scan sat here, stack-attributed to
-        // TraitRegex::find_str under eval_string_literal. Rules within one
+        // the dominant single-threaded finalize cost on large package archives.
+        // Rules within one
         // fixed-point iteration are independent (each sees the same immutable
         // ctx snapshot; new findings land only after the collect), so large
         // reports fan the rule loop across the pool. Small files stay

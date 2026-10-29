@@ -1,9 +1,27 @@
-//! Entropy classification for detecting obfuscation.
+//! Shannon entropy for detecting obfuscation.
 //!
 //! High entropy sections often indicate encryption, compression, or packing.
-//! The Shannon entropy value itself is computed by filefacts and surfaced as
-//! `file.entropy` / `file.entropy` / per-section metrics; this module
-//! only classifies a precomputed value into coarse bands.
+//! filefacts computes whole-file and per-section entropy (`file.entropy` and
+//! the section metrics); [`shannon`] covers cleave-produced bytes such as
+//! archive members and decoded strings, and [`EntropyLevel`] classifies a
+//! value into coarse bands.
+
+/// Shannon entropy of `data` in bits per byte (0.0 for empty input).
+pub(crate) fn shannon(data: &[u8]) -> f64 {
+    let mut counts = [0usize; 256];
+    for &byte in data {
+        counts[usize::from(byte)] += 1;
+    }
+    let len = data.len() as f64;
+    counts
+        .iter()
+        .filter(|&&count| count != 0)
+        .map(|&count| {
+            let p = count as f64 / len;
+            -p * p.log2()
+        })
+        .sum()
+}
 
 /// Classify entropy level
 #[derive(Debug, PartialEq)]

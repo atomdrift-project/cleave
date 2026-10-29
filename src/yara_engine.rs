@@ -115,9 +115,7 @@ const FALLBACK_BUCKET: &str = "fallback";
 
 /// Compiled regex for YARA rule header matching — shared across all preprocessing steps.
 fn rule_start_re() -> Option<&'static regex::Regex> {
-    static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"(?m)^(\s*)((?:private\s+|global\s+)*)rule\s+(\w+)").ok())
-        .as_ref()
+    static_regex!(r"(?m)^(\s*)((?:private\s+|global\s+)*)rule\s+(\w+)")
 }
 
 /// Maximum pattern match ranges to collect per pattern.
@@ -133,7 +131,9 @@ fn rule_start_re() -> Option<&'static regex::Regex> {
 // bounded candidate budget: @a[n], #a and offset loops can depend on
 // occurrences after the first eight.
 const MAX_PATTERN_MATCHES: usize = 8;
-const MAX_SCANNER_PATTERN_MATCHES: usize = 4096;
+pub(crate) const MAX_SCANNER_PATTERN_MATCHES: usize = 4096;
+/// Longest a single YARA scan may run.
+pub(crate) const SCAN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1200);
 
 /// Maximum scanners to cache per thread in the engine tier cache.
 ///
@@ -1372,7 +1372,7 @@ impl YaraEngine {
             };
             // Parsing every trait file to find the few that hold inline YARA
             // was over a quarter of a small file's cold analysis; on
-            // 2026-09-26 only 457 of 19,611 files could hold one.
+            // only 457 of 19,611 files could hold one.
             if !may_spell_yara(content) {
                 return vec![];
             }
@@ -1622,8 +1622,6 @@ impl YaraEngine {
     /// holds a clone of `rules`, so that address cannot be reused by other
     /// rules while it is cached.
     fn run_scanner(rules: &Arc<yara_x::Rules>, data: &[u8]) -> Result<Vec<RawRule>> {
-        use std::time::Duration;
-
         let key = Arc::as_ptr(rules) as usize;
 
         // Scan and collect results inside the thread-local borrow so ScanResults
@@ -1633,7 +1631,7 @@ impl YaraEngine {
             if cache.get(&key).is_none() {
                 let mut entry = cached_scanner::CachedScanner::new(Arc::clone(rules));
                 entry.with(|s| {
-                    s.set_timeout(Duration::from_secs(1200));
+                    s.set_timeout(SCAN_TIMEOUT);
                     // Keep candidate evaluation bounded without truncating it to
                     // the eight ranges retained for display. Native decoder rules
                     // routinely inspect dozens of sites before a target matches.
@@ -1707,13 +1705,7 @@ impl YaraEngine {
                     })) {
                         Ok(result) => result,
                         Err(panic_payload) => {
-                            let msg = if let Some(s) = panic_payload.downcast_ref::<String>() {
-                                s.clone()
-                            } else if let Some(s) = panic_payload.downcast_ref::<&str>() {
-                                (*s).to_string()
-                            } else {
-                                "unknown panic".to_string()
-                            };
+                            let msg = crate::panic_payload_message(&panic_payload);
                             YARA_SCANS_DISABLED_AFTER_PANIC.store(true, Ordering::Relaxed);
                             tracing::error!(error = %msg, "YARA scan panicked");
                             Err(anyhow::anyhow!("YARA scan panicked: {}", msg))

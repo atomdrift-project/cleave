@@ -91,7 +91,7 @@ pub(crate) fn needed_symbol(raw: &str) -> bool {
         return true;
     }
     let tokens = &manifest().gap_tokens;
-    // Scan's gap check uses original import tokens; collimator normalizes
+    // Scan's gap check uses original import tokens; the ML pipeline normalizes
     // whitespace first. Keep the union, without changing either reader.
     tokens.contains(raw)
         || (raw.chars().any(char::is_whitespace)
@@ -248,7 +248,7 @@ mod tests {
         assert_eq!(metrics["binary"]["overall_entropy"], 0);
         assert_eq!(metrics["binary"]["is_pie"], 1);
         assert!(metrics["text"]["total_lines"].is_null());
-        // Models name these by their old keys and collimator back-fills them
+        // Models name these by their old keys and the ML pipeline back-fills them
         // from the renamed report keys, so the report keys must survive.
         assert_eq!(metrics["text"]["lines"], 7);
         assert_eq!(metrics["file"]["entropy"], 2.28);

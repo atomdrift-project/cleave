@@ -42,9 +42,9 @@ pub(crate) fn enhance_yaml_error(error: &Error, file_path: &Path, yaml_content: 
 
 /// Extract line and column numbers from error message
 fn extract_line_column(error_msg: &str) -> (Option<usize>, Option<usize>) {
-    static LINE_REGEX: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
-    let regex = LINE_REGEX.get_or_init(|| regex::Regex::new(r"\bline (\d+) column (\d+)").ok());
-    if let Some(caps) = regex.as_ref().and_then(|regex| regex.captures(error_msg)) {
+    if let Some(caps) =
+        static_regex!(r"\bline (\d+) column (\d+)").and_then(|re| re.captures(error_msg))
+    {
         let line = caps.get(1).and_then(|m| m.as_str().parse().ok());
         let col = caps.get(2).and_then(|m| m.as_str().parse().ok());
         return (line, col);
@@ -424,6 +424,22 @@ fn invalid_is_validator(context: &str) -> Option<(String, String)> {
     None
 }
 
+/// An unquoted all-digit pattern such as `substr: 0123456789` is a YAML
+/// number, not a string. Inside the untagged condition enum serde reports only
+/// that no variant matched, so name the field and the fix here. Numbers are
+/// not coerced back to strings: `0123` would silently become `123`.
+fn unquoted_numeric_pattern(context: &str) -> Option<(&str, &str)> {
+    context.lines().find_map(|line| {
+        let line = line.trim_start().trim_start_matches("- ");
+        let (key, value) = line.split_once(':')?;
+        let value = value.split_once(" #").map_or(value, |(v, _)| v).trim();
+        (matches!(key, "exact" | "substr" | "word" | "regex")
+            && !value.is_empty()
+            && value.parse::<f64>().is_ok())
+        .then_some((key, value))
+    })
+}
+
 /// Provide intelligent guidance based on the error type and context
 fn provide_error_guidance(
     error_msg: &str,
@@ -479,6 +495,17 @@ fn provide_error_guidance(
             "   💡 'is:' applies a high-fidelity check to the matched value. For a literal match, use 'exact: {}'.\n",
             value
         ));
+        found_hallucination = true;
+    }
+
+    if !found_hallucination
+        && error_msg.contains("ConditionDeser")
+        && let Some((key, value)) = unquoted_numeric_pattern(&context)
+    {
+        guidance.push_str(&format!(
+            "\n   '{key}: {value}' is a YAML number, not a string.\n"
+        ));
+        guidance.push_str(&format!("   💡 Quote it: '{key}: \"{value}\"'.\n"));
         found_hallucination = true;
     }
 
@@ -674,6 +701,24 @@ mod tests {
         let (line, col) = extract_line_column(error);
         assert_eq!(line, Some(149));
         assert_eq!(col, Some(5));
+    }
+
+    #[test]
+    fn unquoted_digit_pattern_is_named_in_the_guidance() {
+        let yaml =
+            "traits:\n  - id: t/digits\n    if:\n      type: text\n      substr: 0123456789\n";
+        let guidance = provide_error_guidance(
+            "data did not match any variant of untagged enum ConditionDeser at line 3 column 7",
+            yaml,
+            3,
+        )
+        .expect("an unquoted digit pattern should produce guidance");
+
+        assert!(
+            guidance.contains("Quote it: 'substr: \"0123456789\"'"),
+            "{guidance}"
+        );
+        assert!(!guidance.contains("Valid condition types"), "{guidance}");
     }
 
     /// `is:` on a value condition used to be an alias for `exact:`. A rule

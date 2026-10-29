@@ -84,7 +84,7 @@ pub fn run(format: &OutputFormat, exclude: Option<&str>, verbose: bool) -> Resul
 /// fields on an older engine) are reported only, never fatal.
 ///
 /// Intended for trait-bundle gates — `make publish-traits`, the scan worker,
-/// and hopper's local scanner — that must tolerate hygiene debt but reject a
+/// and a report store's local scanner — that must tolerate hygiene debt but reject a
 /// bundle that won't load or won't detect on this engine. The hard set is
 /// defined in one place: `validation_controls::HARD_VALIDATOR_IDS`.
 pub fn run_soft(format: &OutputFormat, exclude: Option<&str>, verbose: bool) -> Result<String> {
@@ -257,8 +257,7 @@ pub fn run_with_options(
     // analysis's rayon join, on top of the half that analysis was waiting
     // for. A member of such a fixture that then waited on a busy single-flight
     // could be waiting on the very owner blocked in that join, and nothing
-    // moved until the flight's 180 s deadline (one validate in twenty,
-    // 2026-09-26). A worker takes its broadcast job before it steals
+    // moved until the flight's 180 s deadline. A worker takes its broadcast job before it steals
     // anything, so no lane starts on top of another analysis's work.
     // Start large fixtures early so a bundled source file does not begin near
     // the end of the queue and leave every other lane idle. Keep report slots

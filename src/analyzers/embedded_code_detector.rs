@@ -23,11 +23,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// pattern ever fails — the same fallible-init pattern as the other regex
 /// statics in this crate, so library code never `expect()`s.
 fn inline_interp_re() -> Option<&'static Regex> {
-    static RE: std::sync::OnceLock<Option<Regex>> = std::sync::OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r#"(?:^|[\s;&|(])(python3|python|nodejs|node|deno|bun|ruby|perl|php)\s+(?:-c|-e|-r|--eval)\s+("|')"#).ok()
-    })
-    .as_ref()
+    static_regex!(
+        r#"(?:^|[\s;&|(])(python3|python|nodejs|node|deno|bun|ruby|perl|php)\s+(?:-c|-e|-r|--eval)\s+("|')"#
+    )
 }
 
 /// Extract the inner source of an interpreter inline-code invocation
@@ -244,7 +242,7 @@ fn detect_language_inner(
     }
 
     // Check entropy (skip compressed/encrypted data)
-    if calculate_entropy(value.as_bytes()) > MAX_CODE_ENTROPY {
+    if crate::entropy::shannon(value.as_bytes()) > MAX_CODE_ENTROPY {
         return None;
     }
 
@@ -750,30 +748,6 @@ fn is_top_level_self_detection(
     *host_type == *file_type
         || is_sibling_language(host_type, file_type)
         || host_type.is_source_code()
-}
-
-/// Calculate Shannon entropy of data
-fn calculate_entropy(data: &[u8]) -> f64 {
-    if data.is_empty() {
-        return 0.0;
-    }
-
-    let mut counts = [0u32; 256];
-    for &byte in data {
-        counts[byte as usize] += 1;
-    }
-
-    let len = data.len() as f64;
-    let mut entropy = 0.0;
-
-    for &count in &counts {
-        if count > 0 {
-            let p = count as f64 / len;
-            entropy -= p * p.log2();
-        }
-    }
-
-    entropy
 }
 
 /// Convert FileType to language name string
@@ -1976,8 +1950,7 @@ pub(crate) fn process_all_strings(
 /// `-EncodedCommand` on those hosts. Binary/generic callers leave this false.
 ///
 /// `host_plain`: borrowed full-file haystack so unified source analysis can
-/// still classify the host (B1r) without `content.to_string()` +
-/// `strings.clone()` per member.
+/// still classify the host without copying `content` and `strings` per member.
 enum EmbedCand<'a> {
     Extracted(usize, &'a StringInfo),
     HostPlain(&'a str),
@@ -2826,12 +2799,12 @@ composite_rules:
     #[allow(clippy::unwrap_used)]
     fn test_entropy_calculation() {
         let data = b"aaaaaaaaaa";
-        let entropy = calculate_entropy(data);
+        let entropy = crate::entropy::shannon(data);
         assert!(entropy < 1.0); // Low entropy
 
         // Use more varied data for higher entropy test
         let varied = b"abcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()";
-        let entropy = calculate_entropy(varied);
+        let entropy = crate::entropy::shannon(varied);
         assert!(entropy > 3.0); // Higher entropy (many unique bytes)
     }
 
@@ -3322,8 +3295,8 @@ IAAAAAAAsDyZDwU=";
 
     #[test]
     fn test_host_plain_unwraps_inline_python_in_shell() {
-        // B1r: skip HostPlain on is_source_code() dropped python3 -c unwrap
-        // on the full-file haystack (identity-command-python-call).
+        // Source files keep the full-file haystack, so `python3 -c` inside a
+        // shell script is still unwrapped (identity-command-python-call).
         let host = concat!(
             "#!/bin/sh\n",
             "python3 -c \"import os, sys; os.system('id'); print(sys.version)\"\n",

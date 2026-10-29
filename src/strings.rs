@@ -90,7 +90,7 @@ fn stng_method_to_string(method: StringMethod) -> &'static str {
 }
 
 /// Per-file cap on retained strings. 200k, doubled from 100k: large Go, Rust
-/// and LLVM monoliths (75 MB+, measured 2026-09-24) all hit 100k, and a
+/// and LLVM monoliths (75 MB+, measured) all hit 100k, and a
 /// backdoor spliced into one sat past the cut.
 pub(crate) const MAX_STRINGS_PER_FILE: usize = 200_000;
 

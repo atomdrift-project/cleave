@@ -38,7 +38,7 @@ use rustc_hash::FxHashMap;
 /// 512 MiB..=4 GiB on 64-bit hosts (64 MiB on a 32-bit address space, where
 /// scratch must not crowd the scanner's working set).
 ///
-/// Measured 2026-09-03 and deliberately left here: 16 MiB/thread cuts the
+/// Measured and deliberately left here: 16 MiB/thread cuts the
 /// 510-archive npm corpus from 6.0 GB to 4.8 GB peak at no wall cost, but on
 /// a 1.1 GB corpus of large archives it costs ~3.5% wall and ~6% CPU (same
 /// engine, 407 s -> 421 s), because the per-(regex, thread) caches it drops
@@ -47,14 +47,9 @@ use rustc_hash::FxHashMap;
 /// `CLEAVE_REGEX_SCRATCH_MB` (per-thread MiB, times available parallelism) is
 /// honored literally.
 ///
-/// The budget follows parallel demand rather than physical RAM. On the
-/// 128-core FreeBSD gauntlet hard-tail fixture, 16 nested owners with a 4 GiB
-/// ceiling completed in 294.09 s at 16,400,232 KiB max RSS. A 2 GiB ceiling
-/// took 326.32 s (+11.0%) and *increased* max RSS to 17,257,512 KiB as cache
-/// eviction/relearning inflated the rest of the heap. Retained scratch peaked
-/// at 1,862 MiB with the 4 GiB ceiling and 1,937 MiB with the 2 GiB ceiling;
-/// concurrent checkout growth needs the headroom even though the settled
-/// retained total stays below 2 GiB. The 4 GiB clamp prevents wider hosts from
+/// The budget follows parallel demand rather than physical RAM: on a
+/// 128-core host a tighter ceiling was slower *and* used more memory, as cache
+/// eviction and relearning inflated the rest of the heap. The 4 GiB clamp prevents wider hosts from
 /// turning that throughput allowance into unbounded retention.
 fn global_budget_bytes() -> usize {
     static BYTES: OnceLock<usize> = OnceLock::new();

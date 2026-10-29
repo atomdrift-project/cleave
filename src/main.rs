@@ -10,7 +10,7 @@
 /// Allocator and configuration share one `cfg` so they cannot drift apart: a
 /// build that swaps in the system allocator must not leave a `_rjem_malloc_conf`
 /// symbol behind, and one that uses jemalloc must never be left unconfigured.
-/// The excluded targets match atomscan's, and are the platforms where this
+/// The excluded targets match the scan worker's, and are the platforms where this
 /// crate does not link tikv-jemallocator; on FreeBSD the *system* malloc is
 /// jemalloc, but it reads the unprefixed `MALLOC_CONF` / `/etc/malloc.conf`, so
 /// this symbol would not reach it anyway.

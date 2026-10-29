@@ -664,18 +664,42 @@ fn with_conn<T>(f: impl FnOnce(&Connection) -> T) -> Option<T> {
     })
 }
 
-/// Look up a report in `conn`. Returns `None` on miss.
-fn report_cache_lookup_conn(
+/// SQL for one cache table: (lookup, touch, store).
+fn table_sql(kind: memo::Kind) -> [&'static str; 3] {
+    match kind {
+        memo::Kind::Report => [
+            "SELECT report FROM toplevel_report_cache
+             WHERE sha256 = ?1 AND options_hash = ?2 AND traits_timestamp = ?3",
+            "UPDATE toplevel_report_cache SET last_accessed = ?1
+             WHERE sha256 = ?2 AND options_hash = ?3 AND traits_timestamp = ?4",
+            "INSERT OR REPLACE INTO toplevel_report_cache
+             (sha256, options_hash, traits_timestamp, report, created_at, last_accessed)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+        ],
+        memo::Kind::FileAnalysis => [
+            "SELECT file_analysis FROM file_analysis_cache
+             WHERE sha256 = ?1 AND options_hash = ?2 AND traits_timestamp = ?3",
+            "UPDATE file_analysis_cache SET last_accessed = ?1
+             WHERE sha256 = ?2 AND options_hash = ?3 AND traits_timestamp = ?4",
+            "INSERT OR REPLACE INTO file_analysis_cache
+             (sha256, options_hash, traits_timestamp, file_analysis, created_at, last_accessed)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+        ],
+    }
+}
+
+/// Look up the serialized JSON of a cached entry in `conn`. Returns `None` on
+/// a miss or an undecodable blob.
+fn cache_lookup_conn(
     conn: &Connection,
+    kind: memo::Kind,
     sha256: &str,
     opts_hash: &str,
     traits_ts: i64,
-) -> Option<AnalysisReport> {
+) -> Option<Vec<u8>> {
+    let [lookup, touch, _] = table_sql(kind);
     let compressed: Vec<u8> = conn
-        .prepare_cached(
-            "SELECT report FROM toplevel_report_cache
-             WHERE sha256 = ?1 AND options_hash = ?2 AND traits_timestamp = ?3",
-        )
+        .prepare_cached(lookup)
         .ok()?
         .query_row(rusqlite::params![sha256, opts_hash, traits_ts], |row| {
             row.get(0)
@@ -684,35 +708,27 @@ fn report_cache_lookup_conn(
 
     // Update last_accessed best-effort; may lose the race with another writer, that's fine.
     let now = unix_timestamp();
-    let _ = conn.execute(
-        "UPDATE toplevel_report_cache SET last_accessed = ?1
-         WHERE sha256 = ?2 AND options_hash = ?3 AND traits_timestamp = ?4",
-        rusqlite::params![now, sha256, opts_hash, traits_ts],
-    );
+    let _ = conn.execute(touch, rusqlite::params![now, sha256, opts_hash, traits_ts]);
 
-    let json = crate::cache::decode_cached_zstd(compressed.as_slice()).ok()?;
-    serde_json::from_slice(&json).ok()
+    crate::cache::decode_cached_zstd(compressed.as_slice()).ok()
 }
 
-/// Store a report in `conn`. Silently ignores errors.
-fn report_cache_store_conn(
+/// Store serialized JSON in `conn`. Silently ignores errors.
+fn cache_store_conn(
     conn: &Connection,
+    kind: memo::Kind,
     sha256: &str,
     opts_hash: &str,
     traits_ts: i64,
-    report: &AnalysisReport,
+    json: &[u8],
 ) {
-    let Ok(json) = serde_json::to_vec(report) else {
+    let Ok(compressed) = zstd::encode_all(json, 3) else {
         return;
     };
-    let Ok(compressed) = zstd::encode_all(json.as_slice(), 3) else {
-        return;
-    };
+    let [_, _, store] = table_sql(kind);
     let now = unix_timestamp();
     let _ = conn.execute(
-        "INSERT OR REPLACE INTO toplevel_report_cache
-         (sha256, options_hash, traits_timestamp, report, created_at, last_accessed)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+        store,
         rusqlite::params![sha256, opts_hash, traits_ts, compressed, now],
     );
 }
@@ -1213,14 +1229,13 @@ pub(crate) fn report_cache_lookup(
     {
         return cached_report_under(report, path, rules);
     }
-    let hit =
-        with_conn(|conn| report_cache_lookup_conn(conn, sha256, &opts_hash, traits_ts)).flatten();
-    if let Some(report) = &hit
-        && let Ok(bytes) = serde_json::to_vec(report)
-    {
-        memo::put(memo::Kind::Report, key, bytes);
-    }
-    hit.and_then(|report| cached_report_under(report, path, rules))
+    let bytes = with_conn(|conn| {
+        cache_lookup_conn(conn, memo::Kind::Report, sha256, &opts_hash, traits_ts)
+    })
+    .flatten()?;
+    let report = serde_json::from_slice::<AnalysisReport>(&bytes).ok()?;
+    memo::put(memo::Kind::Report, key, bytes);
+    cached_report_under(report, path, rules)
 }
 
 /// A content hit is not a verdict hit until every path input agrees. Reuse
@@ -1320,23 +1335,30 @@ pub(crate) fn report_cache_store(
     if yara_degraded() || evaluation_incomplete(report) {
         return;
     }
+    let Ok(json) = serde_json::to_vec(report) else {
+        return;
+    };
     let opts_hash = typed_options_hash(options, settings, file_type);
-    if let Ok(bytes) = serde_json::to_vec(report) {
-        memo::put(
-            memo::Kind::Report,
-            memo_key(sha256, &opts_hash, traits_revision),
-            bytes,
-        );
-    }
-    let traits_ts = traits_revision;
     with_conn(|conn| {
-        report_cache_store_conn(conn, sha256, &opts_hash, traits_ts, report);
+        cache_store_conn(
+            conn,
+            memo::Kind::Report,
+            sha256,
+            &opts_hash,
+            traits_revision,
+            &json,
+        );
         // Sample across all threads and evict in the background.
         let count = REPORT_STORE_COUNT.fetch_add(1, Ordering::Relaxed);
         if count.is_multiple_of(EVICTION_CHECK_INTERVAL) {
             spawn_eviction(&REPORT_EVICTING, evict_report_cache);
         }
     });
+    memo::put(
+        memo::Kind::Report,
+        memo_key(sha256, &opts_hash, traits_revision),
+        json,
+    );
 }
 
 /// Look up a cached `FileAnalysis` for the given file hash and options.
@@ -1367,15 +1389,19 @@ pub(crate) fn file_analysis_cache_lookup(
     {
         return cached_file_under(fa, path, rules);
     }
-    let hit =
-        with_conn(|conn| file_analysis_cache_lookup_conn(conn, sha256, &opts_hash, traits_ts))
-            .flatten();
-    if let Some(fa) = &hit
-        && let Ok(bytes) = serde_json::to_vec(fa)
-    {
-        memo::put(memo::Kind::FileAnalysis, key, bytes);
-    }
-    hit.and_then(|fa| cached_file_under(fa, path, rules))
+    let bytes = with_conn(|conn| {
+        cache_lookup_conn(
+            conn,
+            memo::Kind::FileAnalysis,
+            sha256,
+            &opts_hash,
+            traits_ts,
+        )
+    })
+    .flatten()?;
+    let fa = serde_json::from_slice::<FileAnalysis>(&bytes).ok()?;
+    memo::put(memo::Kind::FileAnalysis, key, bytes);
+    cached_file_under(fa, path, rules)
 }
 
 fn archive_file_type(file_type: &str) -> bool {
@@ -1409,73 +1435,28 @@ pub(crate) fn file_analysis_cache_store(
     {
         return;
     }
+    let Ok(json) = serde_json::to_vec(fa) else {
+        return;
+    };
     let opts_hash = typed_options_hash(options, settings, file_type);
-    if let Ok(bytes) = serde_json::to_vec(fa) {
-        memo::put(
-            memo::Kind::FileAnalysis,
-            memo_key(sha256, &opts_hash, traits_revision),
-            bytes,
-        );
-    }
-    let traits_ts = traits_revision;
     with_conn(|conn| {
-        file_analysis_cache_store_conn(conn, sha256, &opts_hash, traits_ts, fa);
+        cache_store_conn(
+            conn,
+            memo::Kind::FileAnalysis,
+            sha256,
+            &opts_hash,
+            traits_revision,
+            &json,
+        );
         let count = FILE_ANALYSIS_STORE_COUNT.fetch_add(1, Ordering::Relaxed);
         if count.is_multiple_of(EVICTION_CHECK_INTERVAL) {
             spawn_eviction(&FILE_ANALYSIS_EVICTING, evict_file_analysis_cache);
         }
     });
-}
-
-/// Look up a FileAnalysis in `conn`. Returns `None` on miss.
-fn file_analysis_cache_lookup_conn(
-    conn: &Connection,
-    sha256: &str,
-    opts_hash: &str,
-    traits_ts: i64,
-) -> Option<FileAnalysis> {
-    let compressed: Vec<u8> = conn
-        .prepare_cached(
-            "SELECT file_analysis FROM file_analysis_cache
-             WHERE sha256 = ?1 AND options_hash = ?2 AND traits_timestamp = ?3",
-        )
-        .ok()?
-        .query_row(rusqlite::params![sha256, opts_hash, traits_ts], |row| {
-            row.get(0)
-        })
-        .ok()?;
-
-    let now = unix_timestamp();
-    let _ = conn.execute(
-        "UPDATE file_analysis_cache SET last_accessed = ?1
-         WHERE sha256 = ?2 AND options_hash = ?3 AND traits_timestamp = ?4",
-        rusqlite::params![now, sha256, opts_hash, traits_ts],
-    );
-
-    let json = crate::cache::decode_cached_zstd(compressed.as_slice()).ok()?;
-    serde_json::from_slice(&json).ok()
-}
-
-/// Store a FileAnalysis in `conn`. Silently ignores errors.
-fn file_analysis_cache_store_conn(
-    conn: &Connection,
-    sha256: &str,
-    opts_hash: &str,
-    traits_ts: i64,
-    fa: &FileAnalysis,
-) {
-    let Ok(json) = serde_json::to_vec(fa) else {
-        return;
-    };
-    let Ok(compressed) = zstd::encode_all(json.as_slice(), 3) else {
-        return;
-    };
-    let now = unix_timestamp();
-    let _ = conn.execute(
-        "INSERT OR REPLACE INTO file_analysis_cache
-         (sha256, options_hash, traits_timestamp, file_analysis, created_at, last_accessed)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
-        rusqlite::params![sha256, opts_hash, traits_ts, compressed, now],
+    memo::put(
+        memo::Kind::FileAnalysis,
+        memo_key(sha256, &opts_hash, traits_revision),
+        json,
     );
 }
 
@@ -1642,6 +1623,42 @@ mod tests {
     use super::*;
     use crate::types::FileAnalysis;
     use crate::types::core::{AnalysisReport, TargetInfo};
+
+    fn report_cache_store_conn(c: &Connection, sha: &str, opts: &str, ts: i64, r: &AnalysisReport) {
+        let json = serde_json::to_vec(r).expect("serialize report");
+        cache_store_conn(c, memo::Kind::Report, sha, opts, ts, &json);
+    }
+
+    fn report_cache_lookup_conn(
+        c: &Connection,
+        sha: &str,
+        opts: &str,
+        ts: i64,
+    ) -> Option<AnalysisReport> {
+        let json = cache_lookup_conn(c, memo::Kind::Report, sha, opts, ts)?;
+        serde_json::from_slice(&json).ok()
+    }
+
+    fn file_analysis_cache_store_conn(
+        c: &Connection,
+        sha: &str,
+        opts: &str,
+        ts: i64,
+        fa: &FileAnalysis,
+    ) {
+        let json = serde_json::to_vec(fa).expect("serialize file analysis");
+        cache_store_conn(c, memo::Kind::FileAnalysis, sha, opts, ts, &json);
+    }
+
+    fn file_analysis_cache_lookup_conn(
+        c: &Connection,
+        sha: &str,
+        opts: &str,
+        ts: i64,
+    ) -> Option<FileAnalysis> {
+        let json = cache_lookup_conn(c, memo::Kind::FileAnalysis, sha, opts, ts)?;
+        serde_json::from_slice(&json).ok()
+    }
 
     /// Every input that changes a report is part of its cache key: the YARA
     /// overrides outside `AnalysisOptions`, and the zip passwords.

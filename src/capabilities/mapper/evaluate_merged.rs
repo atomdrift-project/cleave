@@ -103,7 +103,7 @@ pub(crate) fn merge_filefacts_context(
         }
         // Split each located fact's spans into the sidecar at this single
         // bridge, keyed identically. A metrics matcher then attaches the byte
-        // range to its finding so prism can point at the concealed payload.
+        // range to its finding so a report viewer can point at the concealed payload.
         for (k, fact) in metrics.iter_facts() {
             if !fact.spans.is_empty() {
                 report
@@ -162,23 +162,17 @@ fn decoded_layer_findings(report: &AnalysisReport) -> Vec<Finding> {
 }
 
 /// Full raw-content gate with offset recording (windowed `eval_raw`) for
-/// binaries. PE/ELF stay here: B1k measured AC + windows on 200–480 MiB
-/// installers as a loss.
+/// binaries. PE/ELF stay at this cap: windowing multi-hundred-MiB installers
+/// costs more than it saves.
 pub(crate) const RAW_GATE_MAX_BYTES: usize = 3 << 20;
 /// Full gate for source/text (`CLEAVE_RAW_GATE_SOURCE_MAX_KB` overrides).
-/// Same as the binary band for now. Above it a 5–15 MB JavaScript bundle
-/// gets the presence-only sweep, so every text trait whose atom occurs
-/// anywhere full-scans it (85 GB of haystack per analysis of one 8.9 MB
-/// bundle). Solo, 16 MiB cut CPU on every bundle in the npm corpus
-/// (edgeone 54.7 → 48.4 s, tcsp 34.2 → 32.3, utils-mf 20.1 → 18.2, 0
-/// diffs), but the whole-corpus scan measured neutral to +3% CPU over six
-/// runs (2026-09-03) even after the line-window fix, so the default stays
-/// put until that is understood. The 512 atom offset cap stays too:
-/// raising it makes dense atoms cost more in window-building than the
-/// scan they replace (tcsp +26% at 4,096, +55% at 32,768).
+/// Same as the binary band. Above it, a large JavaScript bundle gets the
+/// presence-only sweep, so every text trait whose atom occurs anywhere
+/// full-scans it. A larger band speeds up individual bundles but measured
+/// neutral to slightly worse across a whole package corpus, so it stays here.
 pub(crate) const RAW_GATE_SOURCE_MAX_BYTES: usize = RAW_GATE_MAX_BYTES;
-/// Presence-only source sweep above [`RAW_GATE_MAX_BYTES`]. Not B1l: no
-/// offsets, no windowing. PE/ELF never use this band.
+/// Presence-only source sweep above [`RAW_GATE_MAX_BYTES`]: no offsets, no
+/// windowing. PE/ELF never use this band.
 pub(crate) const RAW_GATE_THIN_SOURCE_MAX_BYTES: usize = 80 << 20;
 
 fn raw_gate_caps() -> (usize, usize, usize) {
@@ -264,12 +258,10 @@ impl super::CapabilityMapper {
         file_type: &RuleFileType,
     ) -> Option<crate::capabilities::indexes::RawGateHits> {
         // Full gate (source offset recording / windowed `eval_raw`) is
-        // profitable up to ~3 MiB. PE/ELF stay ungated above that (B1k:
-        // AC + window on 200–480 MiB installers). Source 3–80 MiB gets a
-        // *presence-only* sweep: skip `eval_raw` when the mandatory atom is
-        // absent, but do **not** record offsets or window (B1l did, +42 s).
-        // Specimen: 61 MiB `re2-exhaustive.txt` has no `font-family` and
-        // still paid 7.3 s for that regex (S4 / S2p).
+        // profitable up to ~3 MiB; PE/ELF stay ungated above that. Source
+        // 3–80 MiB gets a *presence-only* sweep: skip `eval_raw` when the
+        // mandatory atom is absent, but do not record offsets or window,
+        // which costs more than it saves at that size.
         let record_offsets = raw_gate_plan(
             binary_data.len(),
             file_type.uses_raw_text_search_for(binary_data),

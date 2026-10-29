@@ -20,7 +20,6 @@ use crate::composite_rules::{
 };
 use rayon::prelude::*;
 use std::collections::HashMap;
-use std::sync::OnceLock;
 
 /// Extract `(substr, regex, type_label)` from any condition that has them.
 ///
@@ -151,34 +150,19 @@ fn count_regex_min_literals(pattern: &str) -> usize {
 }
 
 fn overlapping_alternations_regex() -> Option<&'static regex::Regex> {
-    static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"\([^)]*\.\*\|[^)]*\.\*\)").ok())
-        .as_ref()
+    static_regex!(r"\([^)]*\.\*\|[^)]*\.\*\)")
 }
 
 fn broad_counted_repeat_regex() -> Option<&'static regex::Regex> {
-    static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
-    RE.get_or_init(|| {
-        regex::Regex::new(r"(?:\.|\\[sSwWdD]|\[\^?[^\]]+\])\{([0-9]+),([0-9]+)\}").ok()
-    })
-    .as_ref()
+    static_regex!(r"(?:\.|\\[sSwWdD]|\[\^?[^\]]+\])\{([0-9]+),([0-9]+)\}")
 }
 
 fn unbounded_broad_span_regex() -> Option<&'static regex::Regex> {
-    static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"(?:\.\*|\.\+|\[\^[^\]]+\][*+]|\[\\s\\S\][*+])").ok())
-        .as_ref()
+    static_regex!(r"(?:\.\*|\.\+|\[\^[^\]]+\][*+]|\[\\s\\S\][*+])")
 }
 
 fn leading_broad_span_regex() -> Option<&'static regex::Regex> {
-    static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
-    RE.get_or_init(|| {
-        regex::Regex::new(
-            r"^(?:\^|\(\?[-a-zA-Z:]+\))*(?:\.\*|\.\+|\[\^[^\]]+\][*+]|\[\\s\\S\][*+])",
-        )
-        .ok()
-    })
-    .as_ref()
+    static_regex!(r"^(?:\^|\(\?[-a-zA-Z:]+\))*(?:\.\*|\.\+|\[\^[^\]]+\][*+]|\[\\s\\S\][*+])")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -655,13 +639,6 @@ pub(crate) fn find_slow_regex_patterns(traits: &[TraitDefinition], warnings: &mu
 /// composite express the same detection for a few KB and scan faster.
 const REGEX_NFA_BUDGET_BYTES: usize = 128 * 1024;
 
-/// The evaluation engines' NFA compile ceiling, mirroring `nfa_size_limit` in
-/// `composite_rules::condition::engine_config`. A pattern whose NFA exceeds
-/// this cannot compile at evaluation time: if no engine compiles the rule
-/// never matches, and if only the Unicode engine fails the rule silently
-/// degrades to no-match on non-ASCII content.
-const REGEX_NFA_RUNTIME_LIMIT_BYTES: usize = 10 * (1 << 20);
-
 /// Build the Thompson NFA for `pattern` the way the evaluation engines do
 /// (implicit-only capture states, the runtime size ceiling). `ascii` selects
 /// the byte-mode engine (`unicode(false)`/`utf8(false)`, as `compile_bytes`
@@ -672,7 +649,7 @@ fn engine_nfa_bytes(pattern: &str, ascii: bool) -> Option<usize> {
     let mut syntax = regex_automata::util::syntax::Config::new();
     let mut config = thompson::Config::new()
         .which_captures(thompson::WhichCaptures::Implicit)
-        .nfa_size_limit(Some(REGEX_NFA_RUNTIME_LIMIT_BYTES));
+        .nfa_size_limit(Some(crate::composite_rules::evaluators::REGEX_SIZE_LIMIT));
     if ascii {
         syntax = syntax.unicode(false).utf8(false);
         config = config.utf8(false);
@@ -969,13 +946,13 @@ pub(crate) fn find_memory_hungry_regex_patterns(
                 "Regex memory: {kind} '{id}' in {location} has pattern '{pattern}' beyond the \
                  {} MB engine compile limit — no engine can be built, so it never matches; \
                  {split_hint}",
-                REGEX_NFA_RUNTIME_LIMIT_BYTES >> 20,
+                crate::composite_rules::evaluators::REGEX_SIZE_LIMIT >> 20,
             ),
             RegexMemoryIssue::UnicodeDegrades => format!(
                 "Regex memory: {kind} '{id}' in {location} has pattern '{pattern}' whose Unicode \
                  engine exceeds the {} MB compile limit — matching silently degrades to no-match \
                  on non-ASCII content; {split_hint}",
-                REGEX_NFA_RUNTIME_LIMIT_BYTES >> 20,
+                crate::composite_rules::evaluators::REGEX_SIZE_LIMIT >> 20,
             ),
         });
     }
@@ -1046,25 +1023,15 @@ fn condition_has_position_constraints(condition: &Condition) -> bool {
 
 fn pattern_targets_code_structure(condition: &Condition) -> Option<(&str, &str)> {
     // Regex for function call pattern: identifier (with optional dots/parens) followed by (
-    static FUNC_CALL_RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
-    let func_call_re = FUNC_CALL_RE
-        .get_or_init(|| regex::Regex::new(r"[a-zA-Z_][a-zA-Z0-9_.]*\(").ok())
-        .as_ref()?;
+    let func_call_re = static_regex!(r"[a-zA-Z_][a-zA-Z0-9_.]*\(")?;
 
     // Import statement pattern: starts with import/from...import
-    static IMPORT_RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
-    let import_re = IMPORT_RE
-        .get_or_init(|| regex::Regex::new(r"^(import\s+\w|from\s+\w+\s+import\b)").ok())
-        .as_ref()?;
+    let import_re = static_regex!(r"^(import\s+\w|from\s+\w+\s+import\b)")?;
 
     // Regex-mode patterns that search for code structure
-    static REGEX_CODE_RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
-    let regex_code_re = REGEX_CODE_RE.get_or_init(|| {
-        regex::Regex::new(
-            r"(?:require\b|\\brequire|exec\(|execSync|eval\(|shell_exec\(|child_process\\?\.|from\\s|import\\s|\\bimport\\b)",
-        )
-        .ok()
-    }).as_ref()?;
+    let regex_code_re = static_regex!(
+        r"(?:require\b|\\brequire|exec\(|execSync|eval\(|shell_exec\(|child_process\\?\.|from\\s|import\\s|\\bimport\\b)"
+    )?;
 
     match condition {
         Condition::Literal(LiteralQuery {
@@ -1299,12 +1266,7 @@ pub(crate) fn find_raw_should_use_text(traits: &[TraitDefinition], warnings: &mu
 fn extract_simple_function_call_name(pattern: &str, is_regex: bool) -> Option<String> {
     if is_regex {
         // Strip a trivial leading boundary guard (\b, ^, (^|X), (?:^|X)).
-        static LEAD_RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
-        let lead_re = LEAD_RE
-            .get_or_init(|| {
-                regex::Regex::new(r"^(?:\\b|\^|\(\?:\^\|[^()]{1,8}\)|\(\^\|[^()]{1,8}\))").ok()
-            })
-            .as_ref()?;
+        let lead_re = static_regex!(r"^(?:\\b|\^|\(\?:\^\|[^()]{1,8}\)|\(\^\|[^()]{1,8}\))")?;
         let body = if let Some(m) = lead_re.find(pattern) {
             &pattern[m.end()..]
         } else {
@@ -1313,23 +1275,15 @@ fn extract_simple_function_call_name(pattern: &str, is_regex: bool) -> Option<St
 
         // Body must be NAME, optional \s*/\s+, then literal \( and optionally \)
         // or trailing \b. Anything else (arg-shape matching) is out of scope.
-        static BODY_RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
-        let body_re = BODY_RE
-            .get_or_init(|| {
-                regex::Regex::new(r"^([a-zA-Z_][a-zA-Z0-9_]+)(?:\\s[*+])?\\\((?:\\\))?(?:\\b)?$")
-                    .ok()
-            })
-            .as_ref()?;
+        let body_re =
+            static_regex!(r"^([a-zA-Z_][a-zA-Z0-9_]+)(?:\\s[*+])?\\\((?:\\\))?(?:\\b)?$")?;
         let caps = body_re.captures(body)?;
         Some(caps.get(1)?.as_str().to_string())
     } else {
         // substr / exact — must be a bare `NAME(` or `NAME ( )` pattern. No
         // dots in the name (those are method calls), no arguments, no trailing
         // content beyond an empty arg list.
-        static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
-        let re = RE
-            .get_or_init(|| regex::Regex::new(r"^\s*([a-zA-Z_][a-zA-Z0-9_]+)\s*\(\s*\)?\s*$").ok())
-            .as_ref()?;
+        let re = static_regex!(r"^\s*([a-zA-Z_][a-zA-Z0-9_]+)\s*\(\s*\)?\s*$")?;
         let caps = re.captures(pattern)?;
         Some(caps.get(1)?.as_str().to_string())
     }

@@ -11,7 +11,7 @@
 //! a file is admitted only when its reservation leaves the configured headroom
 //! in **live available memory** — so large archives serialise while small files
 //! still fill the pool, and, because availability is read live, concurrent
-//! processes (e.g. several `litmus` instances) leave room for each other rather
+//! processes (e.g. several embedding hosts) leave room for each other rather
 //! than each assuming it owns the whole box. A lone file always makes progress
 //! (immediately if it fits, otherwise after a bounded wait).
 
@@ -127,7 +127,7 @@ impl ScanMemGate {
             }
             // Leave evidence: one warning per waiter after two minutes parked,
             // with the numbers needed to diagnose a wedged holder from logs
-            // alone (a rare whole-scan stall was observed 2026-08-22 with all
+            // alone (a rare whole-scan stall was observed with all
             // workers parked here and could not be reproduced under harness).
             if !stall_logged && started.elapsed() >= STALL_REPORT_AFTER {
                 stall_logged = true;
@@ -168,7 +168,7 @@ impl ScanMemGate {
             None => true,
         };
         // Aggregate ceiling caps commitments before their allocations land.
-        // Timed escape (2026-08-22): a waiter parked past FORCE_ADMIT_AFTER
+        // Timed escape: a waiter parked past FORCE_ADMIT_AFTER
         // whose LIVE memory check passes is admitted despite the ceiling.
         // Reservation accounting is an estimate of the future; when it and
         // reality disagree for five minutes straight — a wedged permit

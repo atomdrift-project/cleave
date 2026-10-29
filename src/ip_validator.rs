@@ -12,7 +12,6 @@ use lru::LruCache;
 use std::hash::{BuildHasher, RandomState};
 use std::net::Ipv4Addr;
 use std::num::NonZeroUsize;
-use std::sync::OnceLock;
 
 /// Cache for IP validation results, keyed by the string's content.
 ///
@@ -42,12 +41,7 @@ thread_local! {
 /// Regex pattern to find IP-like strings in text.
 /// Matches any sequence of digits separated by dots (will be validated later).
 fn ip_pattern() -> Option<&'static regex::Regex> {
-    static PATTERN: OnceLock<Option<regex::Regex>> = OnceLock::new();
-    PATTERN
-        .get_or_init(|| {
-            regex::Regex::new(r"\b([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\b").ok()
-        })
-        .as_ref()
+    static_regex!(r"\b([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\b")
 }
 
 /// Check if a parsed IPv4 address is external (external, routable, potentially C2).

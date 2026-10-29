@@ -16,7 +16,7 @@ pub(crate) const MAX_AST_DEPTH: usize = 10_000;
 /// AST detections on starved threads; CPU time does not. See the archive
 /// finding-drop investigation.
 ///
-/// Was 30 s (2026-10-09). Several unanchored-sibling queries ran to that ceiling
+/// Was 30 s. Several unanchored-sibling queries ran to that ceiling
 /// one after another on minified bundles — five on one 7.7 MB VS Code extension
 /// `main.js`, ~80-107 s per member — and matched nothing. At 5 s the four slow
 /// members of that extension produced identical findings at 3-4x less wall

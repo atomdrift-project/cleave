@@ -329,7 +329,7 @@ pub enum Command {
     ///
     /// Walks the given targets and emits one JSON line per recognized file:
     /// `{"path":"...","type":"elf","sz":12345}`. No hashing, no analysis —
-    /// the caller (e.g. hopper) does its own hashing via its own cache.
+    /// the caller (e.g. a report store) does its own hashing via its own cache.
     /// Files whose magic bytes do not match a recognized program type are
     /// silently skipped. Honors `--max-file-size` for the size ceiling.
     #[command(name = "iter-files")]
@@ -342,7 +342,7 @@ pub enum Command {
 
         /// Only emit files modified at or after this Unix timestamp (seconds).
         /// Omitted means a full enumeration. Lets an incremental caller (e.g.
-        /// hopper) skip unchanged files by their mtime before cleave reads
+        /// a report store) skip unchanged files by their mtime before cleave reads
         /// their magic bytes — the expensive step on a cold file cache.
         #[arg(long, value_name = "UNIX_SECS")]
         newer_than: Option<i64>,

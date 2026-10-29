@@ -16,7 +16,6 @@
 
 use crate::types::{AnalysisReport, Import};
 use std::collections::BTreeSet;
-use std::sync::OnceLock;
 
 // ---------------------------------------------------------------------------
 // ELF `.comment` section
@@ -235,10 +234,7 @@ fn is_legacy_rust_mangling_candidate(s: &str) -> bool {
 }
 
 fn legacy_rust_mangling_regex() -> Option<&'static regex::Regex> {
-    static LEGACY_RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
-    LEGACY_RE
-        .get_or_init(|| regex::Regex::new(r"^_?ZN.*17h[0-9a-f]{16}E$").ok())
-        .as_ref()
+    static_regex!(r"^_?ZN.*17h[0-9a-f]{16}E$")
 }
 
 /// Whether the ELF carries a `.rustc` section. Set on rustc-built

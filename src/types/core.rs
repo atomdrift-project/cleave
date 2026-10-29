@@ -12,7 +12,6 @@ use super::is_false;
 use super::paths_env::{DirectoryAccess, EnvVarInfo, PathInfo};
 use super::traits_findings::{ContextLine, Finding, StructuralFeature, Suppression, Trait};
 use crate::analyzers::FileType;
-use crate::malecule_bridge;
 
 /// How many low-tier (component/baseline) traits to keep for a file that would
 /// otherwise be stripped down to no findings, so it still carries a minimal clue
@@ -295,7 +294,7 @@ pub struct AnalysisReport {
     /// only for metrics that carry spans. The value store keeps its `f64` map
     /// (and `MetricsExt` helpers); the producer's `Fact{value, spans}` is split
     /// into the two at the single `merge_filefacts_context` bridge so a metrics
-    /// match can attach the location to its finding for downstream (prism).
+    /// match can attach the location to its finding for downstream (a report viewer).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub filefacts_metric_spans: Option<std::collections::BTreeMap<String, Vec<filefacts::Span>>>,
     /// Raw paths discovered (complete list)
@@ -333,7 +332,7 @@ pub struct AnalysisReport {
     pub metadata: AnalysisMetadata,
 
     /// Differential analysis result, present only on the output of `cleave diff`.
-    /// Embedded in the v3 envelope so prism/litmus can consume diff and
+    /// Embedded in the v3 envelope so embedders can consume diff and
     /// per-file analysis from one document. See [`DiffReportV1`].
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub diff: Option<DiffReportV1>,
@@ -520,9 +519,7 @@ impl AnalysisReport {
     }
 
     fn refresh_formula(file: &mut FileAnalysis) {
-        let filtered = crate::output::filter_findings_for_formula(&file.findings);
-        let formula = malecule_bridge::formula_from_findings(&filtered);
-        file.formula = (!formula.is_empty()).then_some(formula);
+        file.formula = crate::formula::of(&file.findings);
     }
 
     /// Append `findings` to the already-finalized node whose `sha256` matches
@@ -1012,7 +1009,7 @@ impl AnalysisReport {
         // its derived formula/summary depend only on that file, so both passes
         // fan out. Archive containers carry tens of thousands of members, and
         // walking them twice single-threaded — once to retain, once to refresh —
-        // showed up as half the remaining finalize tail (2026-07-24 stack
+        // showed up as half the remaining finalize tail (stack
         // sampling, 3 of 6 in-tail samples across this retain and the
         // `filter_findings_for_formula` call inside `refresh_formula`). Below
         // that size the fan-out costs more than the walk.
@@ -1250,7 +1247,7 @@ impl AnalysisReport {
         // the parent's entire findings list (evidence dedup included) once per
         // child — on a 63k-member archive whose members share one wrapper,
         // that is 63k full-list dedups of the same accumulating list, and it
-        // made this pass dominate archive scans (2026-07-23: 2,865 s for a
+        // made this pass dominate archive scans (2,865 s for a
         // corpus that scans in 337 s as loose files). Batching is safe because
         // a parent's own upward merge always happens at a strictly later
         // level than everything it receives (its (depth, delimiter) key is
@@ -1375,7 +1372,7 @@ impl AnalysisReport {
         // members (which have no children, so the ubiquitous early-break never
         // fired) each scanned the full carrier list — on a 63k-member archive
         // with ~8k manifest composites, ~10^8 string compares that made this
-        // pass the dominant single-thread finalize cost (2026-07-24: the bulk
+        // pass the dominant single-thread finalize cost (the bulk
         // of a ~330 s tail on a 1,870 s scan; 8/14 tail stack samples).
         use rustc_hash::FxHashSet;
         let path_to_index: FxHashMap<&str, usize> = files
@@ -1828,7 +1825,7 @@ impl AnalysisReport {
         Self::link_flagged_references(&mut self.files);
 
         // Context windows on sub-notable, un-cited members serve no reader:
-        // collimator never reads `ctx`, and prism renders member context only
+        // the ML pipeline never reads `ctx`, and a report viewer renders member context only
         // for records with signal — a notable+ finding, or membership in a
         // fired composite's `from` legs (`composite_sources`, resolved just
         // above). On a member-heavy archive those windows were the largest

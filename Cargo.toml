@@ -164,7 +164,7 @@ cab = "0.6"
 # Pinned to the fork carrying the LZMA/ULMO codec work (PR pending upstream at
 # citruz/dmgwiz). default-features = false drops the crypto (openssl/ring) and
 # cli (clap) features cleave doesn't use.
-dmgwiz = { git = "https://github.com/atomdrift-project/dmgwiz.git", rev = "47c6e34877efa7447fc99f7c11a42422aff01a43", default-features = false }
+dmgwiz = { git = "https://github.com/atomdrift-project/dmgwiz.git", default-features = false }
 lzx = { path = "crates/lzx" }
 # Pinned to 0.39 because rusqlite 0.40 pulls libsqlite3-sys 0.38, whose build
 # script uses the still-unstable cfg_select! macro (rust-lang/rust#115585) and

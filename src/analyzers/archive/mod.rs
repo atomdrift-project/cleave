@@ -1179,7 +1179,7 @@ fn is_benign_archive_symlink_escape(path: &str) -> bool {
     }
 
     if let Some((link_name, target)) = path.split_once("->") {
-        let link_name = link_name.trim();
+        let link_name = link_name.trim().trim_start_matches("./");
         let target = target.trim();
         let system_link = link_name.starts_with("etc/")
             || link_name.starts_with("lib")
@@ -3254,6 +3254,17 @@ mod tests {
     /// A symlink escape is excused by what the link is, or by the archive's
     /// content-detected type, never by a name whoever built the archive chose:
     /// a `testdata/` directory, a `.pkg.tar.zst` or a `docker.io_` file name.
+    #[test]
+    fn system_symlink_paths_normalize_dot_prefix() {
+        for link in ["sbin/mount.ntfs-3g", "./sbin/mount.ntfs-3g", "././sbin/mount.ntfs-3g"] {
+            assert!(is_benign_archive_symlink_escape(&format!("{link} -> /bin/ntfs-3g")));
+        }
+        for link in ["../sbin/mount.ntfs-3g", "./../sbin/mount.ntfs-3g", "./data/evil"] {
+            assert!(!is_benign_archive_symlink_escape(&format!("{link} -> /bin/ntfs-3g")));
+        }
+        assert!(!is_benign_archive_symlink_escape("./sbin/mount.ntfs-3g -> /etc/passwd"));
+    }
+
     #[test]
     fn symlink_escape_is_not_excused_by_names() {
         fn escape_findings(file_name: &str, link: &str, members: &[(&str, &[u8])]) -> usize {

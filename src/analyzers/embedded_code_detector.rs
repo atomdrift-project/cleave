@@ -764,6 +764,7 @@ pub(crate) const EMBEDDED_LANG_NAMES: &[&str] =
 pub(crate) const ENCODED_LAYER_NAMES: &[&str] = &[
     "powershell-literal-program",
     "javascript-literal-program",
+    "js-constant-string-table",
     "xor",
     "base64",
     "base64-obf",

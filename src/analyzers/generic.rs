@@ -718,7 +718,7 @@ impl Analyzer for GenericAnalyzer {
         let content = String::from_utf8_lossy(input.data);
         let fallback = input.open_ctx_fallback();
         let source_ctx = input.parsed_ctx.as_ref().or(fallback.as_ref());
-        let mut report = self.analyze_source_internal(
+        let report = self.analyze_source_internal(
             input.path,
             &content,
             Some(input.strings),
@@ -729,23 +729,6 @@ impl Analyzer for GenericAnalyzer {
             source_ctx,
             input.cancellation.as_ref(),
         );
-        if self.detect_embedded
-            && self.file_type == FileType::Vbs
-            && let Some(decoded) = decode_bom_script(input.data)
-            && let Some(layer) =
-                crate::analyzers::embedded_code_detector::analyze_decoded_script_layer(
-                    &input.path.display().to_string(),
-                    &decoded,
-                    0,
-                    FileType::Vbs,
-                    vec!["wide".to_string()],
-                    &self.engine,
-                    0,
-                    false,
-                )
-        {
-            report.files.push(layer);
-        }
         Ok(report)
     }
 
@@ -755,70 +738,11 @@ impl Analyzer for GenericAnalyzer {
     }
 }
 
-// Keep character-to-byte evidence honest: a BOM-encoded VBS is analyzed as a
-// separate decoded layer rather than reusing UTF-8 offsets on UTF-16 bytes.
-fn decode_bom_script(bytes: &[u8]) -> Option<String> {
-    if bytes.len() > 4 * 1024 * 1024 || !bytes.len().is_multiple_of(2) {
-        return None;
-    }
-    let little = match bytes.get(..2)? {
-        [0xff, 0xfe] => true,
-        [0xfe, 0xff] => false,
-        _ => return None,
-    };
-    let units: Vec<u16> = bytes[2..]
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|&pair| {
-            if little {
-                u16::from_le_bytes(pair)
-            } else {
-                u16::from_be_bytes(pair)
-            }
-        })
-        .collect();
-    String::from_utf16(&units).ok()
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
-
-    #[test]
-    fn vbs_bom_text_is_a_separate_bounded_layer() {
-        let text = "Set sh = CreateObject(\"WScript.Shell\")\r\nsh.Run \"cmd /c echo harmless diagnostic\", 0, True\r\n";
-        for little in [true, false] {
-            let mut bytes = if little {
-                vec![0xff, 0xfe]
-            } else {
-                vec![0xfe, 0xff]
-            };
-            for u in text.encode_utf16() {
-                bytes.extend(if little {
-                    u.to_le_bytes()
-                } else {
-                    u.to_be_bytes()
-                });
-            }
-            assert_eq!(decode_bom_script(&bytes).as_deref(), Some(text));
-            let input = AnalysisInput::new(Path::new("renamed.vbs"), &bytes, FileType::Vbs);
-            let report = GenericAnalyzer::new(FileType::Vbs)
-                .analyze_input(&input)
-                .unwrap();
-            assert!(
-                report
-                    .files
-                    .iter()
-                    .any(|f| f.file_type == "vbs" && f.path.contains("wide"))
-            );
-        }
-        assert!(decode_bom_script(b"ordinary UTF-8").is_none());
-        assert!(decode_bom_script(&[0xff, 0xfe, 0]).is_none());
-        assert!(decode_bom_script(&[0xff, 0xfe, 0, 0xd8]).is_none());
-    }
 
     /// Every decoder stng reports maps to a name the reference validator
     /// knows; a new mapping without a matching ENCODED_LAYER_NAMES entry would

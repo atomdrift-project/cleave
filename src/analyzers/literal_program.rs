@@ -1,4 +1,4 @@
-//! Bounded reconstruction of two literal-only script recipes. No interpreter
+//! Bounded reconstruction of literal-only script recipes. No interpreter
 //! is invoked. Unknown writes, expressions, keys, or mismatched variables stop
 //! reconstruction; callers analyze recovered text as a separate source layer.
 use regex::Regex;
@@ -48,6 +48,12 @@ pub(crate) fn decode(source: &str) -> Vec<(usize, String, &'static str)> {
     }
     let mut results = Vec::new();
     let mut budget = MAX_OUTPUT;
+    if let Some(decoded) = super::js_decimal_packer::decode(source)
+        && decoded.len() <= budget
+    {
+        budget -= decoded.len();
+        results.push((0, decoded, "javascript"));
+    }
     if source.contains("eval") {
         for start in JS_START.captures_iter(source).take(64) {
             let Some(whole) = start.get(0) else { continue };

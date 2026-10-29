@@ -26,7 +26,7 @@ use std::path::Path;
 ///
 /// * `target` - Path to the file to analyze
 /// * `rules` - Comma-separated list of rule IDs to test
-/// * `disabled` - Components `--disable` turned off (UPX unpacking and radare2 apply here)
+/// * `disabled` - Components `--disable` turned off (UPX unpacking and rizin apply here)
 /// * `platforms` - Platform filters for rule evaluation
 /// * `min_hostile_precision` - Minimum precision for hostile rules
 /// * `min_suspicious_precision` - Minimum precision for suspicious rules

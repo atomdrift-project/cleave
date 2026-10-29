@@ -353,10 +353,10 @@ pub trait MetricsExt {
     /// Insert an `Option<bool>` — `None` leaves the map unchanged.
     fn set_b_opt(&mut self, key: impl Into<String>, value: Option<bool>);
     /// Read a stored value back as `u64` (returns `None` when absent).
-    fn get_u(&self, key: &str) -> Option<u64>;
+    fn as_u64(&self, key: &str) -> Option<u64>;
     /// Read a stored boolean back (returns `None` when absent;
     /// `1.0` → `Some(true)`, anything else stored → `Some(false)`).
-    fn get_b(&self, key: &str) -> Option<bool>;
+    fn as_bool(&self, key: &str) -> Option<bool>;
 }
 
 impl MetricsExt for std::collections::BTreeMap<String, f64> {
@@ -377,10 +377,10 @@ impl MetricsExt for std::collections::BTreeMap<String, f64> {
             self.set_b(key, v);
         }
     }
-    fn get_u(&self, key: &str) -> Option<u64> {
+    fn as_u64(&self, key: &str) -> Option<u64> {
         self.get(key).map(|v| *v as u64)
     }
-    fn get_b(&self, key: &str) -> Option<bool> {
+    fn as_bool(&self, key: &str) -> Option<bool> {
         self.get(key).map(|v| *v != 0.0)
     }
 }

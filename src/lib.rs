@@ -503,7 +503,7 @@ pub fn create_analysis_report(
 ///
 /// The free functions ([`analyze_file`], [`analyze_bytes`], ...) read every
 /// field. An [`Engine`] is built from the engine-level fields (YARA, UPX,
-/// radare2 and its limits, platforms, precision thresholds, validation) by
+/// rizin and its limits, platforms, precision thresholds, validation) by
 /// [`Engine::for_options`]; its `analyze_*` methods read only the per-call
 /// ones and ignore the rest.
 #[derive(Debug, Clone)]
@@ -514,7 +514,7 @@ pub struct AnalysisOptions {
     pub zip_passwords: Vec<String>,
     /// Disable YARA scanning
     pub disable_yara: bool,
-    /// Disable radare2 analysis
+    /// Disable rizin analysis (the field keeps its historical name)
     pub disable_radare2: bool,
     /// Wall-clock budget for one rizin run on a native binary. A run past it
     /// is killed and the binary keeps its static facts; the report then
@@ -879,6 +879,9 @@ pub fn prefetch_yara_engine(enable_third_party: bool) {
             "traits ensure before YARA prefetch failed; analysis path will surface the error"
         );
     }
+    // A dedicated thread, even though we join it at once: the caller may be a
+    // rayon worker, and first init must not run on one (see
+    // `shared_resources::yara_engine`).
     let handle = std::thread::spawn(move || shared_resources::yara_engine(enable_third_party));
     if handle.join().is_err() {
         tracing::warn!("YARA engine prefetch thread panicked");
@@ -2317,7 +2320,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
 
     // For binary types (PE, ELF, MachO) run the YARA scan concurrently with stng extraction.
     // Both only need file_data and are independent of each other, so they can overlap.
-    // On production runs where radare2 is cached, YARA (~270ms) otherwise sits between
+    // On production runs where rizin output is cached, YARA (~270ms) otherwise sits between
     // stng (~290ms) and structural (~50ms), adding to the critical path.  Running them in
     // parallel eliminates that 270ms from the wall-clock total.
     let binary_yara_ftypes: Option<&[&str]> = if yara_engine.is_none() {
@@ -2459,7 +2462,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         file_type,
     )
     .with_sha256(sha256_hex.clone())
-    .with_skip_rizin_if(!engine.radare2());
+    .with_skip_rizin_if(!engine.rizin());
     input.cancellation = options.cancellation.clone();
 
     // Hand the source/image analyzer the context we already opened so it

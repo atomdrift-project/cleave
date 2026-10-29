@@ -84,7 +84,7 @@ impl TraitIndex {
     /// Build index, keeping only traits whose platform set intersects `platforms`.
     ///
     /// Off-platform traits retain their absolute index slot but contribute no
-    /// file-type buckets, so `get_applicable` never selects them for standalone
+    /// file-type buckets, so `applicable` never selects them for standalone
     /// evaluation. `trait_definitions` itself is left intact, so composite rules
     /// that reference these traits by id still resolve.
     pub(crate) fn build_filtered(traits: &[TraitDefinition], platforms: &[Platform]) -> Self {
@@ -118,7 +118,7 @@ impl TraitIndex {
     }
 
     /// Get trait indices applicable to a given file type
-    pub(crate) fn get_applicable(&self, file_type: &RuleFileType) -> TraitBitSet {
+    pub(crate) fn applicable(&self, file_type: &RuleFileType) -> TraitBitSet {
         // 1. Check cache first (fast path)
         if let Ok(cache) = self.combined_cache.read()
             && let Some(bitset) = cache.get(file_type)
@@ -3125,7 +3125,7 @@ mod tests {
         ] {
             let index = TraitIndex::build_filtered(&traits, &platforms);
             for ft in &types {
-                let actual: Vec<_> = index.get_applicable(ft).into_indices_static().collect();
+                let actual: Vec<_> = index.applicable(ft).into_indices_static().collect();
                 let expected: Vec<_> = traits
                     .iter()
                     .enumerate()
@@ -3164,7 +3164,7 @@ mod tests {
         ];
         let index = TraitIndex::build_filtered(&traits, &[Platform::All]);
         let applicable = |ft: RuleFileType| -> Vec<usize> {
-            index.get_applicable(&ft).into_indices_static().collect()
+            index.applicable(&ft).into_indices_static().collect()
         };
         assert_eq!(applicable(RuleFileType::Jar), vec![0]);
         assert_eq!(applicable(RuleFileType::AndroidApk), vec![0, 1]);
@@ -3179,7 +3179,7 @@ mod tests {
     fn test_trait_index_get_applicable_empty() {
         let index = TraitIndex::new();
         let applicable: Vec<usize> = index
-            .get_applicable(&RuleFileType::All)
+            .applicable(&RuleFileType::All)
             .into_indices_static()
             .collect();
         assert!(applicable.is_empty());

@@ -1,41 +1,9 @@
 //! Bounded recovery of encoded and XOR-obfuscated inline scripts in Mach-O.
 //! This is a static transform: it never executes the input.
 use super::macho_integer_tables::{RecoveredText, inline_applescript};
+use super::primitives::{rc4, unhex};
 use filefacts::ParsedFile;
 
-fn unhex(input: &[u8]) -> Option<Vec<u8>> {
-    if input.len() % 2 != 0 {
-        return None;
-    }
-    input
-        .chunks_exact(2)
-        .map(|p| {
-            let a = (p[0] as char).to_digit(16)?;
-            let b = (p[1] as char).to_digit(16)?;
-            Some(((a << 4) | b) as u8)
-        })
-        .collect()
-}
-fn rc4(data: &[u8], key: &[u8]) -> Vec<u8> {
-    let mut s = [0u8; 256];
-    for (i, v) in s.iter_mut().enumerate() {
-        *v = i as u8;
-    }
-    let mut j = 0usize;
-    for i in 0..256 {
-        j = (j + s[i] as usize + key[i % key.len()] as usize) & 255;
-        s.swap(i, j);
-    }
-    let (mut i, mut j) = (0usize, 0usize);
-    data.iter()
-        .map(|x| {
-            i = (i + 1) & 255;
-            j = (j + s[i] as usize) & 255;
-            s.swap(i, j);
-            x ^ s[(s[i] as usize + s[j] as usize) & 255]
-        })
-        .collect()
-}
 fn recover_strings(data: &[u8], base: usize) -> Vec<RecoveredText> {
     let mut keys = Vec::new();
     let mut payloads = Vec::new();
@@ -43,31 +11,28 @@ fn recover_strings(data: &[u8], base: usize) -> Vec<RecoveredText> {
     for part in data.split(|c| *c == 0) {
         let offset = pos;
         pos += part.len() + 1;
-        if !part.iter().all(u8::is_ascii_hexdigit) || part.len() % 2 != 0 {
+        if !part.iter().all(u8::is_ascii_hexdigit) || !part.len().is_multiple_of(2) {
             continue;
         }
         if (16..=128).contains(&part.len()) && keys.len() < 32 {
-            if let Some(key) = unhex(part) {
-                keys.push(key);
-            }
-        } else if (1024..=2 * 1024 * 1024).contains(&part.len()) && payloads.len() < 8 {
-            if let Some(cipher) = unhex(part) {
-                payloads.push((offset, cipher));
-            }
+            keys.extend(unhex(part));
+        } else if (1024..=2 * 1024 * 1024).contains(&part.len())
+            && payloads.len() < 8
+            && let Some(cipher) = unhex(part)
+        {
+            payloads.push((offset, cipher));
         }
     }
     let mut result = Vec::new();
     for (offset, cipher) in payloads {
         for key in &keys {
             let plain = rc4(&cipher, key);
-            if let Ok(text) = std::str::from_utf8(&plain) {
-                if inline_applescript(text).is_some() {
-                    result.push(RecoveredText {
-                        data: plain,
-                        offset: base + offset,
-                    });
-                    break;
-                }
+            if std::str::from_utf8(&plain).is_ok_and(|text| inline_applescript(text).is_some()) {
+                result.push(RecoveredText {
+                    data: plain,
+                    offset: base + offset,
+                });
+                break;
             }
         }
     }
@@ -140,10 +105,9 @@ fn recover_custom_strings(data: &[u8], base: usize) -> Vec<RecoveredText> {
         } else if (1024..=2 * 1024 * 1024).contains(&part.len())
             && payloads.len() < 8
             && part.iter().all(u8::is_ascii_hexdigit)
+            && let Some(bytes) = unhex(part)
         {
-            if let Some(bytes) = unhex(part) {
-                payloads.push((offset, bytes));
-            }
+            payloads.push((offset, bytes));
         }
     }
     let mut out = Vec::new();
@@ -374,6 +338,7 @@ pub(crate) fn recover_lcg(data: &[u8], parsed: &ParsedFile<'_>) -> Vec<Recovered
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     #[test]

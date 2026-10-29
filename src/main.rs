@@ -166,7 +166,7 @@ fn run() -> Result<()> {
     // available. Install a libc signal handler that flips a global
     // cancellation flag on SIGINT/SIGTERM so long scans drain cleanly on
     // Ctrl-C (second Ctrl-C forces exit).
-    cleave::cancellation::install_signal_handlers();
+    cli_bootstrap::install_signal_handlers();
 
     // Dump all thread backtraces on SIGUSR1 (Linux equivalent of BSD SIGINFO / Ctrl-T).
     // Attaches lldb/gdb to ourselves so every thread is reported with symbols.
@@ -259,7 +259,7 @@ fn run() -> Result<()> {
         is_validate_command,
         format,
         effective_log_file.as_deref(),
-    );
+    )?;
     log_startup(effective_log_file.as_deref(), args.verbose);
 
     // Limit concurrency to reduce peak RSS (especially during archive analysis).

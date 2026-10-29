@@ -962,10 +962,7 @@ pub(crate) fn eval_text<'a, 'b>(
         let mut evidence = Vec::new();
 
         if params.case_insensitive {
-            if let Some(match_list) = ctx
-                .get_string_exact_index_ci()
-                .get(&exact_str.to_lowercase())
-            {
+            if let Some(match_list) = ctx.string_exact_index_ci().get(&exact_str.to_lowercase()) {
                 for &idx in match_list.iter().take(MAX_EVIDENCE_PER_TRAIT) {
                     let s = &ctx.report.strings[idx as usize];
                     if skip_decoded && !s.encoding_chain.is_empty() {
@@ -988,7 +985,7 @@ pub(crate) fn eval_text<'a, 'b>(
                     }
                 }
             }
-        } else if let Some(match_list) = ctx.get_string_exact_index().get(exact_str.as_str()) {
+        } else if let Some(match_list) = ctx.string_exact_index().get(exact_str.as_str()) {
             for &idx in match_list.iter().take(MAX_EVIDENCE_PER_TRAIT) {
                 let s = &ctx.report.strings[idx as usize];
                 if skip_decoded && !s.encoding_chain.is_empty() {

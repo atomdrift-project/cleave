@@ -1521,7 +1521,7 @@ pub(crate) enum Condition {
         namespace: Option<String>,
     },
 
-    /// Match syscalls detected via radare2 binary analysis
+    /// Match syscalls detected via rizin binary analysis
     /// For detecting direct syscall usage patterns in ELF/Mach-O binaries
     Syscall {
         /// Syscall name(s) to match (e.g., "socket", "connect", "execve")

@@ -948,7 +948,7 @@ fn options_hash_with(
         yara.skip,
         yara.builtin_only,
         hex::encode(&zip_passwords[..8]),
-        settings.radare2,
+        settings.rizin,
         settings.upx,
         platforms_str,
         settings.min_hostile_precision,
@@ -1593,7 +1593,7 @@ mod tests {
         };
         assert_ne!(options_hash(&a, &settings), options_hash(&a, &no_upx));
         let no_rizin = Settings {
-            radare2: false,
+            rizin: false,
             ..Settings::default()
         };
         assert_ne!(options_hash(&a, &settings), options_hash(&a, &no_rizin));

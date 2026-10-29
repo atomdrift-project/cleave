@@ -540,7 +540,7 @@ impl CapabilityMapper {
         let applicable: Vec<usize> = self
             .match_indexes()
             .trait_index
-            .get_applicable(&file_type)
+            .applicable(&file_type)
             .into_indices_static()
             .collect();
         let list: Vec<usize> = applicable

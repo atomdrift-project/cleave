@@ -1,5 +1,6 @@
 //! Recover PE members from a code-relative RC4 table envelope as inert data.
 //! No specimen code or Windows APIs are executed.
+use super::primitives::{rc4, u16_le, u32_le, u64_le};
 
 pub(crate) struct Member {
     pub(crate) offset: usize,
@@ -16,52 +17,37 @@ struct Layout {
     base: u64,
     sections: Vec<Section>,
 }
-fn u16at(b: &[u8], at: usize) -> Option<u16> {
-    Some(u16::from_le_bytes(
-        b.get(at..at.checked_add(2)?)?.try_into().ok()?,
-    ))
-}
-fn u32at(b: &[u8], at: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(
-        b.get(at..at.checked_add(4)?)?.try_into().ok()?,
-    ))
-}
-fn u64at(b: &[u8], at: usize) -> Option<u64> {
-    Some(u64::from_le_bytes(
-        b.get(at..at.checked_add(8)?)?.try_into().ok()?,
-    ))
-}
 fn layout(b: &[u8]) -> Option<Layout> {
     if b.get(..2)? != b"MZ" {
         return None;
     }
-    let pe = u32at(b, 60)? as usize;
+    let pe = u32_le(b, 60)? as usize;
     if b.get(pe..pe.checked_add(4)?)? != b"PE\0\0" {
         return None;
     }
-    let n = usize::from(u16at(b, pe.checked_add(6)?)?);
+    let n = usize::from(u16_le(b, pe.checked_add(6)?)?);
     if !(1..=96).contains(&n) {
         return None;
     }
     let opt = pe.checked_add(24)?;
-    let base = match u16at(b, opt)? {
-        0x20b => u64at(b, opt.checked_add(24)?)?,
-        0x10b => u64::from(u32at(b, opt.checked_add(28)?)?),
+    let base = match u16_le(b, opt)? {
+        0x20b => u64_le(b, opt.checked_add(24)?)?,
+        0x10b => u64::from(u32_le(b, opt.checked_add(28)?)?),
         _ => return None,
     };
-    let first = opt.checked_add(usize::from(u16at(b, pe.checked_add(20)?)?))?;
+    let first = opt.checked_add(usize::from(u16_le(b, pe.checked_add(20)?)?))?;
     let mut sections = Vec::new();
     for i in 0..n {
         let p = first.checked_add(i.checked_mul(40)?)?;
-        let va = u32at(b, p.checked_add(12)?)?;
-        let size = u32at(b, p.checked_add(16)?)? as usize;
-        let off = u32at(b, p.checked_add(20)?)? as usize;
+        let va = u32_le(b, p.checked_add(12)?)?;
+        let size = u32_le(b, p.checked_add(16)?)? as usize;
+        let off = u32_le(b, p.checked_add(20)?)? as usize;
         b.get(off..off.checked_add(size)?)?;
         sections.push(Section {
             va,
             off,
             size,
-            exec: u32at(b, p.checked_add(36)?)? & 0x20000000 != 0,
+            exec: u32_le(b, p.checked_add(36)?)? & 0x20000000 != 0,
         });
     }
     Some(Layout { base, sections })
@@ -86,29 +72,8 @@ impl Layout {
         })
     }
 }
-fn rc4(data: &[u8], key: &[u8]) -> Vec<u8> {
-    let mut s = [0u8; 256];
-    for (i, v) in s.iter_mut().enumerate() {
-        *v = i as u8;
-    }
-    let mut j = 0u8;
-    for i in 0..256 {
-        j = j.wrapping_add(s[i]).wrapping_add(key[i % key.len()]);
-        s.swap(i, usize::from(j));
-    }
-    let mut i = 0u8;
-    j = 0;
-    data.iter()
-        .map(|b| {
-            i = i.wrapping_add(1);
-            j = j.wrapping_add(s[usize::from(i)]);
-            s.swap(usize::from(i), usize::from(j));
-            b ^ s[usize::from(s[usize::from(i)].wrapping_add(s[usize::from(j)]))]
-        })
-        .collect()
-}
 fn rel_target(b: &[u8], p: usize, image: &Layout) -> Option<u64> {
-    let disp = i64::from(u32at(b, p.checked_add(3)?)? as i32);
+    let disp = i64::from(u32_le(b, p.checked_add(3)?)? as i32);
     image.rva(p)?.checked_add(7)?.checked_add_signed(disp)
 }
 pub(crate) fn recover(b: &[u8]) -> Vec<Member> {
@@ -133,7 +98,7 @@ pub(crate) fn recover(b: &[u8]) -> Vec<Member> {
             {
                 continue;
             }
-            let Some(key_rva) = u32at(window, 8) else {
+            let Some(key_rva) = u32_le(window, 8) else {
                 continue;
             };
             let Some(key_at) = image.offset(u64::from(key_rva), 16) else {
@@ -171,10 +136,10 @@ pub(crate) fn recover(b: &[u8]) -> Vec<Member> {
                 let mut total = 0usize;
                 for i in 0..count {
                     let entry = table + i * 16;
-                    let Some(address) = u64at(b, entry) else {
+                    let Some(address) = u64_le(b, entry) else {
                         break;
                     };
-                    let Some(size) = u32at(b, entry + 8).map(|n| n as usize) else {
+                    let Some(size) = u32_le(b, entry + 8).map(|n| n as usize) else {
                         break;
                     };
                     if !(512..=32 * 1024 * 1024).contains(&size)
@@ -209,13 +174,6 @@ pub(crate) fn recover(b: &[u8]) -> Vec<Member> {
 )]
 mod tests {
     use super::*;
-    #[test]
-    fn rc4_known_vector() {
-        assert_eq!(
-            rc4(b"Plaintext", b"Key"),
-            vec![0xbb, 0xf3, 0x16, 0xe8, 0xd9, 0x40, 0xaf, 0x0a, 0xd3]
-        );
-    }
     #[test]
     fn rejects_non_images() {
         for b in [&[][..], &[0; 200][..], b"MZ not a PE"] {

@@ -43,7 +43,7 @@ pub struct AnalysisInput<'a> {
     /// Detected file type
     pub file_type: FileType,
 
-    /// Skip deep radare2/rizin analysis for this input.
+    /// Skip deep rizin analysis for this input.
     pub skip_rizin: bool,
 
     /// Optional SHA256 hash (memoized if computed during extraction)
@@ -198,14 +198,14 @@ impl<'a> AnalysisInput<'a> {
         crate::analysis_context::AnalysisContext::open_with(options, self.path, self.data)
     }
 
-    /// Disable deep radare2/rizin analysis for this input.
+    /// Disable deep rizin analysis for this input.
     #[must_use]
     pub fn with_skip_rizin(mut self) -> Self {
         self.skip_rizin = true;
         self
     }
 
-    /// Conditionally disable deep radare2/rizin analysis for this input.
+    /// Conditionally disable deep rizin analysis for this input.
     #[must_use]
     pub fn with_skip_rizin_if(mut self, skip_rizin: bool) -> Self {
         self.skip_rizin = skip_rizin;

@@ -1,5 +1,6 @@
 //! Recover PE members from a code-relative RC4 table envelope as inert data.
 //! No specimen code or Windows APIs are executed.
+use super::primitives::{u16_le, u32_le, u64_le};
 
 pub(crate) struct Member {
     pub(crate) offset: usize,
@@ -15,52 +16,37 @@ struct Section {
 pub(super) struct Layout {
     sections: Vec<Section>,
 }
-fn u16at(b: &[u8], at: usize) -> Option<u16> {
-    Some(u16::from_le_bytes(
-        b.get(at..at.checked_add(2)?)?.try_into().ok()?,
-    ))
-}
-fn u32at(b: &[u8], at: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(
-        b.get(at..at.checked_add(4)?)?.try_into().ok()?,
-    ))
-}
-fn u64at(b: &[u8], at: usize) -> Option<u64> {
-    Some(u64::from_le_bytes(
-        b.get(at..at.checked_add(8)?)?.try_into().ok()?,
-    ))
-}
 pub(super) fn layout(b: &[u8]) -> Option<Layout> {
     if b.get(..2)? != b"MZ" {
         return None;
     }
-    let pe = u32at(b, 60)? as usize;
+    let pe = u32_le(b, 60)? as usize;
     if b.get(pe..pe.checked_add(4)?)? != b"PE\0\0" {
         return None;
     }
-    let n = usize::from(u16at(b, pe.checked_add(6)?)?);
+    let n = usize::from(u16_le(b, pe.checked_add(6)?)?);
     if !(1..=96).contains(&n) {
         return None;
     }
     let opt = pe.checked_add(24)?;
-    let _base = match u16at(b, opt)? {
-        0x20b => u64at(b, opt.checked_add(24)?)?,
-        0x10b => u64::from(u32at(b, opt.checked_add(28)?)?),
+    let _base = match u16_le(b, opt)? {
+        0x20b => u64_le(b, opt.checked_add(24)?)?,
+        0x10b => u64::from(u32_le(b, opt.checked_add(28)?)?),
         _ => return None,
     };
-    let first = opt.checked_add(usize::from(u16at(b, pe.checked_add(20)?)?))?;
+    let first = opt.checked_add(usize::from(u16_le(b, pe.checked_add(20)?)?))?;
     let mut sections = Vec::new();
     for i in 0..n {
         let p = first.checked_add(i.checked_mul(40)?)?;
-        let va = u32at(b, p.checked_add(12)?)?;
-        let size = u32at(b, p.checked_add(16)?)? as usize;
-        let off = u32at(b, p.checked_add(20)?)? as usize;
+        let va = u32_le(b, p.checked_add(12)?)?;
+        let size = u32_le(b, p.checked_add(16)?)? as usize;
+        let off = u32_le(b, p.checked_add(20)?)? as usize;
         b.get(off..off.checked_add(size)?)?;
         sections.push(Section {
             va,
             off,
             size,
-            exec: u32at(b, p.checked_add(36)?)? & 0x20000000 != 0,
+            exec: u32_le(b, p.checked_add(36)?)? & 0x20000000 != 0,
         });
     }
     Some(Layout { sections })
@@ -129,7 +115,7 @@ pub(crate) fn recover(data: &[u8]) -> Option<Member> {
                 let key_load = key_code
                     .windows(5)
                     .position(|v| v == [0x42, 0x0f, 0xb6, 0x8c, 0x2a])?;
-                let key_rva = u32at(key_code, key_load + 5)?;
+                let key_rva = u32_le(key_code, key_load + 5)?;
                 let key_off = image.offset(u64::from(key_rva), 32)?;
                 let key: Vec<u8> = data[key_off..key_off + 32]
                     .iter()
@@ -137,20 +123,20 @@ pub(crate) fn recover(data: &[u8]) -> Option<Member> {
                     .collect();
                 let size_code = post.get(key_at + 64..)?;
                 let size_at = size_code.windows(2).position(|v| v == [0x41, 0xb8])?;
-                let size = u32at(size_code, size_at + 2)? as usize;
+                let size = u32_le(size_code, size_at + 2)? as usize;
                 if !(64..=32 * 1024 * 1024).contains(&size) {
                     return None;
                 }
                 let tables: Vec<usize> = [4, 12, 20]
                     .into_iter()
-                    .map(|n| image.offset(u64::from(u32at(code, at + n)?), count.checked_mul(4)?))
+                    .map(|n| image.offset(u64::from(u32_le(code, at + n)?), count.checked_mul(4)?))
                     .collect::<Option<_>>()?;
                 let keys_off = image.offset(keys_rva, count)?;
                 let mut fragments = Vec::new();
                 for i in 0..count {
-                    let src = u32at(data, tables[0] + i * 4)? as usize;
-                    let dst = u32at(data, tables[1] + i * 4)? as usize;
-                    let n = u32at(data, tables[2] + i * 4)? as usize;
+                    let src = u32_le(data, tables[0] + i * 4)? as usize;
+                    let dst = u32_le(data, tables[1] + i * 4)? as usize;
+                    let n = u32_le(data, tables[2] + i * 4)? as usize;
                     if n == 0 || dst.checked_add(n)? > size {
                         return None;
                     }

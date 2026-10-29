@@ -1,44 +1,35 @@
 //! Recover PE data from a bounded batch self-read / certutil hex envelope.
 //! Recovery records content provenance; it does not prove the batch executes.
+use super::primitives::{u16_le, u32_le};
 
 pub(crate) struct Recovered {
     pub(crate) offset: usize,
     pub(crate) data: Vec<u8>,
 }
 
-fn word(b: &[u8], p: usize) -> Option<u16> {
-    Some(u16::from_le_bytes(
-        b.get(p..p.checked_add(2)?)?.try_into().ok()?,
-    ))
-}
-fn dword(b: &[u8], p: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(
-        b.get(p..p.checked_add(4)?)?.try_into().ok()?,
-    ))
-}
 fn valid_pe(b: &[u8]) -> bool {
     (|| -> Option<()> {
         if b.len() < 512 || b.get(..2)? != b"MZ" {
             return None;
         }
-        let pe = dword(b, 60)? as usize;
+        let pe = u32_le(b, 60)? as usize;
         if b.get(pe..pe.checked_add(4)?)? != b"PE\0\0" {
             return None;
         }
-        let sections = usize::from(word(b, pe.checked_add(6)?)?);
+        let sections = usize::from(u16_le(b, pe.checked_add(6)?)?);
         if !(1..=96).contains(&sections) {
             return None;
         }
         let opt = pe.checked_add(24)?;
-        if !matches!(word(b, opt)?, 0x10b | 0x20b) {
+        if !matches!(u16_le(b, opt)?, 0x10b | 0x20b) {
             return None;
         }
-        let first = opt.checked_add(usize::from(word(b, pe.checked_add(20)?)?))?;
+        let first = opt.checked_add(usize::from(u16_le(b, pe.checked_add(20)?)?))?;
         for i in 0..sections {
             let at = first.checked_add(i.checked_mul(40)?)?;
             b.get(at..at.checked_add(40)?)?;
-            let size = dword(b, at.checked_add(16)?)? as usize;
-            let off = dword(b, at.checked_add(20)?)? as usize;
+            let size = u32_le(b, at.checked_add(16)?)? as usize;
+            let off = u32_le(b, at.checked_add(20)?)? as usize;
             if size != 0 {
                 b.get(off..off.checked_add(size)?)?;
             }

@@ -2759,7 +2759,7 @@ impl CompositeTrait {
     /// so they must be a sound lower bound:
     /// - every `all:` trait reference is mandatory
     /// - `any:` references are only mandatory when the rule requires all of them
-    fn get_required_trait_ids(&self) -> Vec<String> {
+    fn required_trait_ids(&self) -> Vec<String> {
         let mut ids = Vec::new();
 
         if let Some(conds) = &self.all {
@@ -2798,7 +2798,7 @@ impl CompositeTrait {
         &mut self,
         trait_id_map: &std::collections::HashMap<String, usize>,
     ) {
-        let dependent_ids = self.get_required_trait_ids();
+        let dependent_ids = self.required_trait_ids();
         self.required_trait_indices = dependent_ids
             .into_iter()
             .filter_map(|id| trait_id_map.get(&id).copied())

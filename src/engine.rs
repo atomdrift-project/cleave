@@ -34,7 +34,7 @@ pub(crate) struct Settings {
     pub(crate) upx: bool,
     /// Recover symbols and code metrics by disassembling native binaries with
     /// rizin (filefacts' per-file `OpenOptions::rizin`).
-    pub(crate) radare2: bool,
+    pub(crate) rizin: bool,
     /// filefacts' `OpenOptions::rizin_timeout`; `None` is its default.
     pub(crate) rizin_timeout: Option<std::time::Duration>,
     pub(crate) rizin_retry_timeout: Option<std::time::Duration>,
@@ -62,7 +62,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             upx: true,
-            radare2: true,
+            rizin: true,
             rizin_timeout: None,
             rizin_retry_timeout: None,
             rizin_max_bytes: None,
@@ -84,7 +84,7 @@ impl Default for Settings {
 /// it on and cleave's own cache is in use.
 pub(crate) fn filefacts_options(settings: &Settings) -> filefacts::OpenOptions<'static> {
     let mut options = filefacts::OpenOptions::new()
-        .rizin(settings.radare2)
+        .rizin(settings.rizin)
         .rizin_native_arch_only(settings.rizin_native_arch_only)
         .cache(!crate::cache::skip_cache() && filefacts::cache::env_override().unwrap_or(false));
     if let Some(timeout) = settings.rizin_timeout {
@@ -213,8 +213,8 @@ impl Engine {
 
     /// Whether native binaries are disassembled with rizin.
     #[must_use]
-    pub(crate) fn radare2(&self) -> bool {
-        self.0.settings.radare2
+    pub(crate) fn rizin(&self) -> bool {
+        self.0.settings.rizin
     }
 
     /// The filefacts options this engine's analyses parse files with. Per
@@ -256,13 +256,13 @@ impl Engine {
 ///
 /// Every `analyze_*` method takes the per-call inputs from `options`: zip
 /// passwords, cancellation, size limits, and phase
-/// tracking. What the engine was built with (rules, YARA, UPX, radare2 and its
+/// tracking. What the engine was built with (rules, YARA, UPX, rizin and its
 /// limits, platforms, precision thresholds, member folding) comes from the
 /// engine, and the fields of `options` that describe it are not consulted.
 impl Engine {
     /// The engine `options` describe: the process's shared rules and YARA
     /// engine for them (loaded on first use, then reused), with `options`'
-    /// YARA, UPX and radare2 settings and full member retention. Build one at startup
+    /// YARA, UPX and rizin settings and full member retention. Build one at startup
     /// and analyze every file with it.
     ///
     /// Only `options` count: unlike the `AnalysisOptions` free functions, the

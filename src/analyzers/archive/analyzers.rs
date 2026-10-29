@@ -1920,8 +1920,8 @@ impl ArchiveAnalyzer {
         // rizin facts) is never served to an analysis that runs rizin.
         let member_settings = match Self::archive_member_rizin_skip_reason(relative_path, file_type)
         {
-            Some(_) if self.engine.radare2() => crate::engine::Settings {
-                radare2: false,
+            Some(_) if self.engine.rizin() => crate::engine::Settings {
+                rizin: false,
                 ..self.engine.settings().clone()
             },
             _ => self.engine.settings().clone(),
@@ -2490,10 +2490,10 @@ impl ArchiveAnalyzer {
             // binary another thread was parsing (measured: an ARM ELF lost
             // `binary.leaf_function_count`). The analyzer reuses this
             // parse (`with_parsed_ctx`) rather than opening the member again.
-            let member_rizin = skip_rizin_reason.is_none() && self.engine.radare2();
+            let member_rizin = skip_rizin_reason.is_none() && self.engine.rizin();
             let member_ctx = Some(crate::analysis_context::AnalysisContext::open_with(
                 crate::engine::filefacts_options(&crate::engine::Settings {
-                    radare2: member_rizin,
+                    rizin: member_rizin,
                     ..self.engine.settings().clone()
                 }),
                 logical_path,

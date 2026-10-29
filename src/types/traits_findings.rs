@@ -487,9 +487,9 @@ pub(crate) const MAX_OFFSETS_IN_JSON: usize = 8;
 /// by merging their offsets into a single Evidence with multiple locations.
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct Evidence {
-    /// Detection method (symbol, yara, tree-sitter, radare2, entropy, magic, etc.)
+    /// Detection method (symbol, yara, tree-sitter, rizin, entropy, magic, etc.)
     pub method: String,
-    /// Source tool (goblin, yara-x, radare2, tree-sitter-bash, etc.)
+    /// Source tool (goblin, yara-x, rizin, tree-sitter-bash, etc.)
     #[serde(skip_serializing_if = "String::is_empty", default)]
     pub source: String,
     /// Value discovered (symbol name, pattern match, etc.) - truncated to 4KB on serialization

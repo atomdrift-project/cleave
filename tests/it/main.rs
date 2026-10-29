@@ -81,4 +81,3 @@ mod yaml_capability_filtering_test;
 mod yara_filtering_test;
 mod yara_init_no_deadlock;
 mod yara_rule_source_test;
-

@@ -758,7 +758,7 @@ pub(crate) fn find_pathological_regex_patterns(
         .map(|&(pattern, case_insensitive)| {
             let run = || probe(pattern, case_insensitive, hay);
             match &facts {
-                Some(facts) => facts.get_or_compute(
+                Some(facts) => facts.memoized(
                     super::facts_cache::key(
                         "regex-explosion",
                         &[

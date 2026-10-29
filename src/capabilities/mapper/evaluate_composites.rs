@@ -1034,7 +1034,7 @@ impl super::CapabilityMapper {
         let mut container_findings: Vec<Finding> = self
             .match_indexes()
             .trait_index
-            .get_applicable(&rule_file_type)
+            .applicable(&rule_file_type)
             .into_indices_static()
             .filter_map(|idx| self.trait_definitions[idx].evaluate(&parent_trait_ctx))
             .filter(|f| !seen_ids.contains(f.id.as_str()))

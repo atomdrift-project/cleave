@@ -87,7 +87,7 @@ pub struct MatchRequest<'a> {
 /// # Arguments
 ///
 /// * `request` - What to search for, how, and where
-/// * `disabled` - Components `--disable` turned off (UPX unpacking and radare2 apply here)
+/// * `disabled` - Components `--disable` turned off (UPX unpacking and rizin apply here)
 /// * `platforms` - Platform filters for evaluation
 /// * `min_hostile_precision` - Minimum precision for hostile rules
 /// * `min_suspicious_precision` - Minimum precision for suspicious rules
@@ -1725,7 +1725,7 @@ pub fn run(
                 out.push_str(&format!("\n{}\n", "MATCHED".green().bold()));
 
                 // Try to extract and display the actual metric value
-                if let Some(val) = types::scores::get_metric_value(report, field) {
+                if let Some(val) = types::scores::metric_value(report, field) {
                     out.push_str(&format!("  Current value: {:.2}\n", val));
                 }
 
@@ -1745,7 +1745,7 @@ pub fn run(
 
                 // Show current value for debugging
                 {
-                    let value = types::scores::get_metric_value(report, field);
+                    let value = types::scores::metric_value(report, field);
                     if let Some(val) = value {
                         out.push_str(&format!("  Current value: {:.2}\n", val));
                         if let Some(min) = value_min

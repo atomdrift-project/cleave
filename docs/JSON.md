@@ -284,7 +284,7 @@ that machine learning can read raw traits while humans read findings.
 | `offset`   | `offset`   | hex string       | File offset, e.g. `"0x4120"`. Omitted if unknown.        |
 | `encoding` | `encoding` | string           | `utf16le`, `utf16be`. Omitted for `utf8` / `ascii`.      |
 | `section`  | `section`  | string           | Binary section: `.text`, `.data`, `.rodata`. Omitted if unknown. |
-| `source`   | `source`   | string           | Discovery tool: `stng`, `goblin`, `radare2`, `yara-x`, `tree-sitter-*`. |
+| `source`   | `source`   | string           | Discovery tool: `stng`, `goblin`, `rizin`, `yara-x`, `tree-sitter-*`. |
 
 ## `Finding`
 
@@ -312,7 +312,7 @@ backward compatibility; output always uses `conf`.
 
 | JSON       | Type            | Meaning                                                                  |
 | ---------- | --------------- | ------------------------------------------------------------------------ |
-| `method`   | string          | Detection method: `symbol`, `yara`, `tree-sitter`, `radare2`, `entropy`, `magic`. |
+| `method`   | string          | Detection method: `symbol`, `yara`, `tree-sitter`, `rizin`, `entropy`, `magic`. |
 | `source`   | string          | Tool name. Omitted if empty.                                             |
 | `value`    | string          | Discovered value: symbol name, matched substring. Truncated to 4 KiB.    |
 | `location` | string          | Context, e.g. `import` or `archive.zip!!inner/lib.so`. Omitted if unset. |
@@ -350,7 +350,7 @@ These appear when the input is a compiled binary.
 ### `Function` (`src/types/binary.rs:12`)
 
 `name`, `offset` (hex string), `size`, `complexity` (cyclomatic),
-`calls` (array of names), `source` (`radare2` / `tree-sitter`),
+`calls` (array of names), `source` (`rizin` / `tree-sitter`),
 `control_flow`, `instruction_analysis`, `register_usage`, `constants`,
 `properties`, `signature`, `nesting`, `call_patterns`. All optional
 fields are omitted when absent.

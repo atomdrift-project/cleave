@@ -239,12 +239,12 @@ pub(crate) fn extract_function_name<'a>(
 
     if kind == "assignment_expression" {
         let left = node.child_by_field_name("left")?;
-        return get_full_identifier(&left, source);
+        return full_identifier(&left, source);
     }
 
     if kind == "variable_declarator" {
         let name = node.child_by_field_name("name")?;
-        return get_full_identifier(&name, source);
+        return full_identifier(&name, source);
     }
 
     // For call expressions, the function being called is usually the first child or
@@ -255,15 +255,15 @@ pub(crate) fn extract_function_name<'a>(
         .or_else(|| node.child_by_field_name("method"))
         .or_else(|| node.child(0))?;
 
-    get_full_identifier(&callee, source)
+    full_identifier(&callee, source)
 }
 
 /// Recursively extract a full identifier from member expressions (e.g., "os.Open")
-fn get_full_identifier<'a>(node: &tree_sitter::Node<'a>, source: &[u8]) -> Option<String> {
-    get_full_identifier_bounded(node, source, 0)
+fn full_identifier<'a>(node: &tree_sitter::Node<'a>, source: &[u8]) -> Option<String> {
+    full_identifier_bounded(node, source, 0)
 }
 
-fn get_full_identifier_bounded<'a>(
+fn full_identifier_bounded<'a>(
     node: &tree_sitter::Node<'a>,
     source: &[u8],
     depth: usize,
@@ -316,8 +316,8 @@ fn get_full_identifier_bounded<'a>(
             .or_else(|| node.child(node.child_count().saturating_sub(1)))?;
 
         if let (Some(obj_name), Some(mut prop_name)) = (
-            get_full_identifier_bounded(&object, source, depth + 1),
-            get_full_identifier_bounded(&property, source, depth + 1),
+            full_identifier_bounded(&object, source, depth + 1),
+            full_identifier_bounded(&property, source, depth + 1),
         ) {
             // Clean up property name if it's a string literal from a subscript
             if let Some(stripped) = prop_name
@@ -342,7 +342,7 @@ fn get_full_identifier_bounded<'a>(
             .or_else(|| node.child_by_field_name("callee"))
             .or_else(|| node.child_by_field_name("method"))
             .or_else(|| node.child(0))?;
-        return get_full_identifier_bounded(&callee, source, depth + 1);
+        return full_identifier_bounded(&callee, source, depth + 1);
     }
 
     None

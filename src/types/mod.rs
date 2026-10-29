@@ -115,9 +115,6 @@ pub(crate) use code_structure::{
     ShellIdioms, SourceCodeMetrics,
 };
 
-#[allow(unused_imports)]
-pub(crate) use scores::EncodedMetrics;
-
 #[cfg(test)]
 mod tests;
 

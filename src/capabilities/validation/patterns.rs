@@ -911,7 +911,7 @@ pub(crate) fn find_memory_hungry_regex_patterns(
                 }
             };
             match &facts {
-                Some(facts) => facts.get_or_compute(
+                Some(facts) => facts.memoized(
                     super::facts_cache::key(
                         "regex-memory",
                         &[pattern.as_bytes(), &[u8::from(case_insensitive)]],
@@ -1650,7 +1650,7 @@ fn find_uncompilable_ast_queries_with_parallel(
                     filefacts::validate_source_query(&language, &query).map_err(|e| e.to_string())
                 };
                 let outcome = match &facts {
-                    Some(facts) => facts.get_or_compute(
+                    Some(facts) => facts.memoized(
                         super::facts_cache::key(
                             "ast-query-v2",
                             &[language.as_bytes(), query.as_bytes()],
@@ -1705,7 +1705,7 @@ fn find_uncompilable_ast_queries_with_parallel(
                     match &facts {
                         // `-v2`: filefacts 2 reworded these errors, and a
                         // verdict cached by an older build carries the old text.
-                        Some(facts) => facts.get_or_compute(
+                        Some(facts) => facts.memoized(
                             super::facts_cache::key(
                                 "ast-query-v2",
                                 &[lang.as_bytes(), query.as_bytes()],

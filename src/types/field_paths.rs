@@ -35,9 +35,7 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
 
     let mut paths = HashSet::new();
 
-    use super::scores::{
-        EncodedLanguageMetrics, EncodedMetrics, ObfuscationScore, PackingScore, SupplyChainScore,
-    };
+    use super::scores::{ObfuscationScore, PackingScore, SupplyChainScore};
 
     // Everything filefacts can emit, declared at its emission sites and
     // enumerated through `known_metrics()`. A hand-copied manifest would
@@ -49,16 +47,6 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
     let (catalog, _families) = filefacts::known_metrics();
     for field in catalog {
         paths.insert((*field).to_string());
-    }
-    for field in EncodedMetrics::valid_field_paths() {
-        if !matches!(field, "python" | "javascript" | "php" | "shell") {
-            paths.insert(format!("encoded.{}", field));
-        }
-    }
-    for lang in ["python", "javascript", "php", "shell"] {
-        for field in EncodedLanguageMetrics::valid_field_paths() {
-            paths.insert(format!("encoded.{}.{}", lang, field));
-        }
     }
 
     // Per-language metric structs (PythonMetrics / JavaScriptMetrics /
@@ -212,9 +200,7 @@ pub(crate) fn all_metric_descriptions() -> std::collections::HashMap<String, &'s
         };
     }
 
-    use super::scores::{
-        EncodedLanguageMetrics, EncodedMetrics, ObfuscationScore, PackingScore, SupplyChainScore,
-    };
+    use super::scores::{ObfuscationScore, PackingScore, SupplyChainScore};
 
     // Source-text metric descriptions retired with the cleave→filefacts
     // migration. Trait-engine field descriptions for `text.*` /
@@ -225,20 +211,6 @@ pub(crate) fn all_metric_descriptions() -> std::collections::HashMap<String, &'s
     add!("obfuscation", ObfuscationScore);
     add!("packing", PackingScore);
     add!("supply_chain", SupplyChainScore);
-
-    // EncodedMetrics (skip nested struct fields, use sub-prefix for language variants)
-    for (field, desc) in EncodedMetrics::field_descriptions() {
-        if !desc.is_empty() && !matches!(field, "python" | "javascript" | "php" | "shell") {
-            map.insert(format!("encoded.{}", field), desc);
-        }
-    }
-    for lang in ["python", "javascript", "php", "shell"] {
-        for (field, desc) in EncodedLanguageMetrics::field_descriptions() {
-            if !desc.is_empty() {
-                map.insert(format!("encoded.{}.{}", lang, field), desc);
-            }
-        }
-    }
 
     // Image metrics (image.*, jpeg.*, png.*) live in
     // `filefacts_metrics` rather than typed marker structs.

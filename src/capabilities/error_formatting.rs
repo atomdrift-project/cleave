@@ -10,8 +10,7 @@ use std::path::Path;
 pub(crate) fn enhance_yaml_error(error: &Error, file_path: &Path, yaml_content: &str) -> String {
     let error_string = format!("{:#}", error);
 
-    // Extract line and column from serde_yaml error messages
-    // Pattern: "at line X column Y"
+    // Extract line and column from the YAML error message: "line X column Y".
     let (line_num, col_num) = extract_line_column(&error_string);
 
     let mut enhanced = String::new();
@@ -44,7 +43,7 @@ pub(crate) fn enhance_yaml_error(error: &Error, file_path: &Path, yaml_content: 
 /// Extract line and column numbers from error message
 fn extract_line_column(error_msg: &str) -> (Option<usize>, Option<usize>) {
     static LINE_REGEX: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
-    let regex = LINE_REGEX.get_or_init(|| regex::Regex::new(r"at line (\d+) column (\d+)").ok());
+    let regex = LINE_REGEX.get_or_init(|| regex::Regex::new(r"\bline (\d+) column (\d+)").ok());
     if let Some(caps) = regex.as_ref().and_then(|regex| regex.captures(error_msg)) {
         let line = caps.get(1).and_then(|m| m.as_str().parse().ok());
         let col = caps.get(2).and_then(|m| m.as_str().parse().ok());
@@ -413,7 +412,7 @@ fn invalid_is_validator(context: &str) -> Option<(String, String)> {
         if value.is_empty() {
             continue;
         }
-        if let Err(err) = serde_yaml::from_str::<StringValidator>(value) {
+        if let Err(err) = crate::yaml::from_str::<StringValidator>(value) {
             let detail = err.to_string();
             let detail = detail
                 .split_once(" at line")
@@ -671,7 +670,7 @@ mod tests {
 
     #[test]
     fn test_extract_line_column() {
-        let error = "some error at line 149 column 5";
+        let error = "error: line 149 column 5: unknown field `bogus`";
         let (line, col) = extract_line_column(error);
         assert_eq!(line, Some(149));
         assert_eq!(col, Some(5));

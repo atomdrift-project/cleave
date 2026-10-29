@@ -89,7 +89,7 @@ mod time_imp {
     /// stopping workers. Off, `enter` is one cached flag load and a return.
     pub(super) fn enabled() -> bool {
         static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        *ON.get_or_init(|| std::env::var("CLEAVE_PHASE_STATS").is_ok_and(|v| v == "1"))
+        *ON.get_or_init(|| crate::env::flag("CLEAVE_PHASE_STATS"))
     }
 
     struct Ctx {

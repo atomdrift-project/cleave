@@ -44,6 +44,9 @@ fn import_criticality(ecosystem: &str, target: &str) -> Criticality {
         ])
         .case_insensitive(true)
         .build()
+        .inspect_err(|e| {
+            tracing::error!(error = %e, "notable-import patterns failed to compile; imports report as baseline");
+        })
         .ok()
     });
     // A relative module named requests is not evidence of importing requests.
@@ -309,6 +312,20 @@ mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
     use crate::capabilities::CapabilityMapper;
+
+    /// The patterns are literals, so a build failure is a bug that would
+    /// otherwise only show as every import reporting baseline.
+    #[test]
+    fn notable_import_patterns_compile() {
+        assert_eq!(
+            import_criticality("python", "requests"),
+            Criticality::Notable
+        );
+        assert_eq!(
+            import_criticality("python", "./requests"),
+            Criticality::Baseline
+        );
+    }
     use crate::composite_rules::{EvaluationContext, FileType};
     use crate::types::TargetInfo;
 

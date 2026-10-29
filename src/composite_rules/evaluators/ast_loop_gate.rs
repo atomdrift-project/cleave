@@ -20,7 +20,7 @@ pub(crate) struct RequiredSubqueries {
 impl RequiredSubqueries {
     pub(crate) fn enabled() -> bool {
         static ENABLED: OnceLock<bool> = OnceLock::new();
-        *ENABLED.get_or_init(|| std::env::var("CLEAVE_AST_LOOP_GATE").as_deref() != Ok("0"))
+        *ENABLED.get_or_init(|| crate::env::bool_var("CLEAVE_AST_LOOP_GATE").unwrap_or(true))
     }
 
     pub(crate) fn of(language: &Language, query: &Query, source: &str) -> Self {

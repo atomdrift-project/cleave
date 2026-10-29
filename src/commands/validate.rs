@@ -97,6 +97,39 @@ pub fn run_soft(format: &OutputFormat, exclude: Option<&str>, verbose: bool) -> 
     )
 }
 
+/// Note, without failing, how many conditions use a `type:` spelling slated for
+/// retirement, so the rule set can move off them before support is removed.
+fn report_retiring_condition_types(traits_dir: &Path) {
+    use crate::composite_rules::condition::{
+        RETIRING_CONDITION_TYPES, count_retiring_condition_types,
+    };
+    let Ok(sources) = crate::rule_sources::shared(traits_dir) else {
+        return;
+    };
+    let yaml = sources
+        .files()
+        .iter()
+        .filter(|f| {
+            f.relative_path
+                .extension()
+                .is_some_and(|e| e == "yaml" || e == "yml")
+        })
+        .map(|f| &f.bytes[..]);
+    let counts = count_retiring_condition_types(yaml);
+    let uses: Vec<String> = RETIRING_CONDITION_TYPES
+        .iter()
+        .zip(&counts)
+        .filter(|(_, n)| **n > 0)
+        .map(|((old, new), n)| format!("type: {old} ({n}) -> {new}"))
+        .collect();
+    if !uses.is_empty() {
+        eprintln!(
+            "note: condition spellings slated for retirement: {}",
+            uses.join("; ")
+        );
+    }
+}
+
 /// Run validation with the CLI's slow-rule threshold. The environment soft-mode
 /// toggle also applies to callers using the default (strict) mode.
 pub fn run_with_options(
@@ -119,6 +152,7 @@ pub fn run_with_options(
     validation_controls::set_soft_validation_mode(soft);
     let targets = collect_targets()?;
     let traits_dir = cleave::traits_repo::try_resolve().map_err(anyhow::Error::msg)?;
+    report_retiring_condition_types(&traits_dir);
     let result_cache = result_cache::ResultCache::new(
         &traits_dir,
         &targets,

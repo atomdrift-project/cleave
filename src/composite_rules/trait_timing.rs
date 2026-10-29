@@ -14,7 +14,7 @@ use std::time::Duration;
 
 fn enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var("CLEAVE_TRAIT_TIMING").is_ok_and(|v| v == "1"))
+    *ON.get_or_init(|| crate::env::flag("CLEAVE_TRAIT_TIMING"))
 }
 
 /// (total nanos, evaluation count) per trait id.

@@ -851,7 +851,7 @@ mod path_ref_tests {
         ] {
             let mut mapper = CapabilityMapper::new();
             let yaml = format!("id: context\ndesc: Context\nconf: 1.0\n{condition}");
-            let rule: CompositeTrait = serde_yaml::from_str(&yaml).expect("test composite");
+            let rule: CompositeTrait = crate::yaml::from_str(&yaml).expect("test composite");
             mapper.composite_rules.push(rule);
             assert!(
                 !mapper.paths_equivalent("pkg/lib.rs", "pkg/vendor/lib.rs"),
@@ -875,23 +875,6 @@ impl Default for CapabilityMapper {
     }
 }
 
-/// Extract relative path from full path (relative to traits directory)
-/// Returns None if path conversion fails
-pub(super) fn get_relative_source_file(path: &std::path::Path) -> Option<String> {
-    // Try to find "traits/" in the path and return everything after it
-    let path_str = path.to_string_lossy();
-    if let Some(pos) = path_str.find("traits/") {
-        let relative = &path_str[pos + 7..]; // Skip "traits/" prefix
-        return Some(relative.to_string());
-    }
-    // Fallback: return the file name only if we can't find "traits/"
-    path.file_name()
-        .and_then(|n| n.to_str())
-        .map(std::string::ToString::to_string)
-}
-
-/// Build the combined string vector from report strings, imports, and exports.
-/// Used by both `evaluate_and_merge_findings` (cached path) and `evaluate_traits_filtered` (standalone).
 /// Build the synthetic `StringInfo` entries for the string-match haystack —
 /// import and export symbol names surfaced as strings so `type: text`/`string`
 /// traits can match them. The caller chains these (cheap, bounded by symbol

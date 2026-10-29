@@ -40,9 +40,7 @@ use std::time::{Duration, Instant};
 fn expansion() -> u64 {
     static V: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
-        std::env::var("CLEAVE_MEMGATE_EXPANSION")
-            .ok()
-            .and_then(|s| s.parse().ok())
+        crate::env::parse("CLEAVE_MEMGATE_EXPANSION")
             .filter(|&n| n > 0)
             .unwrap_or(64)
     })
@@ -139,7 +137,7 @@ impl ScanMemGate {
                     budget_mb = self.budget_bytes / (1024 * 1024),
                     available_mb = (self.available_fn)().map(|a| a / (1024 * 1024)),
                     waited_s = started.elapsed().as_secs(),
-                    "mem-gate admission stalled; will force-admit against live                      memory after the timeout"
+                    "mem-gate admission stalled; will force-admit against live memory after the timeout"
                 );
             }
             let (guard, _) = self

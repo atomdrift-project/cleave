@@ -67,10 +67,7 @@ fn global_budget_bytes() -> usize {
         } else {
             64 * MIB
         };
-        match std::env::var("CLEAVE_REGEX_SCRATCH_MB")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-        {
+        match crate::env::parse::<usize>("CLEAVE_REGEX_SCRATCH_MB") {
             Some(mb) => mb.saturating_mul(MIB).saturating_mul(threads),
             None => default,
         }

@@ -132,7 +132,7 @@ bytes = "1"
 plist = "1.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["raw_value"] }
-serde_yaml = "0.9"
+serde-saphyr = "1.3"
 simd-json = "0.17"
 toml = "1.1"
 bincode = { package = "cu-bincode", git = "https://github.com/copper-project/cu-bincode", rev = "3c3041a3278cafb1c73701eeecb7961b7ecf6814", features = ["serde", "alloc", "std"] }
@@ -380,7 +380,7 @@ opt-level = 3
 [profile.dev.package.regex-automata]
 opt-level = 3
 
-[profile.dev.package.serde_yaml]
+[profile.dev.package.serde-saphyr]
 opt-level = 3
 
 [profile.dev.package.aho-corasick]

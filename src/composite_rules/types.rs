@@ -2120,7 +2120,7 @@ mod tests {
         }
 
         let parsed: RuleTarget =
-            serde_yaml::from_str("for: [apk_android, apk_alpine, cab, snap, squashfs]")
+            crate::yaml::from_str("for: [apk_android, apk_alpine, cab, snap, squashfs]")
                 .expect("valid YAML rule target");
 
         // apk_android and apk_alpine are unrelated ecosystems (Android app

@@ -24,6 +24,15 @@
 
 extern crate self as cleave;
 
+/// A regex literal compiled once per process; `None` if the literal does not
+/// compile, which the caller's own tests catch.
+macro_rules! static_regex {
+    ($pattern:expr) => {{
+        static RE: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
+        RE.get_or_init(|| regex::Regex::new($pattern).ok()).as_ref()
+    }};
+}
+
 mod analysis_cache;
 pub mod analysis_context;
 pub mod breadcrumb;
@@ -33,6 +42,7 @@ pub mod context;
 mod engine;
 pub mod enriched;
 mod entropy;
+pub(crate) mod env;
 pub mod extractors;
 pub mod file_io;
 pub mod ip_validator;
@@ -83,6 +93,7 @@ pub mod third_party_yara;
 pub mod types;
 pub mod update_check;
 pub mod update_manifest;
+mod yaml;
 pub mod yara_engine;
 
 // Live host-memory pressure gate for the archive member walk, which no
@@ -935,17 +946,9 @@ pub fn prefetch_capability_mapper() {
 /// inside its analysis. Returns immediately; the engine must already be
 /// initialized (call after [`prefetch_yara_engine`]). Steady-state memory is
 /// unchanged — the buckets are built on first use anyway and never dropped.
-/// `CLEAVE_YARA_PREWARM_THREADS` sets the thread count (0 disables).
+/// Uses a quarter of the available cores, between two and four threads.
 pub fn prewarm_yara_buckets_background(enable_third_party: bool) {
-    let threads = std::env::var("CLEAVE_YARA_PREWARM_THREADS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or_else(|| {
-            std::thread::available_parallelism().map_or(2, |n| (n.get() / 4).clamp(2, 4))
-        });
-    if threads == 0 {
-        return;
-    }
+    let threads = std::thread::available_parallelism().map_or(2, |n| (n.get() / 4).clamp(2, 4));
     let engine = shared_resources::yara_engine(enable_third_party);
     if let Err(e) = std::thread::Builder::new()
         .name("yara-prewarm".into())
@@ -992,10 +995,7 @@ pub fn log_scan_stats() {
     crate::analysis_cache::log_analysis_memo_stats();
     crate::composite_rules::evaluators::raw_window_stats::log();
     crate::capabilities::log_raw_gate_stats();
-    let top = std::env::var("CLEAVE_TRAIT_TIMING_TOP")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(40);
+    let top = crate::env::parse::<usize>("CLEAVE_TRAIT_TIMING_TOP").unwrap_or(40);
     crate::composite_rules::trait_timing::report(top);
 }
 
@@ -3164,69 +3164,6 @@ fn sort_largest_first(paths: &mut [std::path::PathBuf]) {
     }
 }
 
-/// Archives at or above this size take a limited concurrency slot so their
-/// member `par_iter` keeps most of the rayon pool. Smaller files run after
-/// the larges drain — attaching them to a live zip was B1d's zip balloon
-/// (solo 66 s → 408 s tail). `CLEAVE_FILE_CONCURRENCY=0` disables the split.
-const LARGE_FILE_SLOT_BYTES: u64 = 50 * 1024 * 1024;
-
-fn file_concurrency_override() -> Option<usize> {
-    static V: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("CLEAVE_FILE_CONCURRENCY")
-            .ok()
-            .and_then(|s| s.parse().ok())
-    })
-}
-
-fn path_len_bytes(path: &Path) -> u64 {
-    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
-}
-
-/// Dispatch `f` over `paths` without parking rayon workers on a condvar.
-///
-/// If `CLEAVE_FILE_CONCURRENCY=N` is set, files ≥ [`LARGE_FILE_SLOT_BYTES`]
-/// run on a std-thread slot semaphore of N (dispatcher is this thread, so
-/// waits do not park rayon workers). Smaller files then use `into_par_iter`.
-/// Unset or `0` is unlimited rayon (the default; a default of 2 lost on B1f).
-fn for_each_scan_path<F>(paths: Vec<std::path::PathBuf>, f: F)
-where
-    F: Fn(&std::path::PathBuf) + Sync,
-{
-    use rayon::prelude::*;
-
-    // Default is unlimited rayon (B1f's default 2-slot large-file
-    // semaphore was 640 s vs B1b 539 s). Opt in with CLEAVE_FILE_CONCURRENCY.
-    let Some(slots) = file_concurrency_override() else {
-        for_each_ordered(&paths, &f);
-        return;
-    };
-    if slots == 0 || paths.len() <= 1 {
-        for_each_ordered(&paths, &f);
-        return;
-    }
-
-    let (larges, smalls): (Vec<_>, Vec<_>) = paths
-        .into_iter()
-        .partition(|p| path_len_bytes(p) >= LARGE_FILE_SLOT_BYTES);
-
-    if larges.len() >= 2 || (larges.len() == 1 && !smalls.is_empty()) {
-        tracing::info!(
-            large_files = larges.len(),
-            small_files = smalls.len(),
-            slots,
-            "scan dispatch: large-file slot semaphore, then unlimited smalls"
-        );
-        for_each_std_limited(&larges, slots, &f);
-        if !smalls.is_empty() {
-            smalls.into_par_iter().for_each(|p| f(&p));
-        }
-    } else {
-        let rest = if larges.is_empty() { smalls } else { larges };
-        rest.into_par_iter().for_each(|p| f(&p));
-    }
-}
-
 /// Run `f` over `paths` on the rayon pool, admitting them strictly in
 /// order: one worker per pool thread pulls the next index from a shared
 /// counter.
@@ -3257,9 +3194,7 @@ where
     // `CLEAVE_SCAN_LANES=N` (experiment): admit paths on N lanes and leave
     // the other pool threads free to steal inner work (whale member and
     // trait chunks) for the whole scan.
-    let lanes = std::env::var("CLEAVE_SCAN_LANES")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
+    let lanes = crate::env::parse::<usize>("CLEAVE_SCAN_LANES")
         .filter(|&n| n > 0)
         .unwrap_or_else(rayon::current_num_threads)
         .max(1)
@@ -3298,47 +3233,6 @@ where
         });
     });
     crate::rayon_nest::set_toplevel_pending(usize::MAX);
-}
-
-fn for_each_std_limited<T, F>(items: &[T], slots: usize, f: &F)
-where
-    T: Sync,
-    F: Fn(&T) + Sync,
-{
-    let n = slots.max(1).min(items.len());
-    if items.is_empty() || n == 0 {
-        return;
-    }
-    if n >= items.len() {
-        std::thread::scope(|scope| {
-            for item in items {
-                scope.spawn(move || f(item));
-            }
-        });
-        return;
-    }
-    let (tx, rx) = std::sync::mpsc::sync_channel::<()>(n);
-    for _ in 0..n {
-        let _ = tx.send(());
-    }
-    std::thread::scope(|scope| {
-        for item in items {
-            if rx.recv().is_err() {
-                break;
-            }
-            let tx = tx.clone();
-            scope.spawn(move || {
-                struct ReturnSlot(std::sync::mpsc::SyncSender<()>);
-                impl Drop for ReturnSlot {
-                    fn drop(&mut self) {
-                        let _ = self.0.send(());
-                    }
-                }
-                let _slot = ReturnSlot(tx);
-                f(item);
-            });
-        }
-    });
 }
 
 /// Analyze a single already-discovered file under the shared scan pipeline:
@@ -3592,7 +3486,7 @@ where
         sort_largest_first(&mut paths);
 
         let mem_gate = scan_mem_gate::ScanMemGate::new();
-        for_each_scan_path(paths, |file_path| {
+        for_each_ordered(&paths, &|file_path: &std::path::PathBuf| {
             analyze_one_path(
                 file_path,
                 options,
@@ -3691,7 +3585,7 @@ where
 
     crate::mem_profile::start_sampler();
     let mem_gate = scan_mem_gate::ScanMemGate::new();
-    for_each_scan_path(paths, |file_path| {
+    for_each_ordered(&paths, &|file_path: &std::path::PathBuf| {
         analyze_one_path(
             file_path,
             options,

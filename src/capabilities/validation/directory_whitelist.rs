@@ -273,6 +273,7 @@ const ALLOWED_MB_COMMUNICATIONS: &[&str] = &[
     "irc",       // IRC network protocol; target home of ipc/irc (IRC is not local IPC)
     "mcp",       // Model Context Protocol (stdio and HTTP transports)
     "messaging", // Chat/bot messaging-platform send APIs (sendMessage, etc.)
+    "telephony", // Telephone and VoIP call operations.
     "modbus",    // Modbus industrial control protocol          (TCP 502)
     "nats",      // NATS pub/sub messaging                      (TCP 4222)
     "opcua",     // OPC UA industrial interoperability          (TCP 4840)
@@ -509,6 +510,7 @@ const ALLOWED_MB_OS: &[&str] = &[
 
 /// Allowed subdirectories in micro-behaviors/process/
 const ALLOWED_MB_PROCESS: &[&str] = &[
+    "config", // Execution-context launch settings; not evidence of launch.
     "argument",
     "attach",
     "control",
@@ -596,6 +598,17 @@ const RETIRED_PROCESS_PATHS: &[&str] = &[
     "micro-behaviors/process/terminate/crash",
     "micro-behaviors/process/lifecycle/self-repair",
     "micro-behaviors/process/create/construction",
+    "micro-behaviors/process/create/flags",
+    "micro-behaviors/process/create/installer",
+    "micro-behaviors/process/create/shell/agent-config",
+    "micro-behaviors/process/create/shell/agent-runtime",
+    "micro-behaviors/process/create/shell/bridge",
+    "micro-behaviors/process/create/shell/lang",
+    "micro-behaviors/process/create/shell/path",
+    "micro-behaviors/process/create/shell/target",
+    "micro-behaviors/process/identity/uid",
+    "micro-behaviors/process/interpreter/gentee",
+    "micro-behaviors/process/interpreter/jscript",
 ];
 
 /// Allowed subdirectories in micro-behaviors/revision-control/
@@ -1923,6 +1936,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         for path in [
             "micro-behaviors/process/stdio/relay",
+            "micro-behaviors/process/config",
             "micro-behaviors/process/hook/interception",
             "micro-behaviors/process/create/fork",
             "micro-behaviors/process/interpreter/eval/direct",

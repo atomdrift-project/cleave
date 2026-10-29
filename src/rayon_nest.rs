@@ -435,42 +435,26 @@ pub(crate) fn with_isolated_leaf_pool<T: Send>(
 
 fn serial_traits_forced() -> bool {
     static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *FLAG.get_or_init(|| std::env::var_os("CLEAVE_SERIAL_TRAITS").is_some())
+    *FLAG.get_or_init(|| crate::env::flag("CLEAVE_SERIAL_TRAITS"))
 }
 
 fn max_inner_parallel_owners() -> usize {
     static MAX: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *MAX.get_or_init(|| {
-        std::env::var("CLEAVE_INNER_PARALLEL_OWNERS")
-            .ok()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or_else(|| match FOREGROUND_INNER_CAP.load(Ordering::Acquire) {
+        crate::env::parse("CLEAVE_INNER_PARALLEL_OWNERS").unwrap_or_else(|| {
+            match FOREGROUND_INNER_CAP.load(Ordering::Acquire) {
                 0 => inner_cap_for(rayon::current_num_threads()),
                 cap => cap,
-            })
+            }
+        })
     })
 }
 
 fn max_nested_member_owners() -> usize {
     static MAX: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *MAX.get_or_init(|| {
-        std::env::var("CLEAVE_NESTED_MEMBER_PARALLEL_OWNERS")
-            .ok()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or_else(|| match FOREGROUND_NESTED_CAP.load(Ordering::Acquire) {
-                0 => nested_cap_for(rayon::current_num_threads()),
-                cap => cap,
-            })
-    })
-}
-
-fn nested_member_parallel_min_bytes() -> usize {
-    static MIN: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *MIN.get_or_init(|| {
-        std::env::var("CLEAVE_NESTED_MEMBER_PARALLEL_MIN_BYTES")
-            .ok()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(0)
+    *MAX.get_or_init(|| match FOREGROUND_NESTED_CAP.load(Ordering::Acquire) {
+        0 => nested_cap_for(rayon::current_num_threads()),
+        cap => cap,
     })
 }
 
@@ -521,13 +505,8 @@ fn try_claim_nested_member_owner() -> bool {
 /// The member itself must already be running on a Rayon worker. Its children
 /// do not inherit this thread-local flag, so this permits one extra level of
 /// fan-out without recreating unbounded recursive trees.
-pub(crate) fn try_enter_nested_member_parallelism(
-    size_bytes: usize,
-) -> Option<NestedMemberParallelGuard> {
-    if rayon::current_thread_index().is_none()
-        || size_bytes < nested_member_parallel_min_bytes()
-        || serial_traits_forced()
-    {
+pub(crate) fn try_enter_nested_member_parallelism() -> Option<NestedMemberParallelGuard> {
+    if rayon::current_thread_index().is_none() || serial_traits_forced() {
         return None;
     }
     let previous = NESTED_MEMBER_PARALLELISM.with(Cell::get);

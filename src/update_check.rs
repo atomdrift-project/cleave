@@ -134,7 +134,7 @@ fn notify(latest: &str, url: Option<&str>, installed: &str) {
 pub fn maybe_notify(disabled_by_flag: bool) {
     use std::io::IsTerminal;
     if disabled_by_flag
-        || std::env::var_os("CLEAVE_NO_UPDATE_CHECK").is_some()
+        || crate::env::flag("CLEAVE_NO_UPDATE_CHECK")
         || !std::io::stderr().is_terminal()
     {
         return;

@@ -622,7 +622,7 @@ pub(crate) fn probe(pattern: &str, case_insensitive: bool, hay: &[u8]) -> Option
     let dfa = DFA::builder()
         .configure(
             DFA::config()
-                .cache_capacity(crate::composite_rules::evaluators::regex_dfa_cache_bytes())
+                .cache_capacity(crate::composite_rules::evaluators::REGEX_DFA_CACHE_BYTES)
                 .minimum_cache_clear_count(Some(3))
                 .minimum_bytes_per_state(Some(10)),
         )
@@ -752,7 +752,7 @@ pub(crate) fn find_pathological_regex_patterns(
     // The probe is a function of the pattern, its flag, the haystack and the
     // cache size, so an earlier run's result stands for any pattern unchanged.
     let facts = super::facts_cache::active();
-    let cache_bytes = crate::composite_rules::evaluators::regex_dfa_cache_bytes() as u64;
+    let cache_bytes = crate::composite_rules::evaluators::REGEX_DFA_CACHE_BYTES as u64;
     let probes: Vec<Option<Explosion>> = distinct
         .par_iter()
         .map(|&(pattern, case_insensitive)| {
@@ -795,7 +795,7 @@ pub(crate) fn find_pathological_regex_patterns(
         } else if e.cache_clears > 0 {
             format!(
                 "filled and cleared its {} KB cache {} times",
-                crate::composite_rules::evaluators::regex_dfa_cache_bytes() >> 10,
+                crate::composite_rules::evaluators::REGEX_DFA_CACHE_BYTES >> 10,
                 e.cache_clears
             )
         } else {

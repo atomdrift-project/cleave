@@ -1442,7 +1442,7 @@ fn archive_members_are_files_not_fragments() {
 /// exclusion was accepted by the loader and never applied.
 #[test]
 fn test_trait_level_not_filters_value_matches() {
-    let condition: Condition = serde_yaml::from_str(
+    let condition: Condition = crate::yaml::from_str(
         r#"
 type: value
 path: scripts.*

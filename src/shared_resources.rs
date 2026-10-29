@@ -53,7 +53,7 @@ pub(crate) fn skip_traits_requested() -> bool {
     match SKIP_TRAITS_OVERRIDE.load(Ordering::Relaxed) {
         1 => true,
         -1 => false,
-        _ => std::env::var("CLEAVE_SKIP_TRAITS").is_ok(),
+        _ => crate::env::flag("CLEAVE_SKIP_TRAITS"),
     }
 }
 

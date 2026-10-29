@@ -961,7 +961,7 @@ pub(crate) fn parse_structured_content(
     let format = detect_format(path, content);
     let value = match format {
         StructuredFormat::Json => serde_json::from_slice(content).ok()?,
-        StructuredFormat::Yaml => serde_yaml::from_slice(content).ok()?,
+        StructuredFormat::Yaml => crate::yaml::from_slice(content).ok()?,
         StructuredFormat::Toml => std::str::from_utf8(content)
             .ok()
             .and_then(|s| toml::from_str(s).ok())?,
@@ -1069,7 +1069,7 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
         let cached = ctx.cached_kv_parsed.get_or_init(|| {
             let parsed_value: Option<Value> = match format {
                 StructuredFormat::Json => serde_json::from_slice(content).ok(),
-                StructuredFormat::Yaml => serde_yaml::from_slice(content).ok(),
+                StructuredFormat::Yaml => crate::yaml::from_slice(content).ok(),
                 StructuredFormat::Toml => std::str::from_utf8(content)
                     .ok()
                     .and_then(|s| toml::from_str(s).ok()),

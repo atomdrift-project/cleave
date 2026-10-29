@@ -140,22 +140,12 @@ pub(crate) static RAW_GATE_SKIPPED: std::sync::atomic::AtomicUsize =
 /// atomic RMW per evaluation is cache-line ping-pong across every worker.
 fn gate_stats_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("CLEAVE_PHASE_STATS").is_ok_and(|v| v == "1"))
+    *ON.get_or_init(|| crate::env::flag("CLEAVE_PHASE_STATS"))
 }
 
 /// Traits evaluated serially per Rayon job before that job's mutable context
-/// is dropped. The override exists for reproducible scheduler tuning on large
-/// workers; zero and invalid values retain the measured default.
-fn parallel_trait_chunk() -> usize {
-    static CHUNK: OnceLock<usize> = OnceLock::new();
-    *CHUNK.get_or_init(|| {
-        std::env::var("CLEAVE_PAR_TRAIT_CHUNK")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .filter(|&value| value > 0)
-            .unwrap_or(64)
-    })
-}
+/// is dropped.
+const PARALLEL_TRAIT_CHUNK: usize = 64;
 
 /// Log the raw-content gate counters at `info`.
 pub(crate) fn log_raw_gate_stats() {
@@ -192,8 +182,6 @@ fn finding_could_affect_ref(r: &str, f: &str) -> bool {
     // Directory path: any trait under it.
     f.len() > r.len() && f.starts_with(r) && matches!(f.as_bytes()[r.len()], b':' | b'/')
 }
-
-use super::get_relative_source_file;
 
 /// Record one AST node into the kind cache if a `kind:`/`node:` trait needs it.
 /// Shared by the source-analyzer fact walk and `build_ast_kind_cache` so a
@@ -377,8 +365,8 @@ impl super::CapabilityMapper {
 
     fn collect_ast_query_strings<'a>(&'a self, indices: &[usize]) -> Vec<&'a str> {
         static BATCH_GUARDED: OnceLock<bool> = OnceLock::new();
-        let batch_guarded = *BATCH_GUARDED
-            .get_or_init(|| std::env::var("CLEAVE_AST_BATCH_GUARDED").as_deref() == Ok("1"));
+        let batch_guarded =
+            *BATCH_GUARDED.get_or_init(|| crate::env::flag("CLEAVE_AST_BATCH_GUARDED"));
         let mut seen = FxHashSet::default();
         let mut out = Vec::new();
         let mut push = |c: &'a Condition| {
@@ -488,7 +476,9 @@ impl super::CapabilityMapper {
                         match_count: 0,
                         kind: FindingKind::Capability,
                         trait_refs: vec![],
-                        source_file: get_relative_source_file(&trait_def.defined_in),
+                        source_file: crate::composite_rules::traits::rule_source_file(
+                            &trait_def.defined_in,
+                        ),
                         downgraded: false,
                     });
                 }
@@ -589,7 +579,8 @@ impl super::CapabilityMapper {
         }
         let tree = cached_ast?;
         static BATCH_ENABLED: OnceLock<bool> = OnceLock::new();
-        if !*BATCH_ENABLED.get_or_init(|| std::env::var("CLEAVE_AST_BATCH").as_deref() != Ok("0")) {
+        if !*BATCH_ENABLED.get_or_init(|| crate::env::bool_var("CLEAVE_AST_BATCH").unwrap_or(true))
+        {
             return None;
         }
         // On small sources, preparing a private copy of the combined query
@@ -1072,11 +1063,11 @@ impl super::CapabilityMapper {
         // member-heavy archives consequently spent most of their CPU cloning
         // and dropping the context's Arc-backed lazy caches. Explicit chunks
         // bound clones to ceil(traits / chunk) while preserving fine-grained
-        // load balancing. `CLEAVE_PAR_TRAIT_CHUNK` is the benchmark override.
+        // load balancing.
         let eval_flags = self.trait_eval_flags();
         let base_cached_evidence = ctx.cached_evidence;
         let is_raw_text = file_type.uses_raw_text_search_for(binary_data);
-        let trait_chunk = parallel_trait_chunk();
+        let trait_chunk = PARALLEL_TRAIT_CHUNK;
 
         // Decoded-layer skip map for `eval_text`: indexed `type: text` traits
         // (regex/word `if:`) whose atoms are absent from every decoded
@@ -1245,11 +1236,11 @@ mod ast_batch_requirements_tests {
             ("direct", "(string) @s", ""),
             ("plain", "(call_expression) @call", ""),
         ] {
-            mapper.trait_definitions.push(serde_yaml::from_str(&format!(
+            mapper.trait_definitions.push(crate::yaml::from_str(&format!(
                 "id: {id}\ndesc: Test\nconf: 1.0\nfor: [javascript]\n{extra}\nif:\n  type: tree-sitter\n  language: javascript\n  query: '{query}'\n"
             )).unwrap());
         }
-        mapper.composite_rules.push(serde_yaml::from_str(
+        mapper.composite_rules.push(crate::yaml::from_str(
             "id: proximity\ndesc: Test\nconf: 1.0\nnear_bytes: 10\nall:\n  - id: near\n  - type: tree-sitter\n    language: javascript\n    query: '(string) @s'\n"
         ).unwrap());
         let boolean = mapper.boolean_ast_queries();

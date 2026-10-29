@@ -12,7 +12,7 @@
 //!
 //! cleave supports disabling expensive analysis components:
 //! - `--disable yara` - Skip YARA pattern matching
-//! - `--disable radare2` - Skip binary disassembly
+//! - `--disable rizin` - Skip binary disassembly
 //! - `--disable upx` - Skip UPX unpacking attempts
 //! - `--disable third-party` - Skip third-party YARA rules
 
@@ -96,21 +96,30 @@ pub struct DisabledComponents {
     pub third_party: bool,
 }
 
+/// A component `--disable` can turn off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum Component {
+    /// YARA pattern matching
+    Yara,
+    /// Rizin disassembly
+    #[value(alias = "radare2")]
+    Rizin,
+    /// UPX unpacking
+    Upx,
+    /// Third-party YARA rules
+    ThirdParty,
+}
+
 impl DisabledComponents {
-    /// Parse comma-separated list of components to disable
+    /// The components named in `components` disabled, the rest enabled.
     #[must_use]
-    pub fn parse(s: &str) -> Self {
-        let mut disabled = Self::default();
-        for component in s.split(',').map(|c| c.trim().to_lowercase()) {
-            match component.as_str() {
-                "yara" => disabled.yara = true,
-                "radare2" => disabled.radare2 = true,
-                "upx" => disabled.upx = true,
-                "third-party" => disabled.third_party = true,
-                _ => {} // Ignore unknown components
-            }
+    pub fn from_components(components: &[Component]) -> Self {
+        Self {
+            yara: components.contains(&Component::Yara),
+            radare2: components.contains(&Component::Rizin),
+            upx: components.contains(&Component::Upx),
+            third_party: components.contains(&Component::ThirdParty),
         }
-        disabled
     }
 }
 
@@ -154,13 +163,9 @@ pub struct Args {
     #[arg(long, value_name = "FILE")]
     pub log_file: Option<String>,
 
-    /// Disable specific components (comma-separated: yara,radare2,upx,third-party)
-    #[arg(long, value_name = "COMPONENTS", default_value = "")]
-    pub disable: String,
-
-    /// Enable all components (overrides --disable default)
-    #[arg(long)]
-    pub enable_all: bool,
+    /// Disable specific components (comma-separated)
+    #[arg(long, value_name = "COMPONENTS", value_enum, value_delimiter = ',')]
+    pub disable: Vec<Component>,
 
     /// Include all files in directory scans, even unknown types
     /// By default, only recognized code/binary files are analyzed
@@ -233,14 +238,10 @@ pub struct Args {
 }
 
 impl Args {
-    /// Get the disabled components based on --disable and --enable-all flags
+    /// The components `--disable` turned off.
     #[must_use]
     pub fn disabled_components(&self) -> DisabledComponents {
-        if self.enable_all {
-            DisabledComponents::default()
-        } else {
-            DisabledComponents::parse(&self.disable)
-        }
+        DisabledComponents::from_components(&self.disable)
     }
 
     /// Get the output format based on --format flag, --json flag, or CLEAVE_FORMAT env var.
@@ -1324,19 +1325,10 @@ mod tests {
     }
 
     #[test]
-    fn test_enable_all_overrides_disable() {
-        let args = Args::try_parse_from(["cleave", "--enable-all", "file.bin"]).unwrap();
-        let disabled = args.disabled_components();
-        // --enable-all should override the default --disable=third-party
-        assert!(!disabled.third_party);
-        assert!(!disabled.yara);
-        assert!(!disabled.radare2);
-        assert!(!disabled.upx);
-    }
-
-    #[test]
     fn test_disabled_components_from_str() {
-        let disabled = DisabledComponents::parse("yara,upx");
+        let disabled = Args::try_parse_from(["cleave", "--disable", "yara,upx", "f"])
+            .unwrap()
+            .disabled_components();
         assert!(disabled.yara);
         assert!(disabled.upx);
         assert!(!disabled.radare2);
@@ -1345,7 +1337,9 @@ mod tests {
 
     #[test]
     fn test_disabled_components_from_str_with_spaces() {
-        let disabled = DisabledComponents::parse("yara, radare2 , upx");
+        let disabled = Args::try_parse_from(["cleave", "--disable", "yara,radare2,upx", "f"])
+            .unwrap()
+            .disabled_components();
         assert!(disabled.yara);
         assert!(disabled.radare2);
         assert!(disabled.upx);
@@ -1353,19 +1347,14 @@ mod tests {
     }
 
     #[test]
-    fn test_disabled_components_from_str_ignores_unknown() {
-        let disabled = DisabledComponents::parse("yara,unknown,radare2");
-        assert!(disabled.yara);
-        assert!(disabled.radare2);
-        assert!(!disabled.upx);
-        assert!(!disabled.third_party);
+    fn test_disable_rejects_unknown_components() {
+        assert!(Args::try_parse_from(["cleave", "--disable", "yarra", "f"]).is_err());
     }
 
     #[test]
-    fn test_disable_empty_string() {
-        let args = Args::try_parse_from(["cleave", "--disable", "", "file.bin"]).unwrap();
+    fn test_nothing_disabled_by_default() {
+        let args = Args::try_parse_from(["cleave", "file.bin"]).unwrap();
         let disabled = args.disabled_components();
-        // Empty string means nothing disabled
         assert!(!disabled.yara);
         assert!(!disabled.radare2);
         assert!(!disabled.upx);

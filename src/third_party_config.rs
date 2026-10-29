@@ -65,8 +65,8 @@ impl Default for Config {
 }
 
 impl Config {
-    fn from_yaml(yaml: &str) -> Result<Self, serde_yaml::Error> {
-        let file: ConfigFile = serde_yaml::from_str(yaml)?;
+    fn from_yaml(yaml: &str) -> Result<Self, serde_saphyr::Error> {
+        let file: ConfigFile = crate::yaml::from_str(yaml)?;
 
         let source_crit = file.sources.into_iter().map(|s| (s.name, s.crit)).collect();
 

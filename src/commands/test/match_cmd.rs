@@ -1153,7 +1153,7 @@ pub fn run(
                             let keys: Vec<_> = obj.keys().take(15).collect();
                             out.push_str(&format!("Available top-level keys: {:?}\n", keys));
                         }
-                    } else if let Ok(yaml) = serde_yaml::from_str::<serde_json::Value>(content)
+                    } else if let Ok(yaml) = crate::yaml::from_str::<serde_json::Value>(content)
                         && let Some(obj) = yaml.as_object()
                     {
                         let keys: Vec<_> = obj.keys().take(15).collect();

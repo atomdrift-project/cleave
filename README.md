@@ -110,6 +110,21 @@ Given the same bytes, traits bundle, options, and installed analysis tools,
 cleave's findings are deterministic. Reports include an analysis timestamp, so
 serialized output is not byte-for-byte identical between runs.
 
+## Environment variables
+
+| Variable | Effect |
+| --- | --- |
+| `CLEAVE_TRAITS_DIR` | Rules directory to load (same as `--traits-dir`). |
+| `CLEAVE_CACHE_DIR` | Cache directory. It must be owned by you and not writable by others. |
+| `CLEAVE_SKIP_CACHE` | `1` disables the analysis and compiled-rule caches. |
+| `CLEAVE_NO_UPDATE_CHECK` | `1` disables the release notice. |
+| `CLEAVE_RAYON_THREADS` | Worker threads (default: all cores). |
+| `CLEAVE_LOG_LEVEL` | Log level: `error`, `warn`, `info`, `debug` or `trace`. |
+| `CLEAVE_FORMAT` | Default output format when `--format` is not given. |
+
+Other `CLEAVE_*` variables are diagnostics or unstable tuning knobs for large
+deployments; see `src/env.rs`.
+
 ## What it analyzes
 
 Representative coverage includes:

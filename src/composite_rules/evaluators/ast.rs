@@ -1167,9 +1167,7 @@ pub(crate) fn batch_ast_queries_with_index(
     // query still falls back to its ordinary per-query budget below.
     let cpu_budget = cpu_budget_override
         .or_else(|| {
-            std::env::var("CLEAVE_AST_BATCH_CPU_MS")
-                .ok()
-                .and_then(|value| value.parse::<u64>().ok())
+            crate::env::parse::<u64>("CLEAVE_AST_BATCH_CPU_MS")
                 .filter(|&ms| ms > 0)
                 .map(std::time::Duration::from_millis)
         })

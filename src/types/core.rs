@@ -1836,13 +1836,9 @@ impl AnalysisReport {
         // nothing. Sweep them here — AFTER attach/link so the cited set is
         // the exact fired-leg set, not a static reachability approximation
         // (measured: rule-reference reachability kept 43k of 54k members'
-        // ctx; the fired set is ~16k). `CLEAVE_MEMBER_CTX=all` retains all.
+        // ctx; the fired set is ~16k).
         {
-            static ALL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-            let keep_all = *ALL.get_or_init(|| {
-                std::env::var("CLEAVE_MEMBER_CTX").is_ok_and(|v| v.eq_ignore_ascii_case("all"))
-            });
-            if !keep_all {
+            {
                 use rustc_hash::FxHashSet;
                 let cited: FxHashSet<u32> = self
                     .files

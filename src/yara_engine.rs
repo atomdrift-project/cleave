@@ -77,14 +77,14 @@ fn builtin_yara_only_active() -> bool {
     if let Some(v) = decode(&BUILTIN_YARA_ONLY_OVERRIDE) {
         return v;
     }
-    std::env::var("CLEAVE_BUILTIN_YARA_ONLY").is_ok()
+    crate::env::flag("CLEAVE_BUILTIN_YARA_ONLY")
 }
 
 fn skip_yara_active() -> bool {
     if let Some(v) = decode(&SKIP_YARA_OVERRIDE) {
         return v;
     }
-    std::env::var("CLEAVE_SKIP_YARA").is_ok()
+    crate::env::flag("CLEAVE_SKIP_YARA")
 }
 
 /// The process-wide YARA settings that change scan results outside
@@ -141,53 +141,21 @@ const MAX_SCANNER_PATTERN_MATCHES: usize = 4096;
 /// interleaves scans from many files (archive-member fan-out, fetched
 /// dependencies) plus tier scans stolen from large payloads' parallel tier
 /// fan-out, so it cycles through most of the tier universe (~75 buckets), not
-/// the 1-3 tiers one file touches. At the old bound of 4 a 13k-member archive
-/// scan recreated scanners ~31,000 times — each a wasmtime store + linker
-/// instantiation that dominated the fetch-phase tail. 64 covers every tier a
-/// thread realistically touches; tune via `CLEAVE_YARA_SCANNER_CACHE`.
-/// Inputs at or above this size evict their scanner from the per-thread cache
-/// after the scan (see the eviction site in `run_scanner`). `CLEAVE_YARA_EVICT_ABOVE_MB`
-/// overrides. Default 1 MiB: on the poppy worker benchmark this returned
-/// ~460 MB of idle module-struct state (peak 4572 → 4112 MiB) with wall
-/// unchanged and identical outputs; evicting on every input (=0) saved no
-/// more memory and cost a little wall re-instantiating scanners for small
-/// files (2026-08-30).
-fn yara_evict_above_bytes() -> usize {
-    static BYTES: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *BYTES.get_or_init(|| {
-        std::env::var("CLEAVE_YARA_EVICT_ABOVE_MB")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .map_or(1024 * 1024, |mb| mb.saturating_mul(1024 * 1024))
-    })
-}
+/// the 1-3 tiers one file touches. Each scanner is a wasmtime store + linker
+/// instantiation, so too small a cache re-instantiates constantly; 64 covers
+/// every tier a thread realistically touches.
+const ENGINE_SCANNER_CACHE_SIZE: usize = 64;
 
-fn engine_scanner_cache_size() -> usize {
-    const DEFAULT: usize = 64;
-    static SIZE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *SIZE.get_or_init(|| {
-        std::env::var("CLEAVE_YARA_SCANNER_CACHE")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .filter(|&n| n > 0)
-            .unwrap_or(DEFAULT)
-    })
-}
+/// Inputs at or above this size evict their scanner from the per-thread cache
+/// after the scan (see the eviction site in `run_scanner`), returning the
+/// module state a large input leaves behind. Evicting after every input saves
+/// no more memory and costs re-instantiation on small files.
+const YARA_EVICT_ABOVE_BYTES: usize = 1 << 20;
 
 /// Payloads at least this large scan their YARA tiers in parallel; smaller ones
 /// scan sequentially (the rayon task overhead exceeds a tiny scan, and avoids a
-/// third nesting level under archive member fan-out). Tunable via
-/// `CLEAVE_YARA_TIER_PARALLEL_MIN_BYTES`; `0` forces always-parallel.
-fn tier_parallel_min_bytes() -> usize {
-    const DEFAULT: usize = 256 * 1024;
-    static MIN: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *MIN.get_or_init(|| {
-        std::env::var("CLEAVE_YARA_TIER_PARALLEL_MIN_BYTES")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(DEFAULT)
-    })
-}
+/// third nesting level under archive member fan-out).
+const TIER_PARALLEL_MIN_BYTES: usize = 256 << 10;
 
 // YARA panics indicate a broken scanner/rule state, not a recoverable per-file
 // condition. Once we catch one, continuing to scan every subsequent file just
@@ -233,7 +201,7 @@ thread_local! {
     static ENGINE_SCANNER_CACHE: RefCell<lru::LruCache<usize, cached_scanner::CachedScanner>> = {
         use std::num::NonZeroUsize;
         let cache_size =
-            NonZeroUsize::new(engine_scanner_cache_size()).unwrap_or(NonZeroUsize::MIN);
+            NonZeroUsize::new(ENGINE_SCANNER_CACHE_SIZE).unwrap_or(NonZeroUsize::MIN);
         RefCell::new(lru::LruCache::new(cache_size))
     };
 }
@@ -1143,7 +1111,6 @@ impl YaraEngine {
     /// Environment variables:
     /// - `CLEAVE_SKIP_YARA=1`: Skip YARA entirely (for fast unit tests)
     /// - `CLEAVE_BUILTIN_YARA_ONLY=1`: Load only built-in rules, skip third-party (~500 vs 14k)
-    /// - `CLEAVE_MINIMAL_RULES=1`: Load only essential rules (~100 instead of 14k)
     pub(crate) fn load_all_rules(&mut self, enable_third_party: bool) -> (usize, usize) {
         let _span = tracing::info_span!("load_yara_rules").entered();
 
@@ -1277,13 +1244,13 @@ impl YaraEngine {
         (builtin_count, third_party_count)
     }
 
-    fn yaml_string_list(value: Option<&serde_yaml::Value>) -> Vec<String> {
+    fn yaml_string_list(value: Option<&serde_json::Value>) -> Vec<String> {
         match value {
-            Some(serde_yaml::Value::Sequence(seq)) => seq
+            Some(serde_json::Value::Array(seq)) => seq
                 .iter()
                 .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
                 .collect(),
-            Some(serde_yaml::Value::String(s)) => vec![s.to_string()],
+            Some(serde_json::Value::String(s)) => vec![s.to_string()],
             _ => Vec::new(),
         }
     }
@@ -1409,23 +1376,23 @@ impl YaraEngine {
             if !may_spell_yara(content) {
                 return vec![];
             }
-            let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(content) else {
+            let Ok(doc) = crate::yaml::from_str::<serde_json::Value>(content) else {
                 return vec![];
             };
 
             let defaults_for = match &doc {
-                serde_yaml::Value::Mapping(m) => {
+                serde_json::Value::Object(m) => {
                     Self::yaml_string_list(m.get("defaults").and_then(|v| v.get("for")))
                 }
                 _ => Vec::new(),
             };
 
             let items = match &doc {
-                serde_yaml::Value::Mapping(m) => m
+                serde_json::Value::Object(m) => m
                     .get("traits")
-                    .and_then(|v| v.as_sequence())
+                    .and_then(|v| v.as_array())
                     .map(|s| s.to_vec()),
-                serde_yaml::Value::Sequence(s) => Some(s.clone()),
+                serde_json::Value::Array(s) => Some(s.clone()),
                 _ => None,
             };
 
@@ -1546,8 +1513,7 @@ impl YaraEngine {
         // join can steal an unrelated multi-second chunk onto its stack (observed:
         // 2 KB members "taking" seconds of wall under load). Sequential buckets
         // also keep one file's scans on one thread, so its scanner cache serves
-        // every bucket without cross-thread churn. Tunable via
-        // `CLEAVE_YARA_TIER_PARALLEL_MIN_BYTES`.
+        // every bucket without cross-thread churn.
         let scan_one = |bucket: &String| {
             self.tier_rules(bucket).map(|rules| {
                 let started = std::time::Instant::now();
@@ -1555,14 +1521,12 @@ impl YaraEngine {
                 (bucket.clone(), started.elapsed().as_millis() as u64, result)
             })
         };
-        let all_raw: Vec<(String, u64, Result<Vec<RawRule>>)> = if data.len()
-            < tier_parallel_min_bytes()
-            || !crate::rayon_nest::inner_work_parallel()
-        {
-            buckets_to_scan.iter().filter_map(scan_one).collect()
-        } else {
-            buckets_to_scan.par_iter().filter_map(scan_one).collect()
-        };
+        let all_raw: Vec<(String, u64, Result<Vec<RawRule>>)> =
+            if data.len() < TIER_PARALLEL_MIN_BYTES || !crate::rayon_nest::inner_work_parallel() {
+                buckets_to_scan.iter().filter_map(scan_one).collect()
+            } else {
+                buckets_to_scan.par_iter().filter_map(scan_one).collect()
+            };
 
         let mut yara_matches = Vec::new();
         let mut inline_results: HashMap<String, Vec<Evidence>> = HashMap::new();
@@ -1798,7 +1762,7 @@ impl YaraEngine {
             // ~380–440 MB of a 4.2 GB worker heap. Above this input size the
             // scanner is dropped after use; re-instantiating one is cheap
             // next to a scan of that size.
-            let evict_for_size = data.len() >= yara_evict_above_bytes();
+            let evict_for_size = data.len() >= YARA_EVICT_ABOVE_BYTES;
             if evict_for_size {
                 cache.pop(&key);
             }
@@ -4029,8 +3993,8 @@ composite_rules:
             "t: \"ya\\\r\n  ra\"\n",
         ];
         for doc in spelled {
-            let value: serde_yaml::Value = serde_yaml::from_str(doc).unwrap();
-            let has = |v: &serde_yaml::Value| serde_yaml::to_string(v).unwrap().contains("yara");
+            let value: serde_json::Value = crate::yaml::from_str(doc).unwrap();
+            let has = |v: &serde_json::Value| serde_saphyr::to_string(v).unwrap().contains("yara");
             assert!(has(&value), "fixture must really spell yara: {doc:?}");
             assert!(may_spell_yara(doc), "prefilter dropped {doc:?}");
         }
@@ -4040,9 +4004,9 @@ composite_rules:
             "t: ya ra\n",
         ] {
             assert!(!may_spell_yara(doc), "prefilter kept {doc:?}");
-            let value: serde_yaml::Value = serde_yaml::from_str(doc).unwrap();
+            let value: serde_json::Value = crate::yaml::from_str(doc).unwrap();
             assert!(
-                !serde_yaml::to_string(&value).unwrap().contains("yara"),
+                !serde_saphyr::to_string(&value).unwrap().contains("yara"),
                 "{doc:?}"
             );
         }

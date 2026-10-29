@@ -172,14 +172,15 @@ pub(crate) use taxonomy::{
     find_invalid_trait_ids, find_malware_subcategory_violations, find_meta_missing_section_filter,
     find_metadata_content_dirs, find_metadata_cross_tier_refs, find_new_metadata_file_literal_ids,
     find_new_metadata_file_string_ids, find_objectives_wellknown_violations,
-    find_oversized_trait_directories, find_parent_duplicate_segments,
-    find_permuted_directory_paths, find_platform_named_directories, find_redundant_unix_platforms,
-    find_sibling_name_restatement, find_stale_filetype_allowlist_entries,
-    find_suppression_only_building_blocks, find_unanchored_wellknown_composites,
-    find_unreferenced_exceptions, find_wellknown_baseline_rules,
-    find_wellknown_category_violations, find_wellknown_high_criticality_basenames,
-    find_wellknown_missing_section_filter, find_wellknown_missing_size_filter,
-    find_wellknown_version_path_traits, find_wide_trait_directories,
+    find_oversized_source_directories, find_oversized_trait_directories,
+    find_parent_duplicate_segments, find_permuted_directory_paths, find_platform_named_directories,
+    find_redundant_unix_platforms, find_sibling_name_restatement,
+    find_stale_filetype_allowlist_entries, find_suppression_only_building_blocks,
+    find_unanchored_wellknown_composites, find_unreferenced_exceptions,
+    find_wellknown_baseline_rules, find_wellknown_category_violations,
+    find_wellknown_high_criticality_basenames, find_wellknown_missing_section_filter,
+    find_wellknown_missing_size_filter, find_wellknown_version_path_traits,
+    find_wide_trait_directories,
 };
 
 // Logic constraint validation

@@ -1822,29 +1822,37 @@ pub fn graft_reference_outcomes_batch(
         return Ok(0);
     }
     let mapper = shared_resources::capability_mapper_with_options(options)?;
+    // Source checks only read their member. Index each digest once, evaluate
+    // those checks independently, then merge in source order before pooling.
+    // Preserve the existing first-node behavior for duplicate member digests.
+    let mut file_indices = rustc_hash::FxHashMap::default();
+    for (index, file) in report.files.iter().enumerate() {
+        file_indices.entry(file.sha256.as_str()).or_insert(index);
+    }
+    let evaluate = |(sha, spans): &(
+        &str,
+        &std::collections::BTreeMap<String, Vec<filefacts::Span>>,
+    )| {
+        let index = *file_indices.get(sha)?;
+        reference_outcome_findings(&report.files[index], &mapper, spans)
+            .map(|findings| (index, findings))
+    };
+    let additions: Vec<_> = if sources.len() >= 8 && crate::rayon_nest::inner_work_parallel() {
+        use rayon::prelude::*;
+        sources.par_iter().filter_map(evaluate).collect()
+    } else {
+        sources.iter().filter_map(evaluate).collect()
+    };
+    if additions.is_empty() {
+        return Ok(0);
+    }
     let mut grafted = 0;
     let mut parents = std::collections::BTreeSet::new();
-    let mut touched = false;
-    for (file_sha, spans) in sources {
-        if let Some(n) = graft_reference_outcome_local(report, file_sha, &mapper, spans) {
-            touched = true;
-            grafted += n;
-            if let Some(parent) = report
-                .files
-                .iter()
-                .find(|f| f.sha256 == *file_sha)
-                .and_then(|f| {
-                    f.path
-                        .rsplit_once("!!")
-                        .map(|(parent, _)| parent.to_owned())
-                })
-            {
-                parents.insert(parent);
-            }
+    for (index, findings) in additions {
+        grafted += report.graft_file_findings_deferred(index, findings);
+        if let Some((parent, _)) = report.files[index].path.rsplit_once("!!") {
+            parents.insert(parent.to_owned());
         }
-    }
-    if !touched {
-        return Ok(0);
     }
     // Reverse lexical order visits a nested path before its prefix.
     for parent in parents.iter().rev() {
@@ -1887,15 +1895,11 @@ pub fn graft_reference_outcomes_batch(
     Ok(grafted)
 }
 
-fn graft_reference_outcome_local(
-    report: &mut AnalysisReport,
-    file_sha: &str,
+fn reference_outcome_findings(
+    file: &crate::types::FileAnalysis,
     mapper: &capabilities::CapabilityMapper,
     spans: &std::collections::BTreeMap<String, Vec<filefacts::Span>>,
-) -> Option<usize> {
-    let Some(file) = report.files.iter().find(|f| f.sha256 == file_sha) else {
-        return None;
-    };
+) -> Option<Vec<crate::types::Finding>> {
     // Nothing was attributed to this file, so nothing new can fire.
     if !file.filefacts_metrics.as_ref().is_some_and(|m| {
         m.contains_key("references.declared_count")
@@ -1935,14 +1939,13 @@ fn graft_reference_outcome_local(
     }
     scratch.files.push(file.clone());
     let no_bytes: &[u8] = &[];
-    let found = mapper.evaluate_traits_with_ast(&scratch, no_bytes, None, None);
+    let mut found = mapper.evaluate_traits_with_ast(&scratch, no_bytes, None, None);
     if found.is_empty() {
         return None;
     }
-    let mut grafted = report.graft_findings_deferred(file_sha, found.clone());
     // File-local composites must see both the retained source observations and
     // the new follow facts. Archive pooling alone cannot evaluate these rules.
-    scratch.findings.extend(found);
+    scratch.findings.extend(found.iter().cloned());
     let local = mapper.evaluate_composite_rules(
         &scratch,
         no_bytes,
@@ -1953,9 +1956,8 @@ fn graft_reference_outcome_local(
         None,
         &[],
     );
-    grafted += report.graft_findings_deferred(file_sha, local);
-
-    Some(grafted)
+    found.extend(local);
+    Some(found)
 }
 
 fn graft_reference_outcome_container(

@@ -552,8 +552,19 @@ impl AnalysisReport {
         target_sha: &str,
         findings: Vec<Finding>,
     ) -> usize {
+        let Some(index) = self.files.iter().position(|f| f.sha256 == target_sha) else {
+            return 0;
+        };
+        self.graft_file_findings_deferred(index, findings)
+    }
+
+    pub(crate) fn graft_file_findings_deferred(
+        &mut self,
+        index: usize,
+        findings: Vec<Finding>,
+    ) -> usize {
         let mut added = 0;
-        if let Some(file) = self.files.iter_mut().find(|f| f.sha256 == target_sha) {
+        if let Some(file) = self.files.get_mut(index) {
             for finding in findings {
                 if !file
                     .findings

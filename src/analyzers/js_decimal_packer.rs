@@ -398,22 +398,23 @@ mod tests {
         )
     }
     #[test]
-    fn decodes_without_running_source() {
+    fn decodes_without_running_source() -> Result<(), serde_json::Error> {
         assert_eq!(decode(&packed()).as_deref(), Some("console.log(42)"));
         let two = format!(
             "eval({}({},10,0,''.split('|'),0,{{}}))",
             CANONICAL.replacen("function unpack", "function", 1),
-            serde_json::to_string(&packed()).unwrap()
+            serde_json::to_string(&packed())?
         );
         // A malformed dictionary cardinality is rejected rather than guessed.
         assert!(decode(&two).is_none());
+        Ok(())
     }
     #[test]
-    fn nested_and_reverse_dictionary() {
+    fn nested_and_reverse_dictionary() -> Result<(), serde_json::Error> {
         let two = format!(
             "eval({}({},10,1,''.split('|'),0,{{}}))",
             CANONICAL.replacen("function unpack", "function", 1),
-            serde_json::to_string(&packed()).unwrap()
+            serde_json::to_string(&packed())?
         );
         assert_eq!(decode(&two).as_deref(), Some("console.log(42)"));
         let cascade = format!(
@@ -427,6 +428,7 @@ mod tests {
             decode(&("eval(unrelated());".to_owned() + &packed())).as_deref(),
             Some("console.log(42)")
         );
+        Ok(())
     }
     #[test]
     fn rejects_changed_semantics_or_dynamic_inputs() {

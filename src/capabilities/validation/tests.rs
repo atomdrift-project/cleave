@@ -5293,7 +5293,7 @@ mod taxonomy_tests {
     }
 
     #[test]
-    fn all_former_budget_paths_reject_rule_99() {
+    fn all_former_budget_paths_reject_rules_above_the_cap() {
         for directory in [
             "metadata/filename",
             "metadata/file/archive",
@@ -5310,12 +5310,12 @@ mod taxonomy_tests {
             "micro-behaviors/fs/write/file/full",
             "micro-behaviors/os/user/account",
         ] {
-            let traits: Vec<_> = (0..99)
+            let traits: Vec<_> = (0..=MAX_TRAITS_PER_DIRECTORY)
                 .map(|i| make_trait(&format!("{directory}::rule-{i}"), "other::t"))
                 .collect();
             assert_eq!(
                 find_oversized_trait_directories(&traits, &[]),
-                vec![(directory.to_string(), 99)]
+                vec![(directory.to_string(), MAX_TRAITS_PER_DIRECTORY + 1)]
             );
         }
     }

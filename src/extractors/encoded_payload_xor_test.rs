@@ -8,13 +8,7 @@ static SAMPLE: std::sync::LazyLock<Vec<u8>> =
 const OFFSET: usize = 0x6210;
 const LEN: usize = 153824;
 fn key(offset: u64) -> ExtractedString {
-    ExtractedString {
-        value: "0x9c".into(),
-        data_offset: offset,
-        method: StringMethod::XorDecode,
-        kind: Some(StringKind::XorKey),
-        ..Default::default()
-    }
+    ExtractedString::new("0x9c", offset, StringMethod::XorDecode).with_kind(StringKind::XorKey)
 }
 #[test]
 fn specimen_pipeline_recovers_complete_binary_and_provenance() {
@@ -22,11 +16,9 @@ fn specimen_pipeline_recovers_complete_binary_and_provenance() {
         hex::encode(Sha256::digest(SAMPLE.as_slice())),
         "30c99015f9c432604d8a8206ce8dcb4fba7866b062e5bd1a8f0adb88fba8807c"
     );
-    let opts = stng::ExtractOptions {
-        caller_provides_symbols: true,
-        filter_garbage: true,
-        ..Default::default()
-    };
+    let opts = stng::ExtractOptions::new(4)
+        .with_caller_provides_symbols(true)
+        .with_garbage_filter(true);
     let strings = stng::extract_strings_with_options(&SAMPLE, &opts);
     let out = xor_encoded_machos(&SAMPLE, &strings);
     assert_eq!(out.len(), 1);

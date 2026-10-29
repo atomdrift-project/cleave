@@ -811,12 +811,12 @@ fn for_each_condition_regex<'a>(condition: &'a Condition, f: &mut impl FnMut(&'a
     for_each_not_exception_regex(condition_not_exceptions(condition), f);
 }
 
-/// Invoke `f` with every regex in a downgrade block's `any:`/`all:`/`none:` legs.
+/// Invoke `f` with every regex in a downgrade block's `any:`/`all:` legs.
 fn for_each_downgrade_regex<'a>(
     downgrade: &'a DowngradeConditions,
     f: &mut impl FnMut(&'a str, bool),
 ) {
-    for condition in [&downgrade.any, &downgrade.all, &downgrade.none]
+    for condition in [&downgrade.any, &downgrade.all]
         .into_iter()
         .flat_map(|legs| legs.as_deref().unwrap_or_default())
     {
@@ -1785,12 +1785,12 @@ fn find_uncompilable_ast_queries_with_parallel(
     }
 }
 
-/// Invoke `f` with every AST query in a downgrade block's `any:`/`all:`/`none:` legs.
+/// Invoke `f` with every AST query in a downgrade block's `any:`/`all:` legs.
 fn for_each_downgrade_ast_query<'a>(
     downgrade: &'a DowngradeConditions,
     f: &mut impl FnMut(&'a str, Option<&'a str>),
 ) {
-    for condition in [&downgrade.any, &downgrade.all, &downgrade.none]
+    for condition in [&downgrade.any, &downgrade.all]
         .into_iter()
         .flat_map(|legs| legs.as_deref().unwrap_or_default())
     {
@@ -1987,7 +1987,6 @@ mod tests {
         let downgrade = super::DowngradeConditions {
             any: Some(vec![ast_query("(missing_downgrade_node) @c", None)]),
             all: None,
-            none: None,
             needs: None,
             scope: None,
         };

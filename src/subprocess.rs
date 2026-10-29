@@ -136,7 +136,7 @@ pub(crate) fn probed_tool(
         return Some(path.clone());
     }
     for name in names {
-        let Some(path) = filefacts::tools::resolve(name) else {
+        let Some(path) = crate::tool_resolution::resolve(name) else {
             continue;
         };
         let mut probe = Command::new(&path);

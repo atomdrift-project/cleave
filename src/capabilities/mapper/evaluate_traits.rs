@@ -320,13 +320,7 @@ impl super::CapabilityMapper {
                     add(c, false);
                 }
                 if let Some(d) = &t.downgrade {
-                    for c in d
-                        .any
-                        .iter()
-                        .flatten()
-                        .chain(d.all.iter().flatten())
-                        .chain(d.none.iter().flatten())
-                    {
+                    for c in d.any.iter().flatten().chain(d.all.iter().flatten()) {
                         add(c, false);
                     }
                 }
@@ -344,13 +338,7 @@ impl super::CapabilityMapper {
                     add(c, true);
                 }
                 if let Some(d) = &rule.downgrade {
-                    for c in d
-                        .any
-                        .iter()
-                        .flatten()
-                        .chain(d.all.iter().flatten())
-                        .chain(d.none.iter().flatten())
-                    {
+                    for c in d.any.iter().flatten().chain(d.all.iter().flatten()) {
                         add(c, true);
                     }
                 }
@@ -391,13 +379,7 @@ impl super::CapabilityMapper {
                 }
             }
             if let Some(d) = &t.downgrade {
-                for c in d
-                    .any
-                    .iter()
-                    .flatten()
-                    .chain(d.all.iter().flatten())
-                    .chain(d.none.iter().flatten())
-                {
+                for c in d.any.iter().flatten().chain(d.all.iter().flatten()) {
                     push(c);
                 }
             }

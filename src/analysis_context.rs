@@ -376,22 +376,22 @@ pub fn project_filefacts_function(sym: &filefacts::Symbol) -> Option<Function> {
 }
 
 fn archive_entry_from_filefacts_member(member: &filefacts::ArchiveMember) -> ArchiveEntry {
-    let compression = member.compression.as_ref();
-    let ownership = member.ownership.as_ref();
+    let compression = &member.compression;
+    let ownership = &member.ownership;
     ArchiveEntry {
         path: member.path.clone(),
         file_type: "unknown".to_string(),
         sha256: String::new(),
         size_bytes: member.size_bytes,
-        compressed_size: compression.and_then(|c| c.compressed_size),
-        compression_method: compression.and_then(|c| c.method.clone()),
+        compressed_size: compression.compressed_size,
+        compression_method: compression.method.clone(),
         mtime_unix: member.mtime_unix,
-        mode_octal: ownership.and_then(|o| o.mode_octal),
-        uid: ownership.and_then(|o| o.uid),
-        gid: ownership.and_then(|o| o.gid),
-        uname: ownership.and_then(|o| o.uname.clone()),
-        gname: ownership.and_then(|o| o.gname.clone()),
-        entry_type: member.entry_type.clone(),
+        mode_octal: ownership.mode_octal,
+        uid: ownership.uid,
+        gid: ownership.gid,
+        uname: ownership.uname.clone(),
+        gname: ownership.gname.clone(),
+        entry_type: Some(member.entry_type.as_str().to_owned()),
         linkname: member.linkname.clone(),
         host_os: member.host_os.clone(),
         header_offset: member.offsets.header,

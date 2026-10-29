@@ -385,12 +385,6 @@ pub(crate) fn apply_trait_defaults(
                 check_regex_length_with_reuse(&ctx, cond, Some(path), warnings, false);
             }
         }
-        if let Some(ref none) = downgrade.none {
-            for (idx, cond) in none.iter().enumerate() {
-                let ctx = format!("{} downgrade.none[{}]", raw.id, idx);
-                check_regex_length_with_reuse(&ctx, cond, Some(path), warnings, false);
-            }
-        }
     }
     for w in &mut warnings[warn_start..] {
         *w = format!("{} (in {})", w, path.display());
@@ -1421,7 +1415,6 @@ pub(crate) fn apply_composite_defaults(
     if let Some(ref downgrade) = raw.downgrade {
         check_conditions(&downgrade.any, "downgrade.any");
         check_conditions(&downgrade.all, "downgrade.all");
-        check_conditions(&downgrade.none, "downgrade.none");
     }
     for w in &mut warnings[warn_start..] {
         *w = format!("{} (in {})", w, path.display());
@@ -1804,9 +1797,6 @@ pub(crate) fn autoprefix_trait_refs(rule: &mut CompositeTrait, prefix: &str) {
             prefix_conditions(conditions, prefix);
         }
         if let Some(ref mut conditions) = downgrade.any {
-            prefix_conditions(conditions, prefix);
-        }
-        if let Some(ref mut conditions) = downgrade.none {
             prefix_conditions(conditions, prefix);
         }
     }

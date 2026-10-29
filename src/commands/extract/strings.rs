@@ -114,7 +114,7 @@ fn run_direct(
                 #[cfg(target_os = "macos")]
                 {
                     if file_type == FileType::MachO
-                        && let Some(nm) = filefacts::tools::resolve("nm")
+                        && let Some(nm) = crate::tool_resolution::resolve("nm")
                         && let Ok(nm_output) = std::process::Command::new(nm)
                             .args(["-u", "-m", "--"])
                             .arg(path)
@@ -257,7 +257,7 @@ fn format_strings_output(
                     Some(crate::types::StringType::FuncName) => "func",
                     Some(crate::types::StringType::StackString) => "stack",
                     Some(crate::types::StringType::Url) => "url",
-                    Some(crate::types::StringType::IP) => "ip",
+                    Some(crate::types::StringType::Ip) => "ip",
                     Some(crate::types::StringType::Email) => "email",
                     Some(crate::types::StringType::Path) => "path",
                     Some(crate::types::StringType::Base64) => "base64",

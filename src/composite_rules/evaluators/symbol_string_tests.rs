@@ -974,7 +974,7 @@ fn test_eval_string_regex_match() {
         value: ("192.168.1.100".to_string()).into(),
         offset: Some(0x1000),
         encoding: "utf8".to_string(),
-        string_type: Some(StringType::IP),
+        string_type: Some(StringType::Ip),
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,

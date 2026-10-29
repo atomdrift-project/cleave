@@ -722,9 +722,6 @@ pub(crate) struct DowngradeConditions {
     /// All of these conditions must match to trigger the downgrade
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub all: Option<Vec<Condition>>,
-    /// None of these conditions may match to trigger the downgrade
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub none: Option<Vec<Condition>>,
     /// Minimum number of `any` conditions that must match
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub needs: Option<usize>,
@@ -753,26 +750,14 @@ impl DowngradeConditions {
         &self,
         out: &mut std::collections::BTreeSet<String>,
     ) {
-        for c in self
-            .any
-            .iter()
-            .flatten()
-            .chain(self.all.iter().flatten())
-            .chain(self.none.iter().flatten())
-        {
+        for c in self.any.iter().flatten().chain(self.all.iter().flatten()) {
             c.collect_kv_sibling_basenames(out);
         }
     }
 
     /// Forward to every held condition — see [`Condition::collect_trait_refs`].
     pub(crate) fn collect_trait_refs(&self, out: &mut std::collections::BTreeSet<String>) {
-        for c in self
-            .any
-            .iter()
-            .flatten()
-            .chain(self.all.iter().flatten())
-            .chain(self.none.iter().flatten())
-        {
+        for c in self.any.iter().flatten().chain(self.all.iter().flatten()) {
             c.collect_trait_refs(out);
         }
     }
@@ -967,17 +952,6 @@ impl TraitDefinition {
                     cond.precompile_regexes().with_context(|| {
                         format!(
                             "in trait '{}' downgrade.all condition #{}",
-                            self.id,
-                            idx + 1
-                        )
-                    })?;
-                }
-            }
-            if let Some(ref mut none) = downgrade.none {
-                for (idx, cond) in none.iter_mut().enumerate() {
-                    cond.precompile_regexes().with_context(|| {
-                        format!(
-                            "in trait '{}' downgrade.none condition #{}",
                             self.id,
                             idx + 1
                         )
@@ -1500,13 +1474,6 @@ impl TraitDefinition {
                     }
                 }
             }
-            if let Some(ref none) = downgrade.none {
-                for cond in none {
-                    if cond.is_trait_reference() {
-                        return true;
-                    }
-                }
-            }
         }
 
         false
@@ -1532,10 +1499,7 @@ impl TraitDefinition {
             }
         }
         if let Some(ref downgrade) = self.downgrade {
-            for conds in [&downgrade.any, &downgrade.all, &downgrade.none]
-                .into_iter()
-                .flatten()
-            {
+            for conds in [&downgrade.any, &downgrade.all].into_iter().flatten() {
                 for cond in conds {
                     add(cond, &mut refs);
                 }
@@ -1995,7 +1959,7 @@ impl TraitDefinition {
     }
 
     /// Evaluate a single downgrade condition set.
-    /// All specified blocks (all/any/none) must pass for the downgrade to trigger.
+    /// All specified blocks (all/any) must pass for the downgrade to trigger.
     fn eval_downgrade_conditions<'a>(
         &self,
         conditions: &DowngradeConditions,
@@ -2024,16 +1988,6 @@ impl TraitDefinition {
             }
             if matched_count < threshold {
                 return false;
-            }
-        }
-
-        // If 'none' is specified, none may match
-        if let Some(none_conds) = &conditions.none {
-            has_any_block = true;
-            for cond in none_conds {
-                if self.eval_condition(cond, ctx).matched {
-                    return false;
-                }
             }
         }
 
@@ -2858,17 +2812,6 @@ impl CompositeTrait {
                     })?;
                 }
             }
-            if let Some(ref mut none) = downgrade.none {
-                for (idx, cond) in none.iter_mut().enumerate() {
-                    cond.precompile_regexes().with_context(|| {
-                        format!(
-                            "in composite rule '{}' downgrade.none condition #{}",
-                            self.id,
-                            idx + 1
-                        )
-                    })?;
-                }
-            }
         }
         Ok(())
     }
@@ -3303,7 +3246,7 @@ impl CompositeTrait {
     }
 
     /// Evaluate a single downgrade condition set.
-    /// All specified blocks (all/any/none) must pass for the downgrade to trigger.
+    /// All specified blocks (all/any) must pass for the downgrade to trigger.
     fn eval_downgrade_conditions<'a>(
         &self,
         conditions: &DowngradeConditions,
@@ -3332,16 +3275,6 @@ impl CompositeTrait {
             }
             if matched_count < threshold {
                 return false;
-            }
-        }
-
-        // If 'none' is specified, none may match
-        if let Some(none_conds) = &conditions.none {
-            has_any_block = true;
-            for cond in none_conds {
-                if self.eval_condition(cond, ctx).matched {
-                    return false;
-                }
             }
         }
 
@@ -3897,7 +3830,7 @@ impl CompositeTrait {
                 {
                     return (offset >= start && offset <= end).then_some(ev);
                 }
-                // Evidence without location info: keep (e.g., exclusion sentinels from none:)
+                // Evidence without location info: keep
                 Some(ev)
             })
             .collect();
@@ -4366,8 +4299,7 @@ fn suppression_legs(
 /// Re-evaluates the positive blocks, which is why it is reached only through
 /// [`EvaluationContext::record_suppression`]'s closure: the hot path asks
 /// `eval_downgrade_conditions` a yes/no question and must not pay to remember
-/// which legs answered it. `none:` is skipped — a fired downgrade means nothing
-/// in it matched.
+/// which legs answered it.
 fn downgrade_legs(
     conditions: &DowngradeConditions,
     mut eval: impl FnMut(&Condition) -> crate::composite_rules::context::ConditionResult,

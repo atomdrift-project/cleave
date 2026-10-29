@@ -16,13 +16,7 @@ fn test_symbol_map_enrichment() {
 
     // A string matching a known import is classified as Import by the
     // conversion layer (filefacts/stng supplies the raw row).
-    let raw = vec![ExtractedString {
-        value: "malloc".to_string(),
-        data_offset: 0,
-        method: StringMethod::RawScan,
-        kind: None,
-        ..ExtractedString::default()
-    }];
+    let raw = vec![ExtractedString::new("malloc", 0, StringMethod::RawScan)];
     let strings = extractor.convert_stng_strings(&raw);
     let malloc = strings.iter().find(|s| s.value == "malloc");
     assert_eq!(

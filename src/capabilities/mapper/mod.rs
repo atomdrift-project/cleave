@@ -715,13 +715,7 @@ impl CapabilityMapper {
                     c.collect_path_inputs(&mut out);
                 }
                 if let Some(d) = &t.downgrade {
-                    for c in d
-                        .any
-                        .iter()
-                        .flatten()
-                        .chain(d.all.iter().flatten())
-                        .chain(d.none.iter().flatten())
-                    {
+                    for c in d.any.iter().flatten().chain(d.all.iter().flatten()) {
                         c.collect_path_inputs(&mut out);
                     }
                 }
@@ -737,13 +731,7 @@ impl CapabilityMapper {
                     c.collect_path_inputs(&mut out);
                 }
                 if let Some(d) = &r.downgrade {
-                    for c in d
-                        .any
-                        .iter()
-                        .flatten()
-                        .chain(d.all.iter().flatten())
-                        .chain(d.none.iter().flatten())
-                    {
+                    for c in d.any.iter().flatten().chain(d.all.iter().flatten()) {
                         c.collect_path_inputs(&mut out);
                     }
                 }
@@ -847,7 +835,6 @@ mod path_ref_tests {
             "unless:\n  - type: path\n    substr: /vendor/\n",
             "downgrade:\n  any:\n    - type: path\n      substr: /vendor/\n",
             "downgrade:\n  all:\n    - type: path\n      substr: /vendor/\n",
-            "downgrade:\n  none:\n    - type: path\n      substr: /vendor/\n",
         ] {
             let mut mapper = CapabilityMapper::new();
             let yaml = format!("id: context\ndesc: Context\nconf: 1.0\n{condition}");

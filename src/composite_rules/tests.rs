@@ -615,7 +615,7 @@ fn test_not_directive_regex() {
         value: ("192.168.1.1".to_string()).into(),
         offset: Some(0x2000),
         encoding: "utf8".to_string(),
-        string_type: Some(crate::types::StringType::IP),
+        string_type: Some(crate::types::StringType::Ip),
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
@@ -624,7 +624,7 @@ fn test_not_directive_regex() {
         value: ("8.8.8.8".to_string()).into(),
         offset: Some(0x3000),
         encoding: "utf8".to_string(),
-        string_type: Some(crate::types::StringType::IP),
+        string_type: Some(crate::types::StringType::Ip),
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
@@ -889,7 +889,6 @@ fn test_downgrade_to_notable() {
                 id: "file/type/shell-script".to_string(),
             }]),
             all: None,
-            none: None,
             needs: None,
             scope: None,
         }),
@@ -970,7 +969,6 @@ fn test_downgrade_one_level() {
                 id: "file/path/test-fixtures".to_string(),
             }]),
             all: None,
-            none: None,
             needs: None,
             scope: None,
         }),
@@ -1033,7 +1031,6 @@ fn test_downgrade_no_match_keeps_original() {
                 id: "file/signed/apple".to_string(),
             }]),
             all: None,
-            none: None,
             needs: None,
             scope: None,
         }),
@@ -1115,7 +1112,6 @@ fn test_downgrade_from_hostile() {
                 id: "file/type/shell-script".to_string(),
             }]),
             all: None,
-            none: None,
             needs: None,
             scope: None,
         }),
@@ -1222,7 +1218,6 @@ fn test_all_three_directives_combined() {
                 id: "file/type/test".to_string(),
             }]),
             all: None,
-            none: None,
             needs: None,
             scope: None,
         }),
@@ -1676,7 +1671,7 @@ fn test_string_regex_match() {
         value: ("192.168.1.1".to_string()).into(),
         offset: Some(0x1000),
         encoding: "utf8".to_string(),
-        string_type: Some(crate::types::StringType::IP),
+        string_type: Some(crate::types::StringType::Ip),
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
@@ -1685,7 +1680,7 @@ fn test_string_regex_match() {
         value: ("10.0.0.1".to_string()).into(),
         offset: Some(0x2000),
         encoding: "utf8".to_string(),
-        string_type: Some(crate::types::StringType::IP),
+        string_type: Some(crate::types::StringType::Ip),
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
@@ -3977,225 +3972,8 @@ fn test_evidence_to_byte_offset_none() {
 }
 
 // =============================================================================
-// B2+B3: Downgrade combinatorial all/any/none + needs threshold
+// Downgrade combinatorial all/any + needs threshold
 // =============================================================================
-
-#[test]
-fn test_downgrade_combined_all_and_none_blocked_by_none() {
-    let (mut report, data) = create_test_context();
-
-    // Add strings for all: condition
-    report.strings.push(StringInfo {
-        value: ("suspicious_call".to_string()).into(),
-        offset: Some(0x2000),
-        encoding: "utf8".to_string(),
-        string_type: None,
-        section: None,
-        encoding_chain: Vec::new(),
-        fragments: None,
-    });
-
-    // Add finding for none: condition — this should BLOCK the downgrade
-    let findings = vec![Finding {
-        precomputed_spans: None,
-        src: None,
-        id: "file/type/binary".to_string().into(),
-        kind: FindingKind::Capability,
-        desc: "Binary file".to_string().into(),
-        conf: 1.0,
-        crit: Criticality::Baseline,
-        mbc: None,
-        attack: None,
-        trait_refs: vec![],
-        evidence: vec![],
-        match_count: 0,
-        source_file: None,
-        downgraded: false,
-    }];
-
-    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None)
-        .with_additional_findings(&findings);
-
-    let trait_def = TraitDefinition {
-        id: "test/combined-downgrade".to_string(),
-        desc: "Test combined all+none downgrade".to_string(),
-        conf: 1.0,
-        crit: Criticality::Suspicious,
-        mbc: None,
-        attack: None,
-        platforms: vec![Platform::All],
-        arch: vec![Arch::All],
-        r#for: vec![FileType::All],
-        for_from_groups: false,
-        r#if: Condition::Text(TextQuery {
-            encoding: None,
-            length_min: None,
-            length_max: None,
-            exclude_html_comments: false,
-            exact: Some("suspicious_call".to_string()),
-            substr: None,
-            regex: None,
-            word: None,
-            case_insensitive: false,
-            is_check: None,
-            section: None,
-            offset: None,
-            offset_range: None,
-            section_offset: None,
-            section_offset_range: None,
-            not: None,
-            platforms: None,
-        }),
-        size_max: None,
-        count_min: None,
-        count_max: None,
-        per_kb_min: None,
-        per_kb_max: None,
-        entropy_min: None,
-        entropy_max: None,
-        size_min: None,
-        not: None,
-        unless: None,
-        downgrade: Some(DowngradeConditions {
-            // all: passes (string matches)
-            all: Some(vec![Condition::Text(TextQuery {
-                encoding: None,
-                length_min: None,
-                length_max: None,
-                exclude_html_comments: false,
-                exact: Some("/bin/sh".to_string()),
-                substr: None,
-                regex: None,
-                word: None,
-                case_insensitive: false,
-                is_check: None,
-                section: None,
-                offset: None,
-                offset_range: None,
-                section_offset: None,
-                section_offset_range: None,
-                not: None,
-                platforms: None,
-            })]),
-            any: None,
-            // none: should block downgrade because "file/type/binary" IS present
-            none: Some(vec![Condition::Trait {
-                id: "file/type/binary".to_string(),
-            }]),
-            needs: None,
-            scope: None,
-        }),
-        defined_in: std::path::PathBuf::from("test.yaml"),
-        precision: None,
-        ..Default::default()
-    };
-
-    let result = trait_def.evaluate(&ctx);
-    assert!(result.is_some());
-    let finding = result.unwrap();
-    // none: blocked the downgrade, so crit stays at Suspicious
-    assert_eq!(finding.crit, Criticality::Suspicious);
-}
-
-#[test]
-fn test_downgrade_combined_all_and_none_pass() {
-    let (mut report, data) = create_test_context();
-
-    report.strings.push(StringInfo {
-        value: ("suspicious_call".to_string()).into(),
-        offset: Some(0x2000),
-        encoding: "utf8".to_string(),
-        string_type: None,
-        section: None,
-        encoding_chain: Vec::new(),
-        fragments: None,
-    });
-
-    // No findings that would match the none: condition
-    let findings = vec![];
-
-    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None)
-        .with_additional_findings(&findings);
-
-    let trait_def = TraitDefinition {
-        id: "test/combined-downgrade-pass".to_string(),
-        desc: "Test combined all+none downgrade passes".to_string(),
-        conf: 1.0,
-        crit: Criticality::Suspicious,
-        mbc: None,
-        attack: None,
-        platforms: vec![Platform::All],
-        arch: vec![Arch::All],
-        r#for: vec![FileType::All],
-        for_from_groups: false,
-        r#if: Condition::Text(TextQuery {
-            encoding: None,
-            length_min: None,
-            length_max: None,
-            exclude_html_comments: false,
-            exact: Some("suspicious_call".to_string()),
-            substr: None,
-            regex: None,
-            word: None,
-            case_insensitive: false,
-            is_check: None,
-            section: None,
-            offset: None,
-            offset_range: None,
-            section_offset: None,
-            section_offset_range: None,
-            not: None,
-            platforms: None,
-        }),
-        size_max: None,
-        count_min: None,
-        count_max: None,
-        per_kb_min: None,
-        per_kb_max: None,
-        entropy_min: None,
-        entropy_max: None,
-        size_min: None,
-        not: None,
-        unless: None,
-        downgrade: Some(DowngradeConditions {
-            all: Some(vec![Condition::Text(TextQuery {
-                encoding: None,
-                length_min: None,
-                length_max: None,
-                exclude_html_comments: false,
-                exact: Some("/bin/sh".to_string()),
-                substr: None,
-                regex: None,
-                word: None,
-                case_insensitive: false,
-                is_check: None,
-                section: None,
-                offset: None,
-                offset_range: None,
-                section_offset: None,
-                section_offset_range: None,
-                not: None,
-                platforms: None,
-            })]),
-            any: None,
-            // none: passes because "nonexistent/trait" is NOT present
-            none: Some(vec![Condition::Trait {
-                id: "nonexistent/trait".to_string(),
-            }]),
-            needs: None,
-            scope: None,
-        }),
-        defined_in: std::path::PathBuf::from("test.yaml"),
-        precision: None,
-        ..Default::default()
-    };
-
-    let result = trait_def.evaluate(&ctx);
-    assert!(result.is_some());
-    let finding = result.unwrap();
-    // Both all: and none: pass → downgrade fires: Suspicious → Notable
-    assert_eq!(finding.crit, Criticality::Notable);
-}
 
 #[test]
 fn test_downgrade_needs_threshold_not_met() {
@@ -4275,7 +4053,6 @@ fn test_downgrade_needs_threshold_not_met() {
                     id: "test/also-nonexistent".to_string(),
                 },
             ]),
-            none: None,
             needs: Some(2), // Requires 2 matches, only 1 present
             scope: None,
         }),
@@ -4387,7 +4164,6 @@ fn test_downgrade_needs_threshold_met() {
                     id: "test/nonexistent".to_string(),
                 },
             ]),
-            none: None,
             needs: Some(2), // Requires 2 matches, 2 present
             scope: None,
         }),
@@ -4501,7 +4277,6 @@ fn test_composite_downgrade_all_match() {
                 },
             ]),
             any: None,
-            none: None,
             needs: None,
             scope: None,
         }),
@@ -4515,96 +4290,6 @@ fn test_composite_downgrade_all_match() {
     let finding = result.unwrap();
     // Both downgrade.all conditions match → downgrade fires: Suspicious → Notable
     assert_eq!(finding.crit, Criticality::Notable);
-}
-
-#[test]
-fn test_composite_downgrade_none_blocks() {
-    let (mut report, data) = create_test_context();
-    report.imports.push(Import {
-        symbol: "socket".to_string(),
-        library: None,
-        offset: None,
-        alias: None,
-    });
-
-    // Provide a finding that matches the downgrade.none condition — should block downgrade
-    let findings = vec![Finding {
-        precomputed_spans: None,
-        src: None,
-        id: "file/signed/apple".to_string().into(),
-        kind: FindingKind::Capability,
-        desc: "Apple-signed binary".to_string().into(),
-        conf: 1.0,
-        crit: Criticality::Baseline,
-        mbc: None,
-        attack: None,
-        trait_refs: vec![],
-        evidence: vec![],
-        match_count: 0,
-        source_file: None,
-        downgraded: false,
-    }];
-
-    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None)
-        .with_additional_findings(&findings);
-
-    let rule = CompositeTrait {
-        required_trait_indices: Vec::new(),
-        id: "test/composite-downgrade-none".to_string(),
-        desc: "Test downgrade blocked by none".to_string(),
-        conf: 0.9,
-        crit: Criticality::Hostile,
-        mbc: None,
-        attack: None,
-        platforms: vec![Platform::All],
-        arch: vec![Arch::All],
-        r#for: vec![FileType::All],
-        for_from_groups: false,
-        size_min: None,
-        size_max: None,
-        all: Some(vec![Condition::Symbol(SymbolQuery {
-            exact: None,
-            substr: None,
-            regex: Some("socket".to_string()),
-            platforms: None,
-            is_check: None,
-            kind: None,
-            arg: None,
-            args: None,
-            alias: None,
-            not: None,
-            module_level: false,
-            receiver: None,
-        })]),
-        any: None,
-        unless: None,
-        not: None,
-        needs: None,
-        near_lines: None,
-        near_bytes: None,
-        scope: None,
-        downgrade: Some(DowngradeConditions {
-            all: None,
-            any: Some(vec![Condition::Trait {
-                id: "file/type/shell-script".to_string(), // NOT in findings
-            }]),
-            none: Some(vec![Condition::Trait {
-                id: "file/signed/apple".to_string(), // IS in findings → blocks downgrade
-            }]),
-            needs: None,
-            scope: None,
-        }),
-        defined_in: std::path::PathBuf::from("test.yaml"),
-        precision: None,
-        ..Default::default()
-    };
-
-    let result = rule.evaluate(&ctx);
-    assert!(result.is_some());
-    let finding = result.unwrap();
-    // downgrade.none includes "file/signed/apple" which IS present → downgrade blocked
-    // Original criticality should be preserved
-    assert_eq!(finding.crit, Criticality::Hostile);
 }
 
 // ============================================================================
@@ -5500,4 +5185,84 @@ fn uppercase_shorthand_not_matches_at_every_level() {
 
     assert!(condition_level.evaluate(&ctx).is_none());
     assert!(composite_level.evaluate(&ctx).is_none());
+}
+
+#[test]
+fn downgrade_none_is_rejected() {
+    let yaml = "any:\n  - id: test::context\nnone:\n  - id: test::blocker\n";
+    assert!(crate::yaml::from_str::<DowngradeConditions>(yaml).is_err());
+}
+
+#[test]
+fn guarded_context_controls_downgrade_without_hiding_finding() {
+    let (report, data) = create_test_context();
+    let fact = |id: &str| Finding {
+        precomputed_spans: None,
+        src: None,
+        id: id.to_string().into(),
+        kind: FindingKind::Capability,
+        desc: "test context".to_string().into(),
+        conf: 1.0,
+        crit: Criticality::Notable,
+        mbc: None,
+        attack: None,
+        trait_refs: vec![],
+        evidence: vec![],
+        match_count: 0,
+        source_file: None,
+        downgraded: false,
+    };
+    let reference = |id: &str| Condition::Trait { id: id.to_string() };
+    let guard = CompositeTrait {
+        id: "test::guard".into(),
+        desc: "Guarded fixture context".into(),
+        crit: Criticality::Exception,
+        all: Some(vec![reference("test::fixture")]),
+        unless: Some(vec![reference("test::interpreter")]),
+        ..Default::default()
+    };
+    let target = TraitDefinition {
+        id: "test::target".into(),
+        desc: "Target evidence".into(),
+        crit: Criticality::Suspicious,
+        r#if: Condition::Text(TextQuery {
+            exact: Some("/bin/sh".into()),
+            ..Default::default()
+        }),
+        downgrade: Some(DowngradeConditions {
+            all: None,
+            any: Some(vec![reference("test::guard")]),
+            needs: None,
+            scope: None,
+        }),
+        ..Default::default()
+    };
+    for (fixture, interpreter, expected) in [
+        (false, false, Criticality::Suspicious),
+        (true, false, Criticality::Notable),
+        (true, true, Criticality::Suspicious),
+    ] {
+        let mut findings = Vec::new();
+        if fixture {
+            findings.push(fact("test::fixture"));
+        }
+        if interpreter {
+            findings.push(fact("test::interpreter"));
+        }
+        let context =
+            EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None)
+                .with_additional_findings(&findings);
+        let guarded = guard.evaluate(&context);
+        if let Some(finding) = guarded {
+            findings.push(finding);
+        }
+        let context =
+            EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None)
+                .with_additional_findings(&findings);
+        let finding = target.evaluate(&context).expect("target remains visible");
+        assert_eq!(
+            finding.crit, expected,
+            "fixture={fixture} interpreter={interpreter}"
+        );
+    }
 }

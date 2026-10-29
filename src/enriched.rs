@@ -369,7 +369,7 @@ fn open_browser(url: &str) {
         }
         _ => return,
     };
-    let Some(path) = filefacts::tools::resolve(opener) else {
+    let Some(path) = crate::tool_resolution::resolve(opener) else {
         return;
     };
     let spawned = Command::new(path)

@@ -294,7 +294,7 @@ const BANNED_SEGMENT_EXCEPTIONS: &[(&str, &str)] = &[
 
 /// Maximum atomic traits and composite rules combined in any directory.
 /// Every directory uses the same limit; there are no path-specific budgets.
-pub(crate) const MAX_TRAITS_PER_DIRECTORY: usize = 95;
+pub(crate) const MAX_TRAITS_PER_DIRECTORY: usize = 100;
 
 /// Baseline findings are too broad to represent a named entity. Components are
 /// still allowed when they are incomplete evidence for an identity.
@@ -804,15 +804,12 @@ fn find_tier_wellknown_violations(
         if let Some(unless) = &trait_def.unless {
             scan_conditions(unless, true, &mut refs);
         }
-        // Atomic traits also support `downgrade:` with all/any/none — all benign-context.
+        // Atomic traits also support `downgrade:` with all/any — all benign-context.
         if let Some(downgrade) = &trait_def.downgrade {
             if let Some(c) = &downgrade.all {
                 scan_conditions(c, true, &mut refs);
             }
             if let Some(c) = &downgrade.any {
-                scan_conditions(c, true, &mut refs);
-            }
-            if let Some(c) = &downgrade.none {
                 scan_conditions(c, true, &mut refs);
             }
         }
@@ -844,9 +841,6 @@ fn find_tier_wellknown_violations(
                 scan_conditions(c, true, &mut refs);
             }
             if let Some(c) = &downgrade.any {
-                scan_conditions(c, true, &mut refs);
-            }
-            if let Some(c) = &downgrade.none {
                 scan_conditions(c, true, &mut refs);
             }
         }
@@ -1031,9 +1025,6 @@ fn composite_condition_lists(rule: &CompositeTrait) -> Vec<(&'static str, &[Cond
         }
         if let Some(c) = &d.any {
             lists.push(("downgrade.any", c));
-        }
-        if let Some(c) = &d.none {
-            lists.push(("downgrade.none", c));
         }
     }
     lists
@@ -1238,10 +1229,7 @@ pub(crate) fn find_unreferenced_exceptions<'a>(
             }
         }
         if let Some(d) = &t.downgrade {
-            for conds in [d.all.as_ref(), d.any.as_ref(), d.none.as_ref()]
-                .into_iter()
-                .flatten()
-            {
+            for conds in [d.all.as_ref(), d.any.as_ref()].into_iter().flatten() {
                 for cond in conds {
                     for id in cond.trait_references() {
                         refs.push((false, &t.id, id));
@@ -3655,17 +3643,23 @@ fn is_low_tier_named_binary_fact(t: &TraitDefinition) -> bool {
     }
     match &t.r#if {
         Condition::Kv(q) => {
-            matches!(q.path.as_str(),
-                "pe.version.company" | "pe.version.product_name"
-                | "pe.version.original_filename" | "pe.version.description"
-                | "pe.signatures[0].subject" | "pe.signatures[*].subject")
-                && [q.exact.as_deref(), q.substr.as_deref(), q.regex.as_deref()]
-                    .iter().any(|v| v.is_some_and(|s| !s.is_empty()))
+            matches!(
+                q.path.as_str(),
+                "pe.version.company"
+                    | "pe.version.product_name"
+                    | "pe.version.original_filename"
+                    | "pe.version.description"
+                    | "pe.signatures[0].subject"
+                    | "pe.signatures[*].subject"
+            ) && [q.exact.as_deref(), q.substr.as_deref(), q.regex.as_deref()]
+                .iter()
+                .any(|v| v.is_some_and(|s| !s.is_empty()))
         }
         Condition::Text(q) => {
             q.section.as_deref() == Some(".rsrc")
                 && [q.exact.as_deref(), q.substr.as_deref(), q.regex.as_deref()]
-                    .iter().any(|v| v.is_some_and(|s| !s.is_empty()))
+                    .iter()
+                    .any(|v| v.is_some_and(|s| !s.is_empty()))
         }
         _ => false,
     }

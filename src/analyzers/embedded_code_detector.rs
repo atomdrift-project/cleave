@@ -1543,7 +1543,9 @@ fn file_type_for_script_language(language: &str) -> Option<FileType> {
 }
 
 fn encoding_chain_for_deobfuscation(result: &stng::script::DeobfuscationResult) -> Vec<String> {
-    if result.language == "powershell" && result.chain_description.contains("utf16le") {
+    if result.language == stng::script::detect::ScriptLanguage::PowerShell
+        && result.chain_description.contains("utf16le")
+    {
         vec!["base64-utf16le".to_string()]
     } else {
         vec!["script".to_string()]
@@ -1602,7 +1604,9 @@ fn encoded_powershell_finding(parent_path: &str, decoded_len: usize, offset: u64
         )
         .into(),
         conf: 0.95,
-        crit: Criticality::Suspicious,
+        // Encoding a PowerShell command does not establish hostile intent;
+        // the decoded layer's findings supply any stronger evidence.
+        crit: Criticality::Notable,
         mbc: None,
         attack: Some("T1059.001".into()),
         evidence: vec![Evidence {
@@ -1808,7 +1812,7 @@ pub(crate) fn analyze_script_deobfuscation_layers(
         if cancelled.is_some_and(|flag| flag.load(Ordering::Acquire)) {
             break;
         }
-        let Some(file_type) = file_type_for_script_language(result.language) else {
+        let Some(file_type) = file_type_for_script_language(result.language.as_str()) else {
             continue;
         };
         let encoding_chain = encoding_chain_for_deobfuscation(&result);
@@ -2336,11 +2340,12 @@ traits:
     /// must be listed so its `metadata/lang/encoded/<name>` id validates.
     #[test]
     fn deobfuscation_layers_are_known_encoded_layer_names() {
+        use stng::script::detect::ScriptLanguage;
         for (language, chain) in [
-            ("powershell", "powershell:encodedcommand+utf16le"),
-            ("powershell", "powershell:iex"),
-            ("python", "python:base64+zlib"),
-            ("php", "php:gzinflate+base64_decode"),
+            (ScriptLanguage::PowerShell, "powershell:encodedcommand+utf16le"),
+            (ScriptLanguage::PowerShell, "powershell:iex"),
+            (ScriptLanguage::Python, "python:base64+zlib"),
+            (ScriptLanguage::Php, "php:gzinflate+base64_decode"),
         ] {
             let result = stng::script::DeobfuscationResult {
                 decoded: String::new(),
@@ -3147,6 +3152,14 @@ IAAAAAAAsDyZDwU=";
         let b64 = base64::engine::general_purpose::STANDARD.encode(&utf16);
         let result = decode_utf16le(&b64);
         assert_eq!(result.as_deref(), Some("IEX"));
+    }
+
+    #[test]
+    fn encoded_powershell_is_notable_without_behavioral_evidence() {
+        assert_eq!(
+            encoded_powershell_finding("test.vbs", 20, 0).crit,
+            Criticality::Notable
+        );
     }
 
     #[test]

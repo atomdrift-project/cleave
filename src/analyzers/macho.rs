@@ -2755,14 +2755,10 @@ mod tests {
             "ABCDE12345",
             "macho.code_signature",
         ));
-        identity.signer = Some(filefacts::Signer {
-            common_name: Some("Developer ID Application: Acme Inc. (ABCDE12345)".to_string()),
-            organization: Some("Acme Inc.".to_string()),
-            subject: None,
-            issuer: None,
-            signed_at: None,
-            source: "macho.code_signature".to_string(),
-        });
+        let mut signer = filefacts::Signer::new("macho.code_signature");
+        signer.common_name = Some("Developer ID Application: Acme Inc. (ABCDE12345)".to_string());
+        signer.organization = Some("Acme Inc.".to_string());
+        identity.signer = Some(signer);
         let mut entitlements = serde_json::Map::new();
         entitlements.insert(
             "com.apple.security.cs.debugger".to_string(),

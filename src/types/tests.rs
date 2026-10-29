@@ -67,7 +67,7 @@ fn test_path_access_type_enum() {
 fn test_string_type_enum_variants() {
     let types = vec![
         StringType::Url,
-        StringType::IP,
+        StringType::Ip,
         StringType::Path,
         StringType::Email,
         StringType::Base64,

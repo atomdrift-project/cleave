@@ -1892,9 +1892,7 @@ fn render_identity(out: &mut String, id: &filefacts::Identity, colorize: bool) {
             if let Some(email) = a.email.as_deref().filter(|e| Some(*e) != a.name.as_deref()) {
                 text.push_str(&format!(" <{}>", truncate_end(email, 48)));
             }
-            if !a.role.is_empty() {
-                text.push_str(&format!(" ({})", a.role));
-            }
+            text.push_str(&format!(" ({})", a.role));
             Some(text)
         })
         .collect();

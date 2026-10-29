@@ -624,8 +624,6 @@ fn trait_ref(cond: &Condition) -> Option<&str> {
 /// - any `downgrade.all` entry that is also in `unless:` (the clause needs all of them,
 ///   so one suppressed leg kills it)
 ///
-/// `downgrade.none` is inverted — an entry there is not dead — and is skipped.
-///
 /// Returns one entry per dead clause.
 #[must_use]
 /// A suppressor that can never let its rule through.
@@ -843,9 +841,7 @@ fn direct_suppression_counts(
 ) -> (usize, usize) {
     let unless_count = unless.map_or(0, Vec::len);
     let downgrade_count = downgrade.map_or(0, |d| {
-        d.any.as_ref().map_or(0, Vec::len)
-            + d.all.as_ref().map_or(0, Vec::len)
-            + d.none.as_ref().map_or(0, Vec::len)
+        d.any.as_ref().map_or(0, Vec::len) + d.all.as_ref().map_or(0, Vec::len)
     });
     (unless_count, downgrade_count)
 }
@@ -1104,7 +1100,7 @@ fn expand_suppressions<'a>(
 
     let downgrade_lists = downgrade
         .into_iter()
-        .flat_map(|d| [d.any.as_ref(), d.all.as_ref(), d.none.as_ref()]);
+        .flat_map(|d| [d.any.as_ref(), d.all.as_ref()]);
     let conditions = unless
         .into_iter()
         .chain(downgrade_lists.flatten())
@@ -1405,7 +1401,7 @@ fn count_concrete_hex_bytes(pattern: &str) -> usize {
 #[must_use]
 /// Collect a composite's positive (`all:`/`any:`) trait references.
 ///
-/// `unless:`, `none:`, and `downgrade:` are exclusions and deliberately ignored —
+/// `unless:` and `downgrade:` are exclusions and deliberately ignored —
 /// they suppress a match, they never supply the purpose-defining evidence.
 fn positive_trait_refs(rule: &CompositeTrait) -> Vec<String> {
     let mut refs = Vec::new();
@@ -1796,13 +1792,9 @@ pub(crate) fn find_orphaned_components(
         }
 
         if let Some(downgrade) = &rule.downgrade {
-            for conditions in [
-                downgrade.any.as_ref(),
-                downgrade.all.as_ref(),
-                downgrade.none.as_ref(),
-            ]
-            .into_iter()
-            .flatten()
+            for conditions in [downgrade.any.as_ref(), downgrade.all.as_ref()]
+                .into_iter()
+                .flatten()
             {
                 for condition in conditions {
                     for id in condition.trait_references() {
@@ -1852,13 +1844,9 @@ pub(crate) fn find_orphaned_components(
         }
 
         if let Some(downgrade) = &trait_def.downgrade {
-            for conditions in [
-                downgrade.any.as_ref(),
-                downgrade.all.as_ref(),
-                downgrade.none.as_ref(),
-            ]
-            .into_iter()
-            .flatten()
+            for conditions in [downgrade.any.as_ref(), downgrade.all.as_ref()]
+                .into_iter()
+                .flatten()
             {
                 for condition in conditions {
                     for id in condition.trait_references() {
@@ -2402,16 +2390,11 @@ pub(crate) fn find_broad_notable_downgrades<'a>(
             return;
         }
         let Some(downgrade) = downgrade else { return };
-        // Breadth is how many *independent* things can fire the downgrade, so
-        // `any:`/`none:` legs count one each while a whole `all:` block counts
-        // once: its legs must all match, which narrows the trigger rather than
-        // widening it. Summing them punished well-targeted conjunctions like
-        // "many imports AND a graphics import AND one of three runtime markers".
+        // A positive `all:` block narrows the alternatives and counts once.
         let all_len = downgrade.all.as_ref().map_or(0, Vec::len);
         let widening = DowngradeConditions {
             all: None,
             any: downgrade.any.clone(),
-            none: downgrade.none.clone(),
             needs: downgrade.needs,
             scope: downgrade.scope,
         };
@@ -2557,15 +2540,9 @@ pub(crate) fn find_directory_shadowed_refs(
                      is_composite: bool,
                      all: Option<&Vec<Condition>>,
                      any: Option<&Vec<Condition>>,
-                     none: Option<&Vec<Condition>>,
                      unless: Option<&Vec<Condition>>,
                      downgrade: Option<&DowngradeConditions>| {
-        for (clause, list) in [
-            ("all", all),
-            ("any", any),
-            ("none", none),
-            ("unless", unless),
-        ] {
+        for (clause, list) in [("all", all), ("any", any), ("unless", unless)] {
             if let Some(list) = list {
                 scan(id, is_composite, clause, list);
             }
@@ -2574,7 +2551,6 @@ pub(crate) fn find_directory_shadowed_refs(
             for (clause, list) in [
                 ("downgrade.all", d.all.as_ref()),
                 ("downgrade.any", d.any.as_ref()),
-                ("downgrade.none", d.none.as_ref()),
             ] {
                 if let Some(list) = list {
                     scan(id, is_composite, clause, list);
@@ -2589,7 +2565,6 @@ pub(crate) fn find_directory_shadowed_refs(
             false,
             None,
             None,
-            None,
             t.unless.as_ref(),
             t.downgrade.as_ref(),
         );
@@ -2600,7 +2575,6 @@ pub(crate) fn find_directory_shadowed_refs(
             true,
             r.all.as_ref(),
             r.any.as_ref(),
-            None,
             r.unless.as_ref(),
             r.downgrade.as_ref(),
         );

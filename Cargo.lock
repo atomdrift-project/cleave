@@ -1461,9 +1461,9 @@ dependencies = [
 
 [[package]]
 name = "ctutils"
-version = "0.4.6"
+version = "0.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe3e9d21d39e6f39ff46e03d5b621424f88ee23d8a1672c6bfc9ccc7f2da4f6a"
+checksum = "a2376ffd6f96d8a9db59875b4b6b0237d6900b5baf64279714e05493ce64828a"
 dependencies = [
  "cmov",
  "subtle",
@@ -1983,7 +1983,7 @@ checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 [[package]]
 name = "filefacts"
 version = "2.0.1"
-source = "git+https://github.com/atomdrift-project/filefacts.git#e0d65ab7262000c4ce2b899244ca58f350e02c9e"
+source = "git+https://github.com/atomdrift-project/filefacts.git#036bda5e889100fc5be981a293ee8084ae0963c4"
 dependencies = [
  "aho-corasick",
  "cab",
@@ -5881,7 +5881,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#e0d65ab7262000c4ce2b899244ca58f350e02c9e"
+source = "git+https://github.com/atomdrift-project/filefacts.git#036bda5e889100fc5be981a293ee8084ae0963c4"
 dependencies = [
  "cc",
  "tree-sitter",

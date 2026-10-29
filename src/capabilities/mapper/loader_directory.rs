@@ -6231,6 +6231,32 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     #[test]
+    fn registry_policy_is_identified_before_parsing_local_rule_id() {
+        let yaml = r#"defaults:
+  for: [registry]
+  platforms: [all]
+composite_rules:
+  - id: registry-security-held-package
+    desc: Registry reports security hold
+    crit: hostile
+    scope: file
+    any:
+      - id: metadata/registry::registry-security-hold
+      - id: metadata/registry::registry-security-hold-record
+"#;
+        let mappings = serde_yaml::from_str(yaml).unwrap();
+        let root = Path::new("traits");
+        let path = root.join("objectives/supply-chain/security-hold/withdrawn.yaml");
+        let file = super::prepare_trait_file(&path, mappings, Vec::new(), root, false, false);
+        assert!(
+            file.rule_parsing_warnings.is_empty(),
+            "{:?}",
+            file.rule_parsing_warnings
+        );
+        assert_eq!(file.rules[0].rule.crit, crate::types::Criticality::Hostile);
+    }
+
+    #[test]
     #[allow(clippy::expect_used)]
     fn full_validation_rejects_new_metadata_file_string_definition() {
         let dir = tempfile::tempdir().expect("create temporary trait tree");
@@ -6761,7 +6787,16 @@ fn prepare_trait_file(
         });
     }
 
-    for raw_rule in mappings.composite_rules {
+    for mut raw_rule in mappings.composite_rules {
+        // Parsing-time policy checks need the canonical ID, not the local YAML ID.
+        if let Some(ref prefix) = trait_prefix {
+            if !raw_rule.id.starts_with(prefix)
+                && !raw_rule.id.contains("::")
+                && !raw_rule.id.contains('/')
+            {
+                raw_rule.id = format!("{}::{}", prefix, raw_rule.id);
+            }
+        }
         // Convert raw rule to final rule, applying file-level defaults
         let mut rule = apply_composite_defaults(
             raw_rule,

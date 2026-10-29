@@ -84,8 +84,11 @@ fn cached_buckets(cache: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Packed rule sources scan like plain ones, and a traits tree's own
+/// `third-party/compiled/` is never loaded — not even a valid one: a compiled
+/// bucket is native code, so it only ever comes from this host's cache.
 #[test]
-fn cli_scans_packed_yaml_yara_and_precompiled_buckets() {
+fn cli_scans_packed_yaml_yara_and_ignores_shipped_buckets() {
     let temp = tempfile::tempdir().unwrap();
     let plain = temp.path().join("plain");
     let packed = temp.path().join("packed");
@@ -93,12 +96,6 @@ fn cli_scans_packed_yaml_yara_and_precompiled_buckets() {
     fs::create_dir_all(plain.join(relative)).unwrap();
     fs::write(plain.join(relative).join("traits.yaml"), TRAIT).unwrap();
     fs::write(plain.join(relative).join("probe.yar"), YARA).unwrap();
-
-    let plain_compiled = plain.join("third-party/compiled");
-    cleave::traits_repo::set_override_dir(Some(plain.clone()));
-    let result = cleave::precompile_yara(&plain_compiled, true);
-    cleave::traits_repo::set_override_dir(None);
-    result.unwrap();
 
     pack(
         &plain.join(relative).join("traits.yaml"),
@@ -108,25 +105,12 @@ fn cli_scans_packed_yaml_yara_and_precompiled_buckets() {
         &plain.join(relative).join("probe.yar"),
         &packed.join(relative).join("probe.yar.zst"),
     );
-    let packed_compiled = packed.join("third-party/compiled");
-    fs::create_dir_all(&packed_compiled).unwrap();
-    fs::copy(
-        plain_compiled.join("manifest.json"),
-        packed_compiled.join("manifest.json"),
-    )
-    .unwrap();
-    let mut buckets = Vec::new();
-    for entry in fs::read_dir(&plain_compiled).unwrap() {
-        let path = entry.unwrap().path();
-        if path.extension().is_some_and(|ext| ext == "yrc") {
-            let name = format!("{}.zst", path.file_name().unwrap().to_string_lossy());
-            let target = packed_compiled.join(name);
-            pack(&path, &target);
-            buckets.push(target);
-        }
-    }
-    assert!(!buckets.is_empty(), "precompiler produced no YARA buckets");
-    assert!(buckets.iter().all(|path| path.is_file()));
+    // A valid precompiled set beside the sources, as an older bundle shipped.
+    let shipped = packed.join("third-party/compiled");
+    cleave::traits_repo::set_override_dir(Some(plain.clone()));
+    let result = cleave::precompile_yara(&shipped, true);
+    cleave::traits_repo::set_override_dir(None);
+    result.unwrap();
 
     let yara_sample = temp.path().join("yara-probe.php");
     fs::write(&yara_sample, "<?php /* cleave-packed-probe-marker */ ?>").unwrap();
@@ -136,36 +120,22 @@ fn cli_scans_packed_yaml_yara_and_precompiled_buckets() {
         r#"<?php $probe = "cleave-packed-probe-marker"; ?>"#,
     )
     .unwrap();
-    let warm_cache = temp.path().join("warm-cache");
-    let warm = run_scan(&packed, &warm_cache, &yara_sample);
-    assert_match(&warm, "packed_probe_yara");
-    assert_match(
-        &run_scan(&packed, &warm_cache, &yaml_sample),
-        "packed-probe",
-    );
-    let warm_log = String::from_utf8_lossy(&warm.stderr);
+    let cache = temp.path().join("cache");
+    let scan = run_scan(&packed, &cache, &yara_sample);
+    assert_match(&scan, "packed_probe_yara");
+    assert_match(&run_scan(&packed, &cache, &yaml_sample), "packed-probe");
+    let log = String::from_utf8_lossy(&scan.stderr);
     assert!(
-        warm_log.contains("Using shipped pre-compiled YARA rules"),
-        "shipped bucket was not accepted: {warm_log}"
+        !log.contains("shipped pre-compiled"),
+        "a shipped bucket was loaded: {log}"
     );
-    assert!(cached_buckets(&warm_cache).is_empty());
-
-    // A corrupt shipped bucket must still detect from the packed source, and
-    // its recovered local cache must use packed storage on Windows.
-    for bucket in &buckets {
-        fs::write(bucket, b"corrupt zstd").unwrap();
-    }
-    let fallback_cache = temp.path().join("fallback-cache");
-    let fallback = run_scan(&packed, &fallback_cache, &yara_sample);
-    assert_match(&fallback, "packed_probe_yara");
-    assert_match(
-        &run_scan(&packed, &fallback_cache, &yaml_sample),
-        "packed-probe",
+    assert!(
+        !cached_buckets(&cache).is_empty(),
+        "buckets must compile into the local cache"
     );
-    assert!(!cached_buckets(&fallback_cache).is_empty());
     #[cfg(windows)]
     assert!(
-        cached_buckets(&fallback_cache)
+        cached_buckets(&cache)
             .iter()
             .all(|path| path.to_string_lossy().ends_with(".yrc.zst"))
     );

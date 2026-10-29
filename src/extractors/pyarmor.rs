@@ -125,7 +125,10 @@ mod tests {
         let runtime = include_bytes!("testdata/pyarmor-runtime-data.bin");
         let container = include_bytes!("testdata/pyarmor-container.bin");
         let expected = include_bytes!("testdata/pyarmor-plain.bin");
-        assert_eq!(recover(runtime, container).unwrap(), expected);
+        assert_eq!(
+            recover(runtime, container).as_deref(),
+            Some(expected.as_slice())
+        );
         let mut wrong_salt = *runtime;
         wrong_salt[0x300] ^= 1;
         assert!(recover(&wrong_salt, container).is_none());
@@ -140,8 +143,9 @@ mod tests {
         for (at, v) in [(0, 32u32), (8, 48), (12, 0x40912), (16, 8)] {
             header[at..at + 4].copy_from_slice(&v.to_le_bytes());
         }
-        let enc = ctr(&header, &[0x7a; 16], &[0x19; 12]).unwrap();
-        assert_eq!(ctr(&enc, &[0x7a; 16], &[0x19; 12]).unwrap(), header);
+        let decrypted = ctr(&header, &[0x7a; 16], &[0x19; 12])
+            .and_then(|enc| ctr(&enc, &[0x7a; 16], &[0x19; 12]));
+        assert_eq!(decrypted, Some(header.clone()));
         assert!(header_valid(&header, 80, 0x40912));
         assert!(!header_valid(&header, 81, 0x40912));
         header[16] = 9;

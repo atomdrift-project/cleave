@@ -1660,6 +1660,7 @@ fn sibling_cohorts(
 /// does not explain the extra branching and a human should check whether breadth
 /// could preserve precision with a simpler visible path.
 #[must_use]
+#[cfg(test)]
 pub(crate) fn find_sparse_sibling_cohorts(
     direct_rule_counts: &HashMap<String, usize>,
 ) -> Vec<(String, usize, usize)> {
@@ -4004,15 +4005,15 @@ mod printenv_filetype_allowance_tests {
         assert_eq!(symbol.r#for.len(), 13);
         for (path, permitted) in [
             (
-                "/traits/micro-behaviors/os/env/enumeration/query.yaml",
+                "/traits/micro-behaviors/os/env/enumerate/enumeration-query.yaml",
                 true,
             ),
             (
-                "/traits/micro-behaviors/os/env/enumeration/query-extra.yaml",
+                "/traits/micro-behaviors/os/env/enumerate/enumeration-query-extra.yaml",
                 false,
             ),
             (
-                "/traits/micro-behaviors/os/env/enumeration-extra/query.yaml",
+                "/traits/micro-behaviors/os/env/enumerate-extra/enumeration-query.yaml",
                 false,
             ),
         ] {
@@ -4031,7 +4032,7 @@ mod printenv_filetype_allowance_tests {
             other.r#if = crate::yaml::from_str(condition)?;
             let sources = HashMap::from([(
                 other.id.clone(),
-                "/traits/micro-behaviors/os/env/enumeration/query.yaml".to_string(),
+                "/traits/micro-behaviors/os/env/enumerate/enumeration-query.yaml".to_string(),
             )]);
             assert_eq!(find_broad_filetype_traits(&[other], &sources).len(), 1);
         }
@@ -4044,9 +4045,9 @@ mod printenv_filetype_allowance_tests {
             "id: printenv\ndesc: Named call reference\ncrit: notable\nconf: 0.6\nfor: [shell, batch, python, javascript, ruby, php, lua, perl]\nif:\n  type: symbol\n  kind: call\n  exact: printenv\n",
         )?;
         for path in [
-            "/traits/micro-behaviors/os/env/enumeration/query.yaml.backup.yaml",
-            "/traits/xmicro-behaviors/os/env/enumeration/query.yaml",
-            "/traits/micro-behaviors/os/env/enumeration/query.yaml/child.yaml",
+            "/traits/micro-behaviors/os/env/enumerate/enumeration-query.yaml.backup.yaml",
+            "/traits/xmicro-behaviors/os/env/enumerate/enumeration-query.yaml",
+            "/traits/micro-behaviors/os/env/enumerate/enumeration-query.yaml/child.yaml",
         ] {
             let sources = HashMap::from([(symbol.id.clone(), path.to_string())]);
             assert_eq!(

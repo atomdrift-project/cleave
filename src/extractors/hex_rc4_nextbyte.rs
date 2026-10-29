@@ -131,7 +131,10 @@ mod tests {
         outer.extend_from_slice(&[0; 8]);
         outer.extend_from_slice(&(hex.len() as u32).to_le_bytes());
         outer.extend_from_slice(&hex);
-        assert_eq!(recover(&outer).unwrap().data, &plain[64..]);
+        assert_eq!(
+            recover(&outer).map(|payload| payload.data),
+            Some(plain[64..].to_vec())
+        );
         let mut wrong_key = outer.clone();
         wrong_key[pe.len() + 4] ^= 1;
         assert!(recover(&wrong_key).is_none());

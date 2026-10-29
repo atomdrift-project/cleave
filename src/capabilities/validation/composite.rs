@@ -812,10 +812,22 @@ pub(crate) fn find_bare_or_crit_escalations(
 /// Also skips directory references since they can match multiple traits.
 ///
 /// Returns `(rule_id, clause_type: "any" or "all", trait_id)`.
+pub(crate) fn is_dependency_security_hold_policy(rule: &CompositeTrait) -> bool {
+    rule.id == "objectives/supply-chain/security-hold::declared-dependency-security-held"
+        && rule.r#for == [RuleFileType::PackageJson]
+        && rule.scope == Some(Scope::File)
+        && rule.any.as_ref().is_none_or(Vec::is_empty)
+        && rule.all.as_deref().is_some_and(|all| matches!(all,
+            [Condition::Trait { id }] if id == "metadata/package/dependencies/declaration::declared-dependency-security-held"))
+}
+
 #[must_use]
 pub(crate) fn find_single_item_clauses(
     rule: &CompositeTrait,
 ) -> Vec<(String, &'static str, String)> {
+    if is_dependency_security_hold_policy(rule) {
+        return Vec::new();
+    }
     let mut violations = Vec::new();
     if crate::capabilities::parsing::is_declared_dependency_security_hold_policy(
         &rule.id,
@@ -910,4 +922,40 @@ pub(crate) fn find_overlapping_conditions(
     }
 
     violations
+}
+
+#[cfg(test)]
+mod dependency_security_hold_policy_tests {
+    use super::*;
+
+    #[test]
+    fn exception_requires_exact_identity_scope_type_and_leg() {
+        let mut rule = CompositeTrait {
+            id: "objectives/supply-chain/security-hold::declared-dependency-security-held".into(),
+            r#for: vec![RuleFileType::PackageJson],
+            scope: Some(Scope::File),
+            all: Some(vec![Condition::Trait {
+                id: "metadata/package/dependencies/declaration::declared-dependency-security-held"
+                    .into(),
+            }]),
+            ..Default::default()
+        };
+        assert!(is_dependency_security_hold_policy(&rule));
+        assert!(find_single_item_clauses(&rule).is_empty());
+        rule.id.push_str("-impostor");
+        assert!(!is_dependency_security_hold_policy(&rule));
+        assert_eq!(find_single_item_clauses(&rule).len(), 1);
+        rule.id.pop();
+        rule.id = "objectives/supply-chain/security-hold::declared-dependency-security-held".into();
+        rule.scope = Some(Scope::Outer);
+        assert!(!is_dependency_security_hold_policy(&rule));
+        rule.scope = Some(Scope::File);
+        rule.r#for = vec![RuleFileType::Registry];
+        assert!(!is_dependency_security_hold_policy(&rule));
+        rule.r#for = vec![RuleFileType::PackageJson];
+        rule.all = Some(vec![Condition::Trait {
+            id: "unrelated::rule".into(),
+        }]);
+        assert!(!is_dependency_security_hold_policy(&rule));
+    }
 }

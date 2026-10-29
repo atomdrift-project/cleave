@@ -302,9 +302,7 @@ const ALLOWED_MB_CRYPTO: &[&str] = &[
     "hybrid", // Symmetric payload encryption combined with asymmetric key wrapping
     "kdf",
     "key",      // Key generation, import/export, exchange and representation
-    "library",  // Legacy implementation partition; migrating by operation
     "mnemonic", // Mnemonic representations of cryptographic seed material
-    "native",   // Legacy provider references; migrating to provider
     "provider", // Provider acquisition/release with no narrower operation
     "sign",     // Signing operations, algorithm may be unknown
     "symmetric",
@@ -1784,10 +1782,6 @@ mod tests {
                 "micro-behaviors/communications/irc",
             ),
             (
-                "micro-behaviors/crypto/native",
-                "micro-behaviors/crypto/provider",
-            ),
-            (
                 "micro-behaviors/crypto/symmetric/aes/decrypt",
                 "micro-behaviors/crypto/decrypt",
             ),
@@ -1851,6 +1845,20 @@ mod tests {
         std::fs::create_dir_all(traits_path.join("micro-behaviors/network/misc")).unwrap();
         let errors = validate_directory_structure(traits_path).unwrap_err();
         assert!(errors.iter().any(|e| e.contains("misc")));
+    }
+
+    #[test]
+    fn retired_crypto_library_and_native_homes_are_rejected() {
+        for retired in ["library", "native"] {
+            let temp = TempDir::new().unwrap();
+            std::fs::create_dir_all(temp.path().join("micro-behaviors/crypto").join(retired))
+                .unwrap();
+            let errors = validate_directory_structure(temp.path()).unwrap_err();
+            assert!(
+                errors.iter().any(|error| error.contains(retired)),
+                "{errors:?}"
+            );
+        }
     }
 
     #[test]

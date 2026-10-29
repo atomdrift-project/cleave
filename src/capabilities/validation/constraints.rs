@@ -1680,6 +1680,9 @@ pub(crate) fn find_hostile_composites_with_too_few_notable_legs(
         {
             continue;
         }
+        if super::composite::is_dependency_security_hold_policy(rule) {
+            continue;
+        }
 
         let mut terminals = Vec::new();
         let mut visiting = HashSet::new();

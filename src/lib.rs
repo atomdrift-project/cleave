@@ -88,6 +88,7 @@ mod payload_filter;
 pub mod random_validator;
 pub mod report_input;
 pub mod theme;
+pub mod tool_resolution;
 pub mod third_party_config;
 pub mod third_party_yara;
 pub mod types;
@@ -846,17 +847,17 @@ impl Default for AnalysisOptions {
     }
 }
 
-/// Clear thread-local caches on the calling thread, plus the process-global
-/// regex caches.
+/// Drop the process-wide regex caches, the only caches that grow without a
+/// per-file reset; call it under memory pressure from any thread.
 ///
-/// Rayon worker threads clear their own thread-local caches per-file, so no
-/// broadcast is needed. The regex caches are shared across all threads, so this
-/// is the one place we drop them — invoke under memory pressure (see
-/// `memory_tracker::start_periodic_logging`).
+/// Despite the name, other threads' thread-local caches are not touched: they
+/// are small, bounded, and every analysis worker clears its own after each
+/// file, so no broadcast is needed (and `rayon::broadcast` would block behind
+/// workers inside long YARA scans). Only the calling thread's are cleared.
 pub fn clear_all_thread_caches() {
     clear_thread_local_caches();
     clear_regex_caches();
-    tracing::debug!("Cleared thread-local caches and regex caches on calling thread");
+    tracing::debug!("Cleared the shared regex caches and this thread's local caches");
 }
 
 /// Pre-warm the YARA engine on a non-rayon thread.
@@ -3228,9 +3229,9 @@ where
 /// `callback`. A caught analyzer panic surfaces as a [`ScanEvent::File`] with an
 /// `Err` rather than poisoning the rayon pool.
 ///
-/// Shared by [`scan_directory`] and [`scan_paths`] so both filter, tally, and
-/// report identically — the only difference between them is how the path list
-/// is produced (an internal walk vs. a caller-supplied list).
+/// Shared by [`scan_directory`], [`scan_paths`] and [`scan_files`] so all three
+/// tally and report identically — they differ only in how the path list is
+/// produced and whether the filters apply.
 #[allow(clippy::too_many_arguments)]
 fn analyze_one_path<F>(
     file_path: &Path,
@@ -3541,8 +3542,54 @@ where
 /// including caught panics, are delivered through the callback as a
 /// [`ScanEvent::File`] carrying an `Err` result.
 pub fn scan_paths<F>(
+    paths: Vec<std::path::PathBuf>,
+    options: &AnalysisOptions,
+    callback: F,
+) -> Result<ScanSummary>
+where
+    F: Fn(ScanEvent) + Sync,
+{
+    scan_list(paths, options, true, callback)
+}
+
+/// Analyze an explicit set of file paths in parallel, invoking `callback` for
+/// each as its analysis completes.
+///
+/// This is the multi-file analog of [`scan_directory`]: the CapabilityMapper and
+/// YARA engine are loaded once and shared across all rayon workers, and results
+/// stream out through the callback under the same [`ScanEvent`] contract — minus
+/// the directory walk. `ScanEvent::Start` carries the path count, which is known
+/// upfront here (unlike the streamed directory walk).
+///
+/// Unlike [`scan_directory`], paths are analyzed exactly as given: directories
+/// are not recursed (a directory path surfaces as a `ScanEvent::File` error),
+/// and the program-type and size filters are not applied — an explicitly named
+/// file is always analyzed. Use [`scan_directory`] to recurse a tree. Otherwise
+/// it is [`scan_paths`]: same ordering, memory gate, and cache maintenance.
+///
+/// # Errors
+///
+/// Returns `Err` only for setup failures (resource load). Per-file errors,
+/// including caught panics, are delivered through the callback as a
+/// [`ScanEvent::File`] carrying an `Err` result.
+pub fn scan_files<F>(
+    paths: &[std::path::PathBuf],
+    options: &AnalysisOptions,
+    callback: F,
+) -> Result<ScanSummary>
+where
+    F: Fn(ScanEvent) + Sync,
+{
+    scan_list(paths.to_vec(), options, false, callback)
+}
+
+/// The pipeline behind [`scan_paths`] and [`scan_files`]. `filtered` applies
+/// the size and program-type filters a directory walk would (honoring
+/// `options.all_files`); unfiltered lists analyze every path as given.
+fn scan_list<F>(
     mut paths: Vec<std::path::PathBuf>,
     options: &AnalysisOptions,
+    filtered: bool,
     callback: F,
 ) -> Result<ScanSummary>
 where
@@ -3551,8 +3598,7 @@ where
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     // Maintain the filefacts disk cache in the background, exactly as
-    // scan_directory does — a caller routing its own walk through scan_paths
-    // instead of scan_directory still expects the cache to be pruned.
+    // scan_directory does.
     cache::maintain_filefacts_cache();
 
     let engine = load_scan_resources(options)?;
@@ -3565,8 +3611,11 @@ where
     let analyzed = AtomicUsize::new(0);
     let skipped = AtomicUsize::new(0);
     let errors = AtomicUsize::new(0);
-    let all_files_flag = options.all_files;
-    let max_scan_size = options.max_scan_file_size;
+    let (all_files, max_scan_size) = if filtered {
+        (options.all_files, options.max_scan_file_size)
+    } else {
+        (true, 0)
+    };
 
     sort_largest_first(&mut paths);
 
@@ -3577,7 +3626,7 @@ where
             file_path,
             options,
             &engine,
-            all_files_flag,
+            all_files,
             max_scan_size,
             &mem_gate,
             &analyzed,
@@ -3595,6 +3644,7 @@ where
     let final_errors = errors.load(Ordering::Relaxed);
     tracing::info!(
         provided = total,
+        filtered,
         analyzed = final_analyzed,
         skipped = final_skipped,
         errors = final_errors,
@@ -3603,114 +3653,6 @@ where
 
     Ok(ScanSummary {
         total,
-        analyzed: final_analyzed,
-        errors: final_errors,
-    })
-}
-
-/// Analyze an explicit set of file paths in parallel, invoking `callback` for
-/// each as its analysis completes.
-///
-/// This is the multi-file analog of [`scan_directory`]: the CapabilityMapper and
-/// YARA engine are loaded once and shared across all rayon workers, and results
-/// stream out through the callback under the same [`ScanEvent`] contract — minus
-/// the directory walk. `ScanEvent::Start` carries the path count, which is known
-/// upfront here (unlike the streamed directory walk).
-///
-/// Unlike [`scan_directory`], paths are analyzed exactly as given: directories
-/// are not recursed (a directory path surfaces as a `ScanEvent::File` error),
-/// and the program-type and size filters are not applied — an explicitly named
-/// file is always analyzed. Use [`scan_directory`] to recurse a tree.
-///
-/// # Errors
-///
-/// Returns `Err` only for setup failures (resource load). Per-file errors,
-/// including caught panics, are delivered through the callback as a
-/// [`ScanEvent::File`] carrying an `Err` result.
-pub fn scan_files<F>(
-    paths: &[std::path::PathBuf],
-    options: &AnalysisOptions,
-    callback: F,
-) -> Result<ScanSummary>
-where
-    F: Fn(ScanEvent) + Sync,
-{
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    let engine = load_scan_resources(options)?;
-
-    let analyzed = AtomicUsize::new(0);
-    let skipped = AtomicUsize::new(0);
-    let errors = AtomicUsize::new(0);
-
-    callback(ScanEvent::Start {
-        total: Some(paths.len()),
-    });
-
-    // Explicit file lists need the same admission order as directory scans.
-    // QA's digest order otherwise starts expensive archives late in the pass.
-    let mut paths = paths.to_vec();
-    sort_largest_first(&mut paths);
-    let mem_gate = scan_mem_gate::ScanMemGate::new();
-    for_each_ordered(&paths, &|file_path| {
-        // Cancellation fast path: once SIGINT flips the flag, remaining slots
-        // return immediately so the scan drains in-flight work rather than
-        // starting new files. Mirrors scan_directory's par_bridge fast path.
-        if options
-            .cancellation
-            .as_ref()
-            .is_some_and(|c| c.load(Ordering::Relaxed))
-        {
-            skipped.fetch_add(1, Ordering::Relaxed);
-            return;
-        }
-
-        // Bound concurrent memory: a burst of large archives serialises instead
-        // of co-residing and OOM-killing the host. Held until this file is done.
-        let _mem_permit =
-            mem_gate.acquire(std::fs::metadata(file_path).map(|m| m.len()).unwrap_or(0));
-
-        // Catch panics so one malformed file can't poison the rayon pool and
-        // kill the whole batch.
-        let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let result = analyze_file_with_engine(file_path, options, &engine, None, None);
-            match &result {
-                Ok(_) => {
-                    analyzed.fetch_add(1, Ordering::Relaxed);
-                }
-                Err(_) => {
-                    errors.fetch_add(1, Ordering::Relaxed);
-                }
-            }
-            callback(ScanEvent::File {
-                path: file_path.clone(),
-                result: Box::new(result),
-            });
-            // Release wasmtime Scanner VMs on this thread (see scan_directory).
-            composite_rules::evaluators::clear_thread_local_caches();
-        }));
-        if panic_result.is_err() {
-            tracing::error!(path = %file_path.display(), "panic during file analysis (caught)");
-            errors.fetch_add(1, Ordering::Relaxed);
-            callback(ScanEvent::File {
-                path: file_path.clone(),
-                result: Box::new(Err(anyhow::anyhow!("analysis panicked"))),
-            });
-        }
-    });
-
-    let final_analyzed = analyzed.load(Ordering::Relaxed);
-    let final_errors = errors.load(Ordering::Relaxed);
-    tracing::info!(
-        total = paths.len(),
-        analyzed = final_analyzed,
-        skipped = skipped.load(Ordering::Relaxed),
-        errors = final_errors,
-        "File list scan complete"
-    );
-
-    Ok(ScanSummary {
-        total: paths.len(),
         analyzed: final_analyzed,
         errors: final_errors,
     })

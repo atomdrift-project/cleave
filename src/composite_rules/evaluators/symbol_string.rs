@@ -1992,7 +1992,7 @@ fn flow<'a>(ctx: &'a EvaluationContext<'_>) -> Option<&'a filefacts::Flow> {
     if flow
         .limitations
         .iter()
-        .any(|limit| limit != "source-local-may-flow-not-reachability")
+        .any(|limit| *limit != filefacts::Limitation::SourceLocalMayFlowNotReachability)
     {
         ctx.report
             .analysis_gaps
@@ -3591,7 +3591,7 @@ mod multi_arg_tests {
                         .as_mut()
                         .unwrap()
                         .limitations
-                        .insert("node-budget".into());
+                        .insert(filefacts::Limitation::NodeBudget);
                 }
                 _ => {}
             }

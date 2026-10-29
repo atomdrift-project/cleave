@@ -71,12 +71,7 @@ mod tests {
             "/tests/fixtures/java/Suspicious.class"
         ));
         let data = std::fs::read(path).expect("read Java class fixture");
-        let strings = [stng::ExtractedString {
-            value: "java-text-regression-marker".to_string(),
-            data_offset: 42,
-            method: stng::StringMethod::RawScan,
-            ..Default::default()
-        }];
+        let strings = [stng::ExtractedString::new("java-text-regression-marker".to_string(), 42, stng::StringMethod::RawScan)];
         let input = AnalysisInput::with_strings(path, &data, &strings, FileType::JavaClass);
 
         let report = JavaClassAnalyzer::new()

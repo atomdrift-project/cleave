@@ -827,7 +827,7 @@ pub(crate) fn calculate_trait_precision(trait_def: &TraitDefinition) -> f32 {
 /// Precision is a measure of how specific/constrained the rule is - how many filters/constraints it has.
 /// This RECURSIVELY counts ALL filters across the entire rule tree:
 /// - Base trait: pattern + size_min + size_max + platform + file_type + not + unless
-/// - Composite: file_type + recursively expanded all/any/none/unless clauses
+/// - Composite: file_type + recursively expanded all/any/unless clauses
 ///
 /// IMPORTANT: This is the ONLY place in the codebase for measuring rule precision.
 /// Do not duplicate this logic elsewhere.

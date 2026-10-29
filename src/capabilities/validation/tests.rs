@@ -4975,17 +4975,32 @@ mod taxonomy_tests {
             "type: text\nsection: .rsrc\nexact: Example\n",
         ] {
             fact.r#if = crate::yaml::from_str(yaml).unwrap();
-            assert!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty());
+            assert!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty()
+            );
         }
-        fact.r#if = crate::yaml::from_str("type: value\npath: pe.version.product_name\nexact: Example\n").unwrap();
+        fact.r#if =
+            crate::yaml::from_str("type: value\npath: pe.version.product_name\nexact: Example\n")
+                .unwrap();
         fact.crit = Criticality::Suspicious;
-        assert_eq!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(), 1);
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+            1
+        );
         fact.crit = Criticality::Notable;
         fact.id = "well-known/malware/demo::claim".to_string();
-        assert_eq!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(), 1);
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+            1
+        );
         fact.id = "well-known/app/demo::claim".to_string();
-        fact.r#if = crate::yaml::from_str("type: value\npath: pe.version.product_name\nexists: true\n").unwrap();
-        assert_eq!(find_wellknown_missing_size_filter(&[fact], &HashMap::new()).len(), 1);
+        fact.r#if =
+            crate::yaml::from_str("type: value\npath: pe.version.product_name\nexists: true\n")
+                .unwrap();
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[fact], &HashMap::new()).len(),
+            1
+        );
     }
 
     #[test]
@@ -5112,7 +5127,7 @@ mod taxonomy_tests {
 
     #[test]
     fn test_oversized_dir_uses_uniform_combined_limit() {
-        assert_eq!(MAX_TRAITS_PER_DIRECTORY, 95);
+        assert_eq!(MAX_TRAITS_PER_DIRECTORY, 100);
         let reviewed_path = "micro-behaviors/communications/http/url/path";
         let reviewed_rules: Vec<_> = (0..101)
             .map(|i| make_trait(&format!("{reviewed_path}::r{i}"), "other::t"))
@@ -5401,7 +5416,6 @@ mod constraint_tests {
                         id: "some-other-trait".to_string(),
                     }]),
                     all: None,
-                    none: None,
                     needs: None,
                     scope: None,
                 })
@@ -6134,11 +6148,7 @@ mod constraint_tests {
         use crate::capabilities::validation::constraints::find_dead_downgrades;
         use crate::composite_rules::traits::DowngradeConditions;
 
-        fn dg(
-            any: Option<&[&str]>,
-            all: Option<&[&str]>,
-            none: Option<&[&str]>,
-        ) -> DowngradeConditions {
+        fn dg(any: Option<&[&str]>, all: Option<&[&str]>) -> DowngradeConditions {
             let conv = |v: &[&str]| {
                 v.iter()
                     .map(|r| Condition::Trait {
@@ -6149,7 +6159,6 @@ mod constraint_tests {
             DowngradeConditions {
                 any: any.map(conv),
                 all: all.map(conv),
-                none: none.map(conv),
                 needs: None,
                 scope: None,
             }
@@ -6165,31 +6174,25 @@ mod constraint_tests {
         // Whole `any:` clause dead — every leg is also suppressed.
         let mut whole = create_trait_ref("d::whole", "x::x", Criticality::Suspicious, None, false);
         whole.unless = Some(unless(&["g::a"]));
-        whole.downgrade = Some(dg(Some(&["g::a"]), None, None));
+        whole.downgrade = Some(dg(Some(&["g::a"]), None));
 
         // Partially dead `any:` — one leg survives, so the clause still works.
         let mut partial =
             create_trait_ref("d::partial", "x::x", Criticality::Suspicious, None, false);
         partial.unless = Some(unless(&["g::a"]));
-        partial.downgrade = Some(dg(Some(&["g::a", "g::b"]), None, None));
+        partial.downgrade = Some(dg(Some(&["g::a", "g::b"]), None));
 
         // `all:` needs every leg, so one suppressed leg kills the whole clause.
         let mut all_dead = create_trait_ref("d::all", "x::x", Criticality::Suspicious, None, false);
         all_dead.unless = Some(unless(&["g::a"]));
-        all_dead.downgrade = Some(dg(None, Some(&["g::a", "g::b"]), None));
-
-        // `none:` is inverted — an entry there is not dead.
-        let mut inverted =
-            create_trait_ref("d::none", "x::x", Criticality::Suspicious, None, false);
-        inverted.unless = Some(unless(&["g::a"]));
-        inverted.downgrade = Some(dg(None, None, Some(&["g::a"])));
+        all_dead.downgrade = Some(dg(None, Some(&["g::a", "g::b"])));
 
         // Disjoint unless/downgrade — the ordinary, healthy shape.
         let mut clean = create_trait_ref("d::clean", "x::x", Criticality::Suspicious, None, false);
         clean.unless = Some(unless(&["g::a"]));
-        clean.downgrade = Some(dg(Some(&["g::b"]), None, None));
+        clean.downgrade = Some(dg(Some(&["g::b"]), None));
 
-        let traits = [whole, partial, all_dead, inverted, clean];
+        let traits = [whole, partial, all_dead, clean];
         let found = find_dead_downgrades(&traits, &[]);
 
         let ids: Vec<&str> = found.iter().map(|d| d.id.as_str()).collect();
@@ -6250,7 +6253,6 @@ mod constraint_tests {
                 id: "foo/bar::pinned".to_string(),
             }]),
             all: None,
-            none: None,
             needs: None,
             scope: None,
         });
@@ -6338,7 +6340,6 @@ mod constraint_tests {
         pinned.downgrade = Some(DowngradeConditions {
             any: Some(refs(&["s/t/"])),
             all: None,
-            none: None,
             needs: None,
             scope: None,
         });
@@ -6347,7 +6348,6 @@ mod constraint_tests {
         conditional.downgrade = Some(DowngradeConditions {
             any: None,
             all: Some(refs(&["s/t::leg", "w/z::context"])),
-            none: None,
             needs: None,
             scope: None,
         });
@@ -6419,14 +6419,12 @@ mod constraint_tests {
         fn dg(
             any: &[&str],
             all: &[&str],
-            none: &[&str],
             needs: Option<usize>,
             scope: Option<Scope>,
         ) -> DowngradeConditions {
             DowngradeConditions {
                 any: refs(any),
                 all: refs(all),
-                none: refs(none),
                 needs,
                 scope,
             }
@@ -6464,14 +6462,12 @@ mod constraint_tests {
             },
         ]);
 
-        let mut dg_none = rule("r::dg-none", &["s/t::leg"], &[], None);
-        dg_none.downgrade = Some(dg(&["s/t/"], &[], &["x/y::ctx"], None, None));
         let mut dg_scoped = rule("r::dg-scoped", &["s/t::leg"], &[], None);
-        dg_scoped.downgrade = Some(dg(&["s/t/"], &[], &[], None, Some(Scope::Archive)));
+        dg_scoped.downgrade = Some(dg(&["s/t/"], &[], None, Some(Scope::Archive)));
         let mut dg_needs_short = rule("r::dg-needs-short", &["s/t::leg"], &[], None);
-        dg_needs_short.downgrade = Some(dg(&["s/t/", "x/y::ctx"], &[], &[], Some(2), None));
+        dg_needs_short.downgrade = Some(dg(&["s/t/", "x/y::ctx"], &[], Some(2), None));
         let mut dg_needs_met = rule("r::dg-needs-met", &["s/t::leg", "u/v::leg"], &[], None);
-        dg_needs_met.downgrade = Some(dg(&["s/t/", "u/v::leg"], &[], &[], Some(2), None));
+        dg_needs_met.downgrade = Some(dg(&["s/t/", "u/v::leg"], &[], Some(2), None));
 
         let rules = [
             leaf_scope,
@@ -6479,7 +6475,6 @@ mod constraint_tests {
             outer_scope,
             same_dir,
             inline_any,
-            dg_none,
             dg_scoped,
             dg_needs_short,
             dg_needs_met,
@@ -7025,9 +7020,6 @@ mod autoprefix_tests {
                 any: Some(vec![Condition::Trait {
                     id: "any-local".to_string(),
                 }]),
-                none: Some(vec![Condition::Trait {
-                    id: "none-local".to_string(),
-                }]),
                 needs: None,
                 scope: None,
             }),
@@ -7044,10 +7036,6 @@ mod autoprefix_tests {
             Condition::Trait { id } => assert_eq!(id, "pfx::any-local"),
             _ => panic!("Expected Trait"),
         }
-        match &dg.none.unwrap()[0] {
-            Condition::Trait { id } => assert_eq!(id, "pfx::none-local"),
-            _ => panic!("Expected Trait"),
-        }
     }
 
     #[test]
@@ -7061,9 +7049,6 @@ mod autoprefix_tests {
                 any: Some(vec![Condition::Trait {
                     id: "dg-any-ref".to_string(),
                 }]),
-                none: Some(vec![Condition::Trait {
-                    id: "dg-none-ref".to_string(),
-                }]),
                 needs: None,
                 scope: None,
             }),
@@ -7073,7 +7058,6 @@ mod autoprefix_tests {
         let ids: Vec<&str> = refs.iter().map(|(id, _)| id.as_str()).collect();
         assert!(ids.contains(&"unless-ref"));
         assert!(ids.contains(&"dg-any-ref"));
-        assert!(ids.contains(&"dg-none-ref"));
     }
 
     fn make_trait_def(
@@ -7116,7 +7100,6 @@ mod autoprefix_tests {
                     id: "dg-all-ref".to_string(),
                 }]),
                 any: None,
-                none: None,
                 needs: None,
                 scope: None,
             }),
@@ -7197,7 +7180,6 @@ mod excessive_skip_tests {
             downgrade: (downgrade_all > 0).then(|| DowngradeConditions {
                 any: None,
                 all: Some(raw_conds(downgrade_all)),
-                none: None,
                 needs: None,
                 scope: None,
             }),
@@ -7655,9 +7637,9 @@ mod orphan_tests {
     }
 
     #[test]
-    fn test_find_orphaned_includes_downgrade_none() {
-        // Component referenced ONLY in downgrade.none: should NOT be orphaned
-        let trait_defs = vec![make_component_trait("test::comp-none-ref")];
+    fn test_find_orphaned_includes_downgrade_any() {
+        // Component referenced ONLY in downgrade.any: should NOT be orphaned
+        let trait_defs = vec![make_component_trait("test::comp-any-ref")];
         let composites = vec![make_composite(
             "test::my-composite",
             vec![Condition::Trait {
@@ -7665,9 +7647,8 @@ mod orphan_tests {
             }],
             Some(DowngradeConditions {
                 all: None,
-                any: None,
-                none: Some(vec![Condition::Trait {
-                    id: "test::comp-none-ref".to_string(),
+                any: Some(vec![Condition::Trait {
+                    id: "test::comp-any-ref".to_string(),
                 }]),
                 needs: None,
                 scope: None,
@@ -7679,8 +7660,8 @@ mod orphan_tests {
         let orphan_ids: Vec<&str> = orphans.iter().map(|(id, _)| id.as_str()).collect();
 
         assert!(
-            !orphan_ids.contains(&"test::comp-none-ref"),
-            "Component referenced in downgrade.none should NOT be orphaned, but got orphans: {:?}",
+            !orphan_ids.contains(&"test::comp-any-ref"),
+            "Component referenced in downgrade.any should NOT be orphaned, but got orphans: {:?}",
             orphan_ids
         );
     }
@@ -8637,12 +8618,21 @@ mod section_filter_validation_tests {
     #[test]
     fn only_reviewed_adobe_marker_keeps_whole_file_scope() {
         let traits = vec![
-            text_trait("well-known/app/system/adobe-acrobat-updater::adobe-acrobat-updater-text", vec![FileType::Pe]),
-            text_trait("well-known/app/productivity/adobe-reader::other", vec![FileType::Pe]),
+            text_trait(
+                "well-known/app/system/adobe-acrobat-updater::adobe-acrobat-updater-text",
+                vec![FileType::Pe],
+            ),
+            text_trait(
+                "well-known/app/productivity/adobe-reader::other",
+                vec![FileType::Pe],
+            ),
         ];
         let result = find_wellknown_missing_section_filter(&traits, &HashMap::new());
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].0, "well-known/app/productivity/adobe-reader::other");
+        assert_eq!(
+            result[0].0,
+            "well-known/app/productivity/adobe-reader::other"
+        );
     }
 
     #[test]
@@ -9411,7 +9401,6 @@ mod exception_validation_tests {
         c.downgrade = Some(DowngradeConditions {
             any: Some(vec![inline_cond()]),
             all: None,
-            none: None,
             needs: None,
             scope: None,
         });
@@ -9754,7 +9743,6 @@ mod bare_or_crit_escalation_tests {
                     id: "d::benign".to_string(),
                 }]),
                 all: None,
-                none: None,
                 needs: None,
                 scope: None,
             }),

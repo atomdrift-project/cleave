@@ -3367,7 +3367,10 @@ mod tests {
                     .map_or(&[][..], |v| v.references.as_slice()),
             })
             .collect();
-        let context = filefacts::go_dependency_context(&members);
+        let context = filefacts::go_dependency_context(
+            &members,
+            &filefacts::package_context::ContextLimits::default(),
+        );
         let dependencies: Vec<_> = context
             .values()
             .flatten()

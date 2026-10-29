@@ -937,7 +937,7 @@ impl From<filefacts::FileType> for FileType {
             Ff::IrcII => Self::IrcII,
             Ff::Markdown => Self::Markdown,
             Ff::Text => Self::Text,
-            Ff::Data => Self::Data,
+            Ff::Data | Ff::Ani | Ff::Nrbf => Self::Data,
             Ff::PgpSignature => Self::PgpSignature,
             Ff::Yaml => Self::Yaml,
             // Archives / packages
@@ -1833,6 +1833,12 @@ mod tests {
         let file_types = default_file_types();
         assert_eq!(file_types.len(), 1);
         assert_eq!(file_types[0], FileType::All);
+    }
+
+    #[test]
+    fn recognized_binary_formats_use_data_rules() {
+        assert_eq!(FileType::from_str("ani"), FileType::Data);
+        assert_eq!(FileType::from_str("nrbf"), FileType::Data);
     }
 
     #[test]

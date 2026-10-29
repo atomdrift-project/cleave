@@ -755,7 +755,7 @@ mod tests {
     #[test]
     fn test_string_type_equality() {
         assert_eq!(StringType::Url, StringType::Url);
-        assert_ne!(StringType::Url, StringType::IP);
+        assert_ne!(StringType::Url, StringType::Ip);
     }
 
     #[test]
@@ -772,7 +772,7 @@ mod tests {
         // StackString is detected via StringMethod, not as a separate kind
         let variants = vec![
             StringType::Url,
-            StringType::IP,
+            StringType::Ip,
             StringType::Path,
             StringType::Email,
             StringType::Base64,

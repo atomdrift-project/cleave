@@ -1200,7 +1200,7 @@ impl PackageJsonAnalyzer {
                     offset: value_offset(&ip),
                     value: ip.into(),
                     encoding: "utf8".to_string(),
-                    string_type: Some(StringType::IP),
+                    string_type: Some(StringType::Ip),
                     section: Some(format!("scripts.{}", name)),
                     encoding_chain: Vec::new(),
                     fragments: None,

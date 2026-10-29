@@ -3,12 +3,18 @@ use crate::types::AnalysisReport;
 use filefacts::package_context::{ContextLimits, Coverage, SourceFile, SourceMember};
 
 pub(super) fn attach(report: &mut AnalysisReport) {
+    let values: Vec<filefacts::Values> = report
+        .files
+        .iter()
+        .map(|file| serde_json::from_value(serde_json::json!(file.kv)).unwrap_or_default())
+        .collect();
     let members: Vec<_> = report
         .files
         .iter()
-        .map(|file| SourceMember {
+        .zip(&values)
+        .map(|(file, values)| SourceMember {
             path: &file.path,
-            values: &file.kv,
+            values,
         })
         .collect();
     let context =
@@ -34,7 +40,7 @@ pub(super) fn attach_go(
     } else {
         Coverage::Complete
     };
-    let context = filefacts::go_source_context(&files, coverage, &ContextLimits::default());
+    let context = filefacts::go_source_context(&files, coverage, &ContextLimits::default(), None);
     if (context.truncated || !context.packages.is_empty())
         && let Ok(facts) = serde_json::to_value(&context)
     {

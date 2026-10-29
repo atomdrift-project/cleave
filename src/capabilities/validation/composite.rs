@@ -82,8 +82,7 @@ pub(crate) fn find_self_suppressing_traits(
         }
         if let Some(downgrade) = trait_def.downgrade.as_ref() {
             let hit = scan(trait_def, downgrade.all.as_deref())
-                .or_else(|| scan(trait_def, downgrade.any.as_deref()))
-                .or_else(|| scan(trait_def, downgrade.none.as_deref()));
+                .or_else(|| scan(trait_def, downgrade.any.as_deref()));
             if let Some(ref_id) = hit {
                 violations.push((trait_def, ref_id, "downgrade"));
             }
@@ -126,7 +125,6 @@ pub(crate) fn find_self_referencing_composites(
                 let downgrade = rule.downgrade.as_ref()?;
                 scan_conditions(rule, downgrade.all.as_deref())
                     .or_else(|| scan_conditions(rule, downgrade.any.as_deref()))
-                    .or_else(|| scan_conditions(rule, downgrade.none.as_deref()))
             });
         if let Some(ref_id) = direct_ref {
             violations.push((rule, ref_id));
@@ -235,13 +233,11 @@ pub(crate) fn find_leg_suppressing_composites(
 }
 
 /// A downgrade applies to every match only when it needs nothing a match
-/// might lack: file-local, no `none:`, every `all:` entry and at least `needs`
+/// might lack: file-local, every `all:` entry and at least `needs`
 /// of its `any:` entries covering a required `all:` leg of the rule.
 fn downgrade_always_applies(rule: &CompositeTrait) -> Option<(&str, &str)> {
     let downgrade = rule.downgrade.as_ref()?;
-    if !scope_is_file_local(downgrade.scope)
-        || downgrade.none.as_ref().is_some_and(|none| !none.is_empty())
-    {
+    if !scope_is_file_local(downgrade.scope) {
         return None;
     }
     fn covers_required<'a>(
@@ -364,9 +360,6 @@ pub(crate) fn collect_trait_refs_from_rule(rule: &CompositeTrait) -> Vec<(String
         if let Some(ref conditions) = downgrade.any {
             collect_from_conditions(conditions, &rule.id, &mut refs);
         }
-        if let Some(ref conditions) = downgrade.none {
-            collect_from_conditions(conditions, &rule.id, &mut refs);
-        }
     }
 
     refs
@@ -410,9 +403,6 @@ pub(crate) fn collect_trait_refs_from_trait_def(t: &TraitDefinition) -> Vec<(Str
             collect_from_conditions(conditions, &t.id, &mut refs);
         }
         if let Some(ref conditions) = downgrade.any {
-            collect_from_conditions(conditions, &t.id, &mut refs);
-        }
-        if let Some(ref conditions) = downgrade.none {
             collect_from_conditions(conditions, &t.id, &mut refs);
         }
     }

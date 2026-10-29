@@ -391,9 +391,14 @@ impl GenericAnalyzer {
                     ext.eq_ignore_ascii_case("yar") || ext.eq_ignore_ascii_case("yara")
                 });
         let inline_yara = if !is_yara_rule_source
-            && (self.file_type == FileType::Data || self.file_type.is_program())
+            && (matches!(self.file_type, FileType::Data | FileType::Ani | FileType::Nrbf)
+                || self.file_type.is_program())
         {
-            let file_types = self.file_type.yara_filetypes();
+            let file_types = if matches!(self.file_type, FileType::Ani | FileType::Nrbf) {
+                FileType::Data.yara_filetypes()
+            } else {
+                self.file_type.yara_filetypes()
+            };
             let result = self
                 .engine
                 .yara()

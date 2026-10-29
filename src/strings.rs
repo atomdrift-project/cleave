@@ -469,14 +469,7 @@ mod tests {
         method: StringMethod,
         kind: Option<StringType>,
     ) -> ExtractedString {
-        ExtractedString {
-            value,
-            data_offset: 42,
-            data_len: 0,
-            method,
-            kind,
-            fragments: None,
-        }
+        ExtractedString::new(value, 42, method).with_kind(kind)
     }
 
     #[test]
@@ -617,12 +610,7 @@ mod tests {
     }
 
     fn raw_row(value: &str, offset: u64) -> ExtractedString {
-        ExtractedString {
-            value: value.to_string(),
-            data_offset: offset,
-            method: StringMethod::RawScan,
-            ..Default::default()
-        }
+        ExtractedString::new(value.to_string(), offset, StringMethod::RawScan)
     }
 
     #[test]

@@ -3246,11 +3246,7 @@ mod tests {
 
     fn named_identity(name: &str) -> filefacts::Identity {
         let mut identity = filefacts::Identity::default();
-        identity.name = Some(filefacts::Claim {
-            value: name.to_string(),
-            source: "test".to_string(),
-            verified: false,
-        });
+        identity.name = Some(filefacts::Claim::claimed(name, "test"));
         identity
     }
 

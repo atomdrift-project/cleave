@@ -1249,7 +1249,7 @@ impl<'a> RuleDebugger<'a> {
             }
         }
 
-        // `downgrade:` — every present block (all/any/none) must pass to fire.
+        // `downgrade:` — every present block (all/any) must pass to fire.
         if let Some(downgrade) = &trait_def.downgrade
             && let Some(reason) = self.explain_downgrade(downgrade)
         {
@@ -1331,15 +1331,6 @@ impl<'a> RuleDebugger<'a> {
             {
                 reasons.push(format!("any: {}", describe_condition(c)));
             }
-        }
-        if let Some(none) = &dg.none {
-            if none
-                .iter()
-                .any(|c| self.unless_clause_satisfied(c).is_some())
-            {
-                return None;
-            }
-            reasons.push("none: satisfied".to_string());
         }
 
         if reasons.is_empty() {
@@ -2858,12 +2849,7 @@ composite_rules:
         let mut report = create_test_report_with_findings(vec![]);
         report.target.file_type = "elf".to_string();
         report.strings = crate::strings::StringExtractor::default().convert_stng_strings(&[
-            stng::ExtractedString {
-                value: "ZSTD".to_string(),
-                data_offset: 12,
-                method: stng::StringMethod::RawScan,
-                ..Default::default()
-            },
+            stng::ExtractedString::new("ZSTD".to_string(), 12, stng::StringMethod::RawScan),
         ]);
         let mapper = create_debug_test_mapper();
         let debugger = RuleDebugger::new(
@@ -3103,7 +3089,7 @@ func upload() {{
         let result = debugger
             .debug_rule("objectives/command-and-control/webshell/backdoor/php-rce")
             .expect("expected local php-rce composite fixture");
-        // For each condition group (all/any/none), verify count matches
+        // For each condition group (all/any), verify count matches
         for cond_result in &result.condition_results {
             // Parse the condition description to get claimed count
             // e.g., "any: (1/2 needed: 1)"
@@ -3406,9 +3392,7 @@ composite_rules:
             .condition_results
             .iter()
             .filter(|c| {
-                c.condition_desc.starts_with("all:")
-                    || c.condition_desc.starts_with("any:")
-                    || c.condition_desc.starts_with("none:")
+                c.condition_desc.starts_with("all:") || c.condition_desc.starts_with("any:")
             })
             .all(|c| c.matched);
 

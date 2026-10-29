@@ -399,11 +399,7 @@ pub(crate) fn find_inline_content_duplicates(
             collect(&t.id, &t.defined_in, "unless", &t.r#for, u, &mut seen);
         }
         if let Some(d) = &t.downgrade {
-            for (clause, set) in [
-                ("downgrade", &d.any),
-                ("downgrade", &d.all),
-                ("downgrade", &d.none),
-            ] {
+            for (clause, set) in [("downgrade", &d.any), ("downgrade", &d.all)] {
                 if let Some(c) = set {
                     collect(&t.id, &t.defined_in, clause, &t.r#for, c, &mut seen);
                 }
@@ -415,11 +411,7 @@ pub(crate) fn find_inline_content_duplicates(
             collect(&r.id, &r.defined_in, "unless", &r.r#for, u, &mut seen);
         }
         if let Some(d) = &r.downgrade {
-            for (clause, set) in [
-                ("downgrade", &d.any),
-                ("downgrade", &d.all),
-                ("downgrade", &d.none),
-            ] {
+            for (clause, set) in [("downgrade", &d.any), ("downgrade", &d.all)] {
                 if let Some(c) = set {
                     collect(&r.id, &r.defined_in, clause, &r.r#for, c, &mut seen);
                 }
@@ -5363,10 +5355,9 @@ pub(crate) fn find_overlapping_scope_duplicates(
         let downgrade_sig = |d: Option<&DowngradeConditions>| {
             d.map(|dg| {
                 format!(
-                    "{:?}|{:?}|{:?}|{:?}",
+                    "{:?}|{:?}|{:?}",
                     legs(dg.all.as_ref()),
                     legs(dg.any.as_ref()),
-                    legs(dg.none.as_ref()),
                     dg.needs,
                 )
             })
@@ -5473,7 +5464,6 @@ mod overlapping_scope_duplicate_tests {
         a.downgrade = Some(DowngradeConditions {
             any: Some(vec![leg("x")]),
             all: None,
-            none: None,
             needs: None,
             scope: None,
         });

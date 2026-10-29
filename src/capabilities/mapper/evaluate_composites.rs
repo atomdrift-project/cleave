@@ -2399,6 +2399,83 @@ composite_rules:
         }
     }
 
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn guarded_archive_context_keeps_fixture_path_local() {
+        use crate::composite_rules::SectionMap;
+        let yaml = r#"
+traits:
+  - id: "test/target::atomic"
+    desc: Target
+    crit: suspicious
+    if: {type: text, exact: example}
+    downgrade:
+      scope: archive
+      all:
+        - id: "test/gate::guarded"
+        - type: path
+          regex: '(^|/)tests/fixtures/'
+composite_rules:
+  - id: "test/gate::guarded"
+    desc: Guarded archive context
+    crit: exception
+    scope: archive
+    all: [{id: "test/gate::static"}]
+    unless: [{id: "test/gate::interpreter"}]
+"#;
+        let file = write_test_traits(yaml);
+        let mapper = super::super::CapabilityMapper::from_yaml(file.path()).expect("mapper");
+        let report = make_test_report();
+        for (member, blocked, expected) in [
+            (
+                "package.crate!!tests/fixtures/payload.py",
+                false,
+                Criticality::Notable,
+            ),
+            (
+                "package.crate!!tests/fixtures/payload.py",
+                true,
+                Criticality::Suspicious,
+            ),
+            (
+                "package.crate!!src/runtime.py",
+                false,
+                Criticality::Suspicious,
+            ),
+        ] {
+            let mut extras = vec![make_test_finding("test/gate::static", Criticality::Notable)];
+            if blocked {
+                extras.push(make_test_finding(
+                    "test/gate::interpreter",
+                    Criticality::Notable,
+                ));
+            }
+            let guards = mapper.evaluate_container_composites(&report, &extras, "zip", None);
+            assert_eq!(
+                guards.iter().any(|f| f.id.as_str() == "test/gate::guarded"),
+                !blocked
+            );
+            extras.extend(guards);
+            let mut findings = vec![make_test_finding(
+                "test/target::atomic",
+                Criticality::Suspicious,
+            )];
+            mapper.reeval_downgrades_cross_scope_at_path(
+                &mut findings,
+                &extras,
+                &report,
+                &[],
+                RuleFileType::All,
+                &SectionMap::default(),
+                Some(member),
+            );
+            assert_eq!(
+                findings[0].crit, expected,
+                "member={member}, blocked={blocked}"
+            );
+        }
+    }
+
     /// Cross-scope downgrade pass — the central behavior used to demote
     /// per-file findings (e.g. `cookies-get-all`) when a container-level
     /// gate (e.g. `metadata/signed/platform::mozilla-extension`) is in

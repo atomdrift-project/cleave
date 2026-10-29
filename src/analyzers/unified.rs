@@ -2096,13 +2096,7 @@ composite_rules:
             (stng::StringMethod::Base32Decode, "base32"),
             (stng::StringMethod::Base85Decode, "base85"),
         ] {
-            let extracted = stng::ExtractedString {
-                value: "harmless decoded evidence".into(),
-                data_offset: 12,
-                data_len: 40,
-                method,
-                ..Default::default()
-            };
+            let extracted = stng::ExtractedString::new("harmless decoded evidence", 12, method).with_data_len(40);
             let report = analyzer.analyze_source_impl(
                 Path::new("sample.js"),
                 "const data = 'recorded decoder input';",

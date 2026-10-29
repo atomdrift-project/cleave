@@ -197,7 +197,7 @@ fn run() -> Result<()> {
                     );
                     // Resolved to absolute paths, never searched for on a
                     // PATH that may name the working directory.
-                    let lldb_ok = filefacts::tools::resolve("lldb").is_some_and(|lldb| {
+                    let lldb_ok = cleave::tool_resolution::resolve("lldb").is_some_and(|lldb| {
                         Command::new(lldb)
                             .args([
                                 "--batch",
@@ -215,7 +215,7 @@ fn run() -> Result<()> {
                             .status()
                             .is_ok_and(|s| s.success())
                     });
-                    if !lldb_ok && let Some(gdb) = filefacts::tools::resolve("gdb") {
+                    if !lldb_ok && let Some(gdb) = cleave::tool_resolution::resolve("gdb") {
                         let _ = Command::new(gdb)
                             .args([
                                 "-batch",

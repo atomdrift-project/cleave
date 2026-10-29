@@ -22,7 +22,7 @@ cd "$repo_root"
 # 1. Reject active local path overrides in Cargo.toml. Local dev sometimes
 #    repoints a dep at a sibling checkout (filefacts = { path = "../filefacts" })
 #    or adds a [patch] entry doing the same; those must never be committed.
-#    Committed git-based patches (e.g. the [patch.crates-io] wasmtime fork) and
+#    Committed git-based patches (the [patch.crates-io] tree-sitter fork) and
 #    workspace-relative paths (crates/*, src/lib.rs) are fine.
 if grep -nE '^[[:space:]]*[^#[:space:]].*path[[:space:]]*=[[:space:]]*"\.\.' Cargo.toml >/dev/null 2>&1; then
 	echo "pre-commit: active local path override (\"../\") found in Cargo.toml:" >&2

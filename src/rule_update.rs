@@ -58,6 +58,16 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
 /// `git archive` extraction with no `.git`, so the commit/date live here instead.
 const SIDECAR: &str = ".cleave-rules.toml";
 
+/// Largest download accepted from the update bucket. A rules bundle is tens of
+/// megabytes compressed; the cap bounds what a misbehaving server can make us
+/// buffer.
+const MAX_DOWNLOAD_BYTES: u64 = 1 << 30;
+
+/// Largest unpacked bundle, and most entries, accepted from one bundle. A full
+/// rules tree is under 1 GiB in ~60k files.
+const MAX_UNPACKED_BYTES: u64 = 8 << 30;
+const MAX_BUNDLE_ENTRIES: usize = 500_000;
+
 /// Why rules were not updated.
 ///
 /// Two kinds, because callers treat them oppositely. A host that cannot reach
@@ -760,12 +770,19 @@ fn unpack_bundle<R: Read>(reader: R, staging: &Path, pack_rules: bool) -> Result
     // primary group, any of them could then edit the rules every scan runs.
     archive.set_mask(0o022);
     let mut written = std::collections::HashSet::new();
+    let mut unpacked = 0u64;
     let entries = archive
         .entries()
         .map_err(|e| format!("reading tar entries: {e}"))?;
 
-    for entry in entries {
+    for (count, entry) in entries.enumerate() {
         let mut entry = entry.map_err(|e| format!("reading tar entry: {e}"))?;
+        unpacked = unpacked.saturating_add(entry.size());
+        if count >= MAX_BUNDLE_ENTRIES || unpacked > MAX_UNPACKED_BYTES {
+            return Err(format!(
+                "bundle exceeds {MAX_BUNDLE_ENTRIES} entries or {MAX_UNPACKED_BYTES} bytes"
+            ));
+        }
         let kind = entry.header().entry_type();
         if kind.is_pax_global_extensions() {
             io::copy(&mut entry, &mut io::sink())
@@ -1045,15 +1062,20 @@ fn download_once(
         .and_then(|v| v.to_str().ok())
         .filter(|t| !t.is_empty() && t.len() <= 32 && t.bytes().all(|b| b.is_ascii_alphanumeric()))
         .map(str::to_owned);
-    let bytes = resp.bytes().map_err(|e| FetchError {
-        status: Some(status.as_u16()),
-        message: format!("reading {url}: {e}"),
-    })?;
-    Ok(Fetched {
-        bytes: bytes.to_vec(),
-        fresh,
-        tier,
-    })
+    let mut bytes = Vec::new();
+    resp.take(MAX_DOWNLOAD_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| FetchError {
+            status: Some(status.as_u16()),
+            message: format!("reading {url}: {e}"),
+        })?;
+    if bytes.len() as u64 > MAX_DOWNLOAD_BYTES {
+        return Err(FetchError {
+            status: Some(status.as_u16()),
+            message: format!("{url} is larger than {MAX_DOWNLOAD_BYTES} bytes"),
+        });
+    }
+    Ok(Fetched { bytes, fresh, tier })
 }
 
 fn hex(bytes: &[u8]) -> String {

@@ -467,7 +467,7 @@ fn walk_files(root: &Path) -> Result<Vec<(PathBuf, String)>> {
     use walkdir::WalkDir;
     let mut out = Vec::new();
     for entry in WalkDir::new(root)
-        .follow_links(true)
+        .follow_links(false)
         .into_iter()
         // Skip the object store itself — thousands of entries, no analyzable
         // content. Match the name exactly: a `starts_with(".git")` prefix also

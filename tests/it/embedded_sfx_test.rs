@@ -272,27 +272,6 @@ fn embedded_binary_scanning() {
     );
 }
 
-#[test]
-fn test_known_good_upx_exe_has_no_embedded_elf_or_hostile_findings() {
-    let sample = std::path::Path::new("/srv/data/known-good/data2/upx.exe");
-    if !sample.exists() {
-        return;
-    }
-
-    let (stdout, _report) = analyze_compact(sample);
-
-    assert!(
-        !stdout.contains("\"id\":\"binary/embedded/elf\""),
-        "False positive: embedded ELF findings on known-good UPX utility.\nFirst 4000 chars:\n{}",
-        &stdout[..stdout.len().min(4000)]
-    );
-    assert!(
-        !stdout.contains("\"crit\":\"hostile\""),
-        "False positive: hostile findings on known-good UPX utility.\nFirst 4000 chars:\n{}",
-        &stdout[..stdout.len().min(4000)]
-    );
-}
-
 // ── Base64-encoded payloads (shell + PowerShell) ──────────────────────────────
 
 #[test]

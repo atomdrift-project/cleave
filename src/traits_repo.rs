@@ -10,8 +10,11 @@
 //!
 //! Resolution order:
 //! 1. `--traits-dir` CLI flag / `CLEAVE_TRAITS_DIR` env var / API override
-//! 2. Workspace-local `traits/` checkout
-//! 3. Platform data directory (bootstrapped from the bundle if missing)
+//! 2. Platform data directory (bootstrapped from the bundle if missing)
+//!
+//! The working directory is never consulted: cleave is routinely run from
+//! inside untrusted trees, and a `traits/` directory there must not be able to
+//! replace the rules.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -116,31 +119,26 @@ fn explicit_traits_dir_from(override_dir: Option<PathBuf>, env: Option<String>) 
         .or(env)
 }
 
+/// The explicit traits directory (API override or `CLEAVE_TRAITS_DIR`), if one
+/// was given, checked to exist.
+fn checked_explicit_dir() -> Option<Result<PathBuf, String>> {
+    let explicit = explicit_traits_dir()?;
+    let path = PathBuf::from(&explicit);
+    Some(if path.exists() {
+        tracing::debug!("Using traits from explicit override: {}", path.display());
+        Ok(path)
+    } else {
+        Err(format!("traits dir override {explicit} does not exist"))
+    })
+}
+
 /// Resolve the traits directory, installing from the bundle if necessary.
 ///
 /// Returns the path to a usable traits directory, or an error if traits cannot
 /// be obtained.
 pub fn resolve_and_ensure() -> Result<PathBuf, String> {
     migrate_legacy_install();
-    // 1. Explicit override via API setter or CLEAVE_TRAITS_DIR env var
-    if let Some(explicit) = explicit_traits_dir() {
-        let p = PathBuf::from(&explicit);
-        if p.is_dir() || p.is_file() {
-            tracing::debug!("Using traits from explicit override: {}", p.display());
-            return Ok(p);
-        }
-        return Err(format!("traits dir override {explicit} does not exist"));
-    }
-
-    // 2. Workspace-local traits checkout, if present.
-    let local_dir = PathBuf::from("traits");
-    if has_traits(&local_dir) {
-        tracing::debug!("Using traits from local checkout: {}", local_dir.display());
-        return Ok(local_dir);
-    }
-
-    // 3. Platform data directory — bootstrap-install from the bundle if missing.
-    ensure_data_dir()
+    checked_explicit_dir().unwrap_or_else(ensure_data_dir)
 }
 
 /// The installed tree for this run's rules edition, installing it on first
@@ -175,51 +173,30 @@ fn ensure_data_dir() -> Result<PathBuf, String> {
     }
 }
 
-/// Resolve the traits directory without bootstrapping or process::exit.
+/// Resolve the traits directory without installing anything.
 ///
-/// Same resolution order as `resolve_and_ensure()` but returns an error
-/// instead of installing. Used by hot-reload paths where exiting the
-/// process on a bad traits path is unacceptable.
-#[allow(dead_code)] // Used by library target (shared_resources reload)
+/// Same resolution order as [`resolve_and_ensure`], but a missing install is
+/// an error. Used by hot-reload paths, which must not block on a download.
 pub fn try_resolve() -> Result<PathBuf, String> {
-    if let Some(explicit) = explicit_traits_dir() {
-        let p = PathBuf::from(&explicit);
-        if p.is_dir() || p.is_file() {
-            return Ok(p);
+    checked_explicit_dir().unwrap_or_else(|| {
+        let data_dir = default_traits_dir();
+        if has_traits(&data_dir) {
+            Ok(data_dir)
+        } else {
+            Err(format!(
+                "Traits not found at {} (run 'cleave update-rules' to install)",
+                data_dir.display()
+            ))
         }
-        return Err(format!("traits dir override {explicit} does not exist"));
-    }
-
-    let local_dir = PathBuf::from("traits");
-    if has_traits(&local_dir) {
-        return Ok(local_dir);
-    }
-
-    let data_dir = default_traits_dir();
-    if has_traits(&data_dir) {
-        return Ok(data_dir);
-    }
-
-    Err(format!(
-        "Traits not found at {} (run 'cleave update-rules' to install)",
-        data_dir.display()
-    ))
+    })
 }
 
-/// Directory the updater should install into: explicit override, a workspace
-/// `traits/` checkout if present, else the platform data dir. Unlike
-/// `resolve_current_traits_dir` it's public and doesn't require the dir to exist.
+/// Directory the updater installs into: the explicit override if set, else the
+/// platform data dir. Unlike [`try_resolve`], the directory need not exist.
 #[must_use]
 pub fn install_target() -> PathBuf {
     migrate_legacy_install();
-    if let Some(explicit) = explicit_traits_dir() {
-        return PathBuf::from(explicit);
-    }
-    let local = PathBuf::from("traits");
-    if has_traits(&local) {
-        return local;
-    }
-    default_traits_dir()
+    resolve_current_traits_dir()
 }
 
 /// Where the update bucket's traits are installed for this process: the
@@ -533,14 +510,7 @@ fn resolve_current_traits_dir() -> PathBuf {
 }
 
 fn resolve_current_traits_dir_from(explicit: Option<String>) -> PathBuf {
-    if let Some(explicit) = explicit {
-        return PathBuf::from(explicit);
-    }
-    let local_dir = PathBuf::from("traits");
-    if has_traits(&local_dir) {
-        return local_dir;
-    }
-    default_traits_dir()
+    explicit.map_or_else(default_traits_dir, PathBuf::from)
 }
 
 #[cfg(test)]
@@ -812,6 +782,13 @@ mod tests {
             resolve_current_traits_dir_from(explicit),
             PathBuf::from("/tmp/test-traits")
         );
+    }
+
+    #[test]
+    fn working_directory_traits_are_never_used() {
+        // A `traits/` in the working directory belongs to whatever tree is being
+        // analyzed, not to the user; it must not be able to replace the rules.
+        assert_eq!(resolve_current_traits_dir_from(None), default_traits_dir());
     }
 
     #[test]

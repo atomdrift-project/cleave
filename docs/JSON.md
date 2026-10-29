@@ -2,8 +2,7 @@
 
 Every cleave analysis produces an `AnalysisReport`, serialised to
 JSON. The same shape is returned by `analyze_file`, written by the
-CLI, and embedded as the `raw` field of [litmus's
-envelope](../../litmus/docs/JSON.md).
+CLI.
 
 For the library that produces these reports, see
 [RUST_API.md](RUST_API.md).
@@ -40,17 +39,6 @@ diff -u before.txt after.txt
 render command does not re-finalize a finalized snapshot; an intermediate
 analysis-cache report is finalized first, and says so on stderr.
 
-With the matching scan reader, use:
-
-```sh
-atomscan render before.json --format interpret > before.txt
-atomscan render after.json --format interpret > after.txt
-diff -u before.txt after.txt
-```
-
-This uses scan's live primary-context budget and annotation rewrite, with no
-models, fetching, updates, or LLM calls. Compare with the same renderer build
-and render-budget settings.
 
 ## Schema versioning
 
@@ -200,21 +188,15 @@ Existing import/export/function caps still apply. Sections are omitted, and
 `fp` identifies the exact retention contract. Rendering a reduced report
 preserves its profile because omitted facts cannot be recovered.
 
-The contract is generated from shipping and candidate training layouts. From
-the cleave checkout, audit candidate layouts and refresh its inventory:
-
-```sh
-python tools/model_facts_manifest.py ../azoth ../collimator \
-  --training-specs ../collimator/out/models \
-  --training-specs ../collimator/out/experiments
-cp src/model_facts_manifest.json ../collimator/src/collimator/data/
-```
+The contract (`src/model_facts_manifest.json`) is generated from the shipping
+and candidate model layouts by `tools/model_facts_manifest.py MODEL-BUNDLE
+TRAINING-CHECKOUT [--training-specs DIR ...]`.
 
 The metric inventory records known layouts; it does not restrict metric
 retention. Training can discover additional metrics without rebuilding
 the producer. New scalar features require
 a dependency audit; symbol vocabularies can discover new tokens without another
-contract change. Rebuild producers that embed cleave (including scan) to use the
+contract change. Rebuild producers that embed cleave to use the
 updated retention code and manifest.
 
 Earlier profiles retained only gap-check symbol tokens and fewer metrics.
@@ -340,7 +322,7 @@ backward compatibility; output always uses `conf`.
 ## `Criticality`
 
 `src/types/core.rs:39`. An ordinal scale; rank order matters more than
-the names. Score weights below are what feeds the litmus model.
+the names. Weights are the per-level scores used in aggregate risk scoring.
 
 | Ordinal | Name        | Weight | Meaning                                                                |
 | ------- | ----------- | ------ | ---------------------------------------------------------------------- |
@@ -461,5 +443,4 @@ helper:
 
 The `Finding` interprets the three `Trait` observations as a single
 behavioural capability with a hostile criticality. Downstream
-consumers — including [litmus](../../litmus/docs/JSON.md) — read
-`findings` for verdicts and keep `traits` for audit and retraining.
+consumers read `findings` for verdicts and keep `traits` for audit and retraining.

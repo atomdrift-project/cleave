@@ -51,6 +51,6 @@ pub mod types;
 
 // Re-exports for convenient API
 pub use builder::{Finding, MaleculeBuilder};
-pub use formula::{generate_formula, FindingInput};
+pub use formula::{FindingInput, generate_formula};
 pub use layout::LayoutAlgorithm;
 pub use types::{Malecule, Severity};

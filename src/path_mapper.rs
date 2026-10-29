@@ -3,8 +3,8 @@
 //! Maps file paths to security-relevant categories (tmp files, config, etc).
 
 use crate::types::{
-    AnalysisReport, DirectoryAccess, DirectoryAccessPattern, Evidence, Finding, PathCategory,
-    PathInfo, PathType, StringInfo, StringType,
+    AnalysisReport, DirectoryAccess, DirectoryAccessPattern, Evidence, PathCategory, PathInfo,
+    PathType, StringInfo, StringType,
 };
 use std::collections::HashMap;
 
@@ -42,7 +42,6 @@ fn analyze_path(path_str: &str, source: &str) -> PathInfo {
             location: None,
             ..Default::default()
         }],
-        referenced_by_traits: Vec::new(),
     }
 }
 
@@ -193,7 +192,6 @@ pub(crate) fn group_into_directories(paths: &[PathInfo]) -> Vec<DirectoryAccess>
             access_pattern,
             categories,
             enumerated: false, // Would need function analysis
-            generated_traits: Vec::new(),
         });
     }
 
@@ -244,100 +242,11 @@ fn determine_access_pattern(files: &[String], paths: &[&PathInfo]) -> DirectoryA
     DirectoryAccessPattern::MultipleSpecific { count: files.len() }
 }
 
-/// Generate traits from path patterns
-#[must_use]
-pub(crate) fn generate_traits_from_paths(paths: &[PathInfo]) -> Vec<Finding> {
-    let mut traits = Vec::new();
-
-    // Platform detection from paths
-    traits.extend(detect_platform_from_paths(paths));
-
-    // Anomalous path detection
-    traits.extend(detect_anomalous_paths(paths));
-
-    // Privilege requirements
-    traits.extend(detect_privilege_requirements(paths));
-
-    traits
-}
-
-/// Detect platform based on path patterns
-/// NOTE: MTD and Android platform detection moved to YAML:
-/// - traits/micro-behaviors/os/platform/embedded/mtd-device.yaml
-/// - traits/micro-behaviors/os/platform/mobile/android.yaml
-fn detect_platform_from_paths(_paths: &[PathInfo]) -> Vec<Finding> {
-    Vec::new()
-}
-
-/// Detect anomalous paths (hidden files in system directories, etc.)
-/// NOTE: Hidden file detection moved to YAML:
-/// - traits/objectives/persistence/hidden-files/system-dir.yaml (uses unless: for exclusions)
-fn detect_anomalous_paths(_paths: &[PathInfo]) -> Vec<Finding> {
-    Vec::new()
-}
-
-/// Detect privilege requirements from paths
-/// NOTE: Root-only path detection moved to YAML:
-/// - traits/micro-behaviors/os/privilege/paths/root-only.yaml
-fn detect_privilege_requirements(_paths: &[PathInfo]) -> Vec<Finding> {
-    Vec::new()
-}
-
-/// Generate traits from directory patterns
-/// NOTE: The following detections moved to YAML with count_min:
-/// - Credential file enumeration: traits/objectives/credential-access/files/config-directory.yaml
-/// - Log file access: traits/micro-behaviors/fs/path/log/multiple-access.yaml
-#[must_use]
-pub(crate) fn generate_traits_from_directories(_directories: &[DirectoryAccess]) -> Vec<Finding> {
-    Vec::new()
-}
-
-/// Main entry point: analyze paths and link to traits
+/// Extract the paths named in `report.strings` and group them by directory.
 pub(crate) fn analyze_and_link_paths(report: &mut AnalysisReport) {
-    // Step 1: Extract paths from strings
-    let mut paths = extract_paths_from_strings(&report.strings);
-
-    // Step 2: Group into directories
-    let directories = group_into_directories(&paths);
-
-    // Step 3: Generate traits from patterns
-    let mut new_traits = Vec::new();
-
-    // Generate traits from individual paths
-    new_traits.extend(generate_traits_from_paths(&paths));
-
-    // Generate traits from directory patterns
-    new_traits.extend(generate_traits_from_directories(&directories));
-
-    // Step 4: Add back-references using evidence
-    for trait_obj in &new_traits {
-        // Mark paths that contributed to this trait based on evidence
-        for path in &mut paths {
-            if trait_obj.evidence.iter().any(|e| e.value == path.path) {
-                path.referenced_by_traits
-                    .push(trait_obj.id.clone().to_string());
-            }
-        }
-    }
-
-    // Step 5: Update directories with generated trait IDs
-    let mut updated_directories = directories;
-    for dir in &mut updated_directories {
-        for trait_obj in &new_traits {
-            if trait_obj
-                .evidence
-                .iter()
-                .any(|e| e.location.as_ref() == Some(&dir.directory))
-            {
-                dir.generated_traits.push(trait_obj.id.clone().to_string());
-            }
-        }
-    }
-
-    // Store results
+    let paths = extract_paths_from_strings(&report.strings);
+    report.directories = group_into_directories(&paths);
     report.paths = paths;
-    report.directories = updated_directories;
-    report.findings.extend(new_traits);
 }
 
 #[cfg(test)]

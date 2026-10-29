@@ -105,12 +105,16 @@ fn cli_scans_packed_yaml_yara_and_ignores_shipped_buckets() {
         &plain.join(relative).join("probe.yar"),
         &packed.join(relative).join("probe.yar.zst"),
     );
-    // A valid precompiled set beside the sources, as an older bundle shipped.
+    // A compiled set beside the sources, as older bundles shipped. Compiled
+    // rules are native code, so cleave must never load them from a bundle.
     let shipped = packed.join("third-party/compiled");
-    cleave::traits_repo::set_override_dir(Some(plain.clone()));
-    let result = cleave::precompile_yara(&shipped, true);
-    cleave::traits_repo::set_override_dir(None);
-    result.unwrap();
+    fs::create_dir_all(&shipped).unwrap();
+    fs::write(
+        shipped.join("manifest.json"),
+        br#"{"populated_tiers":["php"]}"#,
+    )
+    .unwrap();
+    fs::write(shipped.join("php.yrc"), b"not a compiled rule set").unwrap();
 
     let yara_sample = temp.path().join("yara-probe.php");
     fs::write(&yara_sample, "<?php /* cleave-packed-probe-marker */ ?>").unwrap();

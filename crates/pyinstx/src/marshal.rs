@@ -174,10 +174,10 @@ impl<'a> Reader<'a> {
             other => return Err(MarshalError::UnsupportedType(other)),
         };
 
-        if let Some(idx) = slot {
-            if let Some(slot) = self.refs.get_mut(idx) {
-                *slot = value.clone();
-            }
+        if let Some(idx) = slot
+            && let Some(slot) = self.refs.get_mut(idx)
+        {
+            *slot = value.clone();
         }
         Ok(value)
     }

@@ -234,31 +234,6 @@ impl TraitBitSet {
         true
     }
 
-    /// Returns an iterator over all set bit indices in this bitset (static version).
-    #[allow(dead_code)]
-    pub(crate) fn to_indices_static(&self) -> impl Iterator<Item = usize> + '_ {
-        let mut next_u_idx = 0;
-        let mut current_u_idx = 0;
-        let mut current_val = 0u64;
-        let bits = &self.bits;
-
-        std::iter::from_fn(move || {
-            loop {
-                if current_val != 0 {
-                    let bit_idx = current_val.trailing_zeros() as usize;
-                    current_val &= !(1 << bit_idx);
-                    return Some(current_u_idx * 64 + bit_idx);
-                }
-                if next_u_idx >= bits.len() {
-                    return None;
-                }
-                current_u_idx = next_u_idx;
-                current_val = bits[current_u_idx];
-                next_u_idx += 1;
-            }
-        })
-    }
-
     /// Returns an iterator over all set bit indices in this bitset (owned version).
     pub(crate) fn into_indices_static(self) -> impl Iterator<Item = usize> {
         let mut next_u_idx = 0;
@@ -705,12 +680,6 @@ impl SymbolMatchIndex {
 
     pub(crate) fn is_symbol_trait(&self, trait_idx: usize) -> bool {
         self.symbol_trait_indices.contains(&trait_idx)
-    }
-
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub(crate) fn has_fallback(&self) -> bool {
-        !self.regex_fallback_regexes.is_empty()
     }
 }
 
@@ -3054,50 +3023,9 @@ impl RawContentRegexIndex {
         !self.indexed_traits.is_empty()
     }
 
-    /// Check if any of the provided trait indices are indexed in the raw content regex index.
-    #[allow(dead_code)]
-    pub(crate) fn has_applicable_patterns(&self, trait_indices: &[usize]) -> bool {
-        trait_indices.iter().any(|&idx| self.is_indexed_trait(idx))
-    }
-
     /// Check whether a trait is indexed in a compiled regex set.
     pub(crate) fn is_indexed_trait(&self, trait_idx: usize) -> bool {
         self.indexed_traits.contains(&trait_idx)
-    }
-
-    /// Debug helper: every bucket that holds `trait_idx`, with the sub-index it
-    /// sits in. For diagnosing gate/bucket mismatches.
-    #[allow(dead_code)]
-    pub(crate) fn debug_trait_buckets(&self, trait_idx: usize) -> String {
-        let mut out = Vec::new();
-        let mut check = |name: String, s: &FileTypeRegexSet| {
-            if s.pattern_to_traits.iter().any(|v| v.contains(&trait_idx)) {
-                out.push(format!("{name}:pattern"));
-            }
-            if s.cs_word_to_traits
-                .iter()
-                .chain(&s.ci_word_to_traits)
-                .any(|v| v.contains(&trait_idx))
-            {
-                out.push(format!("{name}:word"));
-            }
-            if s.cs_substr_to_traits
-                .iter()
-                .chain(&s.ci_substr_to_traits)
-                .any(|v| v.contains(&trait_idx))
-            {
-                out.push(format!("{name}:substr"));
-            }
-        };
-        if let Some(u) = &self.universal {
-            check("universal".to_string(), u);
-        }
-        for ft in self.by_file_type.keys() {
-            if let Some(s) = self.set(ft) {
-                check(format!("{ft:?}"), s);
-            }
-        }
-        out.join(",")
     }
 
     /// Find matches using only patterns applicable to the given file type.
@@ -3338,17 +3266,6 @@ mod tests {
         assert_eq!(indices, vec![1, 65, 129]);
     }
 
-    #[test]
-    fn test_trait_bitset_to_indices_static_advances_words() {
-        let mut bitset = TraitBitSet::with_capacity(130);
-        bitset.insert(0);
-        bitset.insert(64);
-        bitset.insert(127);
-
-        let indices: Vec<usize> = bitset.to_indices_static().collect();
-        assert_eq!(indices, vec![0, 64, 127]);
-    }
-
     // ==================== StringMatchIndex Tests ====================
 
     #[test]
@@ -3551,14 +3468,6 @@ mod tests {
         let index = RawContentRegexIndex::build(&[]);
 
         assert!(!index.has_patterns());
-    }
-
-    #[test]
-    fn test_raw_content_regex_index_has_applicable_patterns_empty() {
-        let index = RawContentRegexIndex::build(&[]);
-
-        assert!(!index.has_applicable_patterns(&[]));
-        assert!(!index.has_applicable_patterns(&[0, 1, 2]));
     }
 
     #[test]

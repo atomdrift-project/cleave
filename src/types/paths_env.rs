@@ -28,10 +28,6 @@ pub struct PathInfo {
     /// Evidence for this path
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub evidence: Vec<Evidence>,
-
-    /// Trait IDs that reference this path (back-reference)
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub referenced_by_traits: Vec<String>,
 }
 
 /// Path type classification
@@ -111,10 +107,6 @@ pub struct DirectoryAccess {
     /// Whether directory itself was enumerated (opendir/readdir)
     #[serde(default, skip_serializing_if = "is_false")]
     pub enumerated: bool,
-
-    /// Trait IDs generated from this directory pattern
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub generated_traits: Vec<String>,
 }
 
 /// Pattern of directory access
@@ -167,10 +159,6 @@ pub struct EnvVarInfo {
     /// Evidence for this environment variable access
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub evidence: Vec<Evidence>,
-
-    /// Trait IDs that reference this env var (back-reference)
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub referenced_by_traits: Vec<String>,
 }
 
 /// How environment variable is accessed
@@ -425,7 +413,6 @@ mod tests {
             access_type: Some(PathAccessType::Read),
             source: "strings".to_string(),
             evidence: vec![],
-            referenced_by_traits: vec![],
         };
 
         assert_eq!(path_info.path, "/etc/passwd");
@@ -451,11 +438,9 @@ mod tests {
             access_type: None,
             source: "strings".to_string(),
             evidence: vec![evidence],
-            referenced_by_traits: vec!["fs/read/etc".to_string()],
         };
 
         assert_eq!(path_info.evidence.len(), 1);
-        assert_eq!(path_info.referenced_by_traits.len(), 1);
     }
 
     // ==================== DirectoryAccess Tests ====================
@@ -469,7 +454,6 @@ mod tests {
             access_pattern: DirectoryAccessPattern::MultipleSpecific { count: 2 },
             categories: vec![PathCategory::System],
             enumerated: false,
-            generated_traits: vec![],
         };
 
         assert_eq!(dir_access.directory, "/etc");
@@ -486,11 +470,9 @@ mod tests {
             access_pattern: DirectoryAccessPattern::UserEnumeration,
             categories: vec![PathCategory::Home],
             enumerated: true,
-            generated_traits: vec!["fs/enum/home".to_string()],
         };
 
         assert!(dir_access.enumerated);
-        assert_eq!(dir_access.generated_traits.len(), 1);
     }
 
     // ==================== EnvVarInfo Tests ====================
@@ -503,7 +485,6 @@ mod tests {
             source: "getenv".to_string(),
             category: EnvVarCategory::Path,
             evidence: vec![],
-            referenced_by_traits: vec![],
         };
 
         assert_eq!(env_var.name, "PATH");
@@ -525,7 +506,6 @@ mod tests {
                 location: Some("line:42".to_string()),
                 ..Default::default()
             }],
-            referenced_by_traits: vec!["credential/aws".to_string()],
         };
 
         assert_eq!(env_var.category, EnvVarCategory::Credential);
@@ -540,7 +520,6 @@ mod tests {
             source: "setenv".to_string(),
             category: EnvVarCategory::Injection,
             evidence: vec![],
-            referenced_by_traits: vec![],
         };
 
         assert_eq!(env_var.category, EnvVarCategory::Injection);

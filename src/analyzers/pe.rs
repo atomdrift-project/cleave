@@ -829,7 +829,7 @@ impl PEAnalyzer {
     /// front — overlay extraction and embedded-binary scanning
     /// operate on `pe_data`, while file-size metrics use
     /// `original_data`.
-    #[allow(clippy::unnecessary_wraps, clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn analyze_pe<'a>(
         &self,
         logical_path: &Path,
@@ -856,24 +856,6 @@ impl PEAnalyzer {
 
         let any_lazy_panic = lazy_walker_panicked || parse_panicked;
 
-        let file_size = original_data.len() as u64;
-        // Executable-code size sums every section flagged `executable`
-        // on filefacts's typed Sections view, capped to the file extent.
-        let code_size_from_ctx: u64 = ctx
-            .parsed
-            .sections()
-            .iter()
-            .filter(|s| s.has_flag(filefacts::SectionFlag::Executable))
-            .map(|s| {
-                let raw_end = s.file_offset.saturating_add(s.file_size);
-                if raw_end > file_size {
-                    file_size.saturating_sub(s.file_offset)
-                } else {
-                    s.file_size
-                }
-            })
-            .sum();
-
         // Create target info
         let target = TargetInfo {
             path: logical_path.display().to_string(),
@@ -895,7 +877,6 @@ impl PEAnalyzer {
 
         // Add any tampering findings detected during preprocessing
         report.findings.append(&mut tamper_findings);
-        let _ = (analysis_path, code_size_from_ctx, file_size);
 
         // Project structural views from filefacts's typed accessors. The
         // rizin recovery (for stripped / packed PEs) already ran
@@ -937,12 +918,6 @@ impl PEAnalyzer {
             .iter_kind(filefacts::SymbolKind::Function)
             .filter_map(crate::analysis_context::project_filefacts_function)
             .collect();
-
-        // String extraction no longer threads rizin's `izj` output
-        // through stng: filefacts runs rizin once during `open`, and the
-        // stng pre-population options (boundaries / function metadata /
-        // connect-addrs / xor candidates) are sourced from there.
-        let r2_strings: Option<Vec<stng::ExtractedString>> = None;
 
         // --- Corrupted-header findings (filefacts's PE parse fell back
         // to header-only, or failed entirely). The exact failure
@@ -1029,7 +1004,6 @@ impl PEAnalyzer {
         // string-extraction authority (cleave no longer scans). The raw
         // stng rows also feed embedded-child analysis below.
         let raw_stng_strings = ctx.text_rows();
-        let _ = r2_strings;
         // Keep the binary's own symbol names ahead of the cap (Go pclntab
         // names in a large binary), then record what the caps left.
         self.string_extractor.prioritize_report_symbols(&report);

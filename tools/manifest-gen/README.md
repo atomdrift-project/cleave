@@ -2,8 +2,7 @@
 
 Generates the trait-update `versions.toml` from the last few cleave engine
 release tags and the last few `cleave-traits` commits, gating each pointer on
-`cleave validate`. Go reimplementation of the automated path; see
-`docs/UPDATE_DISTRIBUTION.md` for the design.
+`cleave validate`.
 
 ## What it does
 
@@ -43,7 +42,7 @@ cd tools/manifest-gen && GOWORK=off go build -o manifest-gen .
 
 ```sh
 tools/manifest-gen/manifest-gen \
-  --traits ../traits-dev --repo . \
+  --traits ../cleave-traits --repo . \
   --engine ./target/release/cleave --out ./dist \
   --releases 2 --commits 10 --soak-days 7
 ```
@@ -58,7 +57,7 @@ magnitude slower.
 
 | Flag | Default | Meaning |
 |------|---------|---------|
-| `--traits` | `../traits-dev` | traits git repo |
+| `--traits` | (required) | traits git repo |
 | `--repo` | `.` | engine repo (for release tags) |
 | `--engine` | `./target/release/cleave` | validation oracle |
 | `--out` | `dist` | artifacts + manifest output |

@@ -162,10 +162,8 @@ jobs:
           PROFILE: ${{ inputs.profile }}
         run: cargo build --locked --profile "$PROFILE" --target "$TARGET" --bin cleave
 
-      # `--lib` only, mirroring `make test-unit`. The integration tests in
-      # tests/ each link their own copy of a very large binary; enabling them
-      # here needs a look at wall-clock and disk first. The model-dependent
-      # tests are already #[ignore]d.
+      # Unit tests on every target; the integration suite runs once, on Linux,
+      # in ci.yml's `test` job.
       - name: Test
         if: matrix.test
         run: cargo test --locked --lib

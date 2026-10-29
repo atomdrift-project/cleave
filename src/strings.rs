@@ -581,7 +581,7 @@ mod tests {
         let sidecar = strings
             .iter()
             .find(|s| s.value == decoded)
-            .expect("base64 classified strings should filefacts decoded text to encoded traits");
+            .expect("base64 classified strings should expose decoded text to encoded traits");
         assert_eq!(sidecar.encoding_chain, vec!["base64"]);
         assert_eq!(sidecar.offset, Some(42));
         // section is derived from offset by cleave now, not carried from stng.

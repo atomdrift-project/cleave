@@ -462,7 +462,7 @@ impl PackageJsonAnalyzer {
         self.check_metadata(&pkg, content, &mut report);
 
         // Analyze scripts for suspicious patterns
-        self.analyze_scripts(file_path, &pkg, &pkg.scripts, content, &mut report);
+        self.analyze_scripts(&pkg.scripts, content, &mut report);
 
         // Analyze dependencies for known malicious packages and typosquatting
         self.analyze_dependencies(&pkg, content, &mut report);
@@ -688,32 +688,10 @@ impl PackageJsonAnalyzer {
 
     fn analyze_scripts(
         &self,
-        file_path: &Path,
-        pkg: &PackageJson,
         scripts: &BTreeMap<String, String>,
         content: &str,
         report: &mut AnalysisReport,
     ) {
-        // Nested manifests under explicit fixture trees describe intentionally
-        // vulnerable inputs for a parent package's tests; npm does not execute
-        // their lifecycle hooks when installing the parent. Keep extracting
-        // ordinary script capabilities, but do not emit built-in hostile
-        // dropper conclusions for those inert examples.
-        let fixture_manifest = file_path.components().any(|component| {
-            matches!(
-                component.as_os_str().to_string_lossy().as_ref(),
-                "fixture" | "fixtures" | "testdata"
-            )
-        }) || (file_path.components().any(|component| {
-            component
-                .as_os_str()
-                .to_string_lossy()
-                .eq_ignore_ascii_case("vulnerable-configs")
-        }) && pkg
-            .name
-            .as_deref()
-            .is_some_and(|name| name.to_ascii_lowercase().contains("vulnerable")));
-
         for (name, script) in scripts {
             // Per-script capability detection (base64/encoding, network egress,
             // shell+eval, file deletion, env-var access, interpreters) now lives
@@ -761,8 +739,7 @@ impl PackageJsonAnalyzer {
             // codegen idiom — `@a2a-js/sdk`'s manual `generate` script fetches a
             // JSON schema and feeds it to a checked-in generator, which read as a
             // hostile dropper and made a stock Kibana image a false positive.
-            if !fixture_manifest
-                && is_publish_or_install_lifecycle_script(name)
+            if is_publish_or_install_lifecycle_script(name)
                 && (script.contains("curl") || script.contains("wget"))
                 && script.contains("&&")
                 && (script.contains("perl ")
@@ -800,11 +777,10 @@ impl PackageJsonAnalyzer {
             let known_installer = normalized == "curl https://tinybird.co | sh"
                 || (normalized.contains("https://rustwasm.github.io/wasm-pack/installer/init.sh")
                     && (normalized.contains("| sh") || normalized.contains("| bash")));
-            if !fixture_manifest
-                && (script.contains("| sh")
-                    || script.contains("| bash")
-                    || script.contains("| perl")
-                    || script.contains("| python"))
+            if (script.contains("| sh")
+                || script.contains("| bash")
+                || script.contains("| perl")
+                || script.contains("| python"))
                 && !known_installer
             {
                 report.add_finding(
@@ -1737,8 +1713,11 @@ mod tests {
         );
     }
 
+    /// Where a manifest sits says nothing about what it does: an attacker
+    /// controls the path, so a `fixtures/` or `testdata/` directory must not
+    /// excuse a dropper.
     #[test]
-    fn test_vulnerable_config_fixture_scripts_are_not_droppers() {
+    fn test_fixture_path_does_not_excuse_droppers() {
         let content = r#"{
             "name": "vulnerable-project",
             "version": "1.0.0",
@@ -1756,10 +1735,12 @@ mod tests {
             )
             .unwrap();
 
-        assert!(!report.findings.iter().any(|finding| {
-            finding.id == "command-and-control/dropper/download-execute"
-                || finding.id == "command-and-control/dropper/pipe-execute"
-        }));
+        for id in [
+            "command-and-control/dropper/download-execute",
+            "command-and-control/dropper/pipe-execute",
+        ] {
+            assert!(report.findings.iter().any(|f| f.id == id), "missing {id}");
+        }
     }
 
     #[test]

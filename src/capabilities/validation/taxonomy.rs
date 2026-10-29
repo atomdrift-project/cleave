@@ -2964,6 +2964,13 @@ fn broad_filetype_category(cond: &Condition) -> &'static str {
 /// `text` matcher in an allowlisted `text:` directory passes; the same directory
 /// does **not** license a broad `value`/`symbol`/etc. matcher.
 pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
+    // Shared XOR AST productions are portable across the explicitly scoped
+    // grammars. Lua exponentiation and other grammars are excluded; Swift has
+    // its own production. One canonical predicate avoids per-language copies.
+    "tree-sitter:micro-behaviors/data/bitwise/parsed-xor.yaml",
+    // Normalized call names describe the same XOR-named helper observation
+    // across script/source frontends, without claiming a particular algorithm.
+    "symbol:micro-behaviors/data/bitwise/parsed-xor.yaml",
     // Named-call references use the normalized call-symbol namespace across
     // script frontends. The printenv reference currently matches 13 script
     // types; narrowing it to seven would discard existing call facts. This
@@ -2981,6 +2988,8 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // Browser SQL schemas are shared by source and compiled carriers. These
     // bounded query matchers require specific columns and tables in any format.
     "text:micro-behaviors/data/db/access/chromium-queries.yaml",
+    // The same carrier-independent SQL predicates, relocated to the read operation.
+    "text:micro-behaviors/data/db/read/review-access-chromium-queries.yaml",
     // Referenced application/product names can occur in source, binaries,
     // manifests and embedded markup. Preserve that coverage when name markers
     // move out of artifact/library or objective-keyword categories. This only
@@ -3028,6 +3037,11 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // literals that appear in any language that talks to the service — script,
     // compiled binary, or source. Narrowing `for:` would silently drop coverage.
     "text:micro-behaviors/communications/http/services/",
+    // Recursive configuration values retain their meaning across source and binary carriers.
+    // Preserve the former service-leaf scope after moving this generic option to its subject.
+    "text:micro-behaviors/data/config/syntax/recursive-option.yaml",
+    // IMDS credential-header constants are independent of the source/binary carrier.
+    "text:micro-behaviors/communications/http/token-auth/aws-imds-headers.yaml",
     // Shell language markers are intentionally shared across scripts, source, and binaries
     "text:micro-behaviors/process/create/shell/lang/",
     // Download-execute dropper patterns are malicious whether they appear in a

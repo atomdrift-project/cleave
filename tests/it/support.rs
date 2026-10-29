@@ -2,8 +2,7 @@
 //!
 //! Integration tests run one-process-per-test under nextest (fully isolated),
 //! but the same binary can also run as threads in a single process under
-//! `cargo test --test it` (the Phase 5 dual-runner path — see
-//! `docs/FAST_SAFE_TESTING_PLAN.md`). Any test that mutates process-global state
+//! `cargo test --test it`. Any test that mutates process-global state
 //! — environment variables, the `traits_repo` override dir, the working
 //! directory — must serialize through [`global_lock`] so a shared-process run
 //! stays deterministic. Under nextest the lock is uncontended (one test per
@@ -258,4 +257,30 @@ pub(crate) fn skip_missing(what: &str) {
         "required fixture missing: {what} (CLEAVE_TEST_REQUIRE_FIXTURES=1)",
     );
     eprintln!("SKIP: {what}");
+}
+
+/// Decode an untrusted sample stored XOR-encoded with 0x42 under a
+/// `_xor_0x42_encoded` suffix (see `testdata/README.md`). `path` is relative to
+/// the crate root and omits the suffix.
+pub(crate) fn sample(path: &str) -> Vec<u8> {
+    let encoded =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("{path}_xor_0x42_encoded"));
+    std::fs::read(&encoded)
+        .unwrap_or_else(|e| panic!("read {}: {e}", encoded.display()))
+        .into_iter()
+        .map(|b| b ^ 0x42)
+        .collect()
+}
+
+/// [`sample`], written under its original file name in a fresh temp
+/// directory, for tests that analyze a path. Keep the directory alive for as
+/// long as the path is used.
+pub(crate) fn sample_file(path: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("temp dir: {e}"));
+    let name = std::path::Path::new(path)
+        .file_name()
+        .unwrap_or_else(|| panic!("sample path has no file name: {path}"));
+    let file = dir.path().join(name);
+    std::fs::write(&file, sample(path)).unwrap_or_else(|e| panic!("write sample: {e}"));
+    (dir, file)
 }

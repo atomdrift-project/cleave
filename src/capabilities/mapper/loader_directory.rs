@@ -586,23 +586,6 @@ impl super::CapabilityMapper {
         )
     }
 
-    /// Load capability mappings from a directory of YAML files with explicit precision thresholds
-    #[allow(dead_code)] // Compatibility wrapper used by tests and targeted call sites
-    pub(crate) fn from_directory_with_precision_thresholds<P: AsRef<Path>>(
-        dir_path: P,
-        min_hostile_precision: f32,
-        min_suspicious_precision: f32,
-        enable_full_validation: bool,
-    ) -> Result<Self> {
-        Self::from_directory_with_options(
-            dir_path,
-            min_hostile_precision,
-            min_suspicious_precision,
-            enable_full_validation,
-            false,
-        )
-    }
-
     /// Load capability mappings from a directory of YAML files with explicit load options.
     ///
     /// `CLEAVE_VALIDATE` overrides `enable_full_validation` in either direction.
@@ -6226,6 +6209,7 @@ impl super::CapabilityMapper {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::{find_non_leaf_yaml_files, is_open_filefacts_metric_path, matches_metric_family};
     use std::path::{Path, PathBuf};
@@ -6789,13 +6773,12 @@ fn prepare_trait_file(
 
     for mut raw_rule in mappings.composite_rules {
         // Parsing-time policy checks need the canonical ID, not the local YAML ID.
-        if let Some(ref prefix) = trait_prefix {
-            if !raw_rule.id.starts_with(prefix)
-                && !raw_rule.id.contains("::")
-                && !raw_rule.id.contains('/')
-            {
-                raw_rule.id = format!("{}::{}", prefix, raw_rule.id);
-            }
+        if let Some(ref prefix) = trait_prefix
+            && !raw_rule.id.starts_with(prefix)
+            && !raw_rule.id.contains("::")
+            && !raw_rule.id.contains('/')
+        {
+            raw_rule.id = format!("{}::{}", prefix, raw_rule.id);
         }
         // Convert raw rule to final rule, applying file-level defaults
         let mut rule = apply_composite_defaults(

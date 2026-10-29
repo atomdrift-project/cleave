@@ -361,7 +361,7 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
     // survives stripping).
     //
     // Naming: when exactly one canonical username is recovered we
-    // filefacts the singular `username`; otherwise we filefacts the
+    // expose the singular `username`; otherwise we expose the
     // array `usernames` (mutually exclusive shapes).  Trait authors
     // target one or the other based on cardinality; the
     // `username_from` field carries provenance.

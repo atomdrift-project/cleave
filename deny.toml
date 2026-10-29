@@ -1,0 +1,75 @@
+# Dependency policy, checked in CI by `cargo deny check`.
+
+[graph]
+all-features = true
+
+[advisories]
+# Unmaintained crates are reported, not fatal: some (serde_yaml) have no drop-in
+# successor yet. Security advisories always fail.
+unmaintained = "workspace"
+yanked = "deny"
+# Advisories in dependencies cleave does not control. Each names the crate that
+# pulls it in and why cleave's use is not affected; remove the entry when the
+# upstream bump lands.
+ignore = [
+    # sevenz-rust (also via filefacts): unmaintained, and `decompress_impl`
+    # does not confine paths. cleave extracts through its own callback, which
+    # sanitizes every entry path (archive/system_packages.rs). Move to
+    # sevenz-rust2 together with filefacts.
+    { id = "RUSTSEC-2026-0245", reason = "cleave never calls decompress_impl" },
+    { id = "RUSTSEC-2026-0246", reason = "replace with sevenz-rust2 alongside filefacts" },
+    # zip 2.6 via filefacts: `ZipArchive::extract` is never called.
+    { id = "RUSTSEC-2026-0367", reason = "zip 2.6 via filefacts; extract() unused" },
+    { id = "RUSTSEC-2026-0368", reason = "zip 2.6 via filefacts; extract() unused" },
+    { id = "RUSTSEC-2026-0369", reason = "zip 2.6 via filefacts; extract() unused" },
+    # zstd 0.13 / zstd-safe 7 via filefacts and zip 2.6; cleave itself uses 0.14.
+    { id = "RUSTSEC-2026-0391", reason = "zstd 0.13 via filefacts" },
+    { id = "RUSTSEC-2026-0398", reason = "zstd-safe 7 via filefacts" },
+    { id = "RUSTSEC-2026-0403", reason = "zstd-safe 7 via filefacts" },
+    # ruzstd 0.8 via rust-fs-squashfs.
+    { id = "RUSTSEC-2026-0344", reason = "ruzstd via rust-fs-squashfs; no release with the fix" },
+    # rsa (via filefacts and yara-x) only verifies signatures; there is no
+    # private key to recover.
+    { id = "RUSTSEC-2023-0071", reason = "signature verification only" },
+    { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5 via p256 in filefacts; verification only" },
+    # quick-xml 0.37 via the dmgwiz fork.
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.37 via dmgwiz; bump the fork" },
+    { id = "RUSTSEC-2026-0195", reason = "quick-xml 0.37 via dmgwiz; bump the fork" },
+]
+
+[licenses]
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "bzip2-1.0.6",
+    "CDLA-Permissive-2.0",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-git = [
+    "https://github.com/atomdrift-project/dmgwiz.git",
+    "https://github.com/atomdrift-project/filefacts.git",
+    "https://github.com/atomdrift-project/stng.git",
+    "https://github.com/copper-project/cu-bincode",
+    "https://github.com/tstromberg/tree-sitter",
+    "https://github.com/tstromberg/tree-sitter-bash",
+]

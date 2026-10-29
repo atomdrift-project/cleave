@@ -1,15 +1,17 @@
 //! Zero-telemetry update notifier and manifest-backed traits-ref resolution.
 //!
-//! On first run and at most once every 24 hours, cleave fetches a small static
-//! TOML manifest (`cleave.toml`) and prints a one-line notice when a newer
-//! release exists. The fetch is a plain GET of a static file — no version,
+//! In interactive runs, at most once every 24 hours, cleave fetches a small
+//! static TOML manifest (`cleave.toml`) in the background and prints a one-line
+//! notice when a newer release exists. The fetch is a plain GET of a static file — no version,
 //! identity, or any other data is sent — so it leaks nothing even if the host
 //! logs requests. A fresh result is cached locally so subsequent runs print the
 //! notice without touching the network at all.
 //!
 //! The same manifest also tells `update-rules` which git ref each release line
 //! should track for the traits repository: [`traits_ref`] reads `cleave.toml`,
-//! keyed on this binary's version.
+//! keyed on this binary's version. Those fetches add a constant `?update=1`
+//! query, so the server can tell an update from a notice check; nothing else
+//! is sent.
 //!
 //! The opt-out is honored everywhere: pass `--no-update-check` or set
 //! `CLEAVE_NO_UPDATE_CHECK` to disable the notice. The base URL is overridable
@@ -103,7 +105,7 @@ fn write_cache(cache: &Cache) {
         let _ = std::fs::create_dir_all(parent);
     }
     if let Ok(text) = toml::to_string(cache) {
-        let _ = std::fs::write(&path, text);
+        let _ = crate::cache::atomic_write(&path, text.as_bytes());
     }
 }
 
@@ -124,52 +126,55 @@ fn notify(latest: &str, url: Option<&str>, installed: &str) {
 
 /// Run the update notice for an interactive command.
 ///
-/// A fresh (<24h) cache is used without any network access. Otherwise the
-/// manifest is fetched once (bounded by `FETCH_TIMEOUT`), the cache is
-/// refreshed, and a notice is printed if a newer release exists. Any network or
-/// parse failure is logged at debug level and otherwise ignored — the check is
-/// strictly best-effort and never blocks or fails a command.
+/// Only runs when stderr is a terminal, so pipelines and sandboxes never touch
+/// the network. The notice is printed from the local cache; when that is older
+/// than a day, a background thread refreshes it (bounded by `FETCH_TIMEOUT`)
+/// and the next run shows the result, so the check never delays a command. Any
+/// network or parse failure is logged at debug level and otherwise ignored.
 pub fn maybe_notify(disabled_by_flag: bool) {
-    if disabled_by_flag || std::env::var_os("CLEAVE_NO_UPDATE_CHECK").is_some() {
+    use std::io::IsTerminal;
+    if disabled_by_flag
+        || std::env::var_os("CLEAVE_NO_UPDATE_CHECK").is_some()
+        || !std::io::stderr().is_terminal()
+    {
         return;
     }
     let installed = env!("CARGO_PKG_VERSION");
-    let cached: Option<Cache> = cache_path()
+    let cached: Cache = cache_path()
         .and_then(|path| std::fs::read_to_string(path).ok())
-        .and_then(|text| toml::from_str(&text).ok());
-
-    // A fresh stamp (a recent success *or* a recent failed attempt) is used
-    // without any network access.
-    if let Some(cache) = &cached
-        && now_unix().saturating_sub(cache.checked_unix) < CHECK_INTERVAL_SECS
-    {
-        notify(&cache.latest, cache.url.as_deref(), installed);
+        .and_then(|text| toml::from_str(&text).ok())
+        .unwrap_or_default();
+    notify(&cached.latest, cached.url.as_deref(), installed);
+    if now_unix().saturating_sub(cached.checked_unix) < CHECK_INTERVAL_SECS {
         return;
     }
+    let spawned = std::thread::Builder::new()
+        .name("update-check".into())
+        .spawn(move || refresh_cache(cached));
+    if let Err(e) = spawned {
+        tracing::debug!(error = %e, "update check skipped");
+    }
+}
 
-    match fetch("cleave.toml", false) {
-        Ok(manifest) => {
-            write_cache(&Cache {
-                checked_unix: now_unix(),
-                latest: manifest.latest.clone(),
-                url: manifest.url.clone(),
-            });
-            notify(&manifest.latest, manifest.url.as_deref(), installed);
-        }
+/// Fetch the manifest and record the result. A failed attempt is stamped too,
+/// keeping the last known release, so an unreachable manifest is not retried
+/// on every run.
+fn refresh_cache(previous: Cache) {
+    let fresh = match fetch("cleave.toml", false) {
+        Ok(manifest) => Cache {
+            checked_unix: now_unix(),
+            latest: manifest.latest,
+            url: manifest.url,
+        },
         Err(e) => {
             tracing::debug!(error = %format!("{e:#}"), "update check skipped");
-            // Stamp the failed attempt so an unreachable manifest doesn't
-            // trigger a network call on every run. Preserve any previously
-            // known `latest` so a transient failure still shows the last notice.
-            let prev = cached.unwrap_or_default();
-            write_cache(&Cache {
+            Cache {
                 checked_unix: now_unix(),
-                latest: prev.latest.clone(),
-                url: prev.url.clone(),
-            });
-            notify(&prev.latest, prev.url.as_deref(), installed);
+                ..previous
+            }
         }
-    }
+    };
+    write_cache(&fresh);
 }
 
 /// Resolve the traits ref the installed cleave version should track, per

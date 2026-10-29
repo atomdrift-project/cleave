@@ -1252,12 +1252,6 @@ fn format_evidence_value_with_size(
     }
 }
 
-/// Format a value for evidence display (truncated if necessary).
-#[allow(dead_code)]
-fn format_evidence_value(value: &Value) -> String {
-    format_evidence_value_with_size(value, None, None)
-}
-
 /// Path-vs-path equality / inequality. Both sides accept the optional
 /// `<filename>::` prefix to reach a sibling archive entry's value tree.
 /// Comparison is always case-insensitive and whitespace-trimmed; for

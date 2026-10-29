@@ -34,7 +34,7 @@ use colored::{ColoredString, Colorize};
 //
 // Pinned RGB triples mapping to 256-color indices 167/214/39/71/244
 // (xterm extended palette).  Truecolor used directly for portability
-// — the `colored` crate doesn't filefacts a 256-color setter, and every
+// — the `colored` crate doesn't expose a 256-color setter, and every
 // modern terminal that runs cleave handles truecolor cleanly.
 //
 // Constants are `pub(crate)` so future themes can swap them without
@@ -120,50 +120,9 @@ pub fn paint_intensity_f64<S: AsRef<str>>(rel: f64, text: S) -> ColoredString {
 
 // ─── pills ──────────────────────────────────────────────────────────
 //
-// Truecolor backgrounds for top-level section labels.  Two families:
-//
-//   * **namespace pills** — analyze-side section headers
-//     (`well-known`, `objectives`, `micro-behaviors`, `metadata`,
-//     `third-party`).  Hot hue family (red / magenta / blue / gray /
-//     orange).
-//
-//   * **scope pills** — diff-side scope headers (`traits`, `metrics`,
-//     `kv`, `symbols`, `strings`, `sections`).  Cool hue family
-//     (plum / teal / ochre / rose / ocean / slate) so the analyst
-//     can tell at a glance which mode they're in.
-//
-// Both use `bold white` foreground; readability over a dark bg.
-
-/// Analyze-side namespace pill kinds — one per top-level taxonomy
-/// section (well-known, objectives, micro-behaviors, metadata,
-/// third-party). Hot hue family; pairs with `pill_namespace`.
-#[derive(Debug, Clone, Copy)]
-pub enum NamespacePill {
-    /// `well-known` — established malware families and signatures.
-    WellKnown,
-    /// `objectives` — high-level adversary goals.
-    Objectives,
-    /// `micro-behaviors` — low-level capability primitives.
-    MicroBehaviors,
-    /// `metadata` — structural / build-info findings.
-    Metadata,
-    /// `third-party` — vendored YARA / external rule matches.
-    ThirdParty,
-}
-
-/// Render `label` as an analyze-side namespace pill (bold white on
-/// the hot-family background for `ns`).
-#[must_use]
-pub fn pill_namespace(label: &str, ns: NamespacePill) -> ColoredString {
-    let (r, g, b) = match ns {
-        NamespacePill::WellKnown => (95, 0, 0),
-        NamespacePill::Objectives => (95, 0, 95),
-        NamespacePill::MicroBehaviors => (0, 0, 95),
-        NamespacePill::Metadata => (48, 48, 48),
-        NamespacePill::ThirdParty => (120, 56, 0),
-    };
-    format!(" {label} ").bold().white().on_truecolor(r, g, b)
-}
+// Truecolor backgrounds for diff-side scope headers (`traits`, `metrics`,
+// `kv`, `symbols`, `strings`, `sections`), in bold white for readability
+// over a dark background.
 
 /// Diff-side scope pill kinds — one per per-file scope heading
 /// (`traits`, `metrics`, `kv`, `symbols`, `strings`, `sections`).
@@ -216,21 +175,7 @@ pub fn paint_rule<S: AsRef<str>>(text: S) -> ColoredString {
 
 // ─── direction arrows ───────────────────────────────────────────────
 //
-// `↑` / `↓` (and `~` for unchanged) tinted by relative-change
-// magnitude using the same tier as `paint_intensity`.  Diff-only:
-// analyze has no direction concept.
-
-/// `↑` glyph tinted by `rel_change` magnitude (intensity tier).
-#[must_use]
-pub fn paint_arrow_up(rel_change: f64) -> ColoredString {
-    paint_intensity_f64(rel_change, "↑")
-}
-
-/// `↓` glyph tinted by `rel_change` magnitude (intensity tier).
-#[must_use]
-pub fn paint_arrow_down(rel_change: f64) -> ColoredString {
-    paint_intensity_f64(rel_change, "↓")
-}
+// `~` for unchanged rows. Diff-only: analyze has no direction concept.
 
 /// Neutral `~` glyph (dimmed) for unchanged metric rows.
 #[must_use]
@@ -325,10 +270,6 @@ mod tests {
     #[test]
     fn pills_render_with_bold_white_on_truecolor() {
         // Smoke test — pills should produce non-empty colored output.
-        let p = pill_namespace("OBJECTIVES", NamespacePill::Objectives);
-        assert!(!p.to_string().is_empty());
-        assert!(p.to_string().contains("OBJECTIVES"));
-
         let s = pill_scope("traits", ScopePill::Traits);
         assert!(!s.to_string().is_empty());
         assert!(s.to_string().contains("traits"));

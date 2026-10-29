@@ -252,22 +252,24 @@ impl<'a> ScptParser<'a> {
 
         while i + 10 < self.data.len() {
             // Look for variable entry marker: 0x0b followed by 2-byte id, then 0x00
-            if self.data[i] == 0x0b && i + 3 < self.data.len() && self.data[i + 3] == 0x00 {
-                if let Some((name, consumed)) = self.parse_variable_entry(i) {
-                    if !name.is_empty() && Self::is_valid_identifier(&name) {
-                        let key = (name.clone(), SymbolKind::Variable);
-                        if !seen.contains(&key) {
-                            seen.insert(key);
-                            symbols.push(Symbol {
-                                name,
-                                kind: SymbolKind::Variable,
-                                offset: i,
-                            });
-                        }
+            if self.data[i] == 0x0b
+                && i + 3 < self.data.len()
+                && self.data[i + 3] == 0x00
+                && let Some((name, consumed)) = self.parse_variable_entry(i)
+            {
+                if !name.is_empty() && Self::is_valid_identifier(&name) {
+                    let key = (name.clone(), SymbolKind::Variable);
+                    if !seen.contains(&key) {
+                        seen.insert(key);
+                        symbols.push(Symbol {
+                            name,
+                            kind: SymbolKind::Variable,
+                            offset: i,
+                        });
                     }
-                    i += consumed;
-                    continue;
                 }
+                i += consumed;
+                continue;
             }
             i += 1;
         }
@@ -606,13 +608,12 @@ impl<'a> ScptParser<'a> {
                 && self.data[i + 3] == 0x00
                 && self.data[i + 4] == 0x18
                 && self.data[i + 5] == 0x2e
+                && let Some((info, _)) = self.parse_apple_event_entry(i)
             {
-                if let Some((info, _)) = self.parse_apple_event_entry(i) {
-                    let key = (info.class_code.clone(), info.event_code.clone());
-                    if !seen.contains(&key) {
-                        seen.insert(key);
-                        events.push(info);
-                    }
+                let key = (info.class_code.clone(), info.event_code.clone());
+                if !seen.contains(&key) {
+                    seen.insert(key);
+                    events.push(info);
                 }
             }
             i += 1;

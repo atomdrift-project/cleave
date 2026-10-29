@@ -40,7 +40,11 @@ traits:
         disable_upx: true,
         ..Default::default()
     };
-    let file = include_bytes!("../testdata/xor/xor_fat_dropper.macho");
+    // Stored XOR-encoded with 0x42; see testdata/README.md.
+    let file: Vec<u8> = include_bytes!("../testdata/xor/xor_fat_dropper.macho_xor_0x42_encoded")
+        .iter()
+        .map(|b| b ^ 0x42)
+        .collect();
     let payload: Vec<u8> = file[0x6210..0x6210 + 153824]
         .iter()
         .map(|b| b ^ 0x9c)
@@ -57,7 +61,7 @@ traits:
         !negative.contains(probe),
         "wrapper itself cannot satisfy child probe"
     );
-    let standalone = ids(&cleave::analyze_bytes(file, "wrapper.macho", &opts).unwrap());
+    let standalone = ids(&cleave::analyze_bytes(&file, "wrapper.macho", &opts).unwrap());
     let path = dir.path().join("sample.tar.gz");
     let out = std::fs::File::create(&path).unwrap();
     let gzip = flate2::write::GzEncoder::new(out, flate2::Compression::default());

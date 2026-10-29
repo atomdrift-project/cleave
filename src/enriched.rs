@@ -345,6 +345,12 @@ fn welcome(link: &str) {
     );
 }
 
+/// Whether `link` is a plain URL on dash: it is printed to the terminal and
+/// handed to the platform's opener, so it must carry no spaces or controls.
+fn is_dash_link(link: &str) -> bool {
+    link.starts_with(DASH_URL) && link.bytes().all(|b| b.is_ascii_graphic())
+}
+
 /// Open `url` in the browser this desktop uses, when there is one. Nothing
 /// is reported either way: the link is on the screen regardless, and over
 /// SSH it is the link that gets used.
@@ -354,7 +360,8 @@ fn open_browser(url: &str) {
     use std::process::{Command, Stdio};
     let (opener, args): (&str, &[&str]) = match std::env::consts::OS {
         "macos" => ("open", &[]),
-        "windows" => ("cmd", &["/C", "start", ""]),
+        // Not `cmd /C start`: cmd would treat `&` in the query as a separator.
+        "windows" => ("rundll32", &["url.dll,FileProtocolHandler"]),
         _ if std::env::var_os("DISPLAY").is_some()
             || std::env::var_os("WAYLAND_DISPLAY").is_some() =>
         {
@@ -514,6 +521,11 @@ pub fn connect(label: &str) -> Result<Connected, String> {
     let link = start
         .verification_uri_complete
         .unwrap_or(start.verification_uri);
+    if !is_dash_link(&link) {
+        return Err(format!(
+            "{DASH_URL} sent an approval link that is not its own"
+        ));
+    }
     welcome(&link);
     open_browser(&link);
     let progress = Progress::start("Waiting for approval…");
@@ -647,6 +659,16 @@ impl Dash {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_plain_dash_links_are_opened() {
+        assert!(is_dash_link(
+            "https://dash.isotope13.io/device?code=AB-12&x=1"
+        ));
+        assert!(!is_dash_link("https://evil.example/device"));
+        assert!(!is_dash_link("https://dash.isotope13.io/x\x1b[2J"));
+        assert!(!is_dash_link("https://dash.isotope13.io/ calc.exe"));
+    }
 
     #[test]
     fn the_env_switch_is_on_off_or_absent() {

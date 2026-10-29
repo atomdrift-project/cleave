@@ -3,12 +3,19 @@
 # is what this does — Dependabot rewrites the SHA and updates the trailing
 # version comment.
 #
-# Cargo is deliberately not listed: our dependency graph is pinned through
-# Cargo.lock with several git deps tracking branches, and Dependabot would open
-# noise it can't resolve. Dependency freshness there is handled by an explicit
-# `cargo update` pass.
+# Cargo updates are grouped into one weekly PR. Git dependencies are pinned by
+# `rev` in Cargo.toml and are bumped by hand.
 version: 2
 updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "deps"
+    groups:
+      cargo:
+        patterns: ["*"]
   - package-ecosystem: github-actions
     directory: "/"
     schedule:

@@ -72,18 +72,16 @@ impl ResultCache {
             return None;
         }
         let traits_dir = std::fs::canonicalize(traits_dir).ok()?;
-        // Include all environment inputs, conservatively. Changing an unknown
-        // dependency knob must miss rather than reuse a possibly different run.
-        let mut env: Vec<_> = std::env::vars_os().collect();
-        // Shell bookkeeping and caller invocation IDs cannot affect rule
-        // evaluation. In particular, separate agent tool calls must be able
-        // to reuse a result even though each call has a fresh identifier.
-        env.retain(|(k, _)| {
-            !matches!(
-                k.to_str(),
-                Some("_" | "SHLVL" | "CODEX_TOOL_CALL_ID" | "CODEX_SESSION_ID" | "CODEX_THREAD_ID")
-            )
-        });
+        // Every variable that can change a result: cleave's and filefacts' own
+        // knobs, and PATH, which decides which external tools (rizin, 7-Zip,
+        // UPX) analysis can use.
+        let mut env: Vec<_> = std::env::vars_os()
+            .filter(|(k, _)| {
+                k.to_str().is_some_and(|k| {
+                    k == "PATH" || k.starts_with("CLEAVE_") || k.starts_with("FILEFACTS_")
+                })
+            })
+            .collect();
         env.sort();
         let mut settings = Sha256::new();
         field(&mut settings, &slow_rule_ms.to_le_bytes());

@@ -43,7 +43,7 @@ fn performance_cores(
 
 #[cfg(target_os = "macos")]
 fn sysctl_name(name: &std::ffi::CStr) -> Option<String> {
-    extern "C" {
+    unsafe extern "C" {
         fn sysctlbyname(
             name: *const core::ffi::c_char,
             oldp: *mut std::ffi::c_void,

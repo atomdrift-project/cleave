@@ -118,130 +118,6 @@ pub(crate) fn aggregate_findings_by_directory(findings: &[Finding]) -> Vec<Findi
     result
 }
 
-/// Get risk indicator based on criticality
-#[cfg(test)]
-fn risk_indicator(crit: &Criticality) -> colored::ColoredString {
-    use crate::theme;
-    match crit {
-        Criticality::Filtered => "   ".normal(),
-        Criticality::Exception | Criticality::Component => "  ·".dimmed(),
-        Criticality::Baseline => theme::paint_baseline("  ·"),
-        Criticality::Notable => theme::paint_notable("  •"),
-        Criticality::Suspicious => theme::paint_suspicious(" ••"),
-        Criticality::Hostile => theme::paint_hostile("•••"),
-    }
-}
-
-/// Get risk level name
-/// Split trait ID into namespace and rest, skipping "cap"/"obj" prefixes
-/// e.g., "micro-behaviors/execution/command/subprocess" -> ("exec", "command/subprocess")
-/// e.g., "objectives/anti-analysis/debugger/detect" -> ("anti-analysis", "debugger/detect")
-/// e.g., "intel/discover/process/getuid" -> ("intel", "discover/process/getuid")
-#[cfg(test)]
-fn split_trait_id(id: &str) -> (String, String) {
-    let parts: Vec<&str> = id.split('/').collect();
-
-    // Skip "cap" or "obj" prefix if present
-    let start_idx = if parts.len() > 1 && (parts[0] == "cap" || parts[0] == "obj") {
-        1
-    } else {
-        0
-    };
-
-    if parts.len() > start_idx + 1 {
-        (
-            parts[start_idx].to_string(),
-            parts[start_idx + 1..].join("/"),
-        )
-    } else if parts.len() > start_idx {
-        (parts[start_idx].to_string(), parts[start_idx].to_string())
-    } else {
-        (id.to_string(), id.to_string())
-    }
-}
-
-/// Namespace categories for grouping findings
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg(test)]
-enum Namespace {
-    WellKnown,
-    Objectives,
-    MicroBehaviors,
-    Metadata,
-    ThirdParty,
-}
-
-#[cfg(test)]
-impl Namespace {
-    /// Parse namespace from trait ID prefix
-    fn from_trait_id(id: &str) -> Option<Self> {
-        let prefix = id.split('/').next()?;
-        match prefix {
-            "well-known" => Some(Self::WellKnown),
-            "objectives" => Some(Self::Objectives),
-            "micro-behaviors" => Some(Self::MicroBehaviors),
-            "metadata" => Some(Self::Metadata),
-            "third_party" | "third-party" => Some(Self::ThirdParty),
-            _ => None,
-        }
-    }
-
-    /// Display name for section header
-    fn display_name(&self) -> &'static str {
-        match self {
-            Self::WellKnown => "WELL-KNOWN",
-            Self::Objectives => "OBJECTIVES",
-            Self::MicroBehaviors => "MICRO-BEHAVIORS",
-            Self::Metadata => "METADATA",
-            Self::ThirdParty => "THIRD-PARTY",
-        }
-    }
-}
-
-/// Convert namespace to long name, capitalizing if no explicit mapping exists
-#[cfg(test)]
-fn namespace_long_name(ns: &str) -> String {
-    let mapped = match ns {
-        "c2" => Some("COMMAND & CONTROL"),
-        "crypto" => Some("CRYPTOGRAPHY"),
-        "exfil" => Some("EXFILTRATION"),
-        "exec" => Some("EXECUTION"),
-        "fs" => Some("FILESYSTEM"),
-        "hw" => Some("HARDWARE"),
-        "comm" => Some("COMMUNICATION"),
-        "os" => Some("OS"),
-        "anti-analysis" => Some("ANTI-ANALYSIS"),
-        "anti-static" => Some("STATIC EVASION"),
-        "anti-forensics" => Some("ANTI-FORENSICS"),
-        "privilege-escalation" => Some("PRIVILEGE ESCALATION"),
-        "process" => Some("PROCESS"),
-        "mem" => Some("MEMORY"),
-        "data" => Some("DATA"),
-        "impact" => Some("IMPACT"),
-        "credential-access" => Some("CREDENTIALS"),
-        "lateral" => Some("LATERAL MOVEMENT"),
-        "persist" => Some("PERSISTENCE"),
-        "discovery" => Some("DISCOVERY"),
-        "exploit" => Some("EXPLOIT"),
-        "collect" => Some("COLLECTION"),
-        "graphics" => Some("GRAPHICS"),
-        "interop" => Some("INTEROPERABILITY"),
-        "io" => Some("INPUT/OUTPUT"),
-        "time" => Some("TIME"),
-        "ui" => Some("USER INTERFACE"),
-        "meta" => Some("METADATA"),
-        _ => None,
-    };
-
-    match mapped {
-        Some(name) => name.to_string(),
-        None => {
-            // Full uppercase and replace hyphens with spaces for unknown namespaces
-            ns.replace('-', " ").to_uppercase()
-        }
-    }
-}
-
 /// Make descriptions more terse by removing redundant explanatory parentheticals
 fn terse_description(desc: &str) -> String {
     // Remove common verbose patterns that are redundant given the context
@@ -271,46 +147,6 @@ fn annotate_desc(desc: &str, id: &str) -> String {
         id.to_string()
     } else {
         format!("{desc} ({id})")
-    }
-}
-
-#[cfg(test)]
-fn format_evidence(finding: &Finding) -> String {
-    // Dedupe values, drop blank/whitespace-only lines from each. If any
-    // value spans multiple lines after cleaning, return the full set as a
-    // newline-separated block (the renderer indents continuation lines to
-    // the evidence column). Otherwise comma-join for compactness.
-    let mut seen = std::collections::HashSet::new();
-    let values: Vec<String> = finding
-        .evidence
-        .iter()
-        .filter_map(|e| {
-            let cleaned: String = e
-                .value
-                .lines()
-                .filter(|l| !l.trim().is_empty())
-                .collect::<Vec<_>>()
-                .join("\n");
-            if cleaned.is_empty() {
-                return None;
-            }
-            if seen.insert(cleaned.clone()) {
-                Some(cleaned)
-            } else {
-                None
-            }
-        })
-        .take(5)
-        .collect();
-
-    if values.is_empty() {
-        return String::new();
-    }
-
-    if values.iter().any(|v| v.contains('\n')) {
-        values.join("\n")
-    } else {
-        values.join(", ")
     }
 }
 
@@ -2275,7 +2111,7 @@ fn trust_text(id: &filefacts::Identity, colorize: bool) -> String {
     }
 }
 
-/// Truncate keeping head and tail (for paths): `/Users/t/…/main.rs`.
+/// Truncate keeping head and tail (for paths): `/home/user/…/main.rs`.
 fn truncate_mid(s: &str, max: usize) -> String {
     let chars: Vec<char> = s.chars().collect();
     if chars.len() <= max {
@@ -3519,24 +3355,35 @@ fn is_terminal_direction_control(c: char) -> bool {
 /// Replace terminal-significant control and directionality characters with
 /// escaped text.
 ///
-/// Sample-derived strings (file names, source lines, log field values) can
-/// carry CSI/OSC escape sequences that rewrite what an operator sees in the
-/// terminal or a log file. Control characters other than tab, newline, and
-/// carriage return, plus Unicode bidirectional formatting controls, become
-/// `\u{XX}` text. Returns the input unchanged (no allocation) when nothing
-/// needs escaping, which is the overwhelmingly common case.
+/// Sample-derived strings (file names, source lines) can carry CSI/OSC escape
+/// sequences that rewrite what an operator sees in the terminal. Control
+/// characters other than tab, newline, and carriage return, plus Unicode
+/// bidirectional formatting controls, become `\u{XX}` text. Returns the input
+/// unchanged (no allocation) when nothing needs escaping, which is the
+/// overwhelmingly common case. For one-line log fields use
+/// [`escape_log_field`], which escapes line breaks too.
 #[must_use]
 pub fn escape_control_chars(s: &str) -> std::borrow::Cow<'_, str> {
+    escape_controls(s, |c| matches!(c, '\t' | '\n' | '\r'))
+}
+
+/// [`escape_control_chars`] for a value inside a single log record: line
+/// breaks are escaped as well, so a file name containing `\n` cannot forge a
+/// log line.
+#[must_use]
+pub fn escape_log_field(s: &str) -> std::borrow::Cow<'_, str> {
+    escape_controls(s, |c| c == '\t')
+}
+
+fn escape_controls(s: &str, keep: fn(char) -> bool) -> std::borrow::Cow<'_, str> {
     use std::borrow::Cow;
-    if !s.chars().any(|c| {
-        (c.is_control() && !matches!(c, '\t' | '\n' | '\r')) || is_terminal_direction_control(c)
-    }) {
+    let escape = |c: char| (c.is_control() && !keep(c)) || is_terminal_direction_control(c);
+    if !s.chars().any(escape) {
         return Cow::Borrowed(s);
     }
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
-        if (c.is_control() && !matches!(c, '\t' | '\n' | '\r')) || is_terminal_direction_control(c)
-        {
+        if escape(c) {
             // Infallible on String; see expand_tabs.
             let _ = write!(out, "\\u{{{:x}}}", u32::from(c));
         } else {
@@ -3556,7 +3403,9 @@ pub fn escape_control_chars(s: &str) -> std::borrow::Cow<'_, str> {
 /// sequences (`ESC [ ... m`). Every other control character and every Unicode
 /// bidirectional formatting control is rendered as visible `\\u{...}` text.
 /// SGR can alter presentation; it cannot move the cursor, clear the screen,
-/// set the terminal title, or write clipboard contents.
+/// set the terminal title, or write clipboard contents. SGR 8 (conceal), which
+/// the renderer never emits and which would hide the text after it, is
+/// escaped too.
 #[must_use]
 pub fn sanitize_terminal_output(s: &str) -> std::borrow::Cow<'_, str> {
     use std::borrow::Cow;
@@ -3569,7 +3418,8 @@ pub fn sanitize_terminal_output(s: &str) -> std::borrow::Cow<'_, str> {
         let mut i = 2;
         while let Some(&b) = bytes.get(i) {
             if b == b'm' {
-                return Some(i + 1);
+                let conceals = s[2..i].split([';', ':']).any(|p| p == "8");
+                return (!conceals).then_some(i + 1);
             }
             if !b.is_ascii_digit() && !matches!(b, b';' | b':') {
                 return None;
@@ -4259,292 +4109,12 @@ fn display_file_type(file_type: &str) -> String {
     file_type.to_uppercase()
 }
 
-/// Render a section label as a muted 256-color pill — bold white on dark bg.
-/// Hue encodes the namespace: red=well-known, magenta=objectives, blue=behaviors, gray=metadata.
-#[cfg(test)]
-fn section_pill(ns: &Namespace) -> colored::ColoredString {
-    let (name, r, g, b) = match ns {
-        Namespace::WellKnown => (ns.display_name(), 95, 0, 0), // dark red (256 idx 52)
-        Namespace::Objectives => (ns.display_name(), 95, 0, 95), // dark magenta (53)
-        Namespace::MicroBehaviors => (ns.display_name(), 0, 0, 95), // dark blue (17)
-        Namespace::Metadata => (ns.display_name(), 48, 48, 48), // dark gray (236)
-        Namespace::ThirdParty => (ns.display_name(), 120, 56, 0), // dark orange
-    };
-    format!(" {name} ").bold().white().on_truecolor(r, g, b)
-}
-
 /// Full-width slate-blue rule used as a file-boundary marker. Routed
 /// through `theme::paint_rule` and `theme::RULE_CHAR` so analyze and
 /// diff share the exact same separator.
 fn file_rule(width: usize) -> colored::ColoredString {
     let rule: String = crate::theme::RULE_CHAR.to_string().repeat(width);
     crate::theme::paint_rule(rule)
-}
-
-/// Bullet indicator based on criticality: • notable, •• suspicious, ••• hostile
-#[cfg(test)]
-fn bullet_for_crit(crit: &Criticality) -> colored::ColoredString {
-    use crate::theme;
-    match crit {
-        Criticality::Hostile => theme::paint_hostile("•••"),
-        Criticality::Suspicious => theme::paint_suspicious(" ••"),
-        _ => theme::paint_baseline("  •"),
-    }
-}
-
-/// Colorize text based on criticality.
-#[cfg(test)]
-fn colorize_by_crit(text: &str, crit: &Criticality) -> colored::ColoredString {
-    use crate::theme;
-    match crit {
-        Criticality::Hostile => theme::paint_hostile(text),
-        Criticality::Suspicious => theme::paint_suspicious(text),
-        _ => theme::paint_baseline(text),
-    }
-}
-
-/// Extract short trait ID (strip namespace prefix)
-/// e.g., "well-known/malware/BPFDoor" -> "BPFDoor"
-/// e.g., "objectives/c2/http/beacon" -> "c2/http/beacon"
-/// e.g., "micro-behaviors/fs/read/file" -> "fs/read/file"
-#[cfg(test)]
-fn short_trait_id(id: &str) -> String {
-    let parts: Vec<&str> = id.split('/').collect();
-    if parts.len() > 1 {
-        // Skip namespace prefix (well-known, objectives, micro-behaviors)
-        let first = parts[0];
-        if first == "well-known"
-            || first == "objectives"
-            || first == "micro-behaviors"
-            || first == "metadata"
-            || first == "third_party"
-            || first == "third-party"
-        {
-            return parts[1..].join("/");
-        }
-    }
-    id.to_string()
-}
-
-/// Format analysis report for terminal display
-/// Uses the v2 flat files array structure.
-#[cfg(test)]
-pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
-    let mut output = String::new();
-    let term_width = terminal_width();
-
-    // Iterate over files that have findings
-    for file in &report.files {
-        // Skip files with no findings
-        if file.findings.is_empty() {
-            continue;
-        }
-
-        // Per RULES.md: components are hidden from terminal output unless a
-        // matched composite that references them fires. Build the set of
-        // component IDs referenced by notable-or-higher composites, then keep
-        // components only when they appear in that set.
-        let referenced_component_ids: HashSet<&str> = file
-            .findings
-            .iter()
-            .filter(|f| f.crit >= Criticality::Notable && f.conf >= 0.5)
-            .flat_map(|f| f.trait_refs.iter().map(crate::types::Istr::as_str))
-            .collect();
-
-        let pre_filtered: Vec<Finding> = file
-            .findings
-            .iter()
-            .filter(|f| f.conf >= 0.5)
-            .filter(|f| {
-                f.crit >= Criticality::Notable
-                    || (f.crit == Criticality::Component
-                        && referenced_component_ids.contains(f.id.as_str()))
-            })
-            .cloned()
-            .collect();
-
-        // Aggregate remaining findings by directory path
-        let filtered = aggregate_findings_by_directory(&pre_filtered);
-
-        if filtered.is_empty() {
-            continue;
-        }
-
-        // Group findings by namespace
-        let mut by_namespace: HashMap<Namespace, Vec<&Finding>> = HashMap::new();
-        for finding in &filtered {
-            if let Some(ns) = Namespace::from_trait_id(&finding.id) {
-                by_namespace.entry(ns).or_default().push(finding);
-            }
-        }
-
-        // Sort findings within each namespace by criticality (hostile first)
-        for findings in by_namespace.values_mut() {
-            findings.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
-        }
-
-        // Pre-calculate column widths across ALL findings in this file
-        let all_findings: Vec<&&Finding> = by_namespace.values().flat_map(|v| v.iter()).collect();
-
-        let trait_width = all_findings
-            .iter()
-            .map(|f| short_trait_id(&f.id).len())
-            .max()
-            .unwrap_or(20);
-
-        let natural_desc_width = all_findings
-            .iter()
-            .map(|f| terse_description(&f.desc).len())
-            .max()
-            .unwrap_or(30);
-
-        // Reserve at least MIN_EVIDENCE_WIDTH columns for evidence by capping the
-        // description column. One overly long description would otherwise push
-        // evidence off the screen, leaving every row with just a stray `…`.
-        // Layout overhead: bullet(3) + space(1) + trait + 2 spaces + 2 spaces = 8 + trait_width
-        // 24 cols accommodates two short kv-array members like
-        // `[lzma_crc32, lzma_crc64]` — descriptions truncate hard
-        // first since they're often paraphrasable from the trait id.
-        const MIN_EVIDENCE_WIDTH: usize = 24;
-        let overhead = 8 + trait_width;
-        let max_desc_width = term_width.saturating_sub(overhead + MIN_EVIDENCE_WIDTH);
-        let desc_width = natural_desc_width.min(max_desc_width);
-
-        let evidence_width = term_width.saturating_sub(overhead + desc_width);
-
-        // Generate formula from the canonical formula filter (not the
-        // display-aggregated `filtered` set above, which includes referenced
-        // components). Keeps the header formula identical to the JSON `f`.
-        let formula_findings = filter_findings_for_formula(&file.findings);
-        let formula = malecule_bridge::formula_from_findings(&formula_findings);
-
-        let file_type_display = display_file_type(&file.file_type);
-
-        // File header: [indent] path  type • formula
-        let type_formula = if formula.is_empty() {
-            file_type_display
-        } else {
-            format!("{} • {}", file_type_display, formula)
-        };
-
-        // Indent nested files (archive members, embedded binaries, decoded payloads)
-        let indent = "  ".repeat(file.depth as usize);
-        // Strip virtual path prefixes (!!member, ##encoding) for display if depth > 0
-        let display_path = if file.depth > 0 {
-            file.path
-                .rsplit(crate::types::file_analysis::ARCHIVE_DELIMITER)
-                .next()
-                .or_else(|| {
-                    file.path
-                        .rsplit(crate::types::file_analysis::ENCODING_DELIMITER)
-                        .next()
-                })
-                .unwrap_or(&file.path)
-        } else {
-            &file.path
-        };
-
-        output.push_str(&format!(
-            "{}{}  {}\n",
-            indent,
-            display_path.bright_white().bold(),
-            type_formula.bright_black()
-        ));
-        let rule_width = term_width.saturating_sub(indent.len());
-        output.push_str(&format!("{}{}\n", indent, file_rule(rule_width)));
-
-        // Render namespaces in fixed order: WELL-KNOWN, OBJECTIVES, MICRO-BEHAVIORS, METADATA, THIRD-PARTY.
-        // First section follows the file rule with no gap; later sections get a leading blank.
-        let mut first_section = true;
-        for ns in [
-            Namespace::WellKnown,
-            Namespace::Objectives,
-            Namespace::MicroBehaviors,
-            Namespace::Metadata,
-            Namespace::ThirdParty,
-        ] {
-            let Some(findings) = by_namespace.get(&ns) else {
-                continue; // Skip empty sections
-            };
-
-            if !first_section {
-                output.push('\n');
-            }
-            first_section = false;
-
-            output.push_str(&format!("{}\n", section_pill(&ns)));
-
-            // Bullet (3) + space (1) + trait + 2 spaces + desc + 2 spaces.
-            // Continuation lines for multi-line evidence start at this column.
-            let evidence_col = 3 + 1 + trait_width + 2 + desc_width + 2;
-            let evidence_indent = " ".repeat(evidence_col);
-            // Cap multi-line evidence so a single huge match doesn't drown
-            // the rest of the output. Beyond the cap, the last visible line
-            // gets a trailing ellipsis.
-            const MAX_EVIDENCE_LINES: usize = 4;
-
-            // Render each finding
-            for finding in findings {
-                let trait_id = short_trait_id(&finding.id);
-                let desc = terse_description(&finding.desc);
-                let evidence = format_evidence(finding);
-
-                // Build the line with proper column alignment
-                // Format: ● trait_id  description  evidence
-                let bullet = bullet_for_crit(&finding.crit);
-                let padded_trait = format!("{:width$}", trait_id, width = trait_width);
-                let truncated_desc = truncate_with_ellipsis(&desc, desc_width);
-                let padded_desc = format!("{:width$}", truncated_desc, width = desc_width);
-
-                let raw_lines: Vec<&str> = evidence.lines().collect();
-                let (visible_lines, overflow) = if raw_lines.len() > MAX_EVIDENCE_LINES {
-                    (&raw_lines[..MAX_EVIDENCE_LINES], true)
-                } else {
-                    (&raw_lines[..], false)
-                };
-
-                if visible_lines.is_empty() {
-                    output.push_str(&format!(
-                        "{} {}  {}\n",
-                        bullet,
-                        padded_trait,
-                        colorize_by_crit("", &finding.crit)
-                    ));
-                    continue;
-                }
-
-                for (i, line) in visible_lines.iter().enumerate() {
-                    let truncated = truncate_with_ellipsis(line, evidence_width);
-                    let colored = colorize_by_crit(&truncated, &finding.crit);
-
-                    if i == 0 {
-                        output.push_str(&format!(
-                            "{} {}  {}  {}\n",
-                            bullet, padded_trait, padded_desc, colored
-                        ));
-                    } else {
-                        output.push_str(&format!("{}{}\n", evidence_indent, colored));
-                    }
-                }
-                // Overflow indicator on its own line: dimmed `…` at the
-                // evidence column. Unambiguous "more lines below were
-                // dropped" without doubling up with per-line truncation
-                // ellipses.
-                if overflow {
-                    output.push_str(&format!(
-                        "{}{}\n",
-                        evidence_indent,
-                        colorize_by_crit("…", &finding.crit)
-                    ));
-                }
-            }
-        }
-
-        // Trailing blank after all sections separates this file from the next.
-        output.push('\n');
-    }
-
-    output
 }
 
 #[cfg(test)]
@@ -6995,168 +6565,6 @@ mod tests {
     }
 
     #[test]
-    fn test_risk_indicator() {
-        // Verify the underlying text content (colored strings deref to &str).
-        // `·` (small dot) marks the minor tiers (component/baseline); `•` is
-        // notable; the dot count rises with severity.
-        assert_eq!(&*risk_indicator(&Criticality::Component), "  ·");
-        assert_eq!(&*risk_indicator(&Criticality::Baseline), "  ·");
-        assert_eq!(&*risk_indicator(&Criticality::Notable), "  •");
-        assert_eq!(&*risk_indicator(&Criticality::Suspicious), " ••");
-        assert_eq!(&*risk_indicator(&Criticality::Hostile), "•••");
-    }
-
-    #[test]
-    fn test_split_trait_id() {
-        let (ns, rest) = split_trait_id("intel/discover/process");
-        assert_eq!(ns, "intel");
-        assert_eq!(rest, "discover/process");
-    }
-
-    #[test]
-    fn test_split_trait_id_no_namespace() {
-        let (ns, rest) = split_trait_id("test");
-        assert_eq!(ns, "test");
-        assert_eq!(rest, "test");
-    }
-
-    #[test]
-    fn test_namespace_long_name() {
-        assert_eq!(namespace_long_name("c2"), "COMMAND & CONTROL");
-        assert_eq!(namespace_long_name("discovery"), "DISCOVERY");
-        assert_eq!(namespace_long_name("crypto"), "CRYPTOGRAPHY");
-        assert_eq!(namespace_long_name("credential-access"), "CREDENTIALS");
-        assert_eq!(namespace_long_name("anti-static"), "STATIC EVASION");
-        assert_eq!(namespace_long_name("comm"), "COMMUNICATION");
-        assert_eq!(namespace_long_name("collect"), "COLLECTION");
-        assert_eq!(namespace_long_name("impact"), "IMPACT");
-        assert_eq!(namespace_long_name("meta"), "METADATA");
-        assert_eq!(namespace_long_name("unknown"), "UNKNOWN");
-    }
-
-    #[test]
-    fn test_format_evidence_empty() {
-        let trait_item = Finding {
-            precomputed_spans: None,
-            src: None,
-            kind: FindingKind::Capability,
-            trait_refs: vec![],
-            id: "test".to_string().into(),
-            desc: "Test trait".to_string().into(),
-            conf: 0.8,
-            crit: Criticality::Notable,
-            mbc: None,
-            attack: None,
-            evidence: vec![],
-            match_count: 0,
-            source_file: None,
-            downgraded: false,
-        };
-        assert_eq!(format_evidence(&trait_item), "");
-    }
-
-    #[test]
-    fn test_format_evidence_with_values() {
-        let trait_item = Finding {
-            precomputed_spans: None,
-            src: None,
-            kind: FindingKind::Capability,
-            trait_refs: vec![],
-            id: "test".to_string().into(),
-            desc: "Test".to_string().into(),
-            conf: 0.8,
-            crit: Criticality::Notable,
-            mbc: None,
-            attack: None,
-            evidence: vec![
-                Evidence {
-                    method: "yara".to_string(),
-                    source: "test".to_string(),
-                    value: "cmd.exe".to_string(),
-                    location: None,
-                    ..Default::default()
-                },
-                Evidence {
-                    method: "yara".to_string(),
-                    source: "test".to_string(),
-                    value: "powershell".to_string(),
-                    location: None,
-                    ..Default::default()
-                },
-            ],
-            match_count: 2,
-            source_file: None,
-            downgraded: false,
-        };
-        let formatted = format_evidence(&trait_item);
-        assert!(formatted.contains("cmd.exe"));
-        assert!(formatted.contains("powershell"));
-    }
-
-    #[test]
-    fn test_format_terminal_empty_report() {
-        let report = create_test_report(vec![], vec![]);
-        let output = format_terminal(&report);
-        assert!(output.is_empty());
-    }
-
-    #[test]
-    fn test_format_terminal_with_capabilities() {
-        let capabilities = vec![Finding {
-            precomputed_spans: None,
-            src: None,
-            kind: FindingKind::Capability,
-            trait_refs: vec![],
-            id: "micro-behaviors/execution/shell".to_string().into(),
-            desc: "Execute shell commands".to_string().into(),
-            conf: 0.9,
-            crit: Criticality::Hostile,
-            mbc: None,
-            attack: None,
-            evidence: vec![],
-            match_count: 0,
-            source_file: None,
-            downgraded: false,
-        }];
-        let report = create_test_report(capabilities, vec![]);
-        let output = format_terminal(&report);
-        assert!(output.contains("execution/shell") || output.contains("MICRO-BEHAVIORS"));
-    }
-
-    #[test]
-    fn test_format_terminal_includes_third_party() {
-        let findings = vec![Finding {
-            precomputed_spans: None,
-            src: None,
-            kind: FindingKind::Indicator,
-            trait_refs: vec![],
-            id: "third_party/Sekoia/Backdoor/Lin/Bpfdoor".to_string().into(),
-            desc: "Detect the BPFDoor backdoor".to_string().into(),
-            conf: 0.95,
-            crit: Criticality::Hostile,
-            mbc: None,
-            attack: None,
-            evidence: vec![Evidence {
-                method: "yara".to_string(),
-                source: "test".to_string(),
-                value: "$op1".to_string(),
-                location: None,
-                ..Default::default()
-            }],
-            match_count: 1,
-            source_file: None,
-            downgraded: false,
-        }];
-        let report = create_test_report(findings, vec![]);
-
-        let output = format_terminal(&report);
-
-        assert!(output.contains("THIRD-PARTY"));
-        assert!(output.contains("Sekoia/Backdoor/Lin/Bpfdoor"));
-        assert!(!output.contains("third_party/Sekoia"));
-    }
-
-    #[test]
     fn test_format_tiny_renders_location_less_finding_as_annotation() {
         let findings = vec![Finding {
             precomputed_spans: None,
@@ -7730,7 +7138,7 @@ mod tests {
 
 #[cfg(test)]
 mod control_escape_tests {
-    use super::{escape_control_chars, expand_tabs, sanitize_terminal_output};
+    use super::{escape_control_chars, escape_log_field, expand_tabs, sanitize_terminal_output};
 
     #[test]
     fn clean_text_passes_through_unescaped() {
@@ -7762,7 +7170,8 @@ mod control_escape_tests {
             "\x1b]52;c;Y2xpcGJvYXJk\x07",
             "\rrewrite",
             "\u{9b}2J",
-            "photo\u{202e}exe.jpg"
+            "photo\u{202e}exe.jpg",
+            "\x1b[0;8mhidden"
         );
         assert_eq!(
             sanitize_terminal_output(hostile).as_ref(),
@@ -7772,9 +7181,19 @@ mod control_escape_tests {
                 "\\u{1b}]52;c;Y2xpcGJvYXJk\\u{7}",
                 "\\u{d}rewrite",
                 "\\u{9b}2J",
-                "photo\\u{202e}exe.jpg"
+                "photo\\u{202e}exe.jpg",
+                "\\u{1b}[0;8mhidden"
             )
         );
+    }
+
+    #[test]
+    fn log_fields_cannot_forge_lines() {
+        assert_eq!(
+            escape_log_field("a.bin\n2026-01-01 INFO forged").as_ref(),
+            "a.bin\\u{a}2026-01-01 INFO forged"
+        );
+        assert_eq!(escape_control_chars("two\nlines").as_ref(), "two\nlines");
     }
 
     /// The renderer's funnel must both escape and keep the byte-offset map

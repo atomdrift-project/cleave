@@ -47,15 +47,21 @@ fn test_cleave_integration_shell_script() {
     let imports = extract_imports(SHELL_SCRIPT_SCPT);
 
     // Check variables are extracted
-    assert!(imports
-        .iter()
-        .any(|(name, _, source)| name == "userName" && source == "scpt_variable"));
-    assert!(imports
-        .iter()
-        .any(|(name, _, source)| name == "hostName" && source == "scpt_variable"));
-    assert!(imports
-        .iter()
-        .any(|(name, _, source)| name == "currentDir" && source == "scpt_variable"));
+    assert!(
+        imports
+            .iter()
+            .any(|(name, _, source)| name == "userName" && source == "scpt_variable")
+    );
+    assert!(
+        imports
+            .iter()
+            .any(|(name, _, source)| name == "hostName" && source == "scpt_variable")
+    );
+    assert!(
+        imports
+            .iter()
+            .any(|(name, _, source)| name == "currentDir" && source == "scpt_variable")
+    );
 
     // Check Apple Events are extracted
     assert!(imports.iter().any(|(name, lib, source)| name == "syso.exec"
@@ -66,11 +72,13 @@ fn test_cleave_integration_shell_script() {
         && source == "scpt_event"));
 
     // Check command descriptions are extracted
-    assert!(imports
-        .iter()
-        .any(|(name, lib, source)| name == "do shell script"
-            && lib.as_deref() == Some("AppleScript")
-            && source == "scpt_command"));
+    assert!(
+        imports
+            .iter()
+            .any(|(name, lib, source)| name == "do shell script"
+                && lib.as_deref() == Some("AppleScript")
+                && source == "scpt_command")
+    );
     assert!(imports.iter().any(|(name, lib, source)| name == "delay"
         && lib.as_deref() == Some("AppleScript")
         && source == "scpt_command"));
@@ -81,22 +89,28 @@ fn test_cleave_integration_tell_app() {
     let imports = extract_imports(TELL_APP_SCPT);
 
     // Check variables
-    assert!(imports
-        .iter()
-        .any(|(name, _, source)| name == "desktopFolder" && source == "scpt_variable"));
-    assert!(imports
-        .iter()
-        .any(|(name, _, source)| name == "processCount" && source == "scpt_variable"));
+    assert!(
+        imports
+            .iter()
+            .any(|(name, _, source)| name == "desktopFolder" && source == "scpt_variable")
+    );
+    assert!(
+        imports
+            .iter()
+            .any(|(name, _, source)| name == "processCount" && source == "scpt_variable")
+    );
 
     // Check applications
     assert!(imports.iter().any(|(name, lib, source)| name == "Finder"
         && lib.as_deref() == Some("Applications")
         && source == "scpt_app"));
-    assert!(imports
-        .iter()
-        .any(|(name, lib, source)| name == "System Events"
-            && lib.as_deref() == Some("Applications")
-            && source == "scpt_app"));
+    assert!(
+        imports
+            .iter()
+            .any(|(name, lib, source)| name == "System Events"
+                && lib.as_deref() == Some("Applications")
+                && source == "scpt_app")
+    );
 
     // Check Apple Events
     assert!(imports.iter().any(|(name, _, _)| name == "misc.actv"));

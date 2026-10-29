@@ -146,23 +146,22 @@ impl YaraTier {
             let trimmed = line.trim();
             if (trimmed.starts_with("filetype") || trimmed.starts_with("filetypes"))
                 && trimmed.contains('=')
+                && let Some(val) = trimmed.split('=').nth(1)
             {
-                if let Some(val) = trimmed.split('=').nth(1) {
-                    let val = val.trim().trim_matches('"').trim_matches('\'');
-                    let types: Vec<&str> = val.split(',').map(str::trim).collect();
-                    if let Some(tier) = classify_rule_filetypes(&types) {
-                        return tier;
-                    }
+                let val = val.trim().trim_matches('"').trim_matches('\'');
+                let types: Vec<&str> = val.split(',').map(str::trim).collect();
+                if let Some(tier) = classify_rule_filetypes(&types) {
+                    return tier;
                 }
             }
             if trimmed.starts_with("os") && trimmed.contains('=') {
                 let after_os = &trimmed[2..];
-                if after_os.starts_with(' ') || after_os.starts_with('=') {
-                    if let Some(val) = trimmed.split('=').nth(1) {
-                        let val = val.trim().trim_matches('"').trim_matches('\'');
-                        if val != "multi" && val != "all" {
-                            os_meta = Some(val.to_string());
-                        }
+                if (after_os.starts_with(' ') || after_os.starts_with('='))
+                    && let Some(val) = trimmed.split('=').nth(1)
+                {
+                    let val = val.trim().trim_matches('"').trim_matches('\'');
+                    if val != "multi" && val != "all" {
+                        os_meta = Some(val.to_string());
                     }
                 }
             }
@@ -189,34 +188,33 @@ impl YaraTier {
 
         // 1a. Explicit header tags in the rule declaration
         let tagged = infer_filetypes_from_tags(&header_tags);
-        if !tagged.is_empty() {
-            if let Some(tier) = classify_rule_filetypes(&tagged) {
-                return tier;
-            }
+        if !tagged.is_empty()
+            && let Some(tier) = classify_rule_filetypes(&tagged)
+        {
+            return tier;
         }
 
         // 1b. Metadata prose/URLs often carry specific filetype hints.
         let metadata_inferred = infer_filetypes_from_metadata_text(&metadata_hint_text);
-        if !metadata_inferred.is_empty() {
-            if let Some(tier) = classify_rule_filetypes(&metadata_inferred) {
-                if matches!(tier, Self::Script | Self::ScriptJs | Self::Doc) {
-                    if let Some(binary_tier) =
-                        preferred_binary_tier(rule_name, namespace, os_meta.as_deref())
-                    {
-                        return binary_tier;
-                    }
-                }
-                return tier;
+        if !metadata_inferred.is_empty()
+            && let Some(tier) = classify_rule_filetypes(&metadata_inferred)
+        {
+            if matches!(tier, Self::Script | Self::ScriptJs | Self::Doc)
+                && let Some(binary_tier) =
+                    preferred_binary_tier(rule_name, namespace, os_meta.as_deref())
+            {
+                return binary_tier;
             }
+            return tier;
         }
 
         // 1c. Use os metadata only when all inferred filetypes land in one tier.
         if let Some(ref os) = os_meta {
             let inferred = infer_filetypes(rule_name, Some(os));
-            if let Some(tier) = classify_rule_filetypes(&inferred) {
-                if tier != Self::CrossFormat {
-                    return tier;
-                }
+            if let Some(tier) = classify_rule_filetypes(&inferred)
+                && tier != Self::CrossFormat
+            {
+                return tier;
             }
         }
 
@@ -1191,21 +1189,20 @@ fn preferred_binary_tier(
     namespace: &str,
     os_meta: Option<&str>,
 ) -> Option<YaraTier> {
-    if let Some(name_tier) = classify_rule_filetypes(&infer_filetypes(rule_name, os_meta)) {
-        if matches!(name_tier, YaraTier::Pe | YaraTier::Elf | YaraTier::MachO) {
-            return Some(name_tier);
-        }
+    if let Some(name_tier) = classify_rule_filetypes(&infer_filetypes(rule_name, os_meta))
+        && matches!(name_tier, YaraTier::Pe | YaraTier::Elf | YaraTier::MachO)
+    {
+        return Some(name_tier);
     }
 
     if let Some(namespace_tier) =
         classify_rule_filetypes(&infer_filetypes_from_namespace(namespace, None))
-    {
-        if matches!(
+        && matches!(
             namespace_tier,
             YaraTier::Pe | YaraTier::Elf | YaraTier::MachO
-        ) {
-            return Some(namespace_tier);
-        }
+        )
+    {
+        return Some(namespace_tier);
     }
 
     None
@@ -2292,10 +2289,10 @@ mod tests {
             } else {
                 trimmed.strip_prefix("rule ")
             };
-            if let Some(rest) = rest {
-                if let Some(name) = rest.split_whitespace().next() {
-                    starts.push((offset, name.trim_end_matches('{').to_string(), is_private));
-                }
+            if let Some(rest) = rest
+                && let Some(name) = rest.split_whitespace().next()
+            {
+                starts.push((offset, name.trim_end_matches('{').to_string(), is_private));
             }
             offset += line.len();
         }

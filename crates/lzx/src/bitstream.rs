@@ -10,7 +10,7 @@
 /// > [i|j|k|l|m|n|o#p|a|b|c|d|e|f|g|h#y|z|A|B|C|D|E|F#q|r|s|t|u|v|w|x]
 use crate::DecodeFailed;
 
-pub struct Bitstream<'a> {
+pub(crate) struct Bitstream<'a> {
     buffer: &'a [u8],
     // Next number in the bitstream.
     n: u16,
@@ -19,7 +19,7 @@ pub struct Bitstream<'a> {
 }
 
 impl<'a> Bitstream<'a> {
-    pub fn new(buffer: &'a [u8]) -> Self {
+    pub(crate) fn new(buffer: &'a [u8]) -> Self {
         Self {
             buffer,
             n: 0,
@@ -44,7 +44,7 @@ impl<'a> Bitstream<'a> {
         Ok(())
     }
 
-    pub fn read_bit(&mut self) -> Result<u16, DecodeFailed> {
+    pub(crate) fn read_bit(&mut self) -> Result<u16, DecodeFailed> {
         if self.remaining == 0 {
             self.advance_buffer()?;
         }
@@ -54,7 +54,7 @@ impl<'a> Bitstream<'a> {
         Ok(self.n & 1)
     }
 
-    pub fn read_byte(&mut self) -> Option<u8> {
+    pub(crate) fn read_byte(&mut self) -> Option<u8> {
         if self.buffer.is_empty() {
             return None;
         }
@@ -65,7 +65,7 @@ impl<'a> Bitstream<'a> {
 
     /// Read from the bistream, no more than 16 bits (one word).
     fn read_bits_oneword(&mut self, bits: u8) -> Result<u16, DecodeFailed> {
-        assert!(bits <= 16);
+        debug_assert!(bits <= 16);
         debug_assert!(self.remaining <= 16);
 
         Ok(if bits <= self.remaining {
@@ -87,11 +87,11 @@ impl<'a> Bitstream<'a> {
         })
     }
 
-    pub fn read_bits(&mut self, bits: u8) -> Result<u32, DecodeFailed> {
+    pub(crate) fn read_bits(&mut self, bits: u8) -> Result<u32, DecodeFailed> {
         if bits <= 16 {
             self.read_bits_oneword(bits).map(|w| w as u32)
         } else {
-            assert!(bits <= 32);
+            debug_assert!(bits <= 32);
 
             // Read the two words.
             let w0 = self.read_bits_oneword(16)? as u32;
@@ -101,65 +101,44 @@ impl<'a> Bitstream<'a> {
         }
     }
 
-    /// Peek from the bitstream, no more than 16 bits (one word).
-    fn peek_bits_oneword(&self, bits: u8) -> u16 {
-        // Copy paste of `read_bits`, but without advancing the buffer.
-        assert!(bits <= 16);
+    /// Peek from the bitstream, no more than 16 bits (one word). Huffman codes are at most
+    /// 16 bits long, so a decoder never needs to look further ahead than that.
+    ///
+    /// Bits past the end of the buffer read as zeros: a tree may peek more bits than the
+    /// final code in a chunk actually takes.
+    pub(crate) fn peek_bits(&self, bits: u8) -> u32 {
+        // Copy paste of `read_bits_oneword`, but without advancing the buffer.
+        debug_assert!(bits <= 16);
 
-        if bits <= self.remaining {
+        u32::from(if bits <= self.remaining {
             self.n.rotate_left(bits as u32) & ((1 << bits) - 1)
         } else {
             let hi = self.n.rotate_left(self.remaining as u32) & ((1 << self.remaining) - 1);
             let bits = bits - self.remaining;
 
-            // We may peek more than we need (i.e. at the end of a chunk), due to the way
-            // our decoder is implemented. This is a bit ugly but luckily we can pretend
-            // there are just zeros after.
-            let n = if self.buffer.is_empty() {
-                0
-            } else {
-                // A single trailing byte is zero-padded like above.
-                let hi = self.buffer.get(1).copied().unwrap_or(0);
-                u16::from_le_bytes([self.buffer[0], hi])
-            };
+            // A single trailing byte is zero-padded like in `advance_buffer`.
+            let lo_byte = self.buffer.first().copied().unwrap_or(0);
+            let hi_byte = self.buffer.get(1).copied().unwrap_or(0);
+            let n = u16::from_le_bytes([lo_byte, hi_byte]);
             let lo = n.rotate_left(bits as u32) & ((1u32 << bits) as u16).wrapping_sub(1);
 
             ((hi as u32) << bits) as u16 | lo
-        }
+        })
     }
 
-    pub fn peek_bits(&self, bits: u8) -> u32 {
-        if bits <= 16 {
-            self.peek_bits_oneword(bits) as u32
-        } else {
-            assert!(bits <= 32);
-
-            // Read the two words.
-            let mut advanced_stream = Self {
-                buffer: self.buffer,
-                n: self.n,
-                remaining: self.remaining,
-            };
-            let w0 = advanced_stream.read_bits_oneword(16).unwrap() as u32;
-            let w1 = advanced_stream.peek_bits_oneword(bits - 16) as u32;
-
-            (w0 << (bits - 16)) | w1
-        }
-    }
-
-    pub fn read_u32_le(&mut self) -> Result<u32, DecodeFailed> {
+    pub(crate) fn read_u32_le(&mut self) -> Result<u32, DecodeFailed> {
         let lo = self.read_bits_oneword(16)?.to_le_bytes();
         let hi = self.read_bits_oneword(16)?.to_le_bytes();
         Ok(u32::from_le_bytes([lo[0], lo[1], hi[0], hi[1]]))
     }
 
-    pub fn read_u24_be(&mut self) -> Result<u32, DecodeFailed> {
+    pub(crate) fn read_u24_be(&mut self) -> Result<u32, DecodeFailed> {
         let hi = self.read_bits(16)?;
         let lo = self.read_bits(8)?;
         Ok(hi << 8 | lo)
     }
 
-    pub fn align(&mut self) -> Result<(), DecodeFailed> {
+    pub(crate) fn align(&mut self) -> Result<(), DecodeFailed> {
         if self.remaining == 0 {
             self.read_bits(16)?;
         } else {
@@ -169,7 +148,7 @@ impl<'a> Bitstream<'a> {
     }
 
     /// Copies from the current buffer to the destination output ignoring the representation.
-    pub fn read_raw(&mut self, output: &mut [u8]) -> Result<(), DecodeFailed> {
+    pub(crate) fn read_raw(&mut self, output: &mut [u8]) -> Result<(), DecodeFailed> {
         if self.buffer.len() < output.len() {
             return Err(DecodeFailed::UnexpectedEof);
         }
@@ -178,12 +157,13 @@ impl<'a> Bitstream<'a> {
         Ok(())
     }
 
-    pub fn remaining_bytes(&self) -> usize {
+    pub(crate) fn remaining_bytes(&self) -> usize {
         self.buffer.len()
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 
@@ -361,7 +341,7 @@ mod tests {
 
             let bytes = n.to_be_bytes();
             for offset in 0..20 {
-                for size in 0..20 {
+                for size in 0..=16 {
                     let mut bitstream = Bitstream::new(&bytes);
                     bitstream.read_bits(offset).unwrap();
 

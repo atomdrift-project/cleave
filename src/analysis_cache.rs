@@ -690,7 +690,7 @@ fn report_cache_lookup_conn(
         rusqlite::params![now, sha256, opts_hash, traits_ts],
     );
 
-    let json = zstd::decode_all(compressed.as_slice()).ok()?;
+    let json = crate::cache::decode_cached_zstd(compressed.as_slice()).ok()?;
     serde_json::from_slice(&json).ok()
 }
 
@@ -1455,7 +1455,7 @@ fn file_analysis_cache_lookup_conn(
         rusqlite::params![now, sha256, opts_hash, traits_ts],
     );
 
-    let json = zstd::decode_all(compressed.as_slice()).ok()?;
+    let json = crate::cache::decode_cached_zstd(compressed.as_slice()).ok()?;
     serde_json::from_slice(&json).ok()
 }
 

@@ -57,7 +57,7 @@ type config struct {
 
 func main() {
 	var c config
-	flag.StringVar(&c.traits, "traits", "../traits-dev", "path to the traits git repo")
+	flag.StringVar(&c.traits, "traits", "", "path to the traits git repo (required)")
 	flag.StringVar(&c.repo, "repo", ".", "path to the cleave (engine) git repo")
 	flag.StringVar(&c.engineOverride, "engine", "", "use this binary for ALL releases instead of building per tag (testing)")
 	flag.StringVar(&c.headEngine, "head-engine", "", "current/HEAD build used to validate the `latest` pointer (the newest bundle that works for HEAD); empty = no latest validation")
@@ -67,9 +67,9 @@ func main() {
 	engineBin := flag.String("engine-bin", "cleave",
 		"fallback cargo bin name(s) for tags with no Cargo.toml `default-run` (comma-separated, tried in order); tags that declare `default-run` use it directly")
 	flag.StringVar(&c.traitsEnv, "traits-env", "CLEAVE_TRAITS_DIR",
-		"env var set to the extracted checkout when validating (cleave: CLEAVE_TRAITS_DIR; litmus: LITMUS_MODELS_DIR)")
+		"env var set to the extracted checkout when validating (e.g. CLEAVE_TRAITS_DIR)")
 	validateArgs := flag.String("validate-args", "validate",
-		"engine subcommand+args used as the oracle (cleave: \"validate\"; litmus: \"validate --skip-traits\")")
+		"engine subcommand+args used as the oracle (e.g. \"validate\")")
 	flag.IntVar(&c.nReleases, "releases", 2, "recent engine release tags to key the manifest by")
 	flag.IntVar(&c.nCommits, "commits", 8, "recent traits commits to consider (the ceiling; the floor bounds the rest). HEAD/`latest` only ever uses the single newest commit")
 	flag.IntVar(&c.soakDays, "soak-days", 7, "stable lags beta by at least this many days")
@@ -92,6 +92,9 @@ func main() {
 		fatal("--engine-bin must name at least one cargo bin")
 	}
 
+	if c.traits == "" {
+		fatal("--traits is required")
+	}
 	if c.sign && c.identity == "" {
 		fatal("--sign requires --identity")
 	}
@@ -567,7 +570,7 @@ func archive(traits string, c commit, tarCache map[string][]byte) []byte {
 }
 
 func buildArtifact(traits, out string, c commit, tarCache map[string][]byte) artifact {
-	// zstd (single-thread = deterministic) for parity with litmus/azoth bundles.
+	// zstd, single-threaded so the output is deterministic.
 	z := exec.Command("zstd", "-19", "-c")
 	z.Stdin = bytes.NewReader(archive(traits, c, tarCache))
 	var buf bytes.Buffer
@@ -835,7 +838,7 @@ func isInteractive() bool {
 }
 
 // briefErr reduces captured build output to a single line: the first cargo
-// "error…" line (e.g. `error: no bin target named litmus`), else the last
+// "error…" line (e.g. `error: no bin target named foo`), else the last
 // non-empty line.
 func briefErr(out []byte) string {
 	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")

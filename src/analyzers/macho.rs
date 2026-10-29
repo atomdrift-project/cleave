@@ -320,9 +320,8 @@ impl MachOAnalyzer {
         ctx: &Ctx<'a>,
     ) -> AnalysisReport {
         let start = std::time::Instant::now();
-        let sha256 = precomputed_sha256
-            .clone()
-            .unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(data));
+        let sha256 =
+            precomputed_sha256.unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(data));
 
         // filefacts marks unparseable bytes with `macho.parse_failed` or
         // `macho.parse_panicked` metrics. When neither the parse
@@ -341,15 +340,7 @@ impl MachOAnalyzer {
             } else {
                 None
             };
-            return self.analyze_macho_fallback(
-                logical_path,
-                analysis_path,
-                data,
-                sha256,
-                parse_msg,
-                precomputed_sha256,
-                start,
-            );
+            return self.analyze_macho_fallback(logical_path, data, sha256, parse_msg);
         }
 
         // Create target info
@@ -414,15 +405,11 @@ impl MachOAnalyzer {
             .iter_kind(filefacts::SymbolKind::Function)
             .filter_map(crate::analysis_context::project_filefacts_function)
             .collect();
-        let r2_strings: Option<Vec<stng::ExtractedString>> = None;
-        let _ = precomputed_sha256;
 
         let r2_total_ms = _t_r2.elapsed().as_millis();
 
-        // Use strings in order of preference:
-        // 1. stng_strings parameter (from AnalysisInput - avoids redundant extraction)
-        // 2. self.preextracted_strings (legacy builder pattern)
-        // 3. Extract fresh with stng/r2
+        // Strings: the caller's extraction, then pre-extracted strings, then
+        // filefacts.
         let _t = std::time::Instant::now();
         if let Some(strings) = stng_strings {
             self.string_extractor.prioritize_report_symbols(&report);
@@ -436,7 +423,6 @@ impl MachOAnalyzer {
             report.strings = strings.clone();
         } else {
             // No pre-extracted strings supplied: source them from filefacts.
-            let _ = r2_strings;
             report.strings = crate::strings::strings_from_filefacts(analysis_path, data);
         }
         let strings_ms = _t.elapsed().as_millis();
@@ -1836,23 +1822,15 @@ impl MachOAnalyzer {
 
     /// Build a minimal Mach-O analysis report when filefacts couldn't
     /// parse the binary cleanly (the parse failed or panicked, or
-    /// no `macho.cpu_type` was emitted).
-    ///
-    /// Wave B retired the cleave-side rizin spawn here: filefacts owns
-    /// the rizin recovery path now, and it fires from inside
-    /// `filefacts::open` on the same bytes when goblin's typed views
-    /// come back empty. Callers that already hold an
-    /// `AnalysisContext` route through `analyze_structural_with_ctx`
-    /// to surface those recovered functions / imports / sections.
+    /// no `macho.cpu_type` was emitted). Any functions, imports or sections
+    /// filefacts recovered with rizin reach the report through
+    /// `analyze_structural_with_ctx` instead.
     fn analyze_macho_fallback(
         &self,
         logical_path: &Path,
-        analysis_path: &Path,
         data: &[u8],
         sha256: String,
         parse_failure: Option<String>,
-        precomputed_sha256: Option<String>,
-        _start: std::time::Instant,
     ) -> AnalysisReport {
         let target = TargetInfo {
             path: logical_path.display().to_string(),
@@ -1893,7 +1871,6 @@ impl MachOAnalyzer {
         // Wave B drops the cleave-side `extract_batched` spawn; if
         // a future caller needs to opt into rizin from this branch
         // it should pass an `AnalysisContext` instead of bytes.
-        let _ = (analysis_path, precomputed_sha256);
         report
     }
 }
@@ -1970,12 +1947,9 @@ impl Analyzer for MachOAnalyzer {
                 .unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(preferred_data));
             self.analyze_macho_fallback(
                 input.path,
-                input.backing_path(),
                 preferred_data,
                 sha256,
                 Some("filefacts open failed".to_string()),
-                input.sha256.clone(),
-                std::time::Instant::now(),
             )
         };
         self.apply_fat_metadata(&mut report, input.data, &slices);
@@ -2106,12 +2080,9 @@ mod tests {
         let bytes = vec![0u8; 4096];
         let report = analyzer.analyze_macho_fallback(
             Path::new("unparsed.macho"),
-            Path::new("unparsed.macho"),
             &bytes,
             "sha".into(),
             Some("parser could not recover header".into()),
-            None,
-            std::time::Instant::now(),
         );
         assert_eq!(report.metadata.errors.len(), 1);
         assert_eq!(report.findings.len(), 1);
@@ -2130,7 +2101,7 @@ mod tests {
     /// binary's values runs its whole extraction (rizin on every slice).
     #[test]
     fn fat_slices_come_from_the_callers_parse() {
-        let data = std::fs::read("testdata/xor/gapi-update.macho").unwrap();
+        let data = crate::test_samples::read("testdata/xor/gapi-update.macho");
         let ctx = crate::analysis_context::AnalysisContext::open_with(
             filefacts::OpenOptions::new().rizin(false),
             Path::new("gapi-update.macho"),

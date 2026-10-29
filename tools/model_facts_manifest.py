@@ -3,7 +3,7 @@
 No experiment presets or ONNX runtime required. The earlier tree audit verified
 that the declared metric union equals the tree-used union for this bundle.
 
-usage: model_facts_manifest.py [azoth-bundle] [collimator-checkout] [proven-metrics.json]
+usage: model_facts_manifest.py MODEL-BUNDLE TRAINING-CHECKOUT [proven-metrics.json]
                               [--training-specs DIRECTORY ...]
 
 Training spec directories are searched recursively for feature_spec.json. Include
@@ -14,7 +14,7 @@ symbol rows, so new vocabulary tokens do not require a producer rebuild.
 
 A metric stays in the contract once a model has used it: the prior contract's
 metrics carry over, and proven-metrics.json (a list of flat metric names) adds
-more. It was seeded 2026-10-24 with every metric an azoth model ever split on.
+more.
 """
 import argparse
 import ast
@@ -23,8 +23,8 @@ import json
 import pathlib
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('bundle', nargs='?', type=pathlib.Path, default=pathlib.Path('../azoth'))
-parser.add_argument('collimator', nargs='?', type=pathlib.Path, default=pathlib.Path('../collimator'))
+parser.add_argument('bundle', type=pathlib.Path)
+parser.add_argument('collimator', type=pathlib.Path)
 parser.add_argument('proven_metrics', nargs='?', type=pathlib.Path)
 parser.add_argument('--training-specs', action='append', type=pathlib.Path, default=[])
 args = parser.parse_args()

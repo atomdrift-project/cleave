@@ -1,12 +1,18 @@
 [package]
 name = "lzx"
 version = "0.1.0"
-authors = ["Lonami Exo <totufals@hotmail.com>", "Thomas Stromberg <helixblue@gmail.com>"]
+authors = ["Lonami Exo <totufals@hotmail.com>", "The Atomdrift Project"]
 license = "MIT OR Apache-2.0"
 description = """
-LZX decompression supporting both LZXD (CAB delta) and plain-LZX (CHM)
-bitstream framings. Forked from lzxd 0.2.6 by Lonami Exo.
+LZX decompression for CAB, CHM and XNB streams. Forked from lzxd 0.2.6
+by Lonami Exo.
 """
-edition = "2021"
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
 
 [dependencies]

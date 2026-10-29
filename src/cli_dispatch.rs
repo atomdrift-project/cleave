@@ -36,6 +36,9 @@ pub(crate) struct DispatchContext<'a> {
 }
 
 fn analyze_targets(targets: &[String], ctx: &AnalyzeDispatchContext<'_>) -> Result<String> {
+    if *ctx.format == cli::OutputFormat::Json && targets.len() > 1 {
+        anyhow::bail!("--format json writes one report; use --format jsonl for several targets");
+    }
     let mut results = Vec::with_capacity(targets.len());
     for target in targets {
         results.push(analyze_command(&AnalyzeConfig {

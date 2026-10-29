@@ -263,10 +263,10 @@ pub fn extract_to_memory(data: &[u8]) -> Result<MemoryStats, Error> {
                 let body = inflate(raw, entry.compressed_flag)?;
                 let (pyc, needs_patch) = if body.len() >= 4 && &body[2..4] == b"\r\n" {
                     // Pre-PyInstaller 5.3 format: header is intact.
-                    if pyc_magic.is_none() {
-                        if let Ok(m) = body[0..4].try_into() {
-                            pyc_magic = Some(m);
-                        }
+                    if pyc_magic.is_none()
+                        && let Ok(m) = body[0..4].try_into()
+                    {
+                        pyc_magic = Some(m);
                     }
                     (body, false)
                 } else {
@@ -319,10 +319,10 @@ pub fn extract_to_memory(data: &[u8]) -> Result<MemoryStats, Error> {
     // Patch bare pyc magic in already-emitted entries.
     if let Some(magic) = pyc_magic {
         for idx in bare_pyc_indices {
-            if let Some(entry) = stats.entries.get_mut(idx) {
-                if entry.data.len() >= 4 {
-                    entry.data[0..4].copy_from_slice(&magic);
-                }
+            if let Some(entry) = stats.entries.get_mut(idx)
+                && entry.data.len() >= 4
+            {
+                entry.data[0..4].copy_from_slice(&magic);
             }
         }
     }
@@ -341,10 +341,10 @@ pub fn extract(data: &[u8], out_dir: &Path) -> Result<Stats, Error> {
 }
 
 fn write_to_new_directory(mem: MemoryStats, out_dir: &Path) -> Result<Stats, Error> {
-    if let Some(parent) = out_dir.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
-        }
+    if let Some(parent) = out_dir.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)?;
     }
     // Deliberately fail for every existing filesystem object, including an
     // empty directory or a symlink. The archive writer then owns a directory
@@ -360,10 +360,10 @@ fn write_to_new_directory(mem: MemoryStats, out_dir: &Path) -> Result<Stats, Err
     let mut writer = Writer::new(out_dir);
     for entry in mem.entries {
         let path = writer.path_for(&entry.name);
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent)?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent)?;
         }
         let mut f = BufWriter::new(File::create(&path)?);
         f.write_all(&entry.data)?;

@@ -172,16 +172,21 @@ impl ExtractionGuard {
     }
 
     pub(crate) fn add_hostile_reason(&self, reason: HostileArchiveReason) {
-        if let Ok(mut reasons) = self.hostile_reasons.lock() {
-            reasons.push(reason);
-        }
+        // A poisoned lock still holds every reason recorded so far; dropping
+        // this one would hide the very finding a panic elsewhere preceded.
+        self.hostile_reasons
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(reason);
     }
 
     pub(crate) fn take_reasons(&self) -> Vec<HostileArchiveReason> {
-        self.hostile_reasons
-            .lock()
-            .map(|mut r| std::mem::take(&mut *r))
-            .unwrap_or_default()
+        std::mem::take(
+            &mut *self
+                .hostile_reasons
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
     }
 
     /// Record a non-fatal extraction problem — a member skipped, a stream that
@@ -594,20 +599,6 @@ fn truncate_to_char_boundary(s: &str, max_bytes: usize) -> &str {
 /// from the symlink's location.
 pub(crate) fn symlink_escapes(symlink_path: &Path, target: &str, dest_dir: &Path) -> bool {
     let target_path = Path::new(target);
-    let symlink_str = symlink_path.to_string_lossy();
-    let symlink_name = symlink_path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or_default();
-
-    if target_path.is_absolute()
-        && (target == "/usr/bin/python3" || target == "/usr/bin/python")
-        && (symlink_str.contains("/node_gyp_bins/python")
-            || symlink_name == "python3"
-            || symlink_name == "python")
-    {
-        return false;
-    }
 
     // Absolute targets always escape
     if target_path.is_absolute() {

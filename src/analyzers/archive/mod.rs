@@ -36,10 +36,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::composite_rules::SectionMap;
-use ::zip::ZipArchive;
 use guards::{
     ExtractedMemberMetadata, ExtractionGuard, MAX_FILE_COUNT, MAX_FILE_SIZE, MAX_TOTAL_SIZE,
-    escaped_relative_path, names_extraction_root, sanitize_entry_path,
+    escaped_relative_path, names_extraction_root,
 };
 use utils::calculate_sha256;
 
@@ -49,11 +48,6 @@ const MAX_ARCHIVE_PATH_TRAVERSAL_EVIDENCE: usize = 10;
 /// Extraction notes attached as evidence to the incomplete-archive finding.
 /// The rest still reach `metadata.errors`; this only bounds the rendered set.
 const MAX_INCOMPLETE_ARCHIVE_EVIDENCE: usize = 5;
-const MIN_PATH_CORPUS_ENTRY_COUNT: usize = 32;
-const MIN_PATH_CORPUS_TRAVERSAL_ENTRIES: usize = 4;
-const MIN_PATH_CORPUS_EDGE_CASE_ENTRIES: usize = 24;
-const MAX_PATH_CORPUS_FILE_SIZE: u64 = 512;
-const MAX_PATH_CORPUS_TOTAL_SIZE: u64 = 128 * 1024;
 
 /// Give container-owned findings an explicit archive-root location. An
 /// absent/value/offset-only location otherwise becomes the empty scope key,
@@ -1087,82 +1081,9 @@ fn push_archive_hostile_findings(
     }
 }
 
-fn path_looks_synthetic_edge_case(name: &str) -> bool {
-    if name.chars().any(|c| c.is_control() || !c.is_ascii()) {
-        return true;
-    }
-
-    if name == "." || name == ".." || name == "/" || name == "../" {
-        return true;
-    }
-
-    if name.starts_with(' ')
-        || name.ends_with(' ')
-        || name.contains('\t')
-        || name.contains('\n')
-        || name.contains('\r')
-        || name.contains('\\')
-        || name.contains("//")
-        || name.contains("/./")
-        || name.contains("/../")
-        || name.starts_with("./")
-        || name.starts_with("../")
-        || name.starts_with('/')
-    {
-        return true;
-    }
-
-    if name.contains(':')
-        || name.contains('*')
-        || name.contains('?')
-        || name.contains('<')
-        || name.contains('>')
-        || name.contains('|')
-        || name.contains('"')
-    {
-        return true;
-    }
-
-    let basename = name.rsplit(['/', '\\']).next().unwrap_or(name);
-    let trimmed = basename.trim().trim_end_matches('.');
-    let device = trimmed
-        .split('.')
-        .next()
-        .unwrap_or(trimmed)
-        .trim_end_matches(' ')
-        .to_ascii_uppercase();
-
-    matches!(
-        device.as_str(),
-        "NUL"
-            | "CON"
-            | "PRN"
-            | "AUX"
-            | "CLOCK$"
-            | "COM1"
-            | "COM2"
-            | "COM3"
-            | "COM4"
-            | "COM5"
-            | "COM6"
-            | "COM7"
-            | "COM8"
-            | "COM9"
-            | "LPT1"
-            | "LPT2"
-            | "LPT3"
-            | "LPT4"
-            | "LPT5"
-            | "LPT6"
-            | "LPT7"
-            | "LPT8"
-            | "LPT9"
-    )
-}
-
 /// Whether a symlink escape (`path` is `link -> target`) has a known-benign
-/// shape: a node-gyp Python shim, or a system location linking to a system
-/// target.
+/// shape: a Python interpreter shim (node-gyp's `node_gyp_bins`, a virtualenv's
+/// `bin/`), or a system location linking to a system target.
 ///
 /// Judged on the link alone. Where the archive or member sits (a `testdata/`
 /// directory, a `.pkg.tar.zst` or `docker.io_` file name) is chosen by whoever
@@ -1172,17 +1093,18 @@ fn path_looks_synthetic_edge_case(name: &str) -> bool {
 fn is_benign_archive_symlink_escape(path: &str) -> bool {
     let path = path.trim();
 
-    if (path.contains("/node_gyp_bins/python3") || path.contains("/node_gyp_bins/python"))
-        && (path.ends_with("-> /usr/bin/python3") || path.ends_with("-> /usr/bin/python"))
-    {
-        return true;
-    }
-
     if let Some((link_name, target)) = path.split_once("->") {
         let link_name = link_name.trim().trim_start_matches("./");
         let target = target.trim();
+        let interpreter_shim = matches!(link_name.rsplit('/').next(), Some("python" | "python3"))
+            && matches!(target, "/usr/bin/python" | "/usr/bin/python3");
+        if interpreter_shim {
+            return true;
+        }
         let system_link = link_name.starts_with("etc/")
-            || link_name.starts_with("lib")
+            || ["lib/", "lib32/", "lib64/", "libx32/"]
+                .iter()
+                .any(|dir| link_name.starts_with(dir))
             || link_name.starts_with("bin/")
             || link_name.starts_with("sbin")
             || link_name.starts_with("usr/")
@@ -1251,53 +1173,11 @@ fn drop_system_container_symlink_escapes(report: &mut AnalysisReport) {
     }
 }
 
-fn is_zip_path_edge_case_corpus(data: &[u8]) -> bool {
-    let Ok(mut archive) = ZipArchive::new(std::io::Cursor::new(data)) else {
-        return false;
-    };
-    if archive.len() > guards::MAX_ZIP_ENTRIES {
-        return false;
-    }
-
-    let mut total_entries = 0usize;
-    let mut traversal_entries = 0usize;
-    let mut edge_case_entries = 0usize;
-    let mut total_size = 0u64;
-    let mut max_size = 0u64;
-
-    for i in 0..archive.len() {
-        let Ok(entry) = archive.by_index(i) else {
-            return false;
-        };
-
-        total_entries += 1;
-        let name = entry.name();
-        let size = entry.size();
-        total_size = total_size.saturating_add(size);
-        max_size = max_size.max(size);
-
-        if sanitize_entry_path(name, Path::new("/tmp/cleave-archive-inspect")).is_none() {
-            traversal_entries += 1;
-        }
-        if path_looks_synthetic_edge_case(name) {
-            edge_case_entries += 1;
-        }
-    }
-
-    total_entries >= MIN_PATH_CORPUS_ENTRY_COUNT
-        && traversal_entries >= MIN_PATH_CORPUS_TRAVERSAL_ENTRIES
-        && edge_case_entries >= MIN_PATH_CORPUS_EDGE_CASE_ENTRIES
-        && max_size <= MAX_PATH_CORPUS_FILE_SIZE
-        && total_size <= MAX_PATH_CORPUS_TOTAL_SIZE
-}
-
 /// Whether this archive's path-traversal (zip-slip) findings are expected: an
-/// OS package (FreeBSD packages name members by absolute path), or a ZIP that
-/// is a corpus of path edge cases. Judged from the archive's bytes, detected
-/// type and member list, never from its path, which for a nested archive is a
-/// member name rather than a file on disk.
+/// OS package, whose format names members by absolute path. Judged from the
+/// detected type and member list, never from the archive's path, which for a
+/// nested archive is a member name rather than a file on disk.
 fn should_suppress_path_traversal_findings(
-    data: &[u8],
     archive_type: FileType,
     contents: &[ArchiveEntry],
     hostile_reasons: &[HostileArchiveReason],
@@ -1309,8 +1189,6 @@ fn should_suppress_path_traversal_findings(
         return false;
     }
     is_system_package(archive_type, contents)
-        || (matches!(archive_type, FileType::Zip | FileType::Jar)
-            && is_zip_path_edge_case_corpus(data))
 }
 
 /// Analyzes archive files (zip, tar, 7z, etc.) by extracting and analyzing each member
@@ -2139,7 +2017,6 @@ impl ArchiveAnalyzer {
             drain_extraction_notes(&mut report, &guard);
             let hostile_reasons = guard.take_reasons();
             let suppress_path_traversal = should_suppress_path_traversal_findings(
-                data,
                 file_type,
                 &report.archive_contents,
                 &hostile_reasons,
@@ -2196,7 +2073,6 @@ impl ArchiveAnalyzer {
             drain_extraction_notes(&mut report, &guard);
             let hostile_reasons = guard.take_reasons();
             let suppress_path_traversal = should_suppress_path_traversal_findings(
-                data,
                 file_type,
                 &report.archive_contents,
                 &hostile_reasons,
@@ -2322,7 +2198,6 @@ impl ArchiveAnalyzer {
             drain_extraction_notes(&mut report, &guard);
             let hostile_reasons = guard.take_reasons();
             let suppress_path_traversal = should_suppress_path_traversal_findings(
-                data,
                 file_type,
                 &report.archive_contents,
                 &hostile_reasons,
@@ -2465,7 +2340,6 @@ impl ArchiveAnalyzer {
                 {
                     drain_extraction_notes(&mut report, &guard);
                     let suppress_path_traversal = should_suppress_path_traversal_findings(
-                        data,
                         file_type,
                         &report.archive_contents,
                         &hostile_reasons,
@@ -2503,7 +2377,6 @@ impl ArchiveAnalyzer {
         drain_extraction_notes(&mut report, &guard);
 
         let suppress_path_traversal = should_suppress_path_traversal_findings(
-            data,
             file_type,
             &report.archive_contents,
             &hostile_reasons,
@@ -3276,6 +3149,19 @@ mod tests {
         }
         assert!(!is_benign_archive_symlink_escape(
             "./sbin/mount.ntfs-3g -> /etc/passwd"
+        ));
+        // `lib` names a directory, not a prefix: `library/` is user content.
+        assert!(is_benign_archive_symlink_escape(
+            "lib64/ld.so -> /usr/bin/ld.so"
+        ));
+        assert!(!is_benign_archive_symlink_escape(
+            "library/x -> /usr/bin/curl"
+        ));
+        assert!(is_benign_archive_symlink_escape(
+            "venv/bin/python3 -> /usr/bin/python3"
+        ));
+        assert!(!is_benign_archive_symlink_escape(
+            "venv/bin/python3 -> /etc/shadow"
         ));
     }
 
@@ -4960,7 +4846,9 @@ composite_rules:
     }
 
     #[test]
-    fn test_zip_path_edge_case_corpus_is_not_flagged_as_zip_slip() {
+    /// A ZIP full of path edge cases still reports its traversal entries: the
+    /// shape of an archive is the attacker's to choose, so it excuses nothing.
+    fn test_zip_path_edge_case_corpus_still_reports_zip_slip() {
         let temp_dir = tempfile::tempdir().unwrap();
         let zip_path = temp_dir.path().join("mixed-paths.zip");
 
@@ -5090,54 +4978,14 @@ composite_rules:
 
         zip.finish().unwrap();
 
-        assert!(is_zip_path_edge_case_corpus(&fs::read(&zip_path).unwrap()));
-
         let analyzer = ArchiveAnalyzer::new();
         let report = analyzer.analyze(&zip_path).unwrap();
 
         assert!(
-            !report
+            report
                 .findings
                 .iter()
                 .any(|f| f.id == "anti-analysis/archive/path-traversal")
-        );
-    }
-
-    #[test]
-    fn test_known_good_mixed_paths_zip_regression() {
-        let sample =
-            Path::new("/srv/data/known-good/repos/node/deps/zlib/google/test/data/Mixed Paths.zip");
-        if !sample.exists() {
-            eprintln!("Skipping regression test: known-good sample missing");
-            return;
-        }
-
-        let analyzer = ArchiveAnalyzer::new();
-        let report = analyzer.analyze(sample).unwrap();
-
-        assert!(
-            !report
-                .findings
-                .iter()
-                .any(|f| f.id == "anti-analysis/archive/path-traversal")
-        );
-
-        let suspicious = report
-            .findings
-            .iter()
-            .filter(|f| f.crit == Criticality::Suspicious)
-            .count();
-        let hostile = report
-            .findings
-            .iter()
-            .filter(|f| f.crit == Criticality::Hostile)
-            .count();
-
-        assert_eq!(hostile, 0);
-        assert!(
-            suspicious <= 1,
-            "unexpected suspicious findings: {:?}",
-            report.findings
         );
     }
 

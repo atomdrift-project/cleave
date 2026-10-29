@@ -4,9 +4,9 @@
 //! based on struct field definitions.
 
 use proc_macro::TokenStream;
-use proc_macro_crate::{crate_name, FoundCrate};
+use proc_macro_crate::{FoundCrate, crate_name};
 use quote::quote;
-use syn::{parse_macro_input, Data, DeriveInput, Fields};
+use syn::{Data, DeriveInput, Fields, parse_macro_input};
 
 /// Derive the routing-enum inventory, its archive-family membership, and its
 /// package-family membership.
@@ -157,12 +157,11 @@ pub fn derive_valid_field_paths(input: TokenStream) -> TokenStream {
                                     .iter()
                                     .filter(|a| a.path().is_ident("doc"))
                                     .filter_map(|a| {
-                                        if let syn::Meta::NameValue(nv) = &a.meta {
-                                            if let syn::Expr::Lit(lit) = &nv.value {
-                                                if let syn::Lit::Str(s) = &lit.lit {
-                                                    return Some(s.value());
-                                                }
-                                            }
+                                        if let syn::Meta::NameValue(nv) = &a.meta
+                                            && let syn::Expr::Lit(lit) = &nv.value
+                                            && let syn::Lit::Str(s) = &lit.lit
+                                        {
+                                            return Some(s.value());
                                         }
                                         None
                                     })

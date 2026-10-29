@@ -200,18 +200,14 @@ fn synthetic_chm_has_no_dropper_findings() {
 //  Real-sample tests — gated on file presence
 // ────────────────────────────────────────────────────────────────────
 
-/// The real SoftpeakLive dropper, vendored in-tree (11 KB). It used to be read
-/// from a hardcoded `/Users/t/...` path, so on any host but that one the test
-/// skipped silently and reported green while asserting nothing.
-const SOFTPEAK_PATH: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/tests/fixtures/malware/payment instruction.987976.pdf.chm"
-);
+/// The real SoftpeakLive dropper, vendored in-tree (encoded; see
+/// testdata/README.md).
+const SOFTPEAK_SAMPLE: &str = "tests/fixtures/malware/payment instruction.987976.pdf.chm";
 
 #[test]
 fn softpeak_live_real_sample_fires_campaign_composite() {
-    let path = Path::new(SOFTPEAK_PATH);
-    let out = run_cleave_json(path);
+    let (_dir, path) = crate::support::sample_file(SOFTPEAK_SAMPLE);
+    let out = run_cleave_json(&path);
     let f = first_file(&out);
     let trait_ids: Vec<String> = trait_ids(f);
 

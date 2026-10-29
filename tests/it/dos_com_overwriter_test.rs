@@ -1,13 +1,14 @@
 //! Regression coverage for compact, padded DOS COM overwriters without a
 //! recognizable `.com` extension.
 
-use cleave::{AnalysisOptions, analyze_file};
+use cleave::{AnalysisOptions, analyze_bytes};
 
 #[test]
 fn anton_overwriter_is_dispatched_as_dos_com_and_exposes_its_markers() -> anyhow::Result<()> {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/dos-com/anton-97");
-    let report = analyze_file(
-        &path,
+    let sample = crate::support::sample("testdata/dos-com/anton-97");
+    let report = analyze_bytes(
+        &sample,
+        "anton-97",
         &AnalysisOptions {
             disable_yara: true,
             disable_radare2: true,

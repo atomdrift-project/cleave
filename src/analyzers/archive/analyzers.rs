@@ -29,9 +29,7 @@ use super::guards::{
     MAX_PATH_COMPONENT_LEN, sanitize_entry_path, symlink_escapes,
 };
 use super::utils::{calculate_sha256, find_main_class, is_benign_java_path};
-use crate::analyzers::{
-    AnalysisInput, FileType, FileTypeExt, detect_file_type, detect_file_type_from_path,
-};
+use crate::analyzers::{AnalysisInput, FileType, FileTypeExt, detect_file_type_from_path};
 use crate::composite_rules::traits::nest_host;
 use crate::types::{
     ARCHIVE_DELIMITER, AnalysisReport, ArchiveEntry, ENCODING_DELIMITER, FileAnalysis, Finding,
@@ -2518,7 +2516,6 @@ impl ArchiveAnalyzer {
             let extract_payloads = Self::should_extract_archive_payloads(file_type);
             let skip_rizin_reason =
                 Self::archive_member_rizin_skip_reason(relative_path, file_type);
-            let _ = (file_path, sha256);
 
             // Archive members get the SAME string-extraction treatment as a
             // standalone file (`lib.rs` uses `stng_analysis_opts` for every
@@ -3058,7 +3055,10 @@ impl ArchiveAnalyzer {
                         continue;
                     }
                 };
-                let entry_name = entry.name().to_string();
+                let entry_name = entry.name().map_or_else(
+                    |_| String::from_utf8_lossy(entry.name_raw()).into_owned(),
+                    std::borrow::Cow::into_owned,
+                );
                 if entry_name.len() > MAX_PATH_COMPONENT_LEN {
                     guard.add_hostile_reason(HostileArchiveReason::ExcessiveEntryName {
                         len: entry_name.len(),
@@ -5105,48 +5105,6 @@ impl ArchiveAnalyzer {
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
         report.metadata.tools_used = vec!["archive_analyzer".to_string(), "walkdir".to_string()];
     }
-
-    /// Route an extracted file to the appropriate analyzer based on file type.
-    ///
-    /// Detects the file type and delegates to specialized analyzers:
-    /// - MachO, ELF, PE: Binary analyzers
-    /// - Shell, Python, JavaScript, etc.: Script analyzers
-    /// - JavaClass: Bytecode analyzer
-    /// - Archive: Recursive archive analysis (with depth limit)
-    ///
-    /// Passes along capability mapper and YARA engine to child analyzers.
-    ///
-    /// # Arguments
-    /// * `file_path` - Path to the extracted file
-    ///
-    /// # Returns
-    /// * `Ok(AnalysisReport)` - Analysis report from appropriate analyzer
-    /// * `Err` - If file type unsupported or analysis fails
-    #[allow(dead_code)] // Legacy shim while archive callers finish migrating to the shared member path
-    pub(super) fn analyze_extracted_file(&self, file_path: &Path) -> Result<AnalysisReport> {
-        if self.is_cancelled() {
-            anyhow::bail!("Analysis cancelled");
-        }
-
-        let data = std::fs::read(file_path)?;
-        let file_type = detect_file_type(file_path)?;
-        let sha256 = calculate_sha256(&data);
-        let relative_path = file_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("extracted")
-            .to_string();
-        match self.analyze_extracted_member(
-            file_path,
-            &relative_path,
-            &data,
-            &file_type,
-            &sha256,
-        )? {
-            Some(report) => Ok(report),
-            None => anyhow::bail!("Non-program file type, skipping: {}", file_path.display()),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -5648,77 +5606,6 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "Nested archive analysis panicked: nested stack fixture"
-        );
-    }
-
-    #[test]
-    fn off_pool_nested_archive_keeps_member_bytes_and_metadata() {
-        use std::io::{Cursor, Write};
-
-        assert!(rayon::current_thread_index().is_none());
-        let source = b"#!/usr/bin/env python3\nprint('nested archive fixture')\n";
-        let mut writer = ::zip::ZipWriter::new(Cursor::new(Vec::new()));
-        writer
-            .start_file("run.py", ::zip::write::SimpleFileOptions::default())
-            .expect("start member");
-        writer.write_all(source).expect("write member");
-        let data = writer.finish().expect("finish archive").into_inner();
-        let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("nested.zip");
-        std::fs::write(&path, &data).expect("write archive");
-        let report = ArchiveAnalyzer::new()
-            .analyze_extracted_file(&path)
-            .expect("analyze nested archive off pool");
-        assert_eq!(report.target.file_type, "zip");
-        let member = report
-            .files
-            .iter()
-            .find(|file| file.path.ends_with("run.py"))
-            .expect("retain analyzed member");
-        assert_eq!(member.file_type, "python");
-        assert_eq!(member.size, source.len() as u64);
-        assert_eq!(member.sha256, super::calculate_sha256(source));
-        assert!(
-            report
-                .archive_contents
-                .iter()
-                .any(|entry| entry.path == "run.py")
-        );
-        // The lower-level archive helper records its ordinary member summary
-        // in this list; no additional extraction or analysis error is expected.
-        assert_eq!(
-            report.metadata.errors.len(),
-            1,
-            "{:?}",
-            report.metadata.errors
-        );
-        assert!(report.metadata.errors[0].starts_with("ZIP archive: 1 members, 1 analyzed, "));
-    }
-
-    #[test]
-    fn malformed_nested_cab_falls_back_to_script_extension_analysis() {
-        const SAMPLE: &[u8] = include_bytes!("../../../testdata/cab/corrupt-inner-mszip.cab");
-        let dir = tempfile::tempdir().expect("temp dir");
-        let guard = super::super::guards::ExtractionGuard::new();
-        super::super::system_packages::extract_cab_from_reader(
-            std::io::Cursor::new(SAMPLE),
-            dir.path(),
-            &guard,
-        )
-        .expect("outer CAB extraction");
-
-        let member = dir.path().join("PO_UB7635_Specifications_Details.cmd");
-        let report = ArchiveAnalyzer::new()
-            .analyze_extracted_file(&member)
-            .expect("malformed nested CAB should still receive script analysis");
-
-        assert!(
-            report.metadata.errors.iter().any(|error| {
-                error.contains("Nested archive parsing failed; analyzed using batch:")
-                    && error.contains("Failed to parse CAB archive")
-            }),
-            "unexpected fallback report errors: {:?}",
-            report.metadata.errors
         );
     }
 

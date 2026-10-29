@@ -261,7 +261,10 @@ pub(crate) fn extract_zip_entries_safe<R: Read + Seek>(
             None => archive.by_index(i)?,
         };
 
-        let entry_name = entry.name().to_string();
+        let entry_name = entry.name().map_or_else(
+            |_| String::from_utf8_lossy(entry.name_raw()).into_owned(),
+            std::borrow::Cow::into_owned,
+        );
         trace!("Entry {}: {}", i, entry_name);
 
         let compressed_size = Some(entry.compressed_size());

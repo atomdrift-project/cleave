@@ -1293,14 +1293,6 @@ pub(crate) fn find_raw_should_use_text(traits: &[TraitDefinition], warnings: &mu
     }
 }
 
-#[allow(dead_code)]
-pub(crate) fn find_raw_should_use_string_value(
-    traits: &[TraitDefinition],
-    warnings: &mut Vec<String>,
-) {
-    find_raw_should_use_text(traits, warnings);
-}
-
 /// If `pattern` is structurally equivalent to a bare function call `NAME(`,
 /// return `NAME`. Method calls (`obj.fn(`) and patterns with arguments are
 /// rejected — those depend on call-site shape that `type: symbol` can't replace.

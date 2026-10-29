@@ -51,7 +51,7 @@ fn sanitized_field(
 
     let mut rendered = String::new();
     write!(rendered, "{value:?}")?;
-    let rendered = cleave::output::escape_control_chars(&rendered);
+    let rendered = cleave::output::escape_log_field(&rendered);
 
     // Same shape as the default formatter: the message field prints bare,
     // `r#` names drop the prefix, everything else prints `name=value`.

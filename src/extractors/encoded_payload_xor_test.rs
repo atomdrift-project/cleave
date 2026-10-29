@@ -3,7 +3,8 @@
 use super::super::*;
 use sha2::{Digest, Sha256};
 use stng::{ExtractedString, StringKind, StringMethod};
-const FILE: &[u8] = include_bytes!("../../testdata/xor/xor_fat_dropper.macho");
+static SAMPLE: std::sync::LazyLock<Vec<u8>> =
+    std::sync::LazyLock::new(|| crate::test_samples::read("testdata/xor/xor_fat_dropper.macho"));
 const OFFSET: usize = 0x6210;
 const LEN: usize = 153824;
 fn key(offset: u64) -> ExtractedString {
@@ -18,7 +19,7 @@ fn key(offset: u64) -> ExtractedString {
 #[test]
 fn specimen_pipeline_recovers_complete_binary_and_provenance() {
     assert_eq!(
-        hex::encode(Sha256::digest(FILE)),
+        hex::encode(Sha256::digest(SAMPLE.as_slice())),
         "30c99015f9c432604d8a8206ce8dcb4fba7866b062e5bd1a8f0adb88fba8807c"
     );
     let opts = stng::ExtractOptions {
@@ -26,8 +27,8 @@ fn specimen_pipeline_recovers_complete_binary_and_provenance() {
         filter_garbage: true,
         ..Default::default()
     };
-    let strings = stng::extract_strings_with_options(FILE, &opts);
-    let out = xor_encoded_machos(FILE, &strings);
+    let strings = stng::extract_strings_with_options(&SAMPLE, &opts);
+    let out = xor_encoded_machos(&SAMPLE, &strings);
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].original_offset, OFFSET);
     assert_eq!(out[0].encoding_chain, ["xor"]);
@@ -40,42 +41,42 @@ fn specimen_pipeline_recovers_complete_binary_and_provenance() {
 }
 #[test]
 fn only_located_valid_xor_key_observations_trigger_recovery() {
-    assert!(xor_encoded_machos(FILE, &[]).is_empty());
+    assert!(xor_encoded_machos(&SAMPLE, &[]).is_empty());
     for value in ["0x00", "0x9d", "0xzz", "9c", "0x09c", "xxxx"] {
         let mut k = key(OFFSET as u64);
         k.value = value.into();
-        assert!(xor_encoded_machos(FILE, &[k]).is_empty(), "{value}");
+        assert!(xor_encoded_machos(&SAMPLE, &[k]).is_empty(), "{value}");
     }
-    for offset in [0, OFFSET as u64 - 1, FILE.len() as u64, u64::MAX] {
-        assert!(xor_encoded_machos(FILE, &[key(offset)]).is_empty());
+    for offset in [0, OFFSET as u64 - 1, SAMPLE.len() as u64, u64::MAX] {
+        assert!(xor_encoded_machos(&SAMPLE, &[key(offset)]).is_empty());
     }
     let mut k = key(OFFSET as u64);
     k.kind = None;
-    assert!(xor_encoded_machos(FILE, &[k]).is_empty());
+    assert!(xor_encoded_machos(&SAMPLE, &[k]).is_empty());
     let mut k = key(OFFSET as u64);
     k.method = StringMethod::RawScan;
-    assert!(xor_encoded_machos(FILE, &[k]).is_empty());
-    assert!(xor_encoded_machos(&FILE[..OFFSET + LEN - 1], &[key(OFFSET as u64)]).is_empty());
+    assert!(xor_encoded_machos(&SAMPLE, &[k]).is_empty());
+    assert!(xor_encoded_machos(&SAMPLE[..OFFSET + LEN - 1], &[key(OFFSET as u64)]).is_empty());
 }
 #[test]
 fn duplicate_offsets_are_emitted_once_and_attempts_are_bounded() {
     let good = key(OFFSET as u64);
-    assert_eq!(xor_encoded_machos(FILE, &vec![good.clone(); 8]).len(), 1);
+    assert_eq!(xor_encoded_machos(&SAMPLE, &vec![good.clone(); 8]).len(), 1);
     let mut bad = key(u64::MAX);
     let mut keys = vec![bad.clone(); 7];
     keys.push(good.clone());
-    assert_eq!(xor_encoded_machos(FILE, &keys).len(), 1);
+    assert_eq!(xor_encoded_machos(&SAMPLE, &keys).len(), 1);
     keys.insert(0, bad.clone());
-    assert!(xor_encoded_machos(FILE, &keys).is_empty());
+    assert!(xor_encoded_machos(&SAMPLE, &keys).is_empty());
     // Ordinary strings do not consume the binary-candidate budget.
     bad.kind = None;
     let mut keys = vec![bad; 100];
     keys.push(good);
-    assert_eq!(xor_encoded_machos(FILE, &keys).len(), 1);
+    assert_eq!(xor_encoded_machos(&SAMPLE, &keys).len(), 1);
 }
 #[test]
 fn retained_output_never_exceeds_32_mib() {
-    let mut p: Vec<u8> = FILE[OFFSET..OFFSET + LEN]
+    let mut p: Vec<u8> = SAMPLE[OFFSET..OFFSET + LEN]
         .iter()
         .map(|b| b ^ 0x9c)
         .collect();
@@ -120,7 +121,7 @@ fn readable_and_recognized_binary_layers_are_still_decoded() {
     let (bytes, chain) = decompress_and_nest(encoded.as_bytes(), vec!["xor".into()], 0);
     assert_eq!(bytes, text.as_bytes());
     assert_eq!(chain, ["xor", "base64"]);
-    let image: Vec<u8> = FILE[OFFSET..OFFSET + LEN]
+    let image: Vec<u8> = SAMPLE[OFFSET..OFFSET + LEN]
         .iter()
         .map(|b| b ^ 0x9c)
         .collect();

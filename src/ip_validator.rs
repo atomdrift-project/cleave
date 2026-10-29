@@ -9,44 +9,20 @@
 //! - Invalid string formats (leading zeros like 010.001.001.001)
 
 use lru::LruCache;
-use std::cell::Cell;
 use std::hash::{BuildHasher, RandomState};
 use std::net::Ipv4Addr;
 use std::num::NonZeroUsize;
 use std::sync::OnceLock;
 
-thread_local! {
-    /// Per-thread current file ID, used to invalidate `IP_CACHE`.
-    ///
-    /// Must be genuinely thread-local, not a shared `static`: two threads
-    /// analyzing different files concurrently each call `set_current_file_id`
-    /// for their own file, and a global counter would let one thread's write
-    /// clobber another's, making `IP_CACHE`'s staleness check compare against
-    /// the wrong file and serve one file's verdicts to another.
-    static CURRENT_FILE_ID: Cell<u64> = const { Cell::new(0) };
-}
-
-/// Set the current file ID for the thread-local IP validation cache.
-/// Should be called at the start of analyzing each file.
-pub(crate) fn set_current_file_id(file_id: u64) {
-    CURRENT_FILE_ID.with(|cell| cell.set(file_id));
-}
-
-/// Clear the current file ID, effectively disabling the IP validation cache.
-pub(crate) fn clear_current_file_id() {
-    CURRENT_FILE_ID.with(|cell| cell.set(0));
-}
-
 /// Cache for IP validation results, keyed by the string's content.
 ///
+/// A verdict depends only on the string, so entries stay valid across files.
 /// The key is a keyed hash of the bytes plus their length, never the string's
-/// address: callers pass temporaries (a `from_utf8_lossy` window, a rendered
-/// kv scalar) that are freed straight after the check, and the allocator hands
-/// the same address to the next same-sized string, so an address key served
-/// the previous string's verdict. The hasher is seeded per thread, so file
-/// content cannot steer two different strings onto one key.
+/// address: callers pass temporaries that are freed straight after the check,
+/// and the allocator hands the same address to the next same-sized string. The
+/// hasher is seeded per thread, so file content cannot steer two different
+/// strings onto one key.
 struct IpCache {
-    file_id: u64,
     hasher: RandomState,
     cache: LruCache<(u64, usize), bool>,
 }
@@ -58,7 +34,6 @@ const IP_CACHE_CAPACITY: NonZeroUsize = match NonZeroUsize::new(1024) {
 
 thread_local! {
     static IP_CACHE: std::cell::RefCell<IpCache> = std::cell::RefCell::new(IpCache {
-        file_id: 0,
         hasher: RandomState::new(),
         cache: LruCache::new(IP_CACHE_CAPACITY),
     });
@@ -91,16 +66,12 @@ fn ip_pattern() -> Option<&'static regex::Regex> {
 /// (`1.2.3.4`, `7.18.1.1`), which is far more often a version than a host. When
 /// the address is anchored to a URL scheme (see [`is_external_ip_ctx`]) those
 /// heuristics are skipped, since `http://1.2.3.4/` is unambiguously a host.
-// Default-context (non-URL-anchored) entry point. Production reaches the core
-// through `validate_external_ip_string_ctx`; this named shim is what the unit
-// tests exercise the bare-literal behavior through.
-#[allow(dead_code)]
-#[must_use]
-pub(crate) fn is_external_ip(ip: &Ipv4Addr) -> bool {
+#[cfg(test)]
+fn is_external_ip(ip: &Ipv4Addr) -> bool {
     is_external_ip_ctx(ip, false)
 }
 
-/// Context-aware core of [`is_external_ip`].
+/// Whether `ip` is external, as described above `is_external_ip`.
 ///
 /// When `url_scheme_anchored` is true, the IPv4 literal was found immediately
 /// after a `://` URL scheme (e.g. `http://2.27.62.51/`), which makes it a host
@@ -254,12 +225,8 @@ fn parse_octet_fast(s: &str) -> Option<u8> {
 /// (not private/loopback/reserved).
 ///
 /// Returns Some(Ipv4Addr) if the IP is valid and external, None otherwise.
-// Default-context shim over `validate_external_ip_string_ctx`; production calls
-// the ctx form directly (with URL-anchor awareness), so this stays for the
-// bare-literal unit tests. See [`is_external_ip`].
-#[allow(dead_code)]
-#[must_use]
-pub(crate) fn validate_external_ip_string(ip_str: &str) -> Option<Ipv4Addr> {
+#[cfg(test)]
+fn validate_external_ip_string(ip_str: &str) -> Option<Ipv4Addr> {
     validate_external_ip_string_ctx(ip_str, false)
 }
 
@@ -365,26 +332,19 @@ pub(crate) fn contains_valid_ip(text: &str) -> bool {
     false
 }
 
+/// Empty this thread's IP verdict cache.
+pub(crate) fn clear_cache() {
+    IP_CACHE.with(|cache| cache.borrow_mut().cache.clear());
+}
+
 /// Optimized check for external IPs in text, with content-keyed caching.
 ///
 /// Uses a thread-local LRU cache keyed by the string's content (see [`IpCache`])
 /// to avoid re-scanning the same strings across different traits within the same file.
 #[must_use]
 pub(crate) fn contains_external_ip_cached(s: &str) -> bool {
-    let file_id = CURRENT_FILE_ID.with(Cell::get);
-    if file_id == 0 {
-        return contains_external_ip(s);
-    }
-
     IP_CACHE.with(|cache_cell| {
         let mut cache = cache_cell.borrow_mut();
-
-        // Check if cache is for the current file
-        if cache.file_id != file_id {
-            cache.cache.clear();
-            cache.file_id = file_id;
-        }
-
         let key = (cache.hasher.hash_one(s), s.len());
         if let Some(&res) = cache.cache.get(&key) {
             return res;
@@ -437,7 +397,6 @@ mod tests {
     /// address key returned the previous string's verdict.
     #[test]
     fn cached_check_keys_on_content_not_address() {
-        set_current_file_id(0x1f_ace);
         for _ in 0..8 {
             let external = String::from("host 45.33.32.156");
             assert!(contains_external_ip_cached(&external));
@@ -446,7 +405,6 @@ mod tests {
             assert_eq!(private.len(), "host 45.33.32.156".len());
             assert!(!contains_external_ip_cached(&private));
         }
-        clear_current_file_id();
     }
 
     #[test]

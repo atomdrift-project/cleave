@@ -253,7 +253,6 @@ fn test_path_info_creation() {
         access_type: Some(PathAccessType::Read),
         source: "strings".to_string(),
         evidence: vec![],
-        referenced_by_traits: vec![],
     };
 
     assert_eq!(path.path, "/etc/passwd");
@@ -270,7 +269,6 @@ fn test_env_var_info_creation() {
         access_type: EnvVarAccessType::Read,
         source: "tree-sitter".to_string(),
         evidence: vec![],
-        referenced_by_traits: vec![],
     };
 
     assert_eq!(env_var.name, "USER");
@@ -428,7 +426,6 @@ fn test_directory_access_creation() {
         access_pattern: DirectoryAccessPattern::MultipleSpecific { count: 2 },
         categories: vec![PathCategory::Temp],
         enumerated: false,
-        generated_traits: vec![],
     };
 
     assert_eq!(dir_access.directory, "/tmp");

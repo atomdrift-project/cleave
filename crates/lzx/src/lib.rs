@@ -30,8 +30,8 @@ mod window;
 /// which can represent less than 32 KB.
 pub const MAX_CHUNK_SIZE: usize = 32 * 1024;
 
-/// Decoder state needed for new blocks.
-// TODO not sure how much we want to keep in DecoderState and Lzxd respectively
+/// Decoder state needed to read new block headers: the window size and the trees that each
+/// block's path-length deltas apply to.
 pub(crate) struct DecoderState {
     /// The window size we're working with.
     window_size: WindowSize,
@@ -176,18 +176,32 @@ impl From<DecodeFailed> for DecompressError {
     }
 }
 
+impl fmt::Debug for Lzxd {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The window and E8 buffer are up to 32 MB of decompressed data; summarize instead.
+        f.debug_struct("Lzxd")
+            .field("window_size", &self.state.window_size)
+            .field("chunk_offset", &self.chunk_offset)
+            .field("first_chunk_read", &self.first_chunk_read)
+            .field(
+                "e8_translation_size",
+                &self.postprocess.as_ref().map(|p| p.e8_translation_size),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
 impl Lzxd {
     /// Creates a new instance of the LZXD decoder state. The [`WindowSize`] must be obtained
     /// from elsewhere (e.g. it may be predetermined to a certain value), and if it's wrong,
     /// the decompressed values won't be those expected.
     ///
-    /// This constructor matches the LZX-DELTA framing used by `.xnb` files
-    /// and Microsoft Patch files: the very first bit of the bitstream is
-    /// consumed as the E8-translation enable flag. For CHM (and CAB) data,
-    /// which uses plain LZX with no leading E8 flag, use
-    /// [`Lzxd::new_plain`] instead.
+    /// The first bit of the stream is read as the E8-translation header, followed by the
+    /// 32-bit translation size when set. CAB, CHM, XNB and LZX DELTA streams all begin
+    /// this way, and CHM repeats the header after every [`reset`](Self::reset).
     ///
     /// [`WindowSize`]: enum.WindowSize.html
+    #[must_use]
     pub fn new(window_size: WindowSize) -> Self {
         // > The main tree comprises 256 elements that correspond to all possible 8-bit
         // > characters, plus 8 * NUM_POSITION_SLOTS elements that correspond to matches.
@@ -222,28 +236,8 @@ impl Lzxd {
         }
     }
 
-    /// Creates a decoder for **plain LZX** (CAB / CHM framing).
-    ///
-    /// Plain LZX bitstreams begin directly with a block header — there is no
-    /// leading E8-translation enable flag the way LZX-DELTA defines one. Use
-    /// this constructor when feeding compressed bytes that came out of a CHM
-    /// `MSCompressed/Content` blob or a CAB `MSZIP`/LZX folder.
-    ///
-    /// E8 fixups are unconditionally disabled in this mode (CHM and CAB don't
-    /// use them — CAB has its own per-folder E8 handling layered above the
-    /// LZX bitstream).
-    pub fn new_plain(window_size: WindowSize) -> Self {
-        let mut me = Self::new(window_size);
-        // Skip the LZX-DELTA-only first-chunk preamble: pretend the E8 flag
-        // has already been read (and was 0), so the first call to
-        // `decompress_next` reads a block header straight away.
-        me.first_chunk_read = true;
-        me.postprocess = None;
-        me
-    }
-
     /// Try reading the header for the first chunk.
-    fn try_read_first_chunk(&mut self, bitstream: &mut Bitstream) -> Result<(), DecodeFailed> {
+    fn try_read_first_chunk(&mut self, bitstream: &mut Bitstream<'_>) -> Result<(), DecodeFailed> {
         // > The first bit in the first chunk in the LZXD bitstream (following the 2-byte,
         // > chunk-size prefix described in section 2.2.1) indicates the presence or absence of
         // > two 16-bit fields immediately following the single bit. If the bit is set, E8
@@ -265,12 +259,8 @@ impl Lzxd {
         Ok(())
     }
 
-    /// Attempts to perform post-decompression E8 fixups on an output data buffer.
-    fn postprocess(
-        translation_size: i32,
-        chunk_offset: usize,
-        idata: &mut [u8],
-    ) -> Result<&[u8], DecodeFailed> {
+    /// Performs post-decompression E8 fixups on an output data buffer, in place.
+    fn postprocess(translation_size: i32, chunk_offset: usize, idata: &mut [u8]) {
         let mut processed = 0usize;
 
         // Find the next E8 match, or finish once there are no more E8 matches.
@@ -306,11 +296,16 @@ impl Lzxd {
 
             processed = pos + 5;
         }
-
-        Ok(idata)
     }
 
-    /// Decompresses the next compressed `chunk` from the LZXD data stream.
+    /// Decompresses the next compressed `chunk` from the LZXD data stream, which must decode
+    /// to exactly `output_len` bytes (at most [`MAX_CHUNK_SIZE`]).
+    ///
+    /// `chunk` holds the compressed bytes only. The chunk-size prefix that MS-PATCH
+    /// describes is container framing (XNB, the CHM reset table, CAB `CFDATA`), so the
+    /// caller strips it and supplies the uncompressed length from the same framing.
+    ///
+    /// The returned slice borrows the decoder and is valid until the next call.
     pub fn decompress_next(
         &mut self,
         chunk: &[u8],
@@ -318,17 +313,6 @@ impl Lzxd {
     ) -> Result<&[u8], DecompressError> {
         // > A chunk represents exactly 32 KB of uncompressed data until the last chunk in the
         // > stream, which can represent less than 32 KB.
-        //
-        // > The LZXD engine encodes a compressed, chunk-size prefix field preceding each
-        // > compressed chunk in the compressed byte stream. The compressed, chunk-size prefix
-        // > field is a byte aligned, little-endian, 16-bit field.
-        //
-        // However, this doesn't seem to be part of LZXD itself? At least when testing with
-        // `.xnb` files, every chunk comes with a compressed chunk size unless it has the flag
-        // set to 0xff where it also includes the uncompressed chunk size.
-        //
-        // TODO maybe the docs could clarify whether this length is compressed or not
-
         let mut bitstream = Bitstream::new(chunk);
 
         self.try_read_first_chunk(&mut bitstream)?;
@@ -344,8 +328,8 @@ impl Lzxd {
                 {
                     bitstream.read_byte();
                 }
+                // Never empty: `Block::read` rejects a zero block size.
                 self.current_block = Block::read(&mut bitstream, &mut self.state)?;
-                assert_ne!(self.current_block.remaining, 0);
             }
 
             let decoded = self
@@ -358,7 +342,7 @@ impl Lzxd {
                     1
                 }
                 Decoded::Match { offset, length } => {
-                    self.window.copy_from_self(offset, length);
+                    self.window.copy_from_self(offset, length)?;
                     length
                 }
                 Decoded::Read(length) => {
@@ -394,16 +378,17 @@ impl Lzxd {
             if chunk_offset >= 0x4000_0000 || decoded_len <= 10 {
                 Ok(view)
             } else {
+                // `past_view` has bounded `decoded_len` by `MAX_CHUNK_SIZE`.
                 let postprocess_buf = &mut postprocess.data_chunk[..decoded_len];
                 postprocess_buf.copy_from_slice(view);
 
                 // E8 fixups are enabled. Postprocess the output buffer.
-                let view = Self::postprocess(
+                Self::postprocess(
                     postprocess.e8_translation_size,
                     chunk_offset,
                     postprocess_buf,
-                )?;
-                Ok(view)
+                );
+                Ok(postprocess_buf)
             }
         } else {
             Ok(view)
@@ -421,6 +406,7 @@ impl Lzxd {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

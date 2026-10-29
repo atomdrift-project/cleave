@@ -1,7 +1,7 @@
 //! Integration tests for scpt parser.
 #![allow(clippy::unwrap_used)] // Tests use unwrap for simplicity
 
-use scpt::{is_scpt, ScptParser, SymbolKind};
+use scpt::{ScptParser, SymbolKind, is_scpt};
 
 const SHELL_SCRIPT_SCPT: &[u8] = include_bytes!("fixtures/shell_script.scpt");
 const TELL_APP_SCPT: &[u8] = include_bytes!("fixtures/tell_app.scpt");
@@ -74,19 +74,25 @@ fn test_tell_app_events() {
     let events = parser.apple_events();
 
     // Check for activate event
-    assert!(events
-        .iter()
-        .any(|e| e.class_code == "misc" && e.event_code == "actv"));
+    assert!(
+        events
+            .iter()
+            .any(|e| e.class_code == "misc" && e.event_code == "actv")
+    );
 
     // Check for count event
-    assert!(events
-        .iter()
-        .any(|e| e.class_code == "core" && e.event_code == "cnte"));
+    assert!(
+        events
+            .iter()
+            .any(|e| e.class_code == "core" && e.event_code == "cnte")
+    );
 
     // Check for folder reference
-    assert!(events
-        .iter()
-        .any(|e| e.class_code == "ears" && e.event_code == "ffdr"));
+    assert!(
+        events
+            .iter()
+            .any(|e| e.class_code == "ears" && e.event_code == "ffdr")
+    );
 }
 
 #[test]

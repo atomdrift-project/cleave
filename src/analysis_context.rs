@@ -49,7 +49,7 @@ fn native_facts_pool() -> Option<&'static rayon::ThreadPool> {
 fn run_native_facts(threads: usize, f: impl FnOnce() + Send) {
     if crate::rayon_nest::on_isolated_leaf_pool() {
         f();
-    } else if std::env::var("CLEAVE_NATIVE_FACTS_ISOLATED").as_deref() == Ok("1") {
+    } else if crate::env::flag("CLEAVE_NATIVE_FACTS_ISOLATED") {
         // A shared native pool can still nest one binary's long Rizin call
         // inside another's string pass. Keep each pool exclusive, and wait
         // off Rayon so the scan caller cannot bury its return under a bundle.

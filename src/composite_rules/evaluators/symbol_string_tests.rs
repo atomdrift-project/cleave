@@ -1280,7 +1280,7 @@ fn compiled_literals_match_without_ast_and_keep_their_source_anchor() {
     assert_eq!(result.evidence[0].location.as_deref(), Some("0x20"));
     assert_eq!(result.evidence[0].source, "literal");
     let condition: crate::composite_rules::Condition =
-        serde_yaml::from_str("type: literal\nexact: Cookies.binarycookies").unwrap();
+        crate::yaml::from_str("type: literal\nexact: Cookies.binarycookies").unwrap();
     assert!(condition.can_match_file_type(&FileType::AppleScript));
 
     report
@@ -3755,7 +3755,7 @@ fn binding_shape_and_identifier_regex_schema_reject_ignored_filters() {
         ("kind: call\narg: {name_regex: '['}", false),
     ] {
         let condition: Condition =
-            serde_yaml::from_str(&format!("type: symbol\nexact: pwd\n{suffix}\n")).unwrap();
+            crate::yaml::from_str(&format!("type: symbol\nexact: pwd\n{suffix}\n")).unwrap();
         assert_eq!(condition.validate().is_ok(), expected, "{suffix}");
     }
 }

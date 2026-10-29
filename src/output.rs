@@ -379,7 +379,7 @@ impl TinyOpts {
 /// match — for A/B runs.
 fn legacy_windows() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("CLEAVE_TINY_LEGACY_WINDOWS").as_deref() == Ok("1"))
+    *ON.get_or_init(|| crate::env::flag("CLEAVE_TINY_LEGACY_WINDOWS"))
 }
 
 /// Caller-supplied adornments for the first file's rich header. All are
@@ -1377,7 +1377,7 @@ fn withheld_composite_support<'a>(
 /// (the pre-2026-09-06 render) for A/B runs.
 fn relabel_disabled() -> bool {
     static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *OFF.get_or_init(|| std::env::var("CLEAVE_TINY_NO_RELABEL").as_deref() == Ok("1"))
+    *OFF.get_or_init(|| crate::env::flag("CLEAVE_TINY_NO_RELABEL"))
 }
 
 /// A file's window notes with every note for a withheld composite reassigned
@@ -2255,11 +2255,7 @@ fn render_ascii_context(
                     out,
                     "{row_lo:x}{} {}",
                     if hit { ':' } else { '-' },
-                    if escaped_windows() {
-                        ascii_forward(&line.data[row..row_end])
-                    } else {
-                        ascii_printable(&line.data[row..row_end])
-                    }
+                    ascii_printable(&line.data[row..row_end])
                 );
                 row = row_end;
             }
@@ -2312,20 +2308,6 @@ const ASCII_ROW: usize = 64;
 /// mid-file offsets (no BOM for [`crate::file_io::normalize_text_encoding`] to
 /// catch), so without this `ProductName` renders as `P<00>r<00>o<00>…`.
 const UTF16_RUN: usize = 4;
-
-/// Bytes as an ASCII-forward stream using C-string escapes — the notation every
-/// model has seen in source/strings, and shorter than a bracketed form: `\0` for
-/// NUL (2 chars vs 4), `\t`/`\n`/`\r` for whitespace, `\xNN` for other
-/// non-printables, `\\` for a literal backslash; printable ASCII verbatim. A
-/// UTF-16LE ASCII run is collapsed to plain text (the interleaved nulls dropped).
-/// Whether tiny-view byte windows render with `\xNN` escapes
-/// ([`ascii_forward`]) instead of the printable projection
-/// ([`ascii_printable`]). `CLEAVE_TINY_ESCAPED_WINDOWS=1` restores the
-/// escapes for A/B runs.
-fn escaped_windows() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("CLEAVE_TINY_ESCAPED_WINDOWS").as_deref() == Ok("1"))
-}
 
 /// The printable projection of a byte window: printable ASCII verbatim, a
 /// UTF-16LE ASCII run collapsed to its text, and every other byte — NUL,
@@ -2380,43 +2362,6 @@ fn ascii_printable(data: &[u8]) -> String {
     }
     if gap {
         s.push(' ');
-    }
-    s
-}
-
-fn ascii_forward(data: &[u8]) -> String {
-    use std::fmt::Write;
-    let printable = |b: u8| (0x20..=0x7e).contains(&b) && b != b'\\';
-    let mut s = String::with_capacity(data.len());
-    let mut i = 0;
-    while i < data.len() {
-        // A UTF-16LE ASCII run: `<printable>\0` pairs. Collapse to the text.
-        let mut run = 0;
-        while i + run * 2 + 1 < data.len()
-            && printable(data[i + run * 2])
-            && data[i + run * 2 + 1] == 0
-        {
-            run += 1;
-        }
-        if run >= UTF16_RUN {
-            for k in 0..run {
-                s.push(data[i + k * 2] as char);
-            }
-            i += run * 2;
-            continue;
-        }
-        match data[i] {
-            b'\\' => s.push_str("\\\\"),
-            0x00 => s.push_str("\\0"),
-            b'\t' => s.push_str("\\t"),
-            b'\n' => s.push_str("\\n"),
-            b'\r' => s.push_str("\\r"),
-            b @ 0x20..=0x7e => s.push(b as char),
-            b => {
-                let _ = write!(s, "\\x{b:02x}");
-            }
-        }
-        i += 1;
     }
     s
 }
@@ -6617,20 +6562,6 @@ mod tests {
         // A standalone/root path is basenamed only in the LLM (tiny) view.
         assert_eq!(tiny_path("/tmp/triage/x.bin", true), "x.bin");
         assert_eq!(tiny_path("/tmp/triage/x.bin", false), "/tmp/triage/x.bin");
-    }
-
-    #[test]
-    fn ascii_forward_uses_c_escapes_and_collapses_utf16() {
-        // Printable ASCII verbatim; NUL as `\0`, other non-printables as `\xNN`.
-        assert_eq!(
-            ascii_forward(b"\x00getpwuid\x00\x7f\xff"),
-            "\\0getpwuid\\0\\x7f\\xff"
-        );
-        // `<` is no longer special; a literal backslash doubles.
-        assert_eq!(ascii_forward(b"a<b\\c"), "a<b\\\\c");
-        assert_eq!(ascii_forward(b"\x7fELF\x02\x01"), "\\x7fELF\\x02\\x01");
-        // A UTF-16LE ASCII run collapses to plain text (nulls dropped).
-        assert_eq!(ascii_forward(b"P\x00r\x00o\x00d\x00"), "Prod");
     }
 
     /// The printable projection keeps strings and their boundaries, drops

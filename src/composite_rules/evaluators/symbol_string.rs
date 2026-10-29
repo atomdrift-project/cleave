@@ -25,7 +25,7 @@ use std::sync::LazyLock;
 /// process-wide mutex on macOS — hitting that on every rule evaluation was ~3.6%
 /// of total CPU as lock-wait samples across 24 rayon workers.
 static PROFILE_TIMING_ENABLED: LazyLock<bool> =
-    LazyLock::new(|| std::env::var("CLEAVE_PROFILE").is_ok());
+    LazyLock::new(|| crate::env::flag("CLEAVE_PROFILE"));
 
 fn offset_location(offset: Option<u64>, fallback: impl FnOnce() -> String) -> String {
     offset.map(|o| format!("{:#x}", o)).unwrap_or_else(fallback)
@@ -3328,7 +3328,7 @@ mod multi_arg_tests {
             ("name_regex: '^needle$'", vec![2]),
             ("name_regex: '^other$'", vec![]),
         ] {
-            let filter: ArgFilter = serde_yaml::from_str(yaml).unwrap();
+            let filter: ArgFilter = crate::yaml::from_str(yaml).unwrap();
             for (index, value) in values.iter().enumerate() {
                 assert_eq!(
                     super::arg_matches(value, &filter),
@@ -3337,13 +3337,13 @@ mod multi_arg_tests {
                 );
             }
         }
-        let named: ArgFilter = serde_yaml::from_str("regex: '^needle$'").unwrap();
+        let named: ArgFilter = crate::yaml::from_str("regex: '^needle$'").unwrap();
         // The unknown call argument cannot substitute for the missing literal.
         assert!(!all_filters_match_distinct(
             &[filefacts::Arg::Call, s("other")],
             &[named]
         ));
-        let provenance: ArgFilter = serde_yaml::from_str("from:\n  value: '^needle$'").unwrap();
+        let provenance: ArgFilter = crate::yaml::from_str("from:\n  value: '^needle$'").unwrap();
         for value in &values {
             // Shape-only filters remain valid; origin checks run separately.
             let shape = ArgFilter {
@@ -3432,7 +3432,7 @@ mod multi_arg_tests {
         use crate::composite_rules::context::EvaluationContext;
         use crate::composite_rules::types::FileType;
         use crate::types::{AnalysisReport, FilefactsView, TargetInfo};
-        let filter: ArgFilter = serde_yaml::from_str("index: 1\nfrom:\n  call: '^acquire$'\n  literal: '^SERVICE_TOKEN$'\n  through:\n    - call: '^wrap$'\n      arguments: [0]\n").unwrap();
+        let filter: ArgFilter = crate::yaml::from_str("index: 1\nfrom:\n  call: '^acquire$'\n  literal: '^SERVICE_TOKEN$'\n  through:\n    - call: '^wrap$'\n      arguments: [0]\n").unwrap();
         for (source, expected) in [
             (
                 "function run(){send('url',wrap(acquire('SERVICE_TOKEN')));}",
@@ -3512,7 +3512,7 @@ mod multi_arg_tests {
         use crate::types::{AnalysisReport, FilefactsView, TargetInfo};
 
         let filter: ArgFilter =
-            serde_yaml::from_str("index: 0\nfrom:\n  call: '^acquire$'\n").unwrap();
+            crate::yaml::from_str("index: 0\nfrom:\n  call: '^acquire$'\n").unwrap();
         for (expression, expected) in [
             ("rt.Send(acquire()).Finish()", true),
             ("rt.Send(\"public\").Finish()", false),
@@ -3574,7 +3574,7 @@ mod multi_arg_tests {
             ..Default::default()
         });
         let filter: ArgFilter =
-            serde_yaml::from_str("index: 0\nfrom:\n  call: '^acquire$'\n  literal: '^TOKEN$'\n")
+            crate::yaml::from_str("index: 0\nfrom:\n  call: '^acquire$'\n  literal: '^TOKEN$'\n")
                 .unwrap();
         for (variant, expected) in [
             (0, "flow-query-incomplete"),
@@ -3647,7 +3647,7 @@ mod multi_arg_tests {
     fn yaml_literal_provenance_keeps_position_and_helper_context() {
         use crate::composite_rules::{Condition, context::EvaluationContext, types::FileType};
         use crate::types::{AnalysisReport, FilefactsView, TargetInfo};
-        let filter: ArgFilter = serde_yaml::from_str("index: 0\nfrom:\n  value: '^needle$'\n  through:\n    - call: '^join$'\n      arguments: [0, 1]\n").unwrap();
+        let filter: ArgFilter = crate::yaml::from_str("index: 0\nfrom:\n  value: '^needle$'\n  through:\n    - call: '^join$'\n      arguments: [0, 1]\n").unwrap();
         for (source, expected) in [
             ("function run(){write(join('root','needle'),'data')}", true),
             (
@@ -3701,7 +3701,7 @@ mod multi_arg_tests {
             ("{call: acquire, value: needle}", false),
             ("{value: needle, literal: x}", false),
         ] {
-            let condition: Condition = serde_yaml::from_str(&format!(
+            let condition: Condition = crate::yaml::from_str(&format!(
                 "type: symbol\nkind: call\nexact: write\narg:\n  from: {selection}\n"
             ))
             .unwrap();
@@ -3824,7 +3824,7 @@ mod validator_wiring_tests {
 
     #[test]
     fn base64_yaml_selector_reaches_the_validator() -> anyhow::Result<()> {
-        let validator: StringValidator = serde_yaml::from_str("base64")?;
+        let validator: StringValidator = crate::yaml::from_str("base64")?;
         assert_eq!(validator, StringValidator::Base64);
         assert_eq!(serde_json::to_string(&validator)?, "\"base64\"");
         assert!(validate_match("Zg==", Some(validator)));
@@ -3865,7 +3865,7 @@ mod validator_wiring_tests {
         use crate::composite_rules::{Condition, context::EvaluationContext, types::FileType};
         use crate::types::{AnalysisReport, FilefactsView, TargetInfo};
         let filter: ArgFilter =
-            serde_yaml::from_str("index: 0\nfrom:\n  field: name\n  member: '^form\\.job$'\n")
+            crate::yaml::from_str("index: 0\nfrom:\n  field: name\n  member: '^form\\.job$'\n")
                 .unwrap();
         for (source, expected) in [
             ("<cfexecute name='#FORM.job#'>", true),
@@ -3928,7 +3928,7 @@ mod validator_wiring_tests {
             ("{member: x, literal: x}", false),
             ("{member: x, argument: 1}", false),
         ] {
-            let condition: Condition = serde_yaml::from_str(&format!(
+            let condition: Condition = crate::yaml::from_str(&format!(
                 "type: symbol\nkind: call\nexact: cfexecute\narg:\n  from: {selection}\n"
             ))
             .unwrap();
@@ -3942,7 +3942,7 @@ mod validator_wiring_tests {
             condition::ArgFilter, context::EvaluationContext, types::FileType,
         };
         use crate::types::{AnalysisReport, FilefactsView, TargetInfo};
-        let filters: Vec<ArgFilter> = serde_yaml::from_str("- index: 0\n  from: {field: name, value: '^cmd[.]exe$'}\n- index: 0\n  from: {field: arguments, member: '^form[.]job$'}\n").unwrap();
+        let filters: Vec<ArgFilter> = crate::yaml::from_str("- index: 0\n  from: {field: name, value: '^cmd[.]exe$'}\n- index: 0\n  from: {field: arguments, member: '^form[.]job$'}\n").unwrap();
         for (source, expected) in [
             ("<cfexecute name='cmd.exe' arguments='#form.job#'>", true),
             ("<cfexecute arguments='#form.job#' name='cmd.exe'>", true),
@@ -4007,7 +4007,7 @@ mod validator_wiring_tests {
             condition::ArgFilter, context::EvaluationContext, types::FileType,
         };
         use crate::types::{AnalysisReport, FilefactsView, TargetInfo};
-        let filters: Vec<ArgFilter> = serde_yaml::from_str(
+        let filters: Vec<ArgFilter> = crate::yaml::from_str(
             r#"
 - index: 0
   kind: identifier
@@ -4109,7 +4109,7 @@ mod validator_wiring_tests {
         };
         use crate::types::{AnalysisReport, FilefactsView, TargetInfo};
         let filter: ArgFilter =
-            serde_yaml::from_str("index: 0\nfrom: {field: action, whole_value: '^read$'}\n")
+            crate::yaml::from_str("index: 0\nfrom: {field: action, whole_value: '^read$'}\n")
                 .unwrap();
         for (source, expected) in [
             (r#"<cffile action='read'>"#, true),
@@ -4175,7 +4175,7 @@ mod validator_wiring_tests {
                 false,
             ),
         ] {
-            let condition: Condition = serde_yaml::from_str(&format!(
+            let condition: Condition = crate::yaml::from_str(&format!(
                 "type: symbol\nkind: call\nexact: cffile\narg:\n  from: {selection}\n"
             ))
             .unwrap();
@@ -4190,7 +4190,7 @@ mod validator_wiring_tests {
         };
         use crate::types::{AnalysisReport, FilefactsView, TargetInfo};
         let filter: ArgFilter =
-            serde_yaml::from_str("index: 0\nfrom: {field: outputfile, field_absent: true}\n")
+            crate::yaml::from_str("index: 0\nfrom: {field: outputfile, field_absent: true}\n")
                 .unwrap();
         for (source, expected) in [
             (
@@ -4281,7 +4281,7 @@ mod validator_wiring_tests {
                 false,
             ),
         ] {
-            let condition: Condition = serde_yaml::from_str(&format!(
+            let condition: Condition = crate::yaml::from_str(&format!(
                 "type: symbol\nkind: call\nexact: cfexecute\narg:\n  from: {selection}\n"
             ))
             .unwrap();
@@ -4296,7 +4296,7 @@ mod validator_wiring_tests {
         };
         use crate::types::{AnalysisReport, FilefactsView, TargetInfo};
         let filter: ArgFilter =
-            serde_yaml::from_str("index: 0\nfrom: {field: outputfile, field_exists: true}\n")
+            crate::yaml::from_str("index: 0\nfrom: {field: outputfile, field_exists: true}\n")
                 .unwrap();
         for (source, expected) in [
             (r#"<cfexecute name='reporter' outputfile='/srv/out'>"#, true),
@@ -4388,7 +4388,7 @@ mod validator_wiring_tests {
                 false,
             ),
         ] {
-            let condition: Condition = serde_yaml::from_str(&format!(
+            let condition: Condition = crate::yaml::from_str(&format!(
                 "type: symbol\nkind: call\nexact: cfexecute\narg:\n  from: {selection}\n"
             ))
             .unwrap();
@@ -4404,7 +4404,7 @@ mod validator_wiring_tests {
         use crate::types::{AnalysisReport, FilefactsView, TargetInfo};
         let source = b"<cfexecute name='reporter' outputfile='/srv/out'>";
         let filter: ArgFilter =
-            serde_yaml::from_str("index: 0\nfrom: {field: outputfile, field_exists: true}\n")
+            crate::yaml::from_str("index: 0\nfrom: {field: outputfile, field_exists: true}\n")
                 .unwrap();
         for (mode, expected) in [
             ("mixed", true),

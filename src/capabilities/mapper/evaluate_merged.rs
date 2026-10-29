@@ -184,17 +184,11 @@ pub(crate) const RAW_GATE_THIN_SOURCE_MAX_BYTES: usize = 80 << 20;
 fn raw_gate_caps() -> (usize, usize, usize) {
     static CAPS: std::sync::OnceLock<(usize, usize, usize)> = std::sync::OnceLock::new();
     *CAPS.get_or_init(|| {
-        let full = std::env::var("CLEAVE_RAW_GATE_MAX_KB")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
+        let full = crate::env::parse::<usize>("CLEAVE_RAW_GATE_MAX_KB")
             .map_or(RAW_GATE_MAX_BYTES, |kb| kb << 10);
-        let source_full = std::env::var("CLEAVE_RAW_GATE_SOURCE_MAX_KB")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
+        let source_full = crate::env::parse::<usize>("CLEAVE_RAW_GATE_SOURCE_MAX_KB")
             .map_or(RAW_GATE_SOURCE_MAX_BYTES.max(full), |kb| kb << 10);
-        let thin = std::env::var("CLEAVE_RAW_GATE_THIN_SOURCE_MAX_KB")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
+        let thin = crate::env::parse::<usize>("CLEAVE_RAW_GATE_THIN_SOURCE_MAX_KB")
             .map_or(RAW_GATE_THIN_SOURCE_MAX_BYTES, |kb| kb << 10);
         (full, source_full, thin.max(source_full))
     })
@@ -269,10 +263,6 @@ impl super::CapabilityMapper {
         binary_data: &[u8],
         file_type: &RuleFileType,
     ) -> Option<crate::capabilities::indexes::RawGateHits> {
-        static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        if *DISABLED.get_or_init(|| std::env::var_os("CLEAVE_DISABLE_RAW_GATE").is_some()) {
-            return None;
-        }
         // Full gate (source offset recording / windowed `eval_raw`) is
         // profitable up to ~3 MiB. PE/ELF stay ungated above that (B1k:
         // AC + window on 200–480 MiB installers). Source 3–80 MiB gets a

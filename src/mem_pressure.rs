@@ -32,10 +32,7 @@ const SAMPLE_TTL: Duration = Duration::from_millis(100);
 fn floor_bytes() -> u64 {
     static FLOOR: OnceLock<u64> = OnceLock::new();
     *FLOOR.get_or_init(|| {
-        if let Some(mb) = std::env::var("CLEAVE_MEMBER_PRESSURE_FLOOR_MB")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-        {
+        if let Some(mb) = crate::env::parse::<u64>("CLEAVE_MEMBER_PRESSURE_FLOOR_MB") {
             return mb.saturating_mul(MIB);
         }
         let total = crate::memory_tracker::total_memory().unwrap_or(16 * GIB);

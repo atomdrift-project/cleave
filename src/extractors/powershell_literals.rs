@@ -174,14 +174,13 @@ pub(crate) fn extract_powershell_literal_payload(data: &[u8]) -> Option<Extracte
     if !lower.contains("[char]") && !lower.contains("[char[]]") {
         return None;
     }
-    let arithmetic = Regex::new(r"\(([0-9\s+*/.\-]{1,8192})\)").ok()?;
-    let joined = Regex::new(r#"(?i)\[char\[\]\]\s*@\(([0-9,\s-]+)\)\s*-join\s*(?:''|"")"#).ok()?;
-    let pipeline = Regex::new(
-        r"(?i)-join\s*\(@\(([0-9,\s-]+)\)\s*\|\s*([\w-]+)\s*\{\s*\[char\]\s*\$_\s*\}\s*\)",
-    )
-    .ok()?;
-    let alias = Regex::new(r"(?i)&\s*\(*'set-alias'\)*\s+(\w+)\s+\(*'([^']+)'\)*").ok()?;
-    let type_alias = Regex::new(r"(?i)::Add\(\(*'([^']+)'\)*,\s*\[type\]\(*'([^']+)'\)*\)").ok()?;
+    let arithmetic = static_regex!(r"\(([0-9\s+*/.\-]{1,8192})\)")?;
+    let joined = static_regex!(r#"(?i)\[char\[\]\]\s*@\(([0-9,\s-]+)\)\s*-join\s*(?:''|"")"#)?;
+    let pipeline = static_regex!(
+        r"(?i)-join\s*\(@\(([0-9,\s-]+)\)\s*\|\s*([\w-]+)\s*\{\s*\[char\]\s*\$_\s*\}\s*\)"
+    )?;
+    let alias = static_regex!(r"(?i)&\s*\(*'set-alias'\)*\s+(\w+)\s+\(*'([^']+)'\)*")?;
+    let type_alias = static_regex!(r"(?i)::Add\(\(*'([^']+)'\)*,\s*\[type\]\(*'([^']+)'\)*\)")?;
     let mut aliases = HashMap::<String, String>::new();
     let mut types = HashMap::<String, String>::new();
     let mut rendered = source.to_string();
@@ -268,7 +267,7 @@ pub(crate) fn extract_powershell_literal_payload(data: &[u8]) -> Option<Extracte
     }
     // Resolve literal type registrations; alias bindings remain in the output
     // as corroboration. This is an analysis rendering, never executed.
-    let type_reference = Regex::new(r"\[([A-Za-z][A-Za-z0-9_]*)\]").ok()?;
+    let type_reference = static_regex!(r"\[([A-Za-z][A-Za-z0-9_]*)\]")?;
     rendered = type_reference
         .replace_all(&rendered, |c: &regex::Captures<'_>| {
             types
@@ -276,7 +275,7 @@ pub(crate) fn extract_powershell_literal_payload(data: &[u8]) -> Option<Extracte
                 .map_or_else(|| c[0].to_string(), |t| format!("[{t}]"))
         })
         .into_owned();
-    let command_reference = Regex::new(r"(^|[^A-Za-z0-9_$])([A-Za-z][A-Za-z0-9_]*)\b").ok()?;
+    let command_reference = static_regex!(r"(^|[^A-Za-z0-9_$])([A-Za-z][A-Za-z0-9_]*)\b")?;
     rendered = command_reference
         .replace_all(&rendered, |c: &regex::Captures<'_>| {
             aliases
@@ -284,7 +283,7 @@ pub(crate) fn extract_powershell_literal_payload(data: &[u8]) -> Option<Extracte
                 .map_or_else(|| c[0].to_string(), |command| format!("{}{command}", &c[1]))
         })
         .into_owned();
-    let literal_wrapper = Regex::new(r"\(('(?:[^']|'')*')\)").ok()?;
+    let literal_wrapper = static_regex!(r"\(('(?:[^']|'')*')\)")?;
     for _ in 0..8 {
         let normalized = literal_wrapper
             .replace_all(&rendered, |c: &regex::Captures<'_>| {
@@ -304,7 +303,7 @@ pub(crate) fn extract_powershell_literal_payload(data: &[u8]) -> Option<Extracte
         }
         rendered = normalized;
     }
-    let member = Regex::new(r"(::|\.)\('([A-Za-z][A-Za-z0-9_]*)'\)").ok()?;
+    let member = static_regex!(r"(::|\.)\('([A-Za-z][A-Za-z0-9_]*)'\)")?;
     rendered = member.replace_all(&rendered, "$1$2").into_owned();
     Some(ExtractedPayload {
         preview: rendered.chars().take(200).collect(),

@@ -975,7 +975,8 @@ traits:
       exact: "test4"
 "#;
 
-    let mappings: models::TraitMappings = serde_yaml::from_str(yaml).expect("Failed to parse YAML");
+    let mappings: models::TraitMappings =
+        crate::yaml::from_str(yaml).expect("Failed to parse YAML");
 
     assert_eq!(mappings.traits.len(), 4);
 
@@ -1018,7 +1019,8 @@ composite_rules:
       exact: "GET /"
 "#;
 
-    let mappings: models::TraitMappings = serde_yaml::from_str(yaml).expect("Failed to parse YAML");
+    let mappings: models::TraitMappings =
+        crate::yaml::from_str(yaml).expect("Failed to parse YAML");
 
     assert_eq!(mappings.composite_rules.len(), 2);
 
@@ -2755,16 +2757,16 @@ traits:
 "#;
 
     // Parse should fail due to indentation
-    let result: Result<serde_yaml::Value> =
-        serde_yaml::from_str(invalid_yaml).map_err(|e| anyhow::anyhow!("YAML error: {}", e));
+    let result: Result<serde_json::Value> =
+        crate::yaml::from_str(invalid_yaml).map_err(|e| anyhow::anyhow!("YAML error: {}", e));
 
     assert!(result.is_err(), "Malformed YAML should fail to parse");
 
-    // The error message should contain line/column information from serde_yaml
+    // The error message should contain line/column information from the YAML parser
     let error_msg = result.unwrap_err().to_string();
     println!("Error message:\n{}", error_msg);
 
-    // serde_yaml includes line and column in error messages
+    // The parser includes line and column in error messages
     assert!(
         error_msg.contains("line")
             || error_msg.contains("column")

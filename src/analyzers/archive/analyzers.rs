@@ -214,21 +214,19 @@ fn read_member_tolerant<R: Read>(
 fn heavy_member_parallelism() -> usize {
     static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *N.get_or_init(|| {
-        std::env::var("CLEAVE_HEAVY_MEMBER_PARALLEL")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
+        crate::env::parse::<usize>("CLEAVE_HEAVY_MEMBER_PARALLEL")
             .filter(|&n| n > 0)
             .unwrap_or(32)
     })
 }
 
 fn member_is_heavy(bytes: usize) -> bool {
-    bytes >= flight_wait_min_bytes()
+    bytes >= FLIGHT_WAIT_MIN_BYTES
 }
 
 fn prioritized_heavy_members() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var("CLEAVE_PRIORITY_HEAVY_MEMBERS").as_deref() == Ok("1"))
+    *ENABLED.get_or_init(|| crate::env::flag("CLEAVE_PRIORITY_HEAVY_MEMBERS"))
 }
 
 /// Native analysis includes a long external disassembly pass. Start those
@@ -258,9 +256,7 @@ fn member_priority(member: &MemoryArchiveMember) -> Option<MemberPriority> {
         native_member_threads().map(MemberDispatch::WholeMember)
     } else if member.file_type.is_source_code() && member.data.len() >= source_leaf_min_bytes() {
         static EARLY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        if *EARLY
-            .get_or_init(|| std::env::var("CLEAVE_SOURCE_EARLY_DISPATCH").as_deref() == Ok("1"))
-        {
+        if *EARLY.get_or_init(|| crate::env::flag("CLEAVE_SOURCE_EARLY_DISPATCH")) {
             source_leaf_threads().map(|_| MemberDispatch::SourceAnalysis)
         } else {
             None
@@ -319,9 +315,7 @@ fn source_leaf_threads() -> Option<usize> {
 fn source_leaf_min_bytes() -> usize {
     static MIN: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *MIN.get_or_init(|| {
-        std::env::var("CLEAVE_SOURCE_LEAF_MIN_KB")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
+        crate::env::parse::<usize>("CLEAVE_SOURCE_LEAF_MIN_KB")
             .filter(|&kb| kb > 0)
             .unwrap_or(4096)
             .saturating_mul(1024)
@@ -356,18 +350,9 @@ fn for_each_group_with_isolated_members(
     });
 }
 
-/// Smallest member a busy single-flight is worth waiting for
-/// (`CLEAVE_FLIGHT_WAIT_MIN_KB`, default 256 KiB); smaller duplicates are
-/// analyzed independently.
-fn flight_wait_min_bytes() -> usize {
-    static MIN: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *MIN.get_or_init(|| {
-        std::env::var("CLEAVE_FLIGHT_WAIT_MIN_KB")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .map_or(256 << 10, |kb| kb << 10)
-    })
-}
+/// Smallest member a busy single-flight is worth waiting for; smaller
+/// duplicates are analyzed independently.
+const FLIGHT_WAIT_MIN_BYTES: usize = 256 << 10;
 thread_local! {
     static MEMBER_ANALYSIS_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -1201,10 +1186,7 @@ struct MemberCounts {
 fn member_window_bytes() -> usize {
     static BYTES: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *BYTES.get_or_init(|| {
-        if let Some(mb) = std::env::var("CLEAVE_MEMBER_WINDOW_MB")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .filter(|mb| *mb > 0)
+        if let Some(mb) = crate::env::parse::<usize>("CLEAVE_MEMBER_WINDOW_MB").filter(|mb| *mb > 0)
         {
             return mb.saturating_mul(1024 * 1024);
         }
@@ -1231,18 +1213,8 @@ fn member_window_bytes() -> usize {
 /// rayon pool; smaller batches run serially on the analysis's own task. The
 /// member window caps batches at [`member_window_count`] (256), so member-heavy
 /// nested archives hit this threshold window after window while small wheels
-/// and condas never do. Tunable via `CLEAVE_NESTED_PARALLEL_MIN_MEMBERS`.
-fn nested_parallel_min_members() -> usize {
-    const DEFAULT: usize = 64;
-    static MIN: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *MIN.get_or_init(|| {
-        std::env::var("CLEAVE_NESTED_PARALLEL_MIN_MEMBERS")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .filter(|n| *n > 0)
-            .unwrap_or(DEFAULT)
-    })
-}
+/// and condas never do.
+const NESTED_PARALLEL_MIN_MEMBERS: usize = 64;
 
 /// Non-class members sampled from a Java archive, where the remainder are
 /// incidental resources. Raised from 100 once it was measured truncating real
@@ -1294,9 +1266,7 @@ fn member_signal_rank(path: &std::path::Path) -> u8 {
 /// independent of member size; tunable via `CLEAVE_MEMBER_WINDOW_COUNT`.
 fn member_window_count() -> usize {
     const DEFAULT: usize = 2048;
-    std::env::var("CLEAVE_MEMBER_WINDOW_COUNT")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
+    crate::env::parse::<usize>("CLEAVE_MEMBER_WINDOW_COUNT")
         .filter(|n| *n > 0)
         .unwrap_or(DEFAULT)
 }
@@ -1317,8 +1287,7 @@ fn pipeline_member_windows() -> bool {
         // worker the pool loses outright. The window-size defaults above are
         // what actually recover the barrier idle; revisit this gate only with
         // fresh numbers showing a win.
-        std::env::var("CLEAVE_PIPELINE_MEMBER_WINDOWS").as_deref() == Ok("1")
-            && rayon::current_num_threads() >= 2
+        crate::env::flag("CLEAVE_PIPELINE_MEMBER_WINDOWS") && rayon::current_num_threads() >= 2
     })
 }
 
@@ -1575,7 +1544,7 @@ impl ArchiveAnalyzer {
     /// Analyze the managed members of a native .NET single-file host through
     /// the normal bounded member pipeline. Packaging alone is not suspicious.
     pub(crate) fn analyze_dotnet_bundle(&self, data: &[u8], report: &mut AnalysisReport) -> bool {
-        let guard = ExtractionGuard::with_cancellation(self.cancelled.clone());
+        let guard = ExtractionGuard::with_budget(self.cancelled.clone(), self.budget.clone());
         let bundle = match super::dotnet_bundle::parse(data) {
             Ok(Some(bundle)) => bundle,
             Ok(None) => return false,
@@ -1844,6 +1813,7 @@ impl ArchiveAnalyzer {
         let mut nested = ArchiveAnalyzer::new()
             .with_depth(self.current_depth + 1)
             .with_archive_prefix(nested_prefix);
+        nested.budget = self.budget.clone();
 
         nested = nested.with_engine(self.engine.clone());
         if let Some(ref engine) = self.yara_engine {
@@ -1913,13 +1883,7 @@ impl ArchiveAnalyzer {
         if self.current_depth == 0 {
             return true;
         }
-        static SERIAL_NESTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        if *SERIAL_NESTED
-            .get_or_init(|| std::env::var("CLEAVE_SERIAL_NESTED_MEMBERS").is_ok_and(|v| v == "1"))
-        {
-            return false;
-        }
-        member_count >= nested_parallel_min_members()
+        member_count >= NESTED_PARALLEL_MIN_MEMBERS
     }
 
     /// Whether a member whose single-flight is busy may wait for the owner.
@@ -2069,7 +2033,7 @@ impl ArchiveAnalyzer {
             // is pending, a 30 s bundle included — and seven lanes then sat
             // 180 s on a README.md flight (2026-09-02). Below the floor the
             // duplicate is cheaper than any wait.
-            if on_pool && data.len() < flight_wait_min_bytes() {
+            if on_pool && data.len() < FLIGHT_WAIT_MIN_BYTES {
                 tracing::debug!(
                     sha256,
                     relative_path,
@@ -2326,8 +2290,7 @@ impl ArchiveAnalyzer {
     ) -> Result<Option<AnalysisReport>> {
         let work = || {
             static WAIT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-            if *WAIT
-                .get_or_init(|| std::env::var("CLEAVE_SOURCE_FLIGHT_WAIT").as_deref() == Ok("1"))
+            if *WAIT.get_or_init(|| crate::env::flag("CLEAVE_SOURCE_FLIGHT_WAIT"))
                 && let Some(flight) = flight
             {
                 flight.mark_isolated_owner();
@@ -2615,8 +2578,7 @@ impl ArchiveAnalyzer {
             // number of members to one additional parallel level; the guard
             // is thread-local, so their Rayon children cannot recursively fan
             // out again.
-            let _nested_parallel =
-                crate::rayon_nest::try_enter_nested_member_parallelism(data.len());
+            let _nested_parallel = crate::rayon_nest::try_enter_nested_member_parallelism();
             let mut report = analyzer.analyze_input(&input)?;
 
             // Attach identity and the filefacts view for member analyzers that didn't,
@@ -5110,6 +5072,23 @@ impl ArchiveAnalyzer {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    /// Nested archives draw on their parent's extraction budget, so the
+    /// total-size and file-count limits cover the whole tree.
+    #[test]
+    fn nested_archives_share_the_extraction_budget() {
+        use super::ArchiveAnalyzer;
+        use std::sync::Arc;
+        let outer = ArchiveAnalyzer::new();
+        let nested = outer.nested_archive_analyzer("inner.zip");
+        assert!(Arc::ptr_eq(&outer.budget, &nested.budget));
+        let child = outer.child_archive_config().apply(ArchiveAnalyzer::new());
+        assert!(Arc::ptr_eq(&outer.budget, &child.budget));
+        assert!(Arc::ptr_eq(
+            &outer.budget,
+            &outer.clone_for_member_analysis().budget
+        ));
+    }
 
     #[test]
     #[allow(clippy::panic)] // An empty queue must never invoke its callback.

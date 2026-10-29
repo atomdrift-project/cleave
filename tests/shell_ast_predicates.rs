@@ -49,7 +49,7 @@ fn shell_compound_predicates_are_checked_after_structure_in_scan_and_validation(
     let traits: Vec<_> = queries.iter().map(|(id, query)| json!({
         "id":id,"desc":format!("Shell {id} predicate"),"if":{"type":"tree-sitter","language":"shell","query":query}
     })).collect();
-    std::fs::write(rules.join("query.yaml"), serde_yaml::to_string(&json!({
+    std::fs::write(rules.join("query.yaml"), serde_saphyr::to_string(&json!({
         "defaults":{"for":["shell"],"platforms":["unix"],"crit":"notable","conf":1.0},"traits":traits
     })).unwrap()).unwrap();
     let cases: &[(&str, &[&str])] = &[

@@ -2349,6 +2349,49 @@ pub(crate) fn find_oversized_trait_directories(
     violations
 }
 
+/// Count physical source directories as well as ID namespaces. Explicitly
+/// qualified IDs can otherwise hide an oversized source directory.
+pub(crate) fn find_oversized_source_directories(
+    sources: &HashMap<String, String>,
+    root: &std::path::Path,
+) -> Vec<(String, usize)> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for source in sources.values() {
+        let path = std::path::Path::new(source);
+        let relative = path.strip_prefix(root).unwrap_or(path);
+        if let Some(parent) = relative.parent() {
+            let name = parent
+                .to_string_lossy()
+                .trim_start_matches("./")
+                .to_string();
+            *counts.entry(name).or_default() += 1;
+        }
+    }
+    let mut out: Vec<_> = counts
+        .into_iter()
+        .filter(|(_, count)| *count > MAX_TRAITS_PER_DIRECTORY)
+        .collect();
+    out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    out
+}
+
+#[cfg(test)]
+#[test]
+fn physical_directory_budget_counts_qualified_ids() {
+    let sources = (0..86)
+        .map(|i| {
+            (
+                format!("well-known/example::rule-{i}"),
+                "./well-known/example/identity/rules.yaml".to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        find_oversized_source_directories(&sources, std::path::Path::new(".")),
+        vec![("well-known/example/identity".to_string(), 86)]
+    );
+}
+
 /// Find directories whose immediate subdirectories exceed
 /// [`MAX_SUBDIRECTORIES_PER_DIRECTORY`] and need another grouping layer.
 ///
@@ -3042,8 +3085,6 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     "text:micro-behaviors/data/config/syntax/recursive-option.yaml",
     // IMDS credential-header constants are independent of the source/binary carrier.
     "text:micro-behaviors/communications/http/token-auth/aws-imds-headers.yaml",
-    // Shell language markers are intentionally shared across scripts, source, and binaries
-    "text:micro-behaviors/process/create/shell/lang/",
     // Download-execute dropper patterns are malicious whether they appear in a
     // shell script, package.json postinstall, setup.py cmdclass, Dockerfile RUN,
     // plist ProgramArguments, systemd ExecStart, etc.
@@ -3127,7 +3168,6 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     "literal:micro-behaviors/communications/ip/",
     "literal:micro-behaviors/communications/http/url/",
     "literal:objectives/command-and-control/infrastructure/",
-    "literal:micro-behaviors/process/create/shell/lang/",
     "literal:metadata/file/catalog/",
     "literal:metadata/file/extension/",
     "literal:metadata/file/format/",
@@ -3501,7 +3541,7 @@ mod media_filetype_allowance_tests {
 
     #[test]
     fn relocated_media_allowance_stays_matcher_and_directory_scoped() -> anyhow::Result<()> {
-        let value: TraitDefinition = serde_yaml::from_str(
+        let value: TraitDefinition = crate::yaml::from_str(
             "id: carrier\ndesc: Container signature\ncrit: baseline\nconf: 0.9\nfor: [jpeg, png, svg, wav, aiff, mp3, mp4, ico, gif, bmp, webp, font]\nif:\n  type: value\n  path: media.container\n",
         )?;
         assert_eq!(value.r#for.len(), 12);
@@ -3521,7 +3561,7 @@ mod media_filetype_allowance_tests {
             );
         }
         let mut raw = value.clone();
-        raw.r#if = serde_yaml::from_str("type: raw\nsubstr: RIFF\n")?;
+        raw.r#if = crate::yaml::from_str("type: raw\nsubstr: RIFF\n")?;
         let sources = HashMap::from([(
             raw.id.clone(),
             "/traits/metadata/file/format/media/container.yaml".to_string(),
@@ -3958,7 +3998,7 @@ mod printenv_filetype_allowance_tests {
     #[test]
     fn named_call_scope_preserves_script_frontends_without_licensing_other_matchers()
     -> anyhow::Result<()> {
-        let symbol: TraitDefinition = serde_yaml::from_str(
+        let symbol: TraitDefinition = crate::yaml::from_str(
             "id: printenv\ndesc: Named call reference\ncrit: notable\nconf: 0.6\nfor: [shell, batch, python, javascript, ruby, php, lua, perl, powershell, applescript, vbs, mirc, ircii]\nif:\n  type: symbol\n  kind: call\n  exact: printenv\n",
         )?;
         assert_eq!(symbol.r#for.len(), 13);
@@ -3988,7 +4028,7 @@ mod printenv_filetype_allowance_tests {
             "type: value\npath: example.value\n",
         ] {
             let mut other = symbol.clone();
-            other.r#if = serde_yaml::from_str(condition)?;
+            other.r#if = crate::yaml::from_str(condition)?;
             let sources = HashMap::from([(
                 other.id.clone(),
                 "/traits/micro-behaviors/os/env/enumeration/query.yaml".to_string(),
@@ -4000,7 +4040,7 @@ mod printenv_filetype_allowance_tests {
 
     #[test]
     fn named_call_file_allowance_rejects_path_substring_collisions() -> anyhow::Result<()> {
-        let symbol: TraitDefinition = serde_yaml::from_str(
+        let symbol: TraitDefinition = crate::yaml::from_str(
             "id: printenv\ndesc: Named call reference\ncrit: notable\nconf: 0.6\nfor: [shell, batch, python, javascript, ruby, php, lua, perl]\nif:\n  type: symbol\n  kind: call\n  exact: printenv\n",
         )?;
         for path in [

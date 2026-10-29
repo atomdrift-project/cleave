@@ -85,10 +85,7 @@ pub fn skip_cache() -> bool {
     if let Some(v) = skip_cache_override() {
         return v;
     }
-    match std::env::var("CLEAVE_SKIP_CACHE") {
-        Ok(v) => v == "1" || v.eq_ignore_ascii_case("true"),
-        Err(_) => false,
-    }
+    crate::env::flag("CLEAVE_SKIP_CACHE")
 }
 
 /// Returns `true` if the capability-mapper cache should be skipped.
@@ -107,10 +104,7 @@ pub fn skip_cache() -> bool {
 /// - Env var unset                         → don't skip (always use the cache)
 #[must_use]
 pub fn skip_mapper_cache() -> bool {
-    match std::env::var("CLEAVE_SKIP_MAPPER_CACHE") {
-        Ok(v) => v == "1" || v.eq_ignore_ascii_case("true"),
-        Err(_) => false,
-    }
+    crate::env::flag("CLEAVE_SKIP_MAPPER_CACHE")
 }
 
 /// Returns `true` if the YARA rule-compilation cache should be skipped.
@@ -130,16 +124,10 @@ pub fn skip_yara_cache() -> bool {
     if let Some(v) = decode_override(&SKIP_YARA_CACHE_OVERRIDE) {
         return v;
     }
-    if let Ok(v) = std::env::var("CLEAVE_SKIP_YARA_CACHE") {
-        return v == "1" || v.eq_ignore_ascii_case("true");
+    if let Some(v) = crate::env::bool_var("CLEAVE_SKIP_YARA_CACHE") {
+        return v;
     }
-    if let Some(true) = skip_cache_override() {
-        return true;
-    }
-    if let Ok(v) = std::env::var("CLEAVE_SKIP_CACHE") {
-        return v == "1" || v.eq_ignore_ascii_case("true");
-    }
-    false
+    skip_cache_override() == Some(true) || crate::env::flag("CLEAVE_SKIP_CACHE")
 }
 
 /// Largest value read back from an on-disk cache. Cache files live in a
@@ -1086,13 +1074,12 @@ pub(crate) fn mapper_cache_key_for(traits_dir: &Path) -> Result<String> {
 /// absolute canonical path to discriminate concurrent processes that each pass
 /// `--traits-dir` at distinct locations.
 fn traits_dir_tag(traits_dir: &Path) -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
+    use sha2::{Digest, Sha256};
     let canonical = std::fs::canonicalize(traits_dir).unwrap_or_else(|_| traits_dir.to_path_buf());
-    let mut h = DefaultHasher::new();
-    canonical.hash(&mut h);
+    // A stable hash: the tag names files on disk that later builds read back.
+    let digest = Sha256::digest(canonical.as_os_str().as_encoded_bytes());
     // 8 hex chars is enough discrimination for a filename component without bloating it.
-    format!("{:08x}", (h.finish() & 0xFFFF_FFFF) as u32)
+    hex::encode(&digest[..4])
 }
 
 /// Get the path to the capability mapper cache file for the process's

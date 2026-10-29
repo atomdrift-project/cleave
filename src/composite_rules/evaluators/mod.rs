@@ -77,16 +77,7 @@ const REGEX_CACHE_MAX_SIZE: usize = 16_384;
 /// the time; on the 2026-08-13 demo.zip corpus (many small text members) it
 /// forced measurable PikeVM fallback, and 1 MiB bought −8.5% total CPU for
 /// +8% RSS. 2 MiB added RSS without further CPU gain.
-/// Override with `CLEAVE_REGEX_DFA_KB` (KiB) for tuning experiments.
-pub(crate) fn regex_dfa_cache_bytes() -> usize {
-    static BYTES: OnceLock<usize> = OnceLock::new();
-    *BYTES.get_or_init(|| {
-        std::env::var("CLEAVE_REGEX_DFA_KB")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .map_or(1024 * 1024, |kb| kb * 1024)
-    })
-}
+pub(crate) const REGEX_DFA_CACHE_BYTES: usize = 1 << 20;
 
 /// Global bounded LRU cache for compiled regex patterns to avoid repeated compilation.
 /// Key is (pattern, case_insensitive), value is compiled Regex.
@@ -227,24 +218,11 @@ const BYTES_REGEX_CACHE_ENTRIES: NonZeroUsize = match NonZeroUsize::new(32_768) 
     None => NonZeroUsize::MIN,
 };
 
-/// Entry cap of the raw-bytes store: [`BYTES_REGEX_CACHE_ENTRIES`] unless
-/// `CLEAVE_REGEX_CACHE_ENTRIES` overrides it.
-fn bytes_regex_cache_entries() -> NonZeroUsize {
-    static N: OnceLock<NonZeroUsize> = OnceLock::new();
-    *N.get_or_init(|| {
-        std::env::var("CLEAVE_REGEX_CACHE_ENTRIES")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .and_then(NonZeroUsize::new)
-            .unwrap_or(BYTES_REGEX_CACHE_ENTRIES)
-    })
-}
-
 /// Access the bytes regex cache.
 pub(crate) fn bytes_regex_cache() -> &'static RwLock<BytesRegexCache> {
     BYTES_REGEX_CACHE.get_or_init(|| {
         RwLock::new(crate::composite_rules::regex_store::BudgetedStore::new(
-            bytes_regex_cache_entries(),
+            BYTES_REGEX_CACHE_ENTRIES,
             crate::composite_rules::regex_store::raw_budget_bytes(),
         ))
     })
@@ -280,10 +258,10 @@ pub(crate) fn compile_bytes_regex(pattern: &str, case_insensitive: bool) -> Opti
                 regex_automata::meta::Regex::config()
                     .utf8_empty(false)
                     .onepass(false)
-                    .dfa(regex_full_dfa())
+                    .dfa(true)
                     .which_captures(regex_automata::nfa::thompson::WhichCaptures::Implicit)
                     .nfa_size_limit(Some(10 * (1 << 20)))
-                    .hybrid_cache_capacity(regex_dfa_cache_bytes()),
+                    .hybrid_cache_capacity(REGEX_DFA_CACHE_BYTES),
             )
             .syntax(
                 regex_automata::util::syntax::Config::new()
@@ -295,31 +273,11 @@ pub(crate) fn compile_bytes_regex(pattern: &str, case_insensitive: bool) -> Opti
             .build(pattern)
             .ok()
     };
-    let meta = build(regex_unicode_override()).or_else(|| build(true))?;
+    let meta = build(false).or_else(|| build(true))?;
     Some(LeanRegex {
         meta,
         id: crate::composite_rules::regex_scratch::next_regex_id(),
     })
-}
-
-/// Whether trait regexes keep full Unicode class semantics (`\w`, `.`, `(?i)`
-/// spanning UTF-8 sequences): restores byte-regex Unicode mode and disables
-/// the string path's ASCII class demotion (see `compile_bytes_regex` and
-/// `condition::demote_perl_classes_to_ascii`). `CLEAVE_REGEX_UNICODE=1`
-/// restores the old Unicode behavior for A/B benchmarking.
-/// Whether `regex_automata::meta` may build its eager full DFAs (default). They
-/// only apply to small NFAs but cost up to `dfa_size_limit` twice per engine;
-/// over the poppy worker's 44k-pattern warm set they were ~13% of compiled
-/// engine bytes (705 → 610 MiB). `CLEAVE_REGEX_NO_FULL_DFA=1` leaves matching
-/// to the lazy DFA, which the scratch pool already serves.
-pub(crate) fn regex_full_dfa() -> bool {
-    static FULL: OnceLock<bool> = OnceLock::new();
-    *FULL.get_or_init(|| !std::env::var("CLEAVE_REGEX_NO_FULL_DFA").is_ok_and(|v| v == "1"))
-}
-
-pub(crate) fn regex_unicode_override() -> bool {
-    static UNICODE: OnceLock<bool> = OnceLock::new();
-    *UNICODE.get_or_init(|| std::env::var("CLEAVE_REGEX_UNICODE").is_ok_and(|v| v == "1"))
 }
 
 /// Smallest atom length worth using as a prefilter. Shorter literals occur too
@@ -953,9 +911,6 @@ pub(crate) fn windows_from_atom_hits(
     if search_len < MIN_HAYSTACK_TO_WINDOW || hits.is_empty() {
         return None;
     }
-    if regex_unicode_override() {
-        return None;
-    }
     let (line, any_look, radius) = window_shape(pattern)?;
     let pad = usize::from(any_look);
     let mut spans = Vec::with_capacity(hits.len());
@@ -1237,7 +1192,7 @@ pub(crate) fn build_regex(pattern: &str, case_insensitive: bool) -> anyhow::Resu
         let mut builder = regex::RegexBuilder::new(pattern);
         builder.case_insensitive(case_insensitive);
         builder.multi_line(true);
-        builder.dfa_size_limit(regex_dfa_cache_bytes());
+        builder.dfa_size_limit(REGEX_DFA_CACHE_BYTES);
         builder.build()?
     };
 

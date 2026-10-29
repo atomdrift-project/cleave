@@ -1214,6 +1214,8 @@ pub(crate) struct ArchiveAnalyzer {
     cancelled: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// Analysis options for member-level cache lookups.
     analysis_options: Option<Arc<crate::AnalysisOptions>>,
+    /// Extraction limits shared with every archive nested inside this one.
+    budget: Arc<guards::ExtractionBudget>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1222,6 +1224,8 @@ pub(crate) struct ArchiveAnalyzerConfig {
     max_memory_file_size: Option<u64>,
     analysis_options: Option<Arc<crate::AnalysisOptions>>,
     cancellation: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// The enclosing archive's extraction budget, when there is one.
+    budget: Option<Arc<guards::ExtractionBudget>>,
 }
 
 impl ArchiveAnalyzerConfig {
@@ -1242,6 +1246,7 @@ impl ArchiveAnalyzerConfig {
             max_memory_file_size: Some(options.max_memory_file_size),
             analysis_options: Some(Arc::new(options.clone())),
             cancellation: options.cancellation.clone(),
+            budget: None,
         }
     }
 
@@ -1265,6 +1270,9 @@ impl ArchiveAnalyzerConfig {
         }
         if let Some(flag) = &self.cancellation {
             analyzer = analyzer.with_cancellation(flag.clone());
+        }
+        if let Some(budget) = &self.budget {
+            analyzer.budget = budget.clone();
         }
         analyzer
     }
@@ -1600,6 +1608,7 @@ impl ArchiveAnalyzer {
             max_memory_file_size: DEFAULT_MAX_MEMORY_FILE_SIZE,
             cancelled: None,
             analysis_options: None,
+            budget: Arc::default(),
         }
     }
 
@@ -1711,6 +1720,7 @@ impl ArchiveAnalyzer {
             max_memory_file_size: Some(self.max_memory_file_size),
             analysis_options: self.analysis_options.clone(),
             cancellation: self.cancelled.clone(),
+            budget: Some(self.budget.clone()),
         }
     }
 
@@ -1728,6 +1738,7 @@ impl ArchiveAnalyzer {
             max_memory_file_size: self.max_memory_file_size,
             cancelled: self.cancelled.clone(),
             analysis_options: self.analysis_options.clone(),
+            budget: self.budget.clone(),
         }
     }
 
@@ -1911,7 +1922,7 @@ impl ArchiveAnalyzer {
             anyhow::bail!("Analysis cancelled before archive extraction");
         }
 
-        let guard = ExtractionGuard::with_cancellation(self.cancelled.clone());
+        let guard = ExtractionGuard::with_budget(self.cancelled.clone(), self.budget.clone());
         // One detection pass for both cleave's type and the filefacts context
         // below: `from_path_and_bytes` is `detect` plus the extension-mismatch
         // carve-outs, and `detect` on a gzip tar inflates up to 64 MiB of it.
@@ -2112,10 +2123,8 @@ impl ArchiveAnalyzer {
                 .any(|entry| entry.encrypted);
         // Tar family (plain and gzip/bzip2/xz/zstd compressed, and the
         // packages built on them) streams through the same in-memory member
-        // window as zips when the archive fits in memory. `CLEAVE_TAR_IN_MEMORY=0`
-        // restores the temp-tree extraction.
+        // window as zips when the archive fits in memory.
         let tar_family_in_memory = archive_fits_memory
-            && tar_in_memory_enabled()
             && matches!(
                 file_type,
                 FileType::Tar
@@ -2948,13 +2957,6 @@ impl Default for ArchiveAnalyzer {
         Self::new()
     }
 }
-/// `CLEAVE_TAR_IN_MEMORY=0` disables the in-memory tar path (temp-tree
-/// extraction instead), for A/B and as a kill switch.
-fn tar_in_memory_enabled() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| !std::env::var("CLEAVE_TAR_IN_MEMORY").is_ok_and(|v| v == "0"))
-}
-
 impl Analyzer for ArchiveAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
         // `input.data` is authoritative — the caller already read the file, and

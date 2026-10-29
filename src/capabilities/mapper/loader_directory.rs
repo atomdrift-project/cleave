@@ -51,8 +51,9 @@ use crate::capabilities::validation::{
     find_new_metadata_file_literal_ids, find_new_metadata_file_string_ids,
     find_non_capturing_groups, find_none_only_with_proximity, find_objectives_wellknown_violations,
     find_one_fact_convictions, find_orphaned_components, find_overlapping_conditions,
-    find_overlapping_scope_duplicates, find_oversized_trait_directories,
-    find_parent_duplicate_segments, find_permuted_directory_paths, find_platform_named_directories,
+    find_overlapping_scope_duplicates, find_oversized_source_directories,
+    find_oversized_trait_directories, find_parent_duplicate_segments,
+    find_permuted_directory_paths, find_platform_named_directories,
     find_pooling_scope_without_container, find_pure_alias_traits,
     find_pure_directory_alias_composites, find_raw_should_use_text, find_redundant_any_refs,
     find_redundant_explicit_defaults, find_redundant_needs_one, find_redundant_unix_platforms,
@@ -596,12 +597,9 @@ impl super::CapabilityMapper {
         enable_full_validation: bool,
         enable_precision_scoring: bool,
     ) -> Result<Self> {
-        // Check for CLEAVE_VALIDATE env var - it can override the CLI flag in either direction
-        let enable_full_validation = match std::env::var("CLEAVE_VALIDATE").ok().as_deref() {
-            Some("0") | Some("false") => false, // Env var explicitly disables
-            Some("1") | Some("true") => true,   // Env var explicitly enables
-            _ => enable_full_validation,        // Use CLI flag
-        };
+        // `CLEAVE_VALIDATE=1` turns full validation on for a scan; it never
+        // turns off validation a caller asked for.
+        let enable_full_validation = enable_full_validation || crate::env::flag("CLEAVE_VALIDATE");
         Self::from_directory_exact(
             dir_path,
             min_hostile_precision,
@@ -873,7 +871,7 @@ impl super::CapabilityMapper {
                 // Check for meaningless YAML patterns before parsing
                 let yaml_warnings = super::helpers::check_yaml_patterns(&content, path);
 
-                let mappings: TraitMappings = serde_yaml::from_str(&content).map_err(|e| {
+                let mappings: TraitMappings = crate::yaml::from_str(&content).map_err(|e| {
                     // Enhance YAML parsing errors with context and suggestions
                     let enhanced = enhance_yaml_error(&e.into(), path, &content);
                     anyhow::anyhow!("{}", enhanced)
@@ -1655,7 +1653,17 @@ impl super::CapabilityMapper {
                         short_pattern_warnings = find_short_pattern_warnings(traits, trait_sources)
                     });
                     scope.spawn(|_| {
-                        oversized_dirs = find_oversized_trait_directories(traits, rules)
+                        oversized_dirs = find_oversized_trait_directories(traits, rules);
+                        for (dir, count) in find_oversized_source_directories(sources, dir_path) {
+                            if let Some((_, existing)) =
+                                oversized_dirs.iter_mut().find(|(name, _)| *name == dir)
+                            {
+                                *existing = (*existing).max(count);
+                            } else {
+                                oversized_dirs.push((dir, count));
+                            }
+                        }
+                        oversized_dirs.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)))
                     });
                     scope.spawn(|_| {
                         file_stem_hints = build_file_stem_reference_hints(dir_path, traits, rules);
@@ -3819,7 +3827,7 @@ impl super::CapabilityMapper {
                         dead_any.len(),
                         rules.len()
                     );
-                    if std::env::var_os("CLEAVE_WARN_DEAD_ANY").is_some() {
+                    if crate::env::flag("CLEAVE_WARN_DEAD_ANY") {
                         for issue in &dead_any {
                             let source_file = rule_source_files
                                 .get(&issue.id)
@@ -6228,7 +6236,7 @@ composite_rules:
       - id: metadata/registry::registry-security-hold
       - id: metadata/registry::registry-security-hold-record
 "#;
-        let mappings = serde_yaml::from_str(yaml).unwrap();
+        let mappings = crate::yaml::from_str(yaml).unwrap();
         let root = Path::new("traits");
         let path = root.join("objectives/supply-chain/security-hold/withdrawn.yaml");
         let file = super::prepare_trait_file(&path, mappings, Vec::new(), root, false, false);
@@ -6316,7 +6324,7 @@ traits:
     #[allow(clippy::expect_used)]
     fn file_type_issues(yaml: &str) -> Vec<(&'static str, String)> {
         let mappings: crate::capabilities::models::TraitMappings =
-            serde_yaml::from_str(yaml).expect("valid trait YAML");
+            crate::yaml::from_str(yaml).expect("valid trait YAML");
         let dir = Path::new("traits");
         let path = dir.join("x/y.yaml");
         let file = super::prepare_trait_file(&path, mappings, Vec::new(), dir, false, false);

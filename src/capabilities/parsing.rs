@@ -288,32 +288,13 @@ pub(crate) fn apply_trait_defaults(
         *w = format!("{} (trait '{}' in {})", w, raw.id, path.display());
     }
 
-    // Parse criticality: "none" means baseline
-    let mut criticality = match &raw.crit {
-        Some(v) if v.eq_ignore_ascii_case("none") => Criticality::Baseline,
-        Some(v) => match parse_criticality(v) {
-            Ok(crit) => crit,
-            Err(e) => {
-                warnings.push(format!("Trait '{}' in {}: {}", raw.id, path.display(), e));
-                Criticality::Baseline
-            }
-        },
-        None => match defaults.crit.as_deref() {
-            Some(v) => match parse_criticality(v) {
-                Ok(crit) => crit,
-                Err(e) => {
-                    warnings.push(format!(
-                        "Default criticality in {} (trait '{}'): {}",
-                        path.display(),
-                        raw.id,
-                        e
-                    ));
-                    Criticality::Baseline
-                }
-            },
-            None => Criticality::Baseline,
-        },
-    };
+    let mut criticality = resolve_criticality(
+        raw.crit.as_deref(),
+        defaults.crit.as_deref(),
+        &raw.id,
+        path,
+        warnings,
+    );
 
     // Stricter validation for HOSTILE traits: atomic traits cannot be HOSTILE
     if criticality == Criticality::Hostile {
@@ -1176,6 +1157,30 @@ pub(crate) fn parse_arch(archs: &[String], warnings: &mut Vec<String>) -> Vec<Ar
 
 /// Parse criticality string into Criticality enum
 /// Returns an error for invalid criticality values instead of silently defaulting
+/// A rule's criticality: its own `crit:`, else the file default, else
+/// baseline (`none` also means baseline). An unrecognized value falls back to
+/// baseline, which would quietly neuter a rule, so it is logged as well as
+/// recorded for `cleave validate`.
+fn resolve_criticality(
+    own: Option<&str>,
+    default: Option<&str>,
+    rule_id: &str,
+    path: &std::path::Path,
+    warnings: &mut Vec<String>,
+) -> Criticality {
+    let Some(value) = own.or(default) else {
+        return Criticality::Baseline;
+    };
+    if value.eq_ignore_ascii_case("none") {
+        return Criticality::Baseline;
+    }
+    parse_criticality(value).unwrap_or_else(|e| {
+        tracing::warn!(rule = rule_id, path = %path.display(), "{e}; treating as baseline");
+        warnings.push(format!("Rule '{rule_id}' in {}: {e}", path.display()));
+        Criticality::Baseline
+    })
+}
+
 pub(crate) fn parse_criticality(s: &str) -> Result<Criticality, String> {
     match s.to_lowercase().as_str() {
         "exception" => Ok(Criticality::Exception),
@@ -1358,37 +1363,13 @@ pub(crate) fn apply_composite_defaults(
         *w = format!("{} (composite rule '{}' in {})", w, raw.id, path.display());
     }
 
-    // Parse criticality: "none" means baseline
-    let criticality = match &raw.crit {
-        Some(v) if v.eq_ignore_ascii_case("none") => Criticality::Baseline,
-        Some(v) => match parse_criticality(v) {
-            Ok(crit) => crit,
-            Err(e) => {
-                warnings.push(format!(
-                    "Composite rule '{}' in {}: {}",
-                    raw.id,
-                    path.display(),
-                    e
-                ));
-                Criticality::Baseline
-            }
-        },
-        None => match defaults.crit.as_deref() {
-            Some(v) => match parse_criticality(v) {
-                Ok(crit) => crit,
-                Err(e) => {
-                    warnings.push(format!(
-                        "Default criticality in {} (composite rule '{}'): {}",
-                        path.display(),
-                        raw.id,
-                        e
-                    ));
-                    Criticality::Baseline
-                }
-            },
-            None => Criticality::Baseline,
-        },
-    };
+    let criticality = resolve_criticality(
+        raw.crit.as_deref(),
+        defaults.crit.as_deref(),
+        &raw.id,
+        path,
+        warnings,
+    );
 
     // Handle single condition by converting to requires_all
     let requires_all = raw.all.or_else(|| raw.condition.map(|c| vec![c]));
@@ -2677,7 +2658,7 @@ mod tests {
     #[allow(clippy::expect_used)]
     fn empty_resolved_for_is_reported_for_composites() {
         let raw: super::super::models::RawCompositeRule =
-            serde_yaml::from_str("{id: c, desc: composite rule here, all: [{id: a}]}")
+            crate::yaml::from_str("{id: c, desc: composite rule here, all: [{id: a}]}")
                 .expect("composite yaml");
         let mut warnings = Vec::new();
         let rule = super::apply_composite_defaults(

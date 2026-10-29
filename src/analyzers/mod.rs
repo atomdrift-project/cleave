@@ -426,19 +426,9 @@ fn vbs_marker_automaton() -> Option<&'static aho_corasick::AhoCorasick> {
         .as_ref()
 }
 
-/// Largest input the script sniff will look at; `CLEAVE_SCRIPT_SNIFF_MAX_KB`
-/// overrides. See [`sniff_script_type_from_content`] for why it is capped.
-fn script_sniff_max_bytes() -> usize {
-    const DEFAULT_KB: usize = 4 * 1024;
-    static MAX: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *MAX.get_or_init(|| {
-        std::env::var("CLEAVE_SCRIPT_SNIFF_MAX_KB")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(DEFAULT_KB)
-            .saturating_mul(1024)
-    })
-}
+/// Largest input the script sniff will look at. See
+/// [`sniff_script_type_from_content`] for why it is capped.
+const SCRIPT_SNIFF_MAX_BYTES: usize = 4 << 20;
 
 /// Last-resort VBScript sniff, for content that magic bytes, extension, and
 /// filefacts' prefix heuristics all left unidentified.
@@ -460,7 +450,7 @@ fn script_sniff_max_bytes() -> usize {
 /// VBScript is kilobytes; a file over the cap is not a script this fallback
 /// was built to catch, and both the magic and extension paths still see it.
 fn sniff_script_type_from_content(data: &[u8]) -> Option<FileType> {
-    if data.len() > script_sniff_max_bytes() {
+    if data.len() > SCRIPT_SNIFF_MAX_BYTES {
         return None;
     }
 

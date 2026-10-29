@@ -15,21 +15,6 @@ use crate::types::binary::normalize_symbol;
 use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT, StringInfo, deduplicate_evidence};
 use aho_corasick::AhoCorasick;
 
-/// Automaton kind for the index prefilters. Default (`None`) lets aho-corasick
-/// auto-pick — a contiguous DFA at these pattern counts, the fastest and
-/// largest form (~115 MB across the four indexes). `CLEAVE_AC_NFA=1` forces
-/// the contiguous NFA (5-10x smaller, slower per scan) for memory experiments;
-/// the prefilters are among the hottest CPU paths, so the DFA stays the
-/// default unless interleaved wall runs prove the NFA neutral.
-fn ac_kind() -> Option<aho_corasick::AhoCorasickKind> {
-    static KIND: std::sync::OnceLock<Option<aho_corasick::AhoCorasickKind>> =
-        std::sync::OnceLock::new();
-    *KIND.get_or_init(|| {
-        std::env::var("CLEAVE_AC_NFA")
-            .is_ok_and(|v| v == "1")
-            .then_some(aho_corasick::AhoCorasickKind::ContiguousNFA)
-    })
-}
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::{Arc, OnceLock, RwLock};
@@ -37,10 +22,9 @@ use std::sync::{Arc, OnceLock, RwLock};
 /// Build an index prefilter over `patterns`, or `None` when there are none.
 ///
 /// A trait an index gates is evaluated only when the prefilter hits, so an
-/// automaton that fails to build silently disables every trait behind it. A
-/// kind forced by `CLEAVE_AC_NFA` that cannot hold the patterns falls back to
-/// aho-corasick's own choice, which picks a form that fits; a failure past
-/// that is logged as an error instead of being dropped.
+/// automaton that fails to build silently disables every trait behind it; a
+/// failure is logged as an error instead of being dropped. aho-corasick picks
+/// the automaton kind (a contiguous DFA at these pattern counts).
 fn build_index_automaton<P: AsRef<[u8]>>(
     patterns: &[P],
     ascii_case_insensitive: bool,
@@ -48,24 +32,10 @@ fn build_index_automaton<P: AsRef<[u8]>>(
     if patterns.is_empty() {
         return None;
     }
-    let build = |kind| {
-        AhoCorasick::builder()
-            .kind(kind)
-            .ascii_case_insensitive(ascii_case_insensitive)
-            .build(patterns)
-    };
-    let built = match build(ac_kind()) {
-        Err(err) if ac_kind().is_some() => {
-            tracing::warn!(
-                patterns = patterns.len(),
-                error = %err,
-                "forced index automaton kind cannot hold its patterns; letting aho-corasick choose"
-            );
-            build(None)
-        }
-        built => built,
-    };
-    match built {
+    match AhoCorasick::builder()
+        .ascii_case_insensitive(ascii_case_insensitive)
+        .build(patterns)
+    {
         Ok(automaton) => Some(automaton),
         Err(err) => {
             tracing::error!(
@@ -1493,20 +1463,6 @@ pub(crate) struct RawGateHits {
 /// window — i.e. toward today's full scan — never past it.
 const MAX_ATOM_OFFSETS: usize = 512;
 
-/// Per-trait atom-offset cap: `CLEAVE_ATOM_OFFSET_CAP` overrides
-/// [`MAX_ATOM_OFFSETS`] (experiment knob; see `windows_from_atom_hits` for
-/// the coverage rule that bounds the cost of a dense atom).
-fn atom_offset_cap() -> usize {
-    static CAP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *CAP.get_or_init(|| {
-        std::env::var("CLEAVE_ATOM_OFFSET_CAP")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .filter(|&n| n > 0)
-            .unwrap_or(MAX_ATOM_OFFSETS)
-    })
-}
-
 struct OffsetRecorder {
     map: FxHashMap<usize, Vec<u32>>,
     overflowed: FxHashSet<usize>,
@@ -1538,7 +1494,7 @@ impl OffsetRecorder {
         if entry.last() == Some(&offset) {
             return;
         }
-        if entry.len() >= atom_offset_cap() {
+        if entry.len() >= MAX_ATOM_OFFSETS {
             self.map.remove(&trait_idx);
             self.overflowed.insert(trait_idx);
             return;
@@ -2496,15 +2452,14 @@ fn compile_once<T>(slot: &OnceLock<Option<T>>, compile: impl FnOnce() -> Option<
 
 /// Compile a raw-content pattern with the same parse mode the trait engines
 /// use (`condition.rs::TraitRegex::compile`): byte-mode classes for ASCII
-/// patterns with a codepoint fallback, codepoint mode for non-ASCII patterns
-/// (and under `CLEAVE_REGEX_UNICODE=1`). The gate's verifiers must mirror the
+/// patterns with a codepoint fallback, codepoint mode for non-ASCII patterns.
+/// The gate's verifiers must mirror the
 /// engine's parse mode or the two diverge — Unicode-mode verifiers here were
 /// also the reason gate sweeps ran the PikeVM (Unicode `\b` quits the lazy
 /// DFA on non-ASCII bytes) instead of the DFA the engines use.
 fn compile_engine_mirrored(pattern: &str) -> Result<regex::bytes::Regex, regex::Error> {
     const SIZE_LIMIT: usize = 100 * 1024 * 1024;
     if pattern.is_ascii()
-        && !crate::composite_rules::evaluators::regex_unicode_override()
         && let Ok(re) = regex::bytes::RegexBuilder::new(pattern)
             .size_limit(SIZE_LIMIT)
             .unicode(false)
@@ -2549,12 +2504,6 @@ impl RawContentRegexIndex {
             FxHashMap::default();
         let mut universal_substr: Vec<WordPattern> = Vec::new();
 
-        // Diagnostic: `CLEAVE_DUMP_TEXT_GATES=<file>` writes one line per
-        // `type: text` regex trait — whether the raw-content atom gate covers
-        // it (`gated`/`ungated`), its id, its `for:` set and the pattern.
-        let mut ungated_dump = std::env::var_os("CLEAVE_DUMP_TEXT_GATES")
-            .and_then(|p| std::fs::File::create(p).ok())
-            .map(std::io::BufWriter::new);
         for (trait_idx, trait_def) in traits.iter().enumerate() {
             if !platforms_intersect(&trait_def.platforms, platforms) {
                 continue;
@@ -2650,22 +2599,6 @@ impl RawContentRegexIndex {
                     // on any atom marks the trait a candidate. Non-UTF-8 or
                     // inextractable sets stay ungated (eval_raw scans directly).
                     let atoms = super::derivation_memo::mandatory_atom_set(regex_str);
-                    if let Some(dump) = ungated_dump.as_mut() {
-                        use std::io::Write as _;
-                        let kind = if atoms.is_some() { "gated" } else { "ungated" };
-                        let _ = writeln!(
-                            dump,
-                            "{kind}	{}	{}	{}",
-                            trait_def.id,
-                            trait_def
-                                .r#for
-                                .iter()
-                                .map(|f| format!("{f:?}"))
-                                .collect::<Vec<_>>()
-                                .join(","),
-                            regex_str.replace('\t', "\\t").replace('\n', "\\n")
-                        );
-                    }
                     if let Some(atoms) = atoms {
                         for (literal, atom_ci) in &atoms {
                             let make = || WordPattern {

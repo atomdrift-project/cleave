@@ -58,7 +58,7 @@ impl super::CapabilityMapper {
         let content = String::from_utf8_lossy(&bytes);
 
         let mappings: TraitMappings =
-            serde_yaml::from_str(&content).context("Failed to parse capabilities YAML")?;
+            crate::yaml::from_str(&content).context("Failed to parse capabilities YAML")?;
 
         // Convert raw traits to final traits with defaults applied
         let mut warnings: Vec<String> = crate::capabilities::parsing::default_file_type_warnings(

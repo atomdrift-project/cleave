@@ -5523,7 +5523,7 @@ mod literal_regex_tests {
     #[test]
     fn regex_overlap_keeps_structured_argument_filters_out_of_regex_syntax() {
         let rule = |id: &str, callee: &str, setting: &str| -> TraitDefinition {
-            serde_yaml::from_str(&format!(
+            crate::yaml::from_str(&format!(
                 "id: {id}\ndesc: test\nfor: [shell]\nif:\n  type: symbol\n  kind: call\n  regex: '{callee}'\n  args:\n    - index: 2\n      kind: string\n      regex: '^echo 0 > /proc/sys/kernel/{setting}([ \\t;]|$)'\n"
             )).unwrap()
         };
@@ -5549,7 +5549,7 @@ mod literal_regex_tests {
     #[test]
     fn structural_regex_duplicates_preserve_symbol_argument_provenance() {
         let rule = |id: &str, callee: &str, source: &str| -> TraitDefinition {
-            serde_yaml::from_str(&format!(
+            crate::yaml::from_str(&format!(
                 "id: {id}\ndesc: test\ncrit: notable\nfor: [javascript]\nif:\n  type: symbol\n  kind: call\n  regex: '{callee}'\n  arg:\n    index: 0\n    from:\n      call: {source}\n"
             )).unwrap()
         };
@@ -5566,7 +5566,7 @@ mod literal_regex_tests {
     #[test]
     fn symbol_arguments_keep_positions_shapes_and_provenance_distinct() {
         use crate::composite_rules::condition::ArgFilter;
-        let parse = |yaml: &str| serde_yaml::from_str::<ArgFilter>(yaml).unwrap();
+        let parse = |yaml: &str| crate::yaml::from_str::<ArgFilter>(yaml).unwrap();
         let variants = [
             "{exact: token}",
             "{substr: token}",
@@ -5742,7 +5742,7 @@ mod canonical_atomic_duplicate_tests {
     }
 
     fn dos_pair() -> (TraitDefinition, TraitDefinition) {
-        let a: TraitDefinition = serde_yaml::from_str(
+        let a: TraitDefinition = crate::yaml::from_str(
             "id: dos-list-of-lists-call\n\
              desc: DOS list-of-lists interrupt\n\
              crit: notable\n\
@@ -5815,7 +5815,7 @@ mod canonical_atomic_duplicate_tests {
 
     #[test]
     fn explicit_exists_true_uses_the_same_exact_matcher() {
-        let mut a: TraitDefinition = serde_yaml::from_str(
+        let mut a: TraitDefinition = crate::yaml::from_str(
             "id: field-present\ndesc: Field present\nif: {type: value, path: name}\n",
         )
         .unwrap();
@@ -5834,7 +5834,7 @@ mod canonical_atomic_duplicate_tests {
 
     #[test]
     fn string_duplicate_check_respects_count_and_density() {
-        let mut a: TraitDefinition = serde_yaml::from_str(
+        let mut a: TraitDefinition = crate::yaml::from_str(
             "id: repeated-name\ndesc: Repeated name\ncrit: notable\nfor: [shell]\nif: {type: text, word: splarm}\n",
         ).unwrap();
         a.defined_in = "a.yaml".into();
@@ -5884,7 +5884,7 @@ mod canonical_atomic_duplicate_tests {
         b.r#for = a.r#for.clone();
         b.conf = a.conf;
         b.downgrade = Some(
-            serde_yaml::from_str(
+            crate::yaml::from_str(
                 "any:\n  - id: metadata/package/testing/presence/harness::test-directory-path\n",
             )
             .unwrap(),

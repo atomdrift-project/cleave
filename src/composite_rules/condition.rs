@@ -101,10 +101,10 @@ pub(crate) struct TraitRegex {
 fn engine_config() -> regex_automata::meta::Config {
     regex_automata::meta::Regex::config()
         .onepass(false)
-        .dfa(super::evaluators::regex_full_dfa())
+        .dfa(true)
         .which_captures(regex_automata::nfa::thompson::WhichCaptures::Implicit)
         .nfa_size_limit(Some(10 * (1 << 20)))
-        .hybrid_cache_capacity(super::evaluators::regex_dfa_cache_bytes())
+        .hybrid_cache_capacity(super::evaluators::REGEX_DFA_CACHE_BYTES)
 }
 
 impl TraitRegex {
@@ -131,7 +131,7 @@ impl TraitRegex {
         //
         // The `\p{..}`-and-ranges patterns are ASCII *source* but cannot parse
         // in byte mode at all, so they take the same fallback via `or_else`.
-        let engine = if super::evaluators::regex_unicode_override() || !pattern.is_ascii() {
+        let engine = if !pattern.is_ascii() {
             compile_codepoint(pattern)?
         } else {
             match compile_bytes(pattern) {
@@ -1191,6 +1191,49 @@ impl SyscallArg {
         };
         self.mask.is_none_or(|m| v & m == m) && self.value.is_none_or(|want| v == want)
     }
+}
+
+/// Condition `type:` spellings that still load but are slated for retirement,
+/// each with the spelling that replaces it. `cleave validate` counts their uses
+/// (see [`count_retiring_condition_types`]) so the rules can be migrated before
+/// support is removed.
+pub(crate) const RETIRING_CONDITION_TYPES: &[(&str, &str)] = &[
+    ("string_literal", "literal"),
+    ("import", "symbol + kind: import"),
+    ("export", "symbol + kind: export"),
+    ("function", "symbol + kind: function"),
+    ("basename", "path + basename: true"),
+];
+
+/// Count `type: <spelling>` lines in rule YAML for each entry of
+/// [`RETIRING_CONDITION_TYPES`], in that order.
+#[must_use]
+pub(crate) fn count_retiring_condition_types<'a>(
+    yaml_files: impl IntoIterator<Item = &'a [u8]>,
+) -> Vec<usize> {
+    let mut counts = vec![0; RETIRING_CONDITION_TYPES.len()];
+    for bytes in yaml_files {
+        for line in bytes.split(|&b| b == b'\n') {
+            let Ok(line) = std::str::from_utf8(line) else {
+                continue;
+            };
+            let Some(value) = line
+                .trim_start()
+                .trim_start_matches("- ")
+                .strip_prefix("type:")
+                .map(|v| v.trim().trim_matches(['"', '\'']))
+            else {
+                continue;
+            };
+            if let Some(i) = RETIRING_CONDITION_TYPES
+                .iter()
+                .position(|(old, _)| *old == value)
+            {
+                counts[i] += 1;
+            }
+        }
+    }
+    counts
 }
 
 /// Payload of the legacy `type: import` / `export` / `function` conditions: a
@@ -3334,6 +3377,20 @@ fn validate_location_constraints(
 }
 
 #[cfg(test)]
+mod retiring_condition_type_tests {
+    use super::*;
+
+    #[test]
+    fn counts_each_retiring_spelling_once_per_condition() {
+        let yaml = b"traits:\n  - if:\n      type: string_literal\n  - if:\n      type: literal\n  - type: 'basename'\n    exact: x\n  # type: import\n";
+        assert_eq!(
+            count_retiring_condition_types([yaml.as_slice()]),
+            [1, 0, 0, 0, 1]
+        );
+    }
+}
+
+#[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod location_constraint_tests {
     use super::*;
@@ -3518,7 +3575,7 @@ mod location_constraint_tests {
     fn test_offset_range_deser_closed_range() {
         // Test [start, end] format - deserialize as a tuple
         let yaml = "[100, 200]";
-        let result: Result<Option<(i64, Option<i64>)>, _> = serde_yaml::from_str(yaml);
+        let result: Result<Option<(i64, Option<i64>)>, _> = crate::yaml::from_str(yaml);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), Some((100, Some(200))));
     }
@@ -3531,7 +3588,7 @@ mod location_constraint_tests {
             "type: value\npath: maintainers\nlength_min: 2\nlength_max: 5",
             "type: value\npath: maintainers\nsize_min: 2\nsize_max: 5",
         ] {
-            let result: Result<Condition, _> = serde_yaml::from_str(yaml);
+            let result: Result<Condition, _> = crate::yaml::from_str(yaml);
             assert!(result.is_ok(), "failed to parse: {yaml}");
             assert!(matches!(
                 result.unwrap(),
@@ -3547,7 +3604,7 @@ mod location_constraint_tests {
     #[test]
     fn text_length_bounds_parse() {
         let result: Result<Condition, _> =
-            serde_yaml::from_str("type: text\nregex: '[A-Za-z0-9]+'\nlength_min: 4000");
+            crate::yaml::from_str("type: text\nregex: '[A-Za-z0-9]+'\nlength_min: 4000");
         assert!(result.is_ok());
         assert!(matches!(
             result.unwrap(),
@@ -3561,7 +3618,7 @@ mod location_constraint_tests {
 
     #[test]
     fn text_yaml_parses_html_comment_exclusion() {
-        let cond: Condition = serde_yaml::from_str(
+        let cond: Condition = crate::yaml::from_str(
             "type: text\nregex: 'Server\\.MapPath'\nexclude_html_comments: true",
         )
         .expect("parse text comment option");
@@ -3584,7 +3641,7 @@ mod location_constraint_tests {
         }
 
         let yaml = "offset_range: [-1024,]";
-        let result: Result<TestStruct, _> = serde_yaml::from_str(yaml);
+        let result: Result<TestStruct, _> = crate::yaml::from_str(yaml);
         assert!(result.is_ok());
         let parsed = result.unwrap();
         assert_eq!(parsed.offset_range, Some((-1024, None)));
@@ -3600,7 +3657,7 @@ mod location_constraint_tests {
         }
 
         let yaml = "offset_range: [~, 1024]";
-        let result: Result<TestStruct, _> = serde_yaml::from_str(yaml);
+        let result: Result<TestStruct, _> = crate::yaml::from_str(yaml);
         if let Err(ref e) = result {
             eprintln!("Deserialization error: {}", e);
         }
@@ -3619,7 +3676,7 @@ mod location_constraint_tests {
         }
 
         let yaml = "offset_range: [100, null]";
-        let result: Result<TestStruct, _> = serde_yaml::from_str(yaml);
+        let result: Result<TestStruct, _> = crate::yaml::from_str(yaml);
         assert!(result.is_ok());
         let parsed = result.unwrap();
         assert_eq!(parsed.offset_range, Some((100, None)));
@@ -3635,7 +3692,7 @@ mod location_constraint_tests {
         }
 
         let yaml = "offset_range: [100, ~]";
-        let result: Result<TestStruct, _> = serde_yaml::from_str(yaml);
+        let result: Result<TestStruct, _> = crate::yaml::from_str(yaml);
         assert!(result.is_ok());
         let parsed = result.unwrap();
         assert_eq!(parsed.offset_range, Some((100, None)));
@@ -3651,7 +3708,7 @@ mod location_constraint_tests {
         }
 
         let yaml = "offset_range: [null, 1024]";
-        let result: Result<TestStruct, _> = serde_yaml::from_str(yaml);
+        let result: Result<TestStruct, _> = crate::yaml::from_str(yaml);
         assert!(result.is_ok());
         let parsed = result.unwrap();
         assert_eq!(parsed.offset_range, Some((0, Some(1024))));
@@ -3667,7 +3724,7 @@ mod location_constraint_tests {
         }
 
         let yaml = "offset_range: [-1024, -512]";
-        let result: Result<TestStruct, _> = serde_yaml::from_str(yaml);
+        let result: Result<TestStruct, _> = crate::yaml::from_str(yaml);
         assert!(result.is_ok());
         let parsed = result.unwrap();
         assert_eq!(parsed.offset_range, Some((-1024, Some(-512))));
@@ -3683,7 +3740,7 @@ mod location_constraint_tests {
         }
 
         let yaml = "section_offset_range: [100,]";
-        let result: Result<TestStruct, _> = serde_yaml::from_str(yaml);
+        let result: Result<TestStruct, _> = crate::yaml::from_str(yaml);
         assert!(result.is_ok());
         let parsed = result.unwrap();
         assert_eq!(parsed.section_offset_range, Some((100, None)));
@@ -3799,21 +3856,21 @@ mod backtrack_tests {
 
     #[test]
     fn symbol_family_condition_types_set_kind() {
-        let import_cond: Condition = serde_yaml::from_str(
+        let import_cond: Condition = crate::yaml::from_str(
             r#"
 type: import
 regex: "^CreateFileW$"
 "#,
         )
         .unwrap();
-        let export_cond: Condition = serde_yaml::from_str(
+        let export_cond: Condition = crate::yaml::from_str(
             r#"
 type: export
 substr: DllRegisterServer
 "#,
         )
         .unwrap();
-        let function_cond: Condition = serde_yaml::from_str(
+        let function_cond: Condition = crate::yaml::from_str(
             r#"
 type: function
 exact: main
@@ -3862,12 +3919,12 @@ exact: main
             ("type: tree-sitter\nquery: \"(x)\"\n", "qeury: y\n"),
         ] {
             assert!(
-                serde_yaml::from_str::<Condition>(valid).is_ok(),
+                crate::yaml::from_str::<Condition>(valid).is_ok(),
                 "rejected {valid:?}"
             );
             let typo = format!("{valid}{extra}");
             assert!(
-                serde_yaml::from_str::<Condition>(&typo).is_err(),
+                crate::yaml::from_str::<Condition>(&typo).is_err(),
                 "accepted {typo:?}"
             );
         }
@@ -3875,27 +3932,27 @@ exact: main
 
     #[test]
     fn wire_format_aliases_load_and_serialize_canonically() {
-        let literal: Condition = serde_yaml::from_str("type: string_literal\nexact: x\n").unwrap();
+        let literal: Condition = crate::yaml::from_str("type: string_literal\nexact: x\n").unwrap();
         assert!(matches!(literal, Condition::Literal(_)));
         assert_eq!(
-            serde_yaml::to_value(&literal).unwrap()["type"],
-            serde_yaml::Value::from("literal")
+            serde_json::to_value(&literal).unwrap()["type"],
+            serde_json::Value::from("literal")
         );
 
         let kv: Condition =
-            serde_yaml::from_str("type: value\npath: a\nsize_min: 2\nmatch: all\n").unwrap();
+            crate::yaml::from_str("type: value\npath: a\nsize_min: 2\nmatch: all\n").unwrap();
         let Condition::Kv(ref query) = kv else {
             panic!("expected kv, got {kv:?}");
         };
         assert_eq!(query.length_min, Some(2));
         assert_eq!(
-            serde_yaml::to_value(&kv).unwrap()["length_min"],
-            serde_yaml::Value::from(2)
+            serde_json::to_value(&kv).unwrap()["length_min"],
+            serde_json::Value::from(2)
         );
 
         // Legacy alias types load as their canonical condition and serialize
         // as it, so a cached rule never reproduces the alias.
-        let basename: Condition = serde_yaml::from_str("type: basename\nexact: a.txt\n").unwrap();
+        let basename: Condition = crate::yaml::from_str("type: basename\nexact: a.txt\n").unwrap();
         assert!(matches!(
             basename,
             Condition::Path(PathQuery {
@@ -3904,9 +3961,9 @@ exact: main
                 ..
             })
         ));
-        let import: Condition = serde_yaml::from_str("type: import\nexact: f\n").unwrap();
+        let import: Condition = crate::yaml::from_str("type: import\nexact: f\n").unwrap();
         let reloaded: Condition =
-            serde_yaml::from_str(&serde_yaml::to_string(&import).unwrap()).unwrap();
+            crate::yaml::from_str(&serde_saphyr::to_string(&import).unwrap()).unwrap();
         assert!(matches!(
             reloaded,
             Condition::Symbol(SymbolQuery {
@@ -3918,7 +3975,7 @@ exact: main
 
     #[test]
     fn legacy_call_target_spellings_are_normalized_when_loaded() {
-        let cond: Condition = serde_yaml::from_str(
+        let cond: Condition = crate::yaml::from_str(
             r#"
 type: symbol
 kind: call
@@ -3935,7 +3992,7 @@ exact: Runtime.getRuntime()
             }) if value == "Runtime.getRuntime"
         ));
 
-        let cond: Condition = serde_yaml::from_str(
+        let cond: Condition = crate::yaml::from_str(
             r#"
 type: symbol
 kind: call
@@ -3952,7 +4009,7 @@ substr: open().read
             }) if value == "open.read"
         ));
 
-        let cond: Condition = serde_yaml::from_str(
+        let cond: Condition = crate::yaml::from_str(
             r#"
 type: symbol
 kind: call
@@ -3969,7 +4026,7 @@ regex: 'open\(\)\.read$'
             }) if value == r"open\.read$"
         ));
 
-        let cond: Condition = serde_yaml::from_str(
+        let cond: Condition = crate::yaml::from_str(
             r#"
 type: symbol
 kind: member
@@ -3994,7 +4051,7 @@ exact: Runtime.getRuntime()
         // exception silently did nothing, which is the worst way for a
         // suppression to fail. Parse it here so the field cannot go missing
         // again without a test noticing.
-        let cond: Condition = serde_yaml::from_str(
+        let cond: Condition = crate::yaml::from_str(
             r#"
 type: value
 path: pdf.embedded_files[*].filename
@@ -4017,7 +4074,7 @@ not:
     fn value_condition_accepts_the_shorthand_not_form() {
         // A bare string is the substring shorthand every other condition
         // type accepts; the value matcher has to read it the same way.
-        let cond: Condition = serde_yaml::from_str(
+        let cond: Condition = crate::yaml::from_str(
             r#"
 type: value
 path: files[*]
@@ -4042,7 +4099,7 @@ not:
         // in the corpus used the alias, and the migration is safe because a
         // stale literal cannot masquerade as a validator -- see the sibling
         // test below.
-        let cond: Condition = serde_yaml::from_str(
+        let cond: Condition = crate::yaml::from_str(
             r#"
 type: value
 path: office.creator
@@ -4061,7 +4118,7 @@ is: random_like
         ));
 
         // `exact` is untouched and remains the spelling every rule uses.
-        let legacy: Condition = serde_yaml::from_str(
+        let legacy: Condition = crate::yaml::from_str(
             r#"
 type: value
 path: scripts.postinstall
@@ -4080,7 +4137,7 @@ exact: curl
         // The safety property behind reusing the key: an old-style
         // `is: <literal>` fails to parse rather than silently changing from
         // an exact match into a validator that is not there.
-        let err = serde_yaml::from_str::<Condition>(
+        let err = crate::yaml::from_str::<Condition>(
             r#"
 type: value
 path: scripts.postinstall
@@ -4096,8 +4153,8 @@ is: curl
         // must continue parsing into Condition::Literal so the existing
         // trait corpus keeps working.
         let new_form: Condition =
-            serde_yaml::from_str("type: literal\nsubstr: rm -rf").expect("parse type: literal");
-        let old_form: Condition = serde_yaml::from_str("type: string_literal\nsubstr: rm -rf")
+            crate::yaml::from_str("type: literal\nsubstr: rm -rf").expect("parse type: literal");
+        let old_form: Condition = crate::yaml::from_str("type: string_literal\nsubstr: rm -rf")
             .expect("parse type: string_literal");
         assert!(matches!(new_form, Condition::Literal(LiteralQuery { .. })));
         assert!(matches!(old_form, Condition::Literal(LiteralQuery { .. })));
@@ -4174,7 +4231,7 @@ is: curl
         // `value` + `radix`. The evaluator dispatch is a TODO; this
         // test just locks in that the grammar accepts the shape.
         let cond: Condition =
-            serde_yaml::from_str("type: literal\nkind: number\nvalue: 511\nradix: 8")
+            crate::yaml::from_str("type: literal\nkind: number\nvalue: 511\nradix: 8")
                 .expect("parse numeric literal");
         assert!(matches!(cond, Condition::Literal(LiteralQuery { .. })));
         if let Condition::Literal(LiteralQuery {
@@ -4190,7 +4247,7 @@ is: curl
     #[test]
     fn literal_yaml_parses_docstring_exclusion() {
         let cond: Condition =
-            serde_yaml::from_str("type: literal\nregex: 'https?://'\nexclude_docstrings: true")
+            crate::yaml::from_str("type: literal\nregex: 'https?://'\nexclude_docstrings: true")
                 .expect("parse source literal options");
         let Condition::Literal(query) = cond else {
             panic!("expected a literal condition");

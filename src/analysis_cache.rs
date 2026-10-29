@@ -1069,10 +1069,7 @@ mod memo {
 
     fn memo() -> Option<&'static Mutex<Memo>> {
         MEMO.get_or_init(|| {
-            let mb = std::env::var("CLEAVE_ANALYSIS_MEMO_MB")
-                .ok()
-                .and_then(|v| v.parse::<usize>().ok())
-                .unwrap_or(64);
+            let mb = crate::env::parse::<usize>("CLEAVE_ANALYSIS_MEMO_MB").unwrap_or(64);
             (mb > 0).then(|| {
                 Mutex::new(Memo {
                     entries: lru::LruCache::unbounded(),

@@ -10,21 +10,21 @@ use std::fs;
 use std::path::Path;
 
 /// Read a trait YAML file and verify it parses correctly
-fn verify_trait_file(path: &str) -> serde_yaml::Value {
+fn verify_trait_file(path: &str) -> serde_json::Value {
     let content =
         fs::read_to_string(path).unwrap_or_else(|_| panic!("Failed to read trait file: {}", path));
-    serde_yaml::from_str(&content)
+    serde_saphyr::from_str(&content)
         .unwrap_or_else(|e| panic!("Failed to parse YAML in {}: {}", path, e))
 }
 
 /// Check that a trait file has expected structure
-fn verify_trait_structure(yaml: &serde_yaml::Value, expected_ids: &[&str]) {
+fn verify_trait_structure(yaml: &serde_json::Value, expected_ids: &[&str]) {
     for expected_id in expected_ids {
         let mut found = false;
 
         // Check in traits section
         if let Some(traits) = yaml.get("traits")
-            && let Some(traits_arr) = traits.as_sequence()
+            && let Some(traits_arr) = traits.as_array()
             && traits_arr.iter().any(|t| {
                 t.get("id")
                     .and_then(|id| id.as_str())
@@ -38,7 +38,7 @@ fn verify_trait_structure(yaml: &serde_yaml::Value, expected_ids: &[&str]) {
         // Also check in composite_rules section
         if !found
             && let Some(rules) = yaml.get("composite_rules")
-            && let Some(rules_arr) = rules.as_sequence()
+            && let Some(rules_arr) = rules.as_array()
             && rules_arr.iter().any(|r| {
                 r.get("id")
                     .and_then(|id| id.as_str())
@@ -58,7 +58,7 @@ fn verify_trait_structure(yaml: &serde_yaml::Value, expected_ids: &[&str]) {
 
     // Verify composite_rules is a sequence if present
     if let Some(rules) = yaml.get("composite_rules") {
-        assert!(rules.is_sequence(), "composite_rules should be a sequence");
+        assert!(rules.is_array(), "composite_rules should be a sequence");
     }
 }
 
@@ -155,7 +155,7 @@ fn test_desktop_wallet_traits_have_criticality() {
     }
     let yaml = verify_trait_file(path);
 
-    if let Some(traits) = yaml.get("traits").and_then(|t| t.as_sequence()) {
+    if let Some(traits) = yaml.get("traits").and_then(|t| t.as_array()) {
         for trait_def in traits {
             assert!(
                 trait_def.get("crit").is_some()
@@ -211,7 +211,7 @@ fn test_trait_ids_are_short_format() {
     for file_path in checks {
         let yaml = verify_trait_file(file_path);
 
-        if let Some(traits) = yaml.get("traits").and_then(|t| t.as_sequence()) {
+        if let Some(traits) = yaml.get("traits").and_then(|t| t.as_array()) {
             for trait_def in traits {
                 if let Some(id) = trait_def.get("id").and_then(|i| i.as_str()) {
                     // Short format IDs should not contain slashes (unless they're sub-paths within the directory)

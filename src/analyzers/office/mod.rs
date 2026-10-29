@@ -34,7 +34,6 @@ struct OfficeCrossCounts {
     is_encrypted: bool,
 }
 use anyhow::Result;
-use regex::Regex;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -1197,12 +1196,11 @@ impl OfficeAnalyzer {
                 .matches("w:color w:val=\"FFFFFF\" w:themeColor=\"background1\"")
                 .count();
             let bracket_count = word_xml.matches("indexOf('[')").count();
-            let has_function = Regex::new(r"function\s+[A-Za-z_][A-Za-z0-9_]{3,}\s*\(")
-                .ok()
+            let has_function = static_regex!(r"function\s+[A-Za-z_][A-Za-z0-9_]{3,}\s*\(")
                 .is_some_and(|re| re.is_match(word_xml));
-            let has_charcode_builder = Regex::new(r"String\[[^\]]{1,40}\['Char'\]\+\['Code'\]\]")
-                .ok()
-                .is_some_and(|re| re.is_match(word_xml));
+            let has_charcode_builder =
+                static_regex!(r"String\[[^\]]{1,40}\['Char'\]\+\['Code'\]\]")
+                    .is_some_and(|re| re.is_match(word_xml));
             if white_count >= 20 && has_function && (bracket_count >= 20 || has_charcode_builder) {
                 // The concealed-wordprocessingml-script finding is now
                 // emitted by the composite in
@@ -1244,9 +1242,7 @@ impl OfficeAnalyzer {
             if vba_surface.contains("CreateObject") {
                 has_createobject = true;
             }
-            if Regex::new(r"Open.{0,80}For O ?utput")
-                .ok()
-                .is_some_and(|re| re.is_match(&vba_surface))
+            if static_regex!(r"Open.{0,80}For O ?utput").is_some_and(|re| re.is_match(&vba_surface))
             {
                 has_open_for_output = true;
             }
@@ -1273,9 +1269,9 @@ impl OfficeAnalyzer {
             }
         }
 
-        let ip_re = Regex::new(r"\b(?:\d{1,3}\.){3}\d{1,3}:\d{2,5}\b").ok();
+        let ip_re = static_regex!(r"\b(?:\d{1,3}\.){3}\d{1,3}:\d{2,5}\b");
         let mut endpoints = BTreeSet::new();
-        if let Some(re) = &ip_re {
+        if let Some(re) = ip_re {
             for text in [word_xml, vba_surface.as_str(), raw_surface.as_ref()] {
                 if self
                     .cancellation

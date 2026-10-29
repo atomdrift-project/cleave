@@ -646,17 +646,14 @@ fn eval_condition(
 
 /// Extract relative path from full path (relative to traits directory)
 /// Returns None if path conversion fails
-fn get_relative_source_file(path: &std::path::Path) -> Option<String> {
-    // Try to find "traits/" in the path and return everything after it
-    let path_str = path.to_string_lossy();
-    if let Some(pos) = path_str.find("traits/") {
-        let relative = &path_str[pos + 7..]; // Skip "traits/" prefix
-        return Some(relative.to_string());
-    }
-    // Fallback: return the file name only if we can't find "traits/"
-    path.file_name()
-        .and_then(|n| n.to_str())
-        .map(std::string::ToString::to_string)
+/// The rule file `path` relative to the traits directory in use (`/`
+/// separators), or just its file name when it lies outside that directory.
+pub(crate) fn rule_source_file(path: &std::path::Path) -> Option<String> {
+    let root = crate::cache::traits_path();
+    path.strip_prefix(&root)
+        .ok()
+        .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+        .or_else(|| path.file_name().map(|n| n.to_string_lossy().into_owned()))
 }
 
 /// Report evidence that carries no `location`.
@@ -1958,7 +1955,7 @@ impl TraitDefinition {
                 trait_refs: vec![],
                 evidence: result.evidence,
                 match_count: result.match_count,
-                source_file: get_relative_source_file(&self.defined_in),
+                source_file: rule_source_file(&self.defined_in),
             })
         } else {
             None
@@ -3274,7 +3271,7 @@ impl CompositeTrait {
                 trait_refs: result.matched_trait_ids.clone(),
                 evidence,
                 match_count: 0, // not meaningful for composites
-                source_file: get_relative_source_file(&self.defined_in),
+                source_file: rule_source_file(&self.defined_in),
             })
         } else {
             None
@@ -4636,9 +4633,9 @@ mod scope_tests {
     fn package_scope_round_trips_through_yaml() {
         // `scope: package` parses via the serde rename, alongside the other
         // variants, and serializes back to the same lowercase token.
-        let scope: Scope = serde_yaml::from_str("package").expect("parse scope");
+        let scope: Scope = crate::yaml::from_str("package").expect("parse scope");
         assert_eq!(scope, Scope::Package);
-        let token = serde_yaml::to_string(&Scope::Package).expect("serialize scope");
+        let token = serde_saphyr::to_string(&Scope::Package).expect("serialize scope");
         assert_eq!(token.trim(), "package");
     }
 

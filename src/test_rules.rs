@@ -827,28 +827,7 @@ impl<'a> RuleDebugger<'a> {
                 field, min, max, ..
             }) => self.debug_metrics_condition(field, *min, *max),
             Condition::Yara { source, .. } => self.debug_yara_inline_condition(source),
-            Condition::Raw(RawQuery {
-                regex,
-                substr,
-                exact,
-                word,
-                section,
-                offset,
-                offset_range,
-                section_offset,
-                section_offset_range,
-                ..
-            }) => self.debug_raw_condition(
-                exact,
-                substr,
-                regex,
-                word,
-                section.as_ref(),
-                *offset,
-                *offset_range,
-                *section_offset,
-                *section_offset_range,
-            ),
+            Condition::Raw(query) => self.debug_raw_condition(query, &ctx),
             Condition::TreeSitter(TreeSitterQuery {
                 kind,
                 node,
@@ -1557,18 +1536,55 @@ impl<'a> RuleDebugger<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Debug a `type: raw` condition with the evaluator a scan uses, so the
+    /// verdict here is the verdict there; the details add hints on top.
     fn debug_raw_condition(
         &self,
-        exact: &Option<String>,
-        substr: &Option<String>,
-        regex: &Option<String>,
-        word: &Option<String>,
-        section_constraint: Option<&String>,
-        offset: Option<i64>,
-        offset_range: Option<(i64, Option<i64>)>,
-        section_offset: Option<i64>,
-        section_offset_range: Option<(i64, Option<i64>)>,
+        query: &RawQuery,
+        ctx: &EvaluationContext<'_>,
     ) -> ConditionDebugResult {
+        use crate::composite_rules::evaluators::{ContentLocationParams, TextPattern, eval_raw};
+        let RawQuery {
+            exact,
+            substr,
+            regex,
+            word,
+            case_insensitive,
+            length_min,
+            length_max,
+            is_check,
+            not,
+            section,
+            offset,
+            offset_range,
+            section_offset,
+            section_offset_range,
+        } = query;
+        let section_constraint = section.as_ref();
+        let (offset, offset_range, section_offset, section_offset_range) = (
+            *offset,
+            *offset_range,
+            *section_offset,
+            *section_offset_range,
+        );
+        let pattern = TextPattern {
+            exact: exact.as_ref(),
+            substr: substr.as_ref(),
+            regex: regex.as_ref(),
+            word: word.as_ref(),
+            case_insensitive: *case_insensitive,
+        };
+        let evaluate = |location: &ContentLocationParams| {
+            eval_raw(
+                TextPattern { ..pattern },
+                (*length_min, *length_max),
+                *is_check,
+                not.as_ref(),
+                location,
+                ctx,
+                None,
+            )
+        };
         let pattern_desc = if let Some(e) = exact {
             format!("exact: \"{}\"", truncate_string(e, 40))
         } else if let Some(c) = substr {
@@ -1620,29 +1636,17 @@ impl<'a> RuleDebugger<'a> {
             file_size,
         );
 
-        // Search only within the resolved range
-        let search_data = if search_start < search_end && search_end <= file_size {
-            &self.binary_data[search_start..search_end]
-        } else {
-            // Invalid range - no data to search
-            &self.binary_data[0..0]
-        };
-        let content = String::from_utf8_lossy(search_data);
-
-        let matched = if let Some(e) = exact {
-            &content == e
-        } else if let Some(c) = substr {
-            content.contains(c)
-        } else if let Some(r) = regex {
-            regex::Regex::new(r).is_ok_and(|re| re.is_match(&content))
-        } else if let Some(w) = word {
-            let pattern = format!(r"\b{}\b", regex::escape(w));
-            regex::Regex::new(&pattern).is_ok_and(|re| re.is_match(&content))
-        } else {
-            false
-        };
-
+        let outcome = evaluate(&ContentLocationParams {
+            section: section.clone(),
+            offset,
+            offset_range,
+            section_offset,
+            section_offset_range,
+            arch_clamp: None,
+        });
+        let matched = outcome.matched;
         let mut result = ConditionDebugResult::new(desc, matched);
+        result.evidence = outcome.evidence;
 
         // Show search range details
         if search_start != 0 || search_end != file_size {
@@ -1663,17 +1667,15 @@ impl<'a> RuleDebugger<'a> {
         if !matched {
             // Check if pattern exists outside the constrained range
             if search_start != 0 || search_end != file_size {
-                let full_content = String::from_utf8_lossy(self.binary_data);
-                let found_outside = if let Some(c) = substr {
-                    full_content.contains(c)
-                } else if let Some(r) = regex {
-                    regex::Regex::new(r).is_ok_and(|re| re.is_match(&full_content))
-                } else if let Some(w) = word {
-                    let pattern = format!(r"\b{}\b", regex::escape(w));
-                    regex::Regex::new(&pattern).is_ok_and(|re| re.is_match(&full_content))
-                } else {
-                    false
-                };
+                let found_outside = evaluate(&ContentLocationParams {
+                    section: None,
+                    offset: None,
+                    offset_range: None,
+                    section_offset: None,
+                    section_offset_range: None,
+                    arch_clamp: None,
+                })
+                .matched;
                 if found_outside {
                     result.details.push(
                         "💡 Pattern exists in file but outside the specified range".to_string(),
@@ -1824,7 +1826,7 @@ impl<'a> RuleDebugger<'a> {
                             .details
                             .push(format!("Available top-level keys: {:?}", top_keys));
                     }
-                } else if let Ok(yaml) = serde_yaml::from_str::<serde_json::Value>(content)
+                } else if let Ok(yaml) = crate::yaml::from_str::<serde_json::Value>(content)
                     && let Some(obj) = yaml.as_object()
                 {
                     let top_keys: Vec<_> = obj.keys().take(10).collect();
@@ -2808,6 +2810,19 @@ composite_rules:
         }
     }
 
+    /// `test-rules` judges raw conditions with the scan's evaluator, so modifiers
+    /// a scan honors (here `case_insensitive`) are honored here too.
+    #[test]
+    fn raw_conditions_use_the_scan_evaluator() {
+        let report = create_test_report_with_findings(Vec::new());
+        let mapper = create_debug_test_mapper();
+        let debugger =
+            RuleDebugger::new(&mapper, &report, b"Hello WORLD", vec![Platform::All], None);
+        let condition: Condition =
+            crate::yaml::from_str("type: raw\nsubstr: world\ncase_insensitive: true").unwrap();
+        assert!(debugger.debug_condition(&condition).matched);
+    }
+
     /// Test that match status from real evaluation is consistent with debug output
     #[test]
     fn test_debug_rule_match_consistency_with_real_evaluation() {
@@ -3132,7 +3147,7 @@ func upload() {{
         let mapper = CapabilityMapper::empty();
         let debugger = RuleDebugger::new(&mapper, &report, json, vec![Platform::All], None);
 
-        let with_not: Condition = serde_yaml::from_str(
+        let with_not: Condition = crate::yaml::from_str(
             r#"
 type: value
 path: files[*]
@@ -3142,7 +3157,7 @@ not:
 "#,
         )
         .unwrap();
-        let without_not: Condition = serde_yaml::from_str(
+        let without_not: Condition = crate::yaml::from_str(
             r#"
 type: value
 path: files[*]

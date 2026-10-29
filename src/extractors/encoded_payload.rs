@@ -303,8 +303,8 @@ pub(crate) fn extract_mime_attachments(data: &[u8]) -> Vec<ExtractedPayload> {
     if !lower.contains("mime-version:") || !lower.contains("multipart/") {
         return Vec::new();
     }
-    let Ok(parts) = regex::Regex::new(
-        r"(?im)content-transfer-encoding:[ \t]*base64[^\r\n]*\r?\n(?:[^\r\n]+\r?\n)*\r?\n([A-Za-z0-9+/=\r\n]+)",
+    let Some(parts) = static_regex!(
+        r"(?im)content-transfer-encoding:[ \t]*base64[^\r\n]*\r?\n(?:[^\r\n]+\r?\n)*\r?\n([A-Za-z0-9+/=\r\n]+)"
     ) else {
         return Vec::new();
     };
@@ -358,13 +358,13 @@ pub(crate) fn extract_nibble_table_payloads(data: &[u8]) -> Vec<ExtractedPayload
     let mut decoded = Vec::new();
     let offset;
     if is_powershell {
-        let Ok(formula) = regex::Regex::new(r"(?i)\[int\].{0,40}\*\s*16\s*\+\s*\[int\]") else {
+        let Some(formula) = static_regex!(r"(?i)\[int\].{0,40}\*\s*16\s*\+\s*\[int\]") else {
             return Vec::new();
         };
         if !formula.is_match(source) {
             return Vec::new();
         }
-        let Ok(row) = regex::Regex::new(r"(?m)^\d{1,8},(\d{1,2}),(\d{1,2})\r?$") else {
+        let Some(row) = static_regex!(r"(?m)^\d{1,8},(\d{1,2}),(\d{1,2})\r?$") else {
             return Vec::new();
         };
         offset = row.find(source).map_or(0, |m| m.start());
@@ -378,13 +378,13 @@ pub(crate) fn extract_nibble_table_payloads(data: &[u8]) -> Vec<ExtractedPayload
             decoded.push(hi * 16 + lo);
         }
     } else {
-        let Ok(formula) = regex::Regex::new(r"(?i)Chr\(CLng\([^\r\n]{1,60}\)\*16\+CLng") else {
+        let Some(formula) = static_regex!(r"(?i)Chr\(CLng\([^\r\n]{1,60}\)\*16\+CLng") else {
             return Vec::new();
         };
         if !formula.is_match(source) {
             return Vec::new();
         }
-        let Ok(chunks) = regex::Regex::new(r#""([0-9.,]+)""#) else {
+        let Some(chunks) = static_regex!(r#""([0-9.,]+)""#) else {
             return Vec::new();
         };
         offset = chunks.find(source).map_or(0, |m| m.start());

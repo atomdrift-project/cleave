@@ -114,11 +114,22 @@ pub(crate) enum HostileArchiveReason {
     },
 }
 
+/// Bytes and files extracted so far by one top-level archive and every archive
+/// nested inside it.
+///
+/// Shared by all the [`ExtractionGuard`]s of one nesting tree, so the
+/// [`MAX_TOTAL_SIZE`] and [`MAX_FILE_COUNT`] limits bound the whole tree: an
+/// archive of a thousand nested archives does not get a thousand allowances.
+#[derive(Debug, Default)]
+pub(crate) struct ExtractionBudget {
+    total_bytes: AtomicU64,
+    file_count: AtomicUsize,
+}
+
 /// Tracks extraction limits and detects hostile patterns
 #[derive(Debug)]
 pub(crate) struct ExtractionGuard {
-    total_bytes: AtomicU64,
-    file_count: AtomicUsize,
+    budget: Arc<ExtractionBudget>,
     hostile_reasons: Mutex<Vec<HostileArchiveReason>>,
     member_metadata: Mutex<Vec<ExtractedMemberMetadata>>,
     /// Non-fatal extraction notes: a stream that ended mid-decode, a member
@@ -145,11 +156,21 @@ impl ExtractionGuard {
         Self::with_cancellation(None)
     }
 
-    /// Create a guard with a cancellation flag from the caller.
+    /// Create a guard with a cancellation flag from the caller and a budget of
+    /// its own.
+    #[cfg(test)]
     pub(crate) fn with_cancellation(flag: Option<Arc<AtomicBool>>) -> Self {
+        Self::with_budget(flag, Arc::default())
+    }
+
+    /// Create a guard that draws on `budget`, shared with the guards of the
+    /// archives this one is nested in and nests.
+    pub(crate) fn with_budget(
+        flag: Option<Arc<AtomicBool>>,
+        budget: Arc<ExtractionBudget>,
+    ) -> Self {
         Self {
-            total_bytes: AtomicU64::new(0),
-            file_count: AtomicUsize::new(0),
+            budget,
             hostile_reasons: Mutex::new(Vec::new()),
             member_metadata: Mutex::new(Vec::new()),
             extraction_notes: Mutex::new(Vec::new()),
@@ -293,7 +314,7 @@ impl ExtractionGuard {
         if self.is_cancelled() {
             return false;
         }
-        let count = self.file_count.fetch_add(1, Ordering::Relaxed) + 1;
+        let count = self.budget.file_count.fetch_add(1, Ordering::Relaxed) + 1;
         if count > MAX_FILE_COUNT {
             self.add_hostile_reason(HostileArchiveReason::ExcessiveFileCount(count));
             return false;
@@ -313,7 +334,7 @@ impl ExtractionGuard {
         }
 
         // Check total size
-        let total = self.total_bytes.fetch_add(bytes, Ordering::Relaxed) + bytes;
+        let total = self.budget.total_bytes.fetch_add(bytes, Ordering::Relaxed) + bytes;
         if total > MAX_TOTAL_SIZE {
             self.add_hostile_reason(HostileArchiveReason::ExcessiveTotalSize(total));
             return false;

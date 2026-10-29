@@ -83,7 +83,17 @@ fn mislabelled_bom_payload(data: &[u8]) -> Option<&[u8]> {
         .rposition(|&byte| byte != 0)
         .map_or(0, |i| i + 1);
     let text = &payload[..text_end];
-    (!text.is_empty() && !text.contains(&0) && std::str::from_utf8(text).is_ok()).then_some(payload)
+    if text.is_empty() || text.contains(&0) { return None; }
+    // A second fake BOM can occur after a command separator/newline. Validate
+    // all remaining UTF-8 segments rather than decoding the whole ASCII body
+    // as UTF-16 because one extra marker is not itself valid UTF-8.
+    let mut rest = text;
+    while let Some(at) = rest.windows(2).position(|w| w == [0xff, 0xfe] || w == [0xfe, 0xff]) {
+        std::str::from_utf8(&rest[..at]).ok()?;
+        rest = &rest[at + 2..];
+    }
+    std::str::from_utf8(rest).ok()?;
+    Some(payload)
 }
 
 /// Detect UTF-16 that arrived without a byte-order mark.
@@ -414,6 +424,12 @@ mod tests {
         terminated.extend_from_slice(b"echo hi");
         terminated.push(0);
         assert_eq!(normalize_text_encoding(&terminated).as_ref(), b"echo hi\0");
+    }
+
+    #[test]
+    fn repeated_fake_bom_keeps_single_byte_commands() {
+        let data = b"\xff\xfe&cls\r\n\xff\xfe\n@echo off\r\npowershell -Command test\r\n";
+        assert_eq!(normalize_text_encoding(data).as_ref(), &data[2..]);
     }
 
     #[test]

@@ -59,6 +59,7 @@ pub(crate) mod font;
 pub(crate) mod inno_long_path;
 pub(crate) mod java_class;
 pub(crate) mod jpeg;
+pub(crate) mod js_decimal_packer;
 pub(crate) mod js_edge_source;
 pub(crate) mod js_joined_module;
 pub(crate) mod js_literal_catalog;

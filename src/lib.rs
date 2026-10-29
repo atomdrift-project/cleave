@@ -1871,6 +1871,9 @@ pub(crate) fn process_encoded_payloads(
                     .starts_with("untrusted comment: signature"));
         let crit = if is_unknown_unicode_escape || is_detached_signature_data {
             types::Criticality::Baseline
+        } else if payload.encoding_chain.as_slice() == ["nrv2b-8"] {
+            // Static decompression is neutral; infer intent from child analysis.
+            types::Criticality::Notable
         } else {
             match payload.detected_type {
                 FileType::Python
@@ -1885,6 +1888,14 @@ pub(crate) fn process_encoded_payloads(
             "Encoded detached signature data".to_string()
         } else if is_unknown_unicode_escape {
             "Decoded unicode-escape content".to_string()
+        } else if payload.detected_type == FileType::Pe
+            && payload.encoding_chain.as_slice() == ["nrv2b-8"]
+        {
+            "NRV2B-8 compressed PE image recovered".to_string()
+        } else if payload.detected_type == FileType::Pe
+            && payload.encoding_chain.as_slice() == ["xor"]
+        {
+            "XOR-encoded PE image recovered".to_string()
         } else if payload.encoding_chain.as_slice() == ["url"] {
             "Percent-encoded content decoded".to_string()
         } else if payload.detected_type == FileType::Unknown {
@@ -2465,6 +2476,10 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         file_data,
         &stng_strings,
     ));
+
+    if file_type == FileType::Pe {
+        encoded_payloads.extend(extractors::encoded_payload::nrv8_encoded_pes(file_data));
+    }
 
     // Create unified analysis input - all analyzers receive the same pre-extracted data
     let mut input = analyzers::AnalysisInput::with_payloads(

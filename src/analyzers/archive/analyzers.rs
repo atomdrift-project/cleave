@@ -2533,6 +2533,11 @@ impl ArchiveAnalyzer {
             payloads.extend(member_ctx.as_ref().and_then(|ctx| {
                 crate::extractors::encoded_payload::xor_encoded_pe(ctx.parsed.fileid(), data)
             }));
+            // Binary recovery must not depend on the source/string-decoding
+            // gate: a packed PE needs the same child analysis in an archive.
+            if *file_type == FileType::Pe {
+                payloads.extend(crate::extractors::encoded_payload::nrv8_encoded_pes(data));
+            }
             if extract_payloads {
                 payloads.extend(crate::extractors::encoded_payload::xor_encoded_machos(
                     data,

@@ -20,6 +20,7 @@ use std::sync::Arc;
 pub(crate) struct GenericAnalyzer {
     file_type: FileType,
     engine: crate::Engine,
+    detect_embedded: bool,
 }
 
 impl GenericAnalyzer {
@@ -29,6 +30,7 @@ impl GenericAnalyzer {
         Self {
             file_type,
             engine: crate::Engine::empty(),
+            detect_embedded: true,
         }
     }
 
@@ -36,6 +38,13 @@ impl GenericAnalyzer {
     #[must_use]
     pub(crate) fn with_engine(mut self, engine: crate::Engine) -> Self {
         self.engine = engine;
+        self
+    }
+
+    /// Decoded children are already bounded by their caller; do not restart
+    /// embedded detection at depth zero inside the fallback analyzer.
+    pub(crate) fn without_embedded_detection(mut self) -> Self {
+        self.detect_embedded = false;
         self
     }
 
@@ -244,23 +253,24 @@ impl GenericAnalyzer {
                 );
             }
 
-            // Analyze embedded code in strings
-            let t_embedded = std::time::Instant::now();
-            let (encoded_layers, plain_findings) =
-                crate::analyzers::embedded_code_detector::process_all_strings(
-                    &file_path.display().to_string(),
-                    &report.strings,
-                    &self.engine,
-                    0,
-                    Some(&self.file_type),
-                    None,
-                );
-            report.files.extend(encoded_layers);
-            report.findings.extend(plain_findings);
-            // HTML script islands can carry a complete literal-table program;
-            // extracting its individual strings loses the reconstruction order.
-            if self.file_type == FileType::Html {
-                report.files.extend(
+            if self.detect_embedded {
+                // Analyze embedded code in strings
+                let t_embedded = std::time::Instant::now();
+                let (encoded_layers, plain_findings) =
+                    crate::analyzers::embedded_code_detector::process_all_strings(
+                        &file_path.display().to_string(),
+                        &report.strings,
+                        &self.engine,
+                        0,
+                        Some(&self.file_type),
+                        None,
+                    );
+                report.files.extend(encoded_layers);
+                report.findings.extend(plain_findings);
+                // HTML script islands can carry a complete literal-table program;
+                // extracting its individual strings loses the reconstruction order.
+                if matches!(self.file_type, FileType::Html | FileType::Vbs) {
+                    report.files.extend(
                     crate::analyzers::embedded_code_detector::analyze_script_deobfuscation_layers(
                         &file_path.display().to_string(),
                         content,
@@ -269,22 +279,23 @@ impl GenericAnalyzer {
                         cancellation.map(AsRef::as_ref),
                     ),
                 );
-            }
-            // cmd builds its commands from `set` fragments at run time, so the
-            // command words only exist after expansion; replay it as a layer.
-            if self.file_type == FileType::Batch {
-                report.files.extend(
-                    crate::analyzers::embedded_code_detector::analyze_batch_expansion_layer(
-                        &file_path.display().to_string(),
-                        eval_bytes,
-                        &self.engine,
-                    ),
+                }
+                // cmd builds its commands from `set` fragments at run time, so the
+                // command words only exist after expansion; replay it as a layer.
+                if self.file_type == FileType::Batch {
+                    report.files.extend(
+                        crate::analyzers::embedded_code_detector::analyze_batch_expansion_layer(
+                            &file_path.display().to_string(),
+                            eval_bytes,
+                            &self.engine,
+                        ),
+                    );
+                }
+                tracing::debug!(
+                    "GenericAnalyzer: Embedded code analysis completed in {:?}",
+                    t_embedded.elapsed()
                 );
             }
-            tracing::debug!(
-                "GenericAnalyzer: Embedded code analysis completed in {:?}",
-                t_embedded.elapsed()
-            );
         }
 
         // Recover a bounded self-read/certutil hex envelope as data. PE analysis
@@ -704,7 +715,7 @@ impl Analyzer for GenericAnalyzer {
         let content = String::from_utf8_lossy(input.data);
         let fallback = input.open_ctx_fallback();
         let source_ctx = input.parsed_ctx.as_ref().or(fallback.as_ref());
-        Ok(self.analyze_source_internal(
+        let mut report = self.analyze_source_internal(
             input.path,
             &content,
             Some(input.strings),
@@ -714,7 +725,25 @@ impl Analyzer for GenericAnalyzer {
             self.engine.compact_members(),
             source_ctx,
             input.cancellation.as_ref(),
-        ))
+        );
+        if self.detect_embedded
+            && self.file_type == FileType::Vbs
+            && let Some(decoded) = decode_bom_script(input.data)
+            && let Some(layer) =
+                crate::analyzers::embedded_code_detector::analyze_decoded_script_layer(
+                    &input.path.display().to_string(),
+                    &decoded,
+                    0,
+                    FileType::Vbs,
+                    vec!["wide".to_string()],
+                    &self.engine,
+                    0,
+                    false,
+                )
+        {
+            report.files.push(layer);
+        }
+        Ok(report)
     }
 
     fn can_analyze(&self, _file_path: &Path) -> bool {
@@ -723,11 +752,68 @@ impl Analyzer for GenericAnalyzer {
     }
 }
 
+// Keep character-to-byte evidence honest: a BOM-encoded VBS is analyzed as a
+// separate decoded layer rather than reusing UTF-8 offsets on UTF-16 bytes.
+fn decode_bom_script(bytes: &[u8]) -> Option<String> {
+    if bytes.len() > 4 * 1024 * 1024 || bytes.len() % 2 != 0 {
+        return None;
+    }
+    let little = match bytes.get(..2)? {
+        [0xff, 0xfe] => true,
+        [0xfe, 0xff] => false,
+        _ => return None,
+    };
+    let units: Vec<u16> = bytes[2..]
+        .chunks_exact(2)
+        .map(|b| {
+            if little {
+                u16::from_le_bytes([b[0], b[1]])
+            } else {
+                u16::from_be_bytes([b[0], b[1]])
+            }
+        })
+        .collect();
+    String::from_utf16(&units).ok()
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn vbs_bom_text_is_a_separate_bounded_layer() {
+        let text = "Set sh = CreateObject(\"WScript.Shell\")\r\nsh.Run \"cmd /c echo harmless diagnostic\", 0, True\r\n";
+        for little in [true, false] {
+            let mut bytes = if little {
+                vec![0xff, 0xfe]
+            } else {
+                vec![0xfe, 0xff]
+            };
+            for u in text.encode_utf16() {
+                bytes.extend(if little {
+                    u.to_le_bytes()
+                } else {
+                    u.to_be_bytes()
+                });
+            }
+            assert_eq!(decode_bom_script(&bytes).as_deref(), Some(text));
+            let input = AnalysisInput::new(Path::new("renamed.vbs"), &bytes, FileType::Vbs);
+            let report = GenericAnalyzer::new(FileType::Vbs)
+                .analyze_input(&input)
+                .unwrap();
+            assert!(
+                report
+                    .files
+                    .iter()
+                    .any(|f| f.file_type == "vbs" && f.path.contains("wide"))
+            );
+        }
+        assert!(decode_bom_script(b"ordinary UTF-8").is_none());
+        assert!(decode_bom_script(&[0xff, 0xfe, 0]).is_none());
+        assert!(decode_bom_script(&[0xff, 0xfe, 0, 0xd8]).is_none());
+    }
 
     /// Every decoder stng reports maps to a name the reference validator
     /// knows; a new mapping without a matching ENCODED_LAYER_NAMES entry would

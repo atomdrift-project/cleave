@@ -452,6 +452,21 @@ pub(crate) fn xor_encoded_pe(fileid: &filefacts::FileId, data: &[u8]) -> Option<
     })
 }
 
+/// Recover validated PE images from length-prefixed NRV2B-8 streams.
+/// Compression is neutral; the decoded child receives ordinary analysis.
+pub(crate) fn nrv8_encoded_pes(data: &[u8]) -> Vec<ExtractedPayload> {
+    super::nrv8::recover(data)
+        .into_iter()
+        .map(|image| ExtractedPayload {
+            preview: generate_preview(&image.data),
+            data: image.data,
+            encoding_chain: vec!["nrv2b-8".to_string()],
+            detected_type: FileType::Pe,
+            original_offset: image.offset,
+        })
+        .collect()
+}
+
 /// Reuse stng's located single-byte keys to recover whole universal Mach-O
 /// images. No second section scan or key search; exact extents and slice
 /// validation stay in stng. Bound both candidate work and retained bytes.

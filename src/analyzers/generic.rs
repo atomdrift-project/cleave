@@ -751,7 +751,7 @@ impl Analyzer for GenericAnalyzer {
 // Keep character-to-byte evidence honest: a BOM-encoded VBS is analyzed as a
 // separate decoded layer rather than reusing UTF-8 offsets on UTF-16 bytes.
 fn decode_bom_script(bytes: &[u8]) -> Option<String> {
-    if bytes.len() > 4 * 1024 * 1024 || bytes.len() % 2 != 0 {
+    if bytes.len() > 4 * 1024 * 1024 || !bytes.len().is_multiple_of(2) {
         return None;
     }
     let little = match bytes.get(..2)? {
@@ -760,12 +760,14 @@ fn decode_bom_script(bytes: &[u8]) -> Option<String> {
         _ => return None,
     };
     let units: Vec<u16> = bytes[2..]
-        .chunks_exact(2)
-        .map(|b| {
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&pair| {
             if little {
-                u16::from_le_bytes([b[0], b[1]])
+                u16::from_le_bytes(pair)
             } else {
-                u16::from_be_bytes([b[0], b[1]])
+                u16::from_be_bytes(pair)
             }
         })
         .collect();

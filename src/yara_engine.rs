@@ -3382,7 +3382,7 @@ composite_rules:
             Arc::new(mapper),
             Some(Arc::new(yara)),
             crate::engine::Settings {
-                radare2: false,
+                rizin: false,
                 ..Default::default()
             },
         )

@@ -372,7 +372,7 @@ impl OfficeAnalyzer {
         let flat = report
             .filefacts_metrics
             .get_or_insert_with(Default::default);
-        if flat.get_b("office.is_macro_enabled_extension").is_none()
+        if flat.as_bool("office.is_macro_enabled_extension").is_none()
             && let Some(ext) = file_path
                 .extension()
                 .and_then(|e| e.to_str())
@@ -402,7 +402,7 @@ impl OfficeAnalyzer {
         }
 
         flat.set_b("office.has_macros", true);
-        let prev_module_count = flat.get_u("office.vba_module_count").unwrap_or(0);
+        let prev_module_count = flat.as_u64("office.vba_module_count").unwrap_or(0);
         flat.set_u(
             "office.vba_module_count",
             prev_module_count.saturating_add(modules.len() as u64),
@@ -454,7 +454,7 @@ impl OfficeAnalyzer {
             agg.identifier_entropy = m.get("office.vba.identifier_entropy").unwrap_or(0.0) as f32;
         }
 
-        let prev_source_size = flat.get_u("office.vba_source_size").unwrap_or(0);
+        let prev_source_size = flat.as_u64("office.vba_source_size").unwrap_or(0);
         flat.set_u(
             "office.vba_source_size",
             prev_source_size.saturating_add(vba_source_size),
@@ -499,7 +499,7 @@ impl OfficeAnalyzer {
             cross.embedded_executable_count
         };
         if exec_count > 0 {
-            let prev = flat.get_u("office.embedded_executable_count").unwrap_or(0) as u32;
+            let prev = flat.as_u64("office.embedded_executable_count").unwrap_or(0) as u32;
             flat.set_u(
                 "office.embedded_executable_count",
                 prev.saturating_add(exec_count).into(),
@@ -520,13 +520,13 @@ impl OfficeAnalyzer {
             ("office.dde_link_count", cross.dde_link_count),
         ] {
             if value > 0 {
-                let prev = flat.get_u(key).unwrap_or(0) as u32;
+                let prev = flat.as_u64(key).unwrap_or(0) as u32;
                 flat.set_u(key, prev.saturating_add(value).into());
             }
         }
         // Boolean is_encrypted ORs in across format passes — emit
         // the count-style bool only when at least one side flagged it.
-        let already_encrypted = flat.get_b("office.is_encrypted").unwrap_or(false);
+        let already_encrypted = flat.as_bool("office.is_encrypted").unwrap_or(false);
         if cross.is_encrypted || already_encrypted {
             flat.set_b("office.is_encrypted", true);
         }
@@ -1821,14 +1821,17 @@ mod tests {
             .filefacts_metrics
             .as_ref()
             .expect("filefacts_metrics populated");
-        assert_eq!(flat.get_b("office.is_macro_enabled_extension"), Some(true));
-        assert_eq!(flat.get_b("office.has_macros"), Some(true));
-        assert_eq!(flat.get_u("office.vba_module_count"), Some(2));
-
-        assert!(flat.get_u("office.vba.total_logical_lines").unwrap_or(0) >= 6);
-        assert!(flat.get_u("office.vba.comment_lines").unwrap_or(0) >= 1);
         assert_eq!(
-            flat.get_u("office.vba.random_named_module_count"),
+            flat.as_bool("office.is_macro_enabled_extension"),
+            Some(true)
+        );
+        assert_eq!(flat.as_bool("office.has_macros"), Some(true));
+        assert_eq!(flat.as_u64("office.vba_module_count"), Some(2));
+
+        assert!(flat.as_u64("office.vba.total_logical_lines").unwrap_or(0) >= 6);
+        assert!(flat.as_u64("office.vba.comment_lines").unwrap_or(0) >= 1);
+        assert_eq!(
+            flat.as_u64("office.vba.random_named_module_count"),
             Some(1),
             "qWeRty12Ab should match the random-name heuristic",
         );
@@ -1888,18 +1891,18 @@ mod tests {
             .filefacts_metrics
             .as_ref()
             .expect("filefacts_metrics populated");
-        assert_eq!(flat.get_u("office.embedded_executable_count"), Some(2));
-        assert_eq!(flat.get_u("office.external_ref_count"), Some(4));
-        assert_eq!(flat.get_u("office.external_template_count"), Some(1));
-        assert_eq!(flat.get_u("office.external_oleobject_count"), Some(1));
-        assert_eq!(flat.get_u("office.external_frame_count"), Some(1));
-        assert_eq!(flat.get_u("office.external_image_count"), Some(1));
-        assert_eq!(flat.get_u("office.dde_link_count"), Some(2));
-        assert_eq!(flat.get_b("office.is_encrypted"), Some(true));
+        assert_eq!(flat.as_u64("office.embedded_executable_count"), Some(2));
+        assert_eq!(flat.as_u64("office.external_ref_count"), Some(4));
+        assert_eq!(flat.as_u64("office.external_template_count"), Some(1));
+        assert_eq!(flat.as_u64("office.external_oleobject_count"), Some(1));
+        assert_eq!(flat.as_u64("office.external_frame_count"), Some(1));
+        assert_eq!(flat.as_u64("office.external_image_count"), Some(1));
+        assert_eq!(flat.as_u64("office.dde_link_count"), Some(2));
+        assert_eq!(flat.as_bool("office.is_encrypted"), Some(true));
         // Sub-struct fields flattened into dotted keys.
-        assert_eq!(flat.get_u("office.ole.stream_count"), Some(9));
-        assert_eq!(flat.get_u("office.ooxml.entry_count"), Some(18));
-        assert_eq!(flat.get_u("office.xlm.char_count"), Some(250));
+        assert_eq!(flat.as_u64("office.ole.stream_count"), Some(9));
+        assert_eq!(flat.as_u64("office.ooxml.entry_count"), Some(18));
+        assert_eq!(flat.as_u64("office.xlm.char_count"), Some(250));
     }
 
     #[test]

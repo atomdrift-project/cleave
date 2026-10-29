@@ -1,4 +1,4 @@
-//! Composite scoring metrics and the encoded-payload counter.
+//! Composite scoring metrics.
 //!
 //! The unified `Metrics` container retired with the typed
 //! PE/ELF/Mach-O/Binary metric projections — every numeric metric
@@ -8,54 +8,7 @@
 use cleave_macros::ValidFieldPaths;
 use serde::{Deserialize, Serialize};
 
-use super::{is_zero_f32, is_zero_u32};
-
-/// Embedded code counts by decoded language and encoding.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
-pub(crate) struct EncodedMetrics {
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub total_count: u32,
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub base64_count: u32,
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub hex_count: u32,
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub xor_count: u32,
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub url_count: u32,
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub unicode_escape_count: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub python: Option<EncodedLanguageMetrics>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub javascript: Option<EncodedLanguageMetrics>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub php: Option<EncodedLanguageMetrics>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub shell: Option<EncodedLanguageMetrics>,
-}
-
-/// Encoded embedded-code counts for one decoded language.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
-pub(crate) struct EncodedLanguageMetrics {
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub total_count: u32,
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub base64_count: u32,
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub hex_count: u32,
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub xor_count: u32,
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub url_count: u32,
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub unicode_escape_count: u32,
-}
-
-// Nothing populates `EncodedMetrics`: neither cleave nor filefacts emits an
-// `encoded.*` metric. The structs exist only so `field_paths.rs` keeps
-// accepting the `encoded.*` paths existing rules name; those rules load but
-// never match until the paths are retired or an emitter returns.
+use super::is_zero_f32;
 
 // =============================================================================
 // COMPOSITE SCORES
@@ -162,7 +115,7 @@ pub(crate) struct SupplyChainScore {
 /// Returns `None` if the metric doesn't exist. Reads exclusively from filefacts's
 /// flat metric map; cleave-side typed metric projections have been retired.
 #[must_use]
-pub(crate) fn get_metric_value(report: &crate::types::AnalysisReport, field: &str) -> Option<f64> {
+pub(crate) fn metric_value(report: &crate::types::AnalysisReport, field: &str) -> Option<f64> {
     report
         .filefacts_metrics
         .as_ref()

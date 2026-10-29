@@ -1,44 +1,8 @@
 //! Static hex/RC4/forward-feedback envelope recovery. Never executes specimens.
+use super::primitives::{rc4, u32_le, unhex};
 pub(crate) struct Member {
     pub(crate) offset: usize,
     pub(crate) data: Vec<u8>,
-}
-fn dword(b: &[u8], p: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(
-        b.get(p..p.checked_add(4)?)?.try_into().ok()?,
-    ))
-}
-fn rc4(b: &[u8], key: &[u8; 4]) -> Vec<u8> {
-    let mut s = [0u8; 256];
-    for (i, v) in s.iter_mut().enumerate() {
-        *v = i as u8;
-    }
-    let mut j = 0usize;
-    for i in 0..256 {
-        j = (j + usize::from(s[i]) + usize::from(key[i % 4])) & 255;
-        s.swap(i, j);
-    }
-    let (mut i, mut j) = (0usize, 0usize);
-    b.iter()
-        .map(|v| {
-            i = (i + 1) & 255;
-            j = (j + usize::from(s[i])) & 255;
-            s.swap(i, j);
-            v ^ s[(usize::from(s[i]) + usize::from(s[j])) & 255]
-        })
-        .collect()
-}
-fn unhex(b: &[u8]) -> Option<Vec<u8>> {
-    if !b.len().is_multiple_of(2) {
-        return None;
-    }
-    b.as_chunks::<2>()
-        .0
-        .iter()
-        .map(|p| {
-            Some(((char::from(p[0]).to_digit(16)? << 4) | char::from(p[1]).to_digit(16)?) as u8)
-        })
-        .collect()
 }
 pub(crate) fn recover(b: &[u8]) -> Option<Member> {
     if b.len() > 64 * 1024 * 1024 {
@@ -49,7 +13,7 @@ pub(crate) fn recover(b: &[u8]) -> Option<Member> {
     // MOV stack immediate; ADD same stack slot. Operands vary between builds.
     for p in b.windows(16) {
         if p[..3] == [0xc7, 0x44, 0x24] && p[8..11] == [0x81, 0x44, 0x24] && p[3] == p[11] {
-            let k = dword(p, 4)?.wrapping_add(dword(p, 12)?).to_le_bytes();
+            let k = u32_le(p, 4)?.wrapping_add(u32_le(p, 12)?).to_le_bytes();
             if !keys.contains(&k) {
                 keys.push(k);
             }
@@ -63,10 +27,10 @@ pub(crate) fn recover(b: &[u8]) -> Option<Member> {
     }
     let mut candidates = 0;
     for at in 0..b.len().saturating_sub(16) {
-        if dword(b, at + 4) != Some(0) || dword(b, at + 8) != Some(0) {
+        if u32_le(b, at + 4) != Some(0) || u32_le(b, at + 8) != Some(0) {
             continue;
         }
-        let n = dword(b, at + 12)? as usize;
+        let n = u32_le(b, at + 12)? as usize;
         if !(2048..=8 * 1024 * 1024).contains(&n) || !n.is_multiple_of(2) {
             continue;
         }

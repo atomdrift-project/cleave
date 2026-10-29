@@ -111,7 +111,7 @@ pub fn analysis_options(config: &AnalyzeConfig<'_>) -> cleave::AnalysisOptions {
         enable_third_party_yara: config.enable_third_party && !config.disabled.third_party,
         zip_passwords: config.zip_passwords.to_vec(),
         disable_yara: config.disabled.yara,
-        disable_radare2: config.disabled.radare2,
+        disable_radare2: config.disabled.rizin,
         rizin_timeout: None,
         rizin_retry_timeout: None,
         rizin_max_bytes: None,

@@ -61,7 +61,7 @@ fn run_direct(target: &str, format: &cli::OutputFormat, engine: &Engine) -> Resu
 
     // Analyze the file to compute metrics
     // Note: For metrics extraction, we use the empty capability mapper and rely on the
-    // analyzers to compute metrics. Radare2 analysis can be slow; `--disable radare2`
+    // analyzers to compute metrics. Rizin analysis can be slow; `--disable rizin`
     // turns it off through the engine.
     let report = match file_type {
         FileType::Elf | FileType::MachO | FileType::Pe => {

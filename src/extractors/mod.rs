@@ -18,6 +18,7 @@ pub(crate) mod nrv32;
 pub(crate) mod nrv8;
 pub(crate) mod powershell_literals;
 pub(crate) mod powershell_payloads;
+mod primitives;
 pub(crate) mod ps_to_exe;
 pub(crate) mod pyarmor;
 pub(crate) mod rc4_pe_table;

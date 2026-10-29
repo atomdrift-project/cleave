@@ -2,6 +2,7 @@
 //! Only recognized instruction forms and file-backed operands are read. No
 //! specimen instructions are executed. A recovered alphabet is derived from
 //! the file, and decoded text is analyzed separately without inferring intent.
+use super::primitives::{u32_le, unhex};
 use filefacts::{ParsedFile, Section};
 
 pub(crate) struct RecoveredText {
@@ -12,9 +13,6 @@ const MAX_TEXT: usize = 1024 * 1024;
 const MAX_TABLES: usize = 32;
 fn bytes(b: &[u8], p: usize, n: usize) -> Option<&[u8]> {
     b.get(p..p.checked_add(n)?)
-}
-fn u32at(b: &[u8], p: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(bytes(b, p, 4)?.try_into().ok()?))
 }
 fn rip(code: &[u8], va: u64, pos: usize) -> Option<u64> {
     let disp = i32::from_le_bytes(bytes(code, pos.checked_add(3)?, 4)?.try_into().ok()?);
@@ -29,20 +27,6 @@ fn mapped(sections: &[Section], va: u64, len: usize) -> Option<usize> {
         }
         usize::try_from(s.file_offset.checked_add(delta)?).ok()
     })
-}
-fn unhex(b: &[u8]) -> Option<Vec<u8>> {
-    let (pairs, remainder) = b.as_chunks::<2>();
-    if !remainder.is_empty() {
-        return None;
-    }
-    pairs
-        .iter()
-        .map(|p| {
-            let hi = (p[0] as char).to_digit(16)?;
-            let lo = (p[1] as char).to_digit(16)?;
-            Some(((hi << 4) | lo) as u8)
-        })
-        .collect()
 }
 fn table(
     data: &[u8],
@@ -61,8 +45,8 @@ fn table(
     let mut text = Vec::with_capacity(count);
     for i in 0..count {
         let j = i.checked_mul(4)?;
-        let value = u32at(data, a.checked_add(j)?)?.wrapping_sub(u32at(data, s.checked_add(j)?)?)
-            ^ u32at(data, x.checked_add(j)?)?;
+        let value = u32_le(data, a.checked_add(j)?)?.wrapping_sub(u32_le(data, s.checked_add(j)?)?)
+            ^ u32_le(data, x.checked_add(j)?)?;
         text.push(value as u8);
     }
     Some(RecoveredText {
@@ -174,7 +158,7 @@ fn recover_sections(data: &[u8], sections: &[Section]) -> Vec<RecoveredText> {
                         count = bytes(code, k + 3, 1).map(|b| usize::from(b[0]) + 1);
                     }
                     if bytes(code, k, 3) == Some(&[0x41, 0x81, 0xfc]) {
-                        count = u32at(code, k + 3)
+                        count = u32_le(code, k + 3)
                             .and_then(|n| usize::try_from(n).ok())
                             .and_then(|n| n.checked_add(1));
                     }
@@ -215,7 +199,7 @@ fn recover_sections(data: &[u8], sections: &[Section]) -> Vec<RecoveredText> {
             let mut valid = true;
             for i in 0..n {
                 let Some(idx) =
-                    u32at(data, order_offset + i * 4).and_then(|n| usize::try_from(n).ok())
+                    u32_le(data, order_offset + i * 4).and_then(|n| usize::try_from(n).ok())
                 else {
                     valid = false;
                     break;

@@ -70,7 +70,7 @@ The options struct (`src/lib.rs:555`) is plain `pub` fields with
 | `enable_third_party_yara`   | bool                    | false         | Load the third-party YARA rule set.                    |
 | `zip_passwords`             | `Vec<String>`           | malware list  | Passwords tried on encrypted archives.                 |
 | `disable_yara`              | bool                    | false         | Skip YARA scanning.                                    |
-| `disable_radare2`           | bool                    | false         | Skip disassembly. No functions, no syscalls.           |
+| `disable_radare2`           | bool                    | false         | Skip rizin disassembly. No functions, no syscalls.     |
 | `disable_upx`               | bool                    | false         | Skip UPX unpacking.                                    |
 | `all_files`                 | bool                    | false         | In directory scans, include unknown file types.        |
 | `platforms`                 | `Vec<Platform>`         | all           | Restrict composite rules to target OSes.               |

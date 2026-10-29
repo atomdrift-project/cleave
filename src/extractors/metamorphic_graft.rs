@@ -2,6 +2,7 @@
 //! The decoder's code-relative parameter block supplies its seed, multiplier
 //! and size. The decoded section trailer supplies the RC4 key and DLL extent.
 //! Names, keys, addresses and payload contents are not fixed signatures.
+use super::primitives::{rc4, u16_le, u32_le};
 const LIMIT: usize = 32 * 1024 * 1024;
 const DECODER: &[u8] = &[
     0xe8, 0, 0, 0, 0, 0x5d, 0x8d, 0x7d, 0x3c, 0x8b, 0x0f, 0x8b, 0x47, 0xf8, 0x8b, 0x57, 0xfc, 0x8d,
@@ -11,12 +12,6 @@ const DECODER: &[u8] = &[
 ];
 fn bytes(b: &[u8], at: usize, len: usize) -> Option<&[u8]> {
     b.get(at..at.checked_add(len)?)
-}
-fn word(b: &[u8], at: usize) -> Option<u16> {
-    Some(u16::from_le_bytes(bytes(b, at, 2)?.try_into().ok()?))
-}
-fn dword(b: &[u8], at: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(bytes(b, at, 4)?.try_into().ok()?))
 }
 struct Section {
     rva: u32,
@@ -28,52 +23,32 @@ fn sections(b: &[u8]) -> Option<Vec<Section>> {
     if bytes(b, 0, 2)? != b"MZ" {
         return None;
     }
-    let pe = usize::try_from(dword(b, 0x3c)?).ok()?;
-    if bytes(b, pe, 4)? != b"PE\0\0" || word(b, pe + 4)? != 0x14c {
+    let pe = usize::try_from(u32_le(b, 0x3c)?).ok()?;
+    if bytes(b, pe, 4)? != b"PE\0\0" || u16_le(b, pe + 4)? != 0x14c {
         return None;
     }
-    let count = usize::from(word(b, pe + 6)?);
+    let count = usize::from(u16_le(b, pe + 6)?);
     if !(1..=96).contains(&count) {
         return None;
     }
     let optional = pe.checked_add(24)?;
-    if word(b, optional)? != 0x10b {
+    if u16_le(b, optional)? != 0x10b {
         return None;
     }
-    let table = optional.checked_add(usize::from(word(b, pe + 20)?))?;
+    let table = optional.checked_add(usize::from(u16_le(b, pe + 20)?))?;
     bytes(b, table, count.checked_mul(40)?)?;
     (0..count)
         .map(|i| {
             let at = table.checked_add(i.checked_mul(40)?)?;
-            let raw = usize::try_from(dword(b, at + 20)?).ok()?;
-            let size = usize::try_from(dword(b, at + 16)?).ok()?;
+            let raw = usize::try_from(u32_le(b, at + 20)?).ok()?;
+            let size = usize::try_from(u32_le(b, at + 16)?).ok()?;
             bytes(b, raw, size)?;
             Some(Section {
-                rva: dword(b, at + 12)?,
+                rva: u32_le(b, at + 12)?,
                 raw,
                 size,
-                executable: dword(b, at + 36)? & 0x2000_0000 != 0,
+                executable: u32_le(b, at + 36)? & 0x2000_0000 != 0,
             })
-        })
-        .collect()
-}
-fn rc4(b: &[u8], key: &[u8]) -> Vec<u8> {
-    let mut s = [0u8; 256];
-    for (i, value) in s.iter_mut().enumerate() {
-        *value = i as u8;
-    }
-    let mut j = 0;
-    for i in 0..256 {
-        j = (j + usize::from(s[i]) + usize::from(key[i % key.len()])) & 255;
-        s.swap(i, j);
-    }
-    let (mut i, mut j) = (0, 0);
-    b.iter()
-        .map(|v| {
-            i = (i + 1) & 255;
-            j = (j + usize::from(s[i])) & 255;
-            s.swap(i, j);
-            v ^ s[(usize::from(s[i]) + usize::from(s[j])) & 255]
         })
         .collect()
 }
@@ -105,7 +80,7 @@ pub(crate) fn recover(b: &[u8]) -> Option<Recovered> {
     // than repeatedly decrypting attacker-selected overlapping ranges.
     let pos = section.windows(DECODER.len()).position(|w| w == DECODER)?;
     let block = pos.checked_add(5 + 0x3c)?;
-    let size = usize::try_from(dword(section, block)?).ok()?;
+    let size = usize::try_from(u32_le(section, block)?).ok()?;
     if !(512..=LIMIT).contains(&size) {
         return None;
     }
@@ -115,8 +90,8 @@ pub(crate) fn recover(b: &[u8]) -> Option<Recovered> {
     }
     let plain = stream(
         bytes(section, start, size)?,
-        dword(section, block.checked_sub(8)?)?,
-        dword(section, block.checked_sub(4)?)?,
+        u32_le(section, block.checked_sub(8)?)?,
+        u32_le(section, block.checked_sub(4)?)?,
     );
     // A manual mapper, not merely an arbitrary decrypted byte string.
     let mapper = [0x64, 0xa1, 0x30, 0, 0, 0, 0x8b, 0x40, 0x08];
@@ -128,11 +103,11 @@ pub(crate) fn recover(b: &[u8]) -> Option<Recovered> {
     }
     let tail = size.checked_sub(48)?;
     let key = bytes(&plain, tail + 8, 8)?;
-    let dll_size = usize::try_from(dword(&plain, tail + 36)?).ok()?;
+    let dll_size = usize::try_from(u32_le(&plain, tail + 36)?).ok()?;
     if !(256..=LIMIT).contains(&dll_size) {
         return None;
     }
-    let dll_rva = dword(&plain, tail + 40)?;
+    let dll_rva = u32_le(&plain, tail + 40)?;
     let stream_rva = u64::from(last.rva).checked_add(start as u64)?;
     let relative = usize::try_from(u64::from(dll_rva).checked_sub(stream_rva)?).ok()?;
     if relative.checked_add(dll_size)? > tail {
@@ -150,20 +125,13 @@ pub(crate) fn recover(b: &[u8]) -> Option<Recovered> {
 }
 fn sections_for_dll(b: &[u8]) -> Option<usize> {
     let sections = sections(b)?;
-    let pe = usize::try_from(dword(b, 0x3c)?).ok()?;
-    (word(b, pe + 22)? & 0x2000 != 0).then_some(sections.len())
+    let pe = usize::try_from(u32_le(b, 0x3c)?).ok()?;
+    (u16_le(b, pe + 22)? & 0x2000 != 0).then_some(sections.len())
 }
 #[cfg(test)]
 mod tests {
     use super::*;
     use anyhow::Context;
-    #[test]
-    fn rc4_vector() {
-        assert_eq!(
-            rc4(b"Plaintext", b"Key"),
-            [0xbb, 0xf3, 0x16, 0xe8, 0xd9, 0x40, 0xaf, 0x0a, 0xd3]
-        );
-    }
     #[test]
     fn malformed_is_rejected() {
         for n in 0..300 {
@@ -197,12 +165,12 @@ mod tests {
         assert_eq!(recovered.data, expected);
         assert!(recovered.offset < original.len());
         let mut no_code = original.clone();
-        let pe = dword(&no_code, 0x3c).context("missing PE offset")? as usize;
+        let pe = u32_le(&no_code, 0x3c).context("missing PE offset")? as usize;
         let table =
-            pe + 24 + word(&no_code, pe + 20).context("missing optional header size")? as usize;
+            pe + 24 + u16_le(&no_code, pe + 20).context("missing optional header size")? as usize;
         let last =
-            table + 40 * (word(&no_code, pe + 6).context("missing section count")? as usize - 1);
-        let flags = dword(&no_code, last + 36).context("missing section flags")? & !0x2000_0000;
+            table + 40 * (u16_le(&no_code, pe + 6).context("missing section count")? as usize - 1);
+        let flags = u32_le(&no_code, last + 36).context("missing section flags")? & !0x2000_0000;
         no_code[last + 36..last + 40].copy_from_slice(&flags.to_le_bytes());
         assert!(recover(&no_code).is_none());
         let mut corrupt = original.clone();

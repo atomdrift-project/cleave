@@ -94,7 +94,7 @@ impl MachOAnalyzer {
         self
     }
 
-    /// Set pre-extracted strings (avoids redundant stng/radare2 extraction)
+    /// Set pre-extracted strings (avoids redundant stng/rizin extraction)
     #[must_use]
     pub(crate) fn with_preextracted_strings(mut self, strings: Vec<StringInfo>) -> Self {
         self.preextracted_strings = Some(strings);

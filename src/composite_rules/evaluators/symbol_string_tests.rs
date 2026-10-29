@@ -739,7 +739,7 @@ fn test_eval_string_exact_duplicate_offsets() {
     assert!(result.matched);
     assert_eq!(result.match_count, 2);
     let idx = ctx
-        .get_string_exact_index()
+        .string_exact_index()
         .get("/bin/sh")
         .expect("duplicate values share one exact-index key");
     assert_eq!(idx.as_slice(), &[0, 1]);

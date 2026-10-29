@@ -1,7 +1,7 @@
 use cleave::cli;
 use tracing_subscriber::EnvFilter;
 
-pub(crate) fn get_parent_pid() -> u32 {
+pub(crate) fn parent_pid() -> u32 {
     // The parent pid is one syscall; this used to spawn `ps` on macOS, looked
     // up on PATH, where a planted `./ps` could run at startup.
     #[cfg(unix)]
@@ -82,7 +82,7 @@ pub(crate) fn init_logging(
     is_validate: bool,
     format: cli::OutputFormat,
     effective_log_file: Option<&str>,
-) {
+) -> anyhow::Result<()> {
     if let Some(log_file) = effective_log_file {
         use std::fs::OpenOptions;
         use std::sync::{Arc, Mutex};
@@ -116,16 +116,10 @@ pub(crate) fn init_logging(
             )
         };
 
-        let file = Arc::new(Mutex::new(
-            OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(log_file)
-                .unwrap_or_else(|e| {
-                    eprintln!("Failed to open log file {}: {}", log_file, e);
-                    std::process::exit(1);
-                }),
-        ));
+        let file = Arc::new(Mutex::new(anyhow::Context::with_context(
+            OpenOptions::new().create(true).append(true).open(log_file),
+            || format!("Failed to open log file {log_file}"),
+        )?));
 
         if format == cli::OutputFormat::Terminal {
             eprintln!("Logging to: {}", log_file);
@@ -207,6 +201,25 @@ pub(crate) fn init_logging(
             })
             .init();
     }
+    Ok(())
+}
+
+/// Flip the library's cancellation flag on SIGINT/SIGTERM so long scans drain
+/// cleanly; a second signal reaps rizin process groups and exits. Runs on the
+/// `ctrlc` dispatch thread, so locking and deleting temp inputs is safe there.
+pub(crate) fn install_signal_handlers() {
+    let flag = cleave::cancellation::global_flag();
+    let result = ctrlc::set_handler(move || {
+        if flag.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            cleave::kill_all_rizin_groups();
+            eprintln!("\n[cleave] second interrupt, forcing exit");
+            std::process::exit(130);
+        }
+        eprintln!("\n[cleave] interrupt received, draining workers (Ctrl-C again to force exit)");
+    });
+    if let Err(error) = result {
+        tracing::warn!(%error, "could not install cancellation signal handler");
+    }
 }
 
 pub(crate) fn log_startup(effective_log_file: Option<&str>, verbose: bool) {
@@ -216,7 +229,7 @@ pub(crate) fn log_startup(effective_log_file: Option<&str>, verbose: bool) {
     );
 
     let pid = std::process::id();
-    let ppid = get_parent_pid();
+    let ppid = parent_pid();
     tracing::info!(
         pid = pid,
         ppid = ppid,
@@ -365,6 +378,10 @@ pub(crate) fn start_memory_logger(
         Some(memory_tracker::start_periodic_logging(
             std::time::Duration::from_secs(10),
             sysmem::memory_limit(),
+            || {
+                eprintln!("[cleave] memory cap exceeded for >30s, exiting to avoid an OOM kill");
+                std::process::exit(1);
+            },
         ))
     } else {
         None

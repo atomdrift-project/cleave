@@ -39,12 +39,6 @@ fn is_micro_behavior_data_text_path(path: &str) -> bool {
         .any(|parts| parts == ["micro-behaviors", "data", "text"])
 }
 
-/// Get or compile a regex pattern using the shared evaluator cache.
-/// Returns None if the pattern is invalid.
-fn get_cached_regex(pattern: &str) -> Option<regex::Regex> {
-    build_regex(pattern, false).ok()
-}
-
 /// Normalize criticality for overlap checking purposes.
 /// `Component`, `Baseline`, and `Filtered` are all treated as equivalent "inert" levels
 /// since they represent low-signal building blocks rather than meaningful findings.
@@ -2187,7 +2181,7 @@ fn literal_coverage_in_bucket(
                     .is_ok()
             };
             match &facts {
-                Some(facts) => facts.get_or_compute(
+                Some(facts) => facts.memoized(
                     super::facts_cache::key("regex-parses", &[pattern.as_bytes()]),
                     parses,
                 ),
@@ -3436,7 +3430,7 @@ pub(crate) fn find_regex_literal_overlap_issues(
                 return Vec::new();
             }
             // Try to compile regex to test matches (using cache)
-            let Some(re) = get_cached_regex(&regex_pat.pattern) else {
+            let Some(re) = build_regex(&regex_pat.pattern, false).ok() else {
                 return Vec::new();
             };
 
@@ -3949,7 +3943,7 @@ fn regex_could_match_literal(regex: &str, literal: &str) -> bool {
 
     // Slow path: actually compile and test the regex (using cache)
     // This catches cases like "c?mod" matching "chmod"
-    if let Some(re) = get_cached_regex(regex)
+    if let Some(re) = build_regex(regex, false).ok()
         && re.is_match(literal)
     {
         return true;

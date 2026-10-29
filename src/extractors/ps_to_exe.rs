@@ -2,6 +2,7 @@
 //! Recognize the converter's negated runtime vocabulary, derive candidate
 //! RC4 keys from code-referenced eight-byte seeds, and inspect RCDATA only.
 //! Addresses, resource names, keys, and script contents are never pinned.
+use super::primitives::rc4;
 
 use filefacts::{ParsedFile, Section};
 use md5::{Digest, Md5};
@@ -31,27 +32,6 @@ fn rva_offset(sections: &[Section], rva: u64) -> Option<usize> {
             .flatten()
             .and_then(|n| usize::try_from(n).ok())
     })
-}
-
-fn rc4(data: &[u8], key: &[u8]) -> Vec<u8> {
-    let mut s = [0u8; 256];
-    for (i, v) in s.iter_mut().enumerate() {
-        *v = i as u8;
-    }
-    let mut j = 0;
-    for i in 0..256 {
-        j = (j + usize::from(s[i]) + usize::from(key[i % key.len()])) & 255;
-        s.swap(i, j);
-    }
-    let (mut i, mut j) = (0, 0);
-    data.iter()
-        .map(|b| {
-            i = (i + 1) & 255;
-            j = (j + usize::from(s[i])) & 255;
-            s.swap(i, j);
-            b ^ s[(usize::from(s[i]) + usize::from(s[j])) & 255]
-        })
-        .collect()
 }
 
 fn marker(data: &[u8], plain: &[u8]) -> bool {
@@ -247,11 +227,6 @@ pub(crate) fn recover(data: &[u8], parsed: &ParsedFile<'_>) -> Vec<RecoveredScri
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn rc4_published_vector() {
-        assert_eq!(hex::encode(rc4(b"Plaintext", b"Key")), "bbf316e8d940af0ad3");
-    }
 
     #[test]
     fn rejects_truncated_and_cyclic_resource_tables() {

@@ -1,19 +1,10 @@
 //! Static PyArmor 8 container recovery using a bundled Windows runtime.
 //! No Python objects, native runtime or specimen code is executed. GCM's
 //! counter stream is decoded and checked structurally; this is not tag authentication.
+use super::primitives::{u16_le, u32_le};
 use aes::cipher::{BlockCipherEncrypt, KeyInit};
 use md5::{Digest, Md5};
 
-fn u16at(b: &[u8], at: usize) -> Option<u16> {
-    Some(u16::from_le_bytes(
-        b.get(at..at.checked_add(2)?)?.try_into().ok()?,
-    ))
-}
-fn u32at(b: &[u8], at: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(
-        b.get(at..at.checked_add(4)?)?.try_into().ok()?,
-    ))
-}
 fn span(b: &[u8], at: usize, n: usize) -> Option<&[u8]> {
     b.get(at..at.checked_add(n)?)
 }
@@ -32,11 +23,11 @@ fn ctr(data: &[u8], key: &[u8], nonce: &[u8; 12]) -> Option<Vec<u8>> {
     Some(out)
 }
 fn header_valid(plain: &[u8], n: usize, flags: u32) -> bool {
-    u32at(plain, 0) == Some(32)
-        && u32at(plain, 4) == Some(0)
-        && u32at(plain, 8) == u32::try_from(n.saturating_sub(32)).ok()
-        && u32at(plain, 12) == Some(flags)
-        && u32at(plain, 16) == Some(8)
+    u32_le(plain, 0) == Some(32)
+        && u32_le(plain, 4) == Some(0)
+        && u32_le(plain, 8) == u32::try_from(n.saturating_sub(32)).ok()
+        && u32_le(plain, 12) == Some(flags)
+        && u32_le(plain, 16) == Some(8)
 }
 /// Only the reviewed v8 container and PE runtime layout are admitted. Search
 /// for the runtime's XOR-masked 270-byte salt in bounded writable PE sections,
@@ -48,9 +39,9 @@ pub(crate) fn recover(runtime: &[u8], pyc: &[u8]) -> Option<Vec<u8>> {
     }
     let at = pyc.windows(8).position(|v| v == b"PY000000")?;
     let blob = pyc.get(at..)?;
-    let offset = u32at(blob, 0x1c)? as usize;
-    let n = u32at(blob, 0x20)? as usize;
-    let flags = u32at(blob, 0x24)?;
+    let offset = u32_le(blob, 0x1c)? as usize;
+    let n = u32_le(blob, 0x20)? as usize;
+    let flags = u32_le(blob, 0x24)?;
     if !(32..=16 * 1024 * 1024).contains(&n) || offset != 64 || flags >> 8 & 7 == 0 {
         return None;
     }
@@ -64,10 +55,10 @@ pub(crate) fn recover(runtime: &[u8], pyc: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
     let start = id.checked_add(0x34)?;
-    let public_at = start.checked_add(u32at(runtime, id + 0x24)? as usize)?;
-    let public_len = u32at(runtime, id + 0x28)? as usize;
-    let license = start.checked_add(u32at(runtime, id + 0x2c)? as usize)?;
-    let extra_len = u32at(runtime, license + 4)? as usize;
+    let public_at = start.checked_add(u32_le(runtime, id + 0x24)? as usize)?;
+    let public_len = u32_le(runtime, id + 0x28)? as usize;
+    let license = start.checked_add(u32_le(runtime, id + 0x2c)? as usize)?;
+    let extra_len = u32_le(runtime, license + 4)? as usize;
     if public_len > 8192 || extra_len > 8192 {
         return None;
     }
@@ -78,25 +69,25 @@ pub(crate) fn recover(runtime: &[u8], pyc: &[u8]) -> Option<Vec<u8>> {
     if runtime.get(..2)? != b"MZ" {
         return None;
     }
-    let pe = u32at(runtime, 60)? as usize;
+    let pe = u32_le(runtime, 60)? as usize;
     if span(runtime, pe, 4)? != b"PE\0\0" {
         return None;
     }
-    let count = usize::from(u16at(runtime, pe + 6)?);
+    let count = usize::from(u16_le(runtime, pe + 6)?);
     if count > 96 {
         return None;
     }
     let sections = pe
         .checked_add(24)?
-        .checked_add(usize::from(u16at(runtime, pe + 20)?))?;
+        .checked_add(usize::from(u16_le(runtime, pe + 20)?))?;
     let mut attempts = 0;
     for i in 0..count {
         let sh = sections.checked_add(i.checked_mul(40)?)?;
-        if u32at(runtime, sh + 36)? & 0x80000000 == 0 {
+        if u32_le(runtime, sh + 36)? & 0x80000000 == 0 {
             continue;
         }
-        let off = u32at(runtime, sh + 20)? as usize;
-        let size = u32at(runtime, sh + 16)? as usize;
+        let off = u32_le(runtime, sh + 20)? as usize;
+        let size = u32_le(runtime, sh + 16)? as usize;
         let data = span(runtime, off, size)?;
         for salt in data.windows(270) {
             attempts += 1;

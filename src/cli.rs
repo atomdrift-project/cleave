@@ -88,8 +88,8 @@ pub const DEFAULT_ZIP_PASSWORDS: &[&str] = &[
 pub struct DisabledComponents {
     /// Whether YARA scanning is disabled
     pub yara: bool,
-    /// Whether radare2 analysis is disabled
-    pub radare2: bool,
+    /// Whether rizin analysis is disabled
+    pub rizin: bool,
     /// Whether UPX unpacking is disabled
     pub upx: bool,
     /// Whether third-party YARA rules are disabled
@@ -116,7 +116,7 @@ impl DisabledComponents {
     pub fn from_components(components: &[Component]) -> Self {
         Self {
             yara: components.contains(&Component::Yara),
-            radare2: components.contains(&Component::Rizin),
+            rizin: components.contains(&Component::Rizin),
             upx: components.contains(&Component::Upx),
             third_party: components.contains(&Component::ThirdParty),
         }
@@ -1293,7 +1293,7 @@ mod tests {
         // Nothing is disabled by default
         assert!(!disabled.third_party);
         assert!(!disabled.yara);
-        assert!(!disabled.radare2);
+        assert!(!disabled.rizin);
         assert!(!disabled.upx);
     }
 
@@ -1303,7 +1303,7 @@ mod tests {
             Args::try_parse_from(["cleave", "--disable", "yara,radare2", "file.bin"]).unwrap();
         let disabled = args.disabled_components();
         assert!(disabled.yara);
-        assert!(disabled.radare2);
+        assert!(disabled.rizin);
         assert!(!disabled.upx);
         assert!(!disabled.third_party);
     }
@@ -1319,7 +1319,7 @@ mod tests {
         .unwrap();
         let disabled = args.disabled_components();
         assert!(disabled.yara);
-        assert!(disabled.radare2);
+        assert!(disabled.rizin);
         assert!(disabled.upx);
         assert!(disabled.third_party);
     }
@@ -1331,7 +1331,7 @@ mod tests {
             .disabled_components();
         assert!(disabled.yara);
         assert!(disabled.upx);
-        assert!(!disabled.radare2);
+        assert!(!disabled.rizin);
         assert!(!disabled.third_party);
     }
 
@@ -1341,7 +1341,7 @@ mod tests {
             .unwrap()
             .disabled_components();
         assert!(disabled.yara);
-        assert!(disabled.radare2);
+        assert!(disabled.rizin);
         assert!(disabled.upx);
         assert!(!disabled.third_party);
     }
@@ -1356,7 +1356,7 @@ mod tests {
         let args = Args::try_parse_from(["cleave", "file.bin"]).unwrap();
         let disabled = args.disabled_components();
         assert!(!disabled.yara);
-        assert!(!disabled.radare2);
+        assert!(!disabled.rizin);
         assert!(!disabled.upx);
         assert!(!disabled.third_party);
     }

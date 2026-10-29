@@ -122,7 +122,7 @@ pub(crate) fn dev_engine(
     let engine = crate::Engine::from_rules(std::sync::Arc::new(rules));
     let settings = crate::engine::Settings {
         upx: !disabled.upx,
-        radare2: !disabled.radare2,
+        rizin: !disabled.rizin,
         ..engine.settings().clone()
     };
     engine.with_settings(settings)

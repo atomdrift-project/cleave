@@ -25,7 +25,10 @@
 //!
 //! So a cancelled run stops scheduling promptly and abandons the one leaf that
 //! could otherwise run long in-process, but a rizin child or an in-flight YARA
-//! scan still costs its own timeout. The CLI's second SIGINT force-exits.
+//! scan still costs its own timeout.
+//!
+//! The library never installs signal handlers: the host sets the flag. The
+//! `cleave` binary does so on SIGINT/SIGTERM and force-exits on the second.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -43,25 +46,4 @@ pub fn global_flag() -> Arc<AtomicBool> {
 #[must_use]
 pub fn is_cancelled() -> bool {
     FLAG.get().is_some_and(|f| f.load(Ordering::Relaxed))
-}
-
-/// Install signal handlers on a dedicated thread so forced shutdown can
-/// safely lock the process registry and delete temporary inputs.
-pub fn install_signal_handlers() {
-    static INSTALLED: OnceLock<()> = OnceLock::new();
-    INSTALLED.get_or_init(|| {
-        let _ = global_flag();
-        if let Err(error) = ctrlc::set_handler(interrupted) {
-            tracing::warn!(%error, "could not install cancellation signal handler");
-        }
-    });
-}
-
-fn interrupted() {
-    if global_flag().swap(true, Ordering::SeqCst) {
-        crate::kill_all_rizin_groups();
-        eprintln!("\n[cleave] second interrupt, forcing exit");
-        std::process::exit(130);
-    }
-    eprintln!("\n[cleave] interrupt received, draining workers (Ctrl-C again to force exit)");
 }

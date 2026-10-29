@@ -11,7 +11,7 @@
 
 use crate::composite_rules::context::{ConditionResult, EvaluationContext};
 use crate::types::Evidence;
-use crate::types::scores::get_metric_value;
+use crate::types::scores::metric_value;
 
 /// Evaluate metrics condition - check computed metrics against thresholds
 /// Field path examples: "identifiers.avg_entropy", "functions.density"
@@ -37,10 +37,10 @@ pub(crate) fn eval_metrics<'a>(
         return ConditionResult::no_match();
     }
 
-    // Dynamic field lookup — `get_metric_value` consults the typed
+    // Dynamic field lookup — `metric_value` consults the typed
     // `Metrics` struct first (cleave-native fields) then falls back
     // to `report.filefacts_metrics` (filefacts's verbatim flat map).
-    let value = get_metric_value(ctx.report, field);
+    let value = metric_value(ctx.report, field);
 
     let Some(value) = value else {
         return ConditionResult::no_match();

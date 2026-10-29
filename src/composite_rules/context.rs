@@ -581,7 +581,7 @@ impl<'a> EvaluationContext<'a> {
             .get_or_init(|| String::from_utf8_lossy(self.binary_data).into_owned())
     }
 
-    pub(crate) fn get_string_exact_index(&self) -> &FxHashMap<String, Vec<u32>> {
+    pub(crate) fn string_exact_index(&self) -> &FxHashMap<String, Vec<u32>> {
         self.string_exact_index.get_or_init(|| {
             let mut index: FxHashMap<String, Vec<u32>> = FxHashMap::default();
             for (i, s) in self.report.strings.iter().enumerate() {
@@ -596,7 +596,7 @@ impl<'a> EvaluationContext<'a> {
 
     /// Get or build the case-insensitive exact string index (key = lowercased
     /// value, values = `report.strings` indices).
-    pub(crate) fn get_string_exact_index_ci(&self) -> &FxHashMap<String, Vec<u32>> {
+    pub(crate) fn string_exact_index_ci(&self) -> &FxHashMap<String, Vec<u32>> {
         self.string_exact_index_ci.get_or_init(|| {
             let mut index: FxHashMap<String, Vec<u32>> = FxHashMap::default();
             for (i, s) in self.report.strings.iter().enumerate() {

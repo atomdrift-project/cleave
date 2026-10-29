@@ -4966,6 +4966,29 @@ mod taxonomy_tests {
     }
 
     #[test]
+    fn low_tier_named_binary_facts_do_not_need_arbitrary_size() {
+        let mut fact = leaf("well-known/app/demo::claim", Criticality::Notable);
+        fact.r#for = vec![FileType::Pe];
+        for yaml in [
+            "type: value\npath: pe.version.product_name\nexact: Example\n",
+            "type: value\npath: pe.signatures[0].subject\nexact: CN=Example\n",
+            "type: text\nsection: .rsrc\nexact: Example\n",
+        ] {
+            fact.r#if = crate::yaml::from_str(yaml).unwrap();
+            assert!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty());
+        }
+        fact.r#if = crate::yaml::from_str("type: value\npath: pe.version.product_name\nexact: Example\n").unwrap();
+        fact.crit = Criticality::Suspicious;
+        assert_eq!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(), 1);
+        fact.crit = Criticality::Notable;
+        fact.id = "well-known/malware/demo::claim".to_string();
+        assert_eq!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(), 1);
+        fact.id = "well-known/app/demo::claim".to_string();
+        fact.r#if = crate::yaml::from_str("type: value\npath: pe.version.product_name\nexists: true\n").unwrap();
+        assert_eq!(find_wellknown_missing_size_filter(&[fact], &HashMap::new()).len(), 1);
+    }
+
+    #[test]
     fn flags_baseline_leaf_referenced_only_in_unless() {
         let traits = vec![leaf(
             "objectives/evasion/x::benign-ctx",
@@ -5089,7 +5112,7 @@ mod taxonomy_tests {
 
     #[test]
     fn test_oversized_dir_uses_uniform_combined_limit() {
-        assert_eq!(MAX_TRAITS_PER_DIRECTORY, 100);
+        assert_eq!(MAX_TRAITS_PER_DIRECTORY, 95);
         let reviewed_path = "micro-behaviors/communications/http/url/path";
         let reviewed_rules: Vec<_> = (0..101)
             .map(|i| make_trait(&format!("{reviewed_path}::r{i}"), "other::t"))
@@ -5119,11 +5142,11 @@ mod taxonomy_tests {
         ] {
             // Cover atom-only, composite-only, and mixed directories, including
             // more than 75 atoms: there is no separate atomic cap.
-            for atoms in [0, 42, 76, 100] {
+            for atoms in [0, 42, 76, MAX_TRAITS_PER_DIRECTORY] {
                 let traits: Vec<_> = (0..atoms)
                     .map(|i| make_trait(&format!("{dir}::a{i}"), "other::t"))
                     .collect();
-                let mut rules: Vec<_> = (0..100 - atoms)
+                let mut rules: Vec<_> = (0..MAX_TRAITS_PER_DIRECTORY - atoms)
                     .map(|i| make_composite(&format!("{dir}::c{i}"), &["other::t"]))
                     .collect();
                 assert!(find_oversized_trait_directories(&traits, &rules).is_empty());
@@ -5133,15 +5156,15 @@ mod taxonomy_tests {
                 rules.push(make_composite(&format!("{dir}::extra"), &["other::t"]));
                 assert_eq!(
                     find_oversized_trait_directories(&traits, &rules),
-                    vec![(dir.to_string(), 101)]
+                    vec![(dir.to_string(), MAX_TRAITS_PER_DIRECTORY + 1)]
                 );
             }
-            let traits: Vec<_> = (0..101)
+            let traits: Vec<_> = (0..=MAX_TRAITS_PER_DIRECTORY)
                 .map(|i| make_trait(&format!("{dir}::a{i}"), "other::t"))
                 .collect();
             assert_eq!(
                 find_oversized_trait_directories(&traits, &[]),
-                vec![(dir.to_string(), 101)]
+                vec![(dir.to_string(), MAX_TRAITS_PER_DIRECTORY + 1)]
             );
         }
     }
@@ -8609,6 +8632,17 @@ mod section_filter_validation_tests {
         let result = find_wellknown_missing_section_filter(&traits, &sources);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].0, "well-known/tool/test::binary");
+    }
+
+    #[test]
+    fn only_reviewed_adobe_marker_keeps_whole_file_scope() {
+        let traits = vec![
+            text_trait("well-known/app/system/adobe-acrobat-updater::adobe-acrobat-updater-text", vec![FileType::Pe]),
+            text_trait("well-known/app/productivity/adobe-reader::other", vec![FileType::Pe]),
+        ];
+        let result = find_wellknown_missing_section_filter(&traits, &HashMap::new());
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, "well-known/app/productivity/adobe-reader::other");
     }
 
     #[test]

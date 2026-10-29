@@ -294,7 +294,7 @@ const BANNED_SEGMENT_EXCEPTIONS: &[(&str, &str)] = &[
 
 /// Maximum atomic traits and composite rules combined in any directory.
 /// Every directory uses the same limit; there are no path-specific budgets.
-pub(crate) const MAX_TRAITS_PER_DIRECTORY: usize = 100;
+pub(crate) const MAX_TRAITS_PER_DIRECTORY: usize = 95;
 
 /// Baseline findings are too broad to represent a named entity. Components are
 /// still allowed when they are incomplete evidence for an identity.
@@ -3028,7 +3028,8 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // The file's own directory components have the same meaning across
     // content formats. Preserve the original scope when this neutral path
     // observations move to naming metadata; their matchers scan no body.
-    "path:metadata/path/directory-components.yaml",
+    "path:metadata/path/directory/directory-components.yaml",
+    "path:metadata/path/software/directory-components.yaml",
     // Browser SQL schemas are shared by source and compiled carriers. These
     // bounded query matchers require specific columns and tables in any format.
     "text:micro-behaviors/data/db/access/chromium-queries.yaml",
@@ -3204,6 +3205,7 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // so these path matchers legitimately span the archive family.
     "path:metadata/package/testing/presence/harness/",
     "path:metadata/package/testing/presence/path/",
+    "path:metadata/package/testing/presence/suite/paths.yaml",
     // Test-path / embedded-runtime FP-suppression: excluding `…/test/…` and
     // `jruby-complete.jar!…` paths from obfuscation flags applies across every
     // code/archive type the obfuscation composites run on.
@@ -3555,7 +3557,7 @@ mod media_filetype_allowance_tests {
 
     #[test]
     fn gif_header_allowance_is_exact_file_and_hex_only() -> anyhow::Result<()> {
-        let hex: TraitDefinition = serde_yaml::from_str(
+        let hex: TraitDefinition = crate::yaml::from_str(
             "id: gif-header\ndesc: GIF signature\ncrit: baseline\nconf: 0.99\nfor: [gif, php, asp, data, javascript, python]\nif:\n  type: hex\n  pattern: 47 49 46 38 (37|39) 61\n  offset: 0\n",
         )?;
         for (path, permitted) in [
@@ -3575,7 +3577,7 @@ mod media_filetype_allowance_tests {
 
     #[test]
     fn embedded_php_allowance_is_exact_file_and_value_only() -> anyhow::Result<()> {
-        let value: TraitDefinition = serde_yaml::from_str(
+        let value: TraitDefinition = crate::yaml::from_str(
             "id: request-call\ndesc: Parsed request call\ncrit: suspicious\nconf: 0.99\nfor: [jpeg, png, gif, wav, aiff, mp3, mp4, ico, webp, font]\nif:\n  type: value\n  path: media.php.request_calls[*]\n  exact: system\n",
         )?;
         for (path, permitted) in [
@@ -3600,7 +3602,7 @@ mod media_filetype_allowance_tests {
             );
         }
         let mut raw = value.clone();
-        raw.r#if = serde_yaml::from_str("type: raw\nsubstr: system\n")?;
+        raw.r#if = crate::yaml::from_str("type: raw\nsubstr: system\n")?;
         let sources = HashMap::from([(
             raw.id.clone(),
             "/traits/micro-behaviors/data/embedded/payload/media/php-command-input.yaml"
@@ -3642,11 +3644,39 @@ mod media_filetype_allowance_tests {
     }
 }
 
+/// Named fields and resource labels are evidence of a claim, not a verified
+/// identity. Like basename facts, low-tier observations do not become more
+/// accurate merely because their carrier falls within a chosen size range.
+fn is_low_tier_named_binary_fact(t: &TraitDefinition) -> bool {
+    if t.id.starts_with("well-known/malware/")
+        || !matches!(t.crit, Criticality::Component | Criticality::Notable)
+    {
+        return false;
+    }
+    match &t.r#if {
+        Condition::Kv(q) => {
+            matches!(q.path.as_str(),
+                "pe.version.company" | "pe.version.product_name"
+                | "pe.version.original_filename" | "pe.version.description"
+                | "pe.signatures[0].subject" | "pe.signatures[*].subject")
+                && [q.exact.as_deref(), q.substr.as_deref(), q.regex.as_deref()]
+                    .iter().any(|v| v.is_some_and(|s| !s.is_empty()))
+        }
+        Condition::Text(q) => {
+            q.section.as_deref() == Some(".rsrc")
+                && [q.exact.as_deref(), q.substr.as_deref(), q.regex.as_deref()]
+                    .iter().any(|v| v.is_some_and(|s| !s.is_empty()))
+        }
+        _ => false,
+    }
+}
+
 /// Find well-known/ atomic traits targeting binaries without any file size filter.
 ///
-/// well-known/ traits targeting binary file types (PE, ELF, Mach-O) should include size bounds
-/// to avoid false positives. Most malware samples fall within a predictable size range.
-/// Script-only traits are excluded since script size is less predictable.
+/// Binary identity signatures normally need a size bound. Low-tier basename,
+/// named version-field, signer-subject, and section-scoped resource facts are
+/// observations, not verified identity, and need no arbitrary size range.
+/// Malware, higher-criticality and unscoped binary signatures remain checked.
 ///
 /// Returns `Vec<(trait_id, source_file)>` for violations.
 #[must_use]
@@ -3661,6 +3691,7 @@ pub(crate) fn find_wellknown_missing_size_filter(
                 && trait_targets_binaries(t)
                 && !(is_basename_fact(t)
                     && matches!(t.crit, Criticality::Component | Criticality::Notable))
+                && !is_low_tier_named_binary_fact(t)
                 && t.size_min.is_none()
                 && t.size_max.is_none()
         })
@@ -3758,6 +3789,8 @@ pub(crate) fn find_wellknown_missing_section_filter(
         .filter(|t| {
             extract_trait_tier(&t.id) == "well-known"
                 && trait_targets_only_binaries(t)
+                // This reviewed whole-file marker must retain its original scope.
+                && t.id != "well-known/app/system/adobe-acrobat-updater::adobe-acrobat-updater-text"
                 && condition_supports_section_filter(&t.r#if)
                 && !condition_has_section_filter(&t.r#if)
         })

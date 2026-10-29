@@ -131,7 +131,7 @@ impl FactsCache {
     }
 
     /// The stored fact, or `compute` it and record the result.
-    pub(crate) fn get_or_compute<T: Serialize + DeserializeOwned>(
+    pub(crate) fn memoized<T: Serialize + DeserializeOwned>(
         &self,
         key: FactKey,
         compute: impl FnOnce() -> T,
@@ -257,7 +257,7 @@ pub(crate) fn fact<T: Serialize + DeserializeOwned>(
     compute: impl FnOnce() -> T,
 ) -> T {
     match active() {
-        Some(facts) => facts.get_or_compute(key(kind, &[input.as_bytes()]), compute),
+        Some(facts) => facts.memoized(key(kind, &[input.as_bytes()]), compute),
         None => compute(),
     }
 }

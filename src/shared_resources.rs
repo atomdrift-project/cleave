@@ -140,7 +140,7 @@ pub(crate) fn loaded_capability_mapper() -> Option<Arc<CapabilityMapper>> {
 pub(crate) fn settings_from_options(options: &crate::AnalysisOptions) -> crate::engine::Settings {
     crate::engine::Settings {
         upx: !options.disable_upx,
-        radare2: !options.disable_radare2,
+        rizin: !options.disable_radare2,
         rizin_timeout: options.rizin_timeout,
         rizin_retry_timeout: options.rizin_retry_timeout,
         rizin_max_bytes: options.rizin_max_bytes,
@@ -292,13 +292,13 @@ pub(crate) fn capability_mapper_stats() -> Option<(usize, usize)> {
 
 /// Get or initialize the global CapabilityMapper
 pub(crate) fn capability_mapper() -> anyhow::Result<Arc<CapabilityMapper>> {
-    get_or_build_mapper(&CAPABILITY_MAPPER, CapabilityMapper::try_new)
+    shared_mapper(&CAPABILITY_MAPPER, CapabilityMapper::try_new)
 }
 
 /// [`capability_mapper`] over an explicit slot and builder, so the
 /// first-writer-wins logic can be tested on a private slot instead of the
 /// process-wide one every concurrently running analysis reads.
-fn get_or_build_mapper(
+fn shared_mapper(
     slot: &MapperSlot,
     build: impl FnOnce() -> anyhow::Result<CapabilityMapper>,
 ) -> anyhow::Result<Arc<CapabilityMapper>> {
@@ -510,10 +510,10 @@ traits:
     #[allow(clippy::panic)]
     fn test_capability_mapper_singleton() {
         let slot: MapperSlot = parking_lot::RwLock::new(None);
-        let m1 = get_or_build_mapper(&slot, || Ok(CapabilityMapper::empty()))
-            .expect("mapper should load");
+        let m1 =
+            shared_mapper(&slot, || Ok(CapabilityMapper::empty())).expect("mapper should load");
         // The second call must be served from the slot, never rebuilt.
-        let m2 = get_or_build_mapper(&slot, || panic!("rebuilt an initialized mapper"))
+        let m2 = shared_mapper(&slot, || panic!("rebuilt an initialized mapper"))
             .expect("mapper should load");
         assert!(Arc::ptr_eq(&m1, &m2));
     }

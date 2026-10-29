@@ -818,7 +818,10 @@ pub(crate) fn find_single_item_clauses(
 ) -> Vec<(String, &'static str, String)> {
     let mut violations = Vec::new();
     if crate::capabilities::parsing::is_declared_dependency_security_hold_policy(
-        &rule.id, rule.all.as_deref(), &rule.r#for, rule.scope,
+        &rule.id,
+        rule.all.as_deref(),
+        &rule.r#for,
+        rule.scope,
     ) {
         return violations;
     }

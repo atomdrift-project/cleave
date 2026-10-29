@@ -1412,7 +1412,17 @@ impl PEAnalyzer {
         // Authenticated fragmented AES-GCM envelope: decode bytes, never execute.
         // Decode only the bounded envelope; each child owns its behavior.
         if !self.skip_embedded_scan && !self.is_cancelled() {
-            for (payload, encoding) in crate::extractors::fragment_gcm_pe::recover_chain(pe_data) {
+            let mut recovered = crate::extractors::fragment_gcm_pe::recover_chain(pe_data);
+            if let Some(payload) = crate::extractors::hex_rc4_nextbyte::recover(pe_data) {
+                recovered.push((
+                    crate::extractors::fragment_gcm_pe::Member {
+                        offset: payload.offset,
+                        data: payload.data,
+                    },
+                    "hex-rc4-nextbyte",
+                ));
+            }
+            for (payload, encoding) in recovered {
                 if self.is_cancelled() {
                     break;
                 }

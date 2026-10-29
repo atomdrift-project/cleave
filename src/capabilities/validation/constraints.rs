@@ -1666,10 +1666,16 @@ pub(crate) fn find_hostile_composites_with_too_few_notable_legs(
     for rule in composite_rules {
         if rule.crit != Criticality::Hostile
             || crate::capabilities::parsing::is_registry_security_hold_policy(
-                &rule.id, rule.any.as_deref(), &rule.r#for, rule.scope,
+                &rule.id,
+                rule.any.as_deref(),
+                &rule.r#for,
+                rule.scope,
             )
             || crate::capabilities::parsing::is_declared_dependency_security_hold_policy(
-                &rule.id, rule.all.as_deref(), &rule.r#for, rule.scope,
+                &rule.id,
+                rule.all.as_deref(),
+                &rule.r#for,
+                rule.scope,
             )
         {
             continue;

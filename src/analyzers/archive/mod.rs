@@ -3256,13 +3256,27 @@ mod tests {
     /// a `testdata/` directory, a `.pkg.tar.zst` or a `docker.io_` file name.
     #[test]
     fn system_symlink_paths_normalize_dot_prefix() {
-        for link in ["sbin/mount.ntfs-3g", "./sbin/mount.ntfs-3g", "././sbin/mount.ntfs-3g"] {
-            assert!(is_benign_archive_symlink_escape(&format!("{link} -> /bin/ntfs-3g")));
+        for link in [
+            "sbin/mount.ntfs-3g",
+            "./sbin/mount.ntfs-3g",
+            "././sbin/mount.ntfs-3g",
+        ] {
+            assert!(is_benign_archive_symlink_escape(&format!(
+                "{link} -> /bin/ntfs-3g"
+            )));
         }
-        for link in ["../sbin/mount.ntfs-3g", "./../sbin/mount.ntfs-3g", "./data/evil"] {
-            assert!(!is_benign_archive_symlink_escape(&format!("{link} -> /bin/ntfs-3g")));
+        for link in [
+            "../sbin/mount.ntfs-3g",
+            "./../sbin/mount.ntfs-3g",
+            "./data/evil",
+        ] {
+            assert!(!is_benign_archive_symlink_escape(&format!(
+                "{link} -> /bin/ntfs-3g"
+            )));
         }
-        assert!(!is_benign_archive_symlink_escape("./sbin/mount.ntfs-3g -> /etc/passwd"));
+        assert!(!is_benign_archive_symlink_escape(
+            "./sbin/mount.ntfs-3g -> /etc/passwd"
+        ));
     }
 
     #[test]

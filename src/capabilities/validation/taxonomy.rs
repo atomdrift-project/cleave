@@ -337,14 +337,15 @@ pub(crate) fn find_wellknown_high_criticality_basenames(
     let mut violations: Vec<_> = traits
         .iter()
         .filter(|t| {
-            t.id.starts_with("well-known/")
-                && t.crit > Criticality::Notable
-                && is_basename_fact(t)
+            t.id.starts_with("well-known/") && t.crit > Criticality::Notable && is_basename_fact(t)
         })
         .map(|t| {
             (
                 t.id.clone(),
-                sources.get(&t.id).cloned().unwrap_or_else(|| "unknown".to_string()),
+                sources
+                    .get(&t.id)
+                    .cloned()
+                    .unwrap_or_else(|| "unknown".to_string()),
             )
         })
         .collect();

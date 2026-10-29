@@ -4213,10 +4213,15 @@ impl ArchiveAnalyzer {
         // encrypted format identity itself supplies no hostile classification.
         let mut decoded = Vec::new();
         for member in &members {
-            if !member.data.windows(8).any(|v| v == b"PY000000") { continue; }
+            if !member.data.windows(8).any(|v| v == b"PY000000") {
+                continue;
+            }
             for runtime in &members {
-                if !runtime.data.windows(12).any(|v| v == b"pyarmor-vax-") { continue; }
-                if let Some(data) = crate::extractors::pyarmor::recover(&runtime.data, &member.data) {
+                if !runtime.data.windows(12).any(|v| v == b"pyarmor-vax-") {
+                    continue;
+                }
+                if let Some(data) = crate::extractors::pyarmor::recover(&runtime.data, &member.data)
+                {
                     decoded.push(MemoryArchiveMember {
                         relative_path: format!("{}.pyarmor-decoded.pyc", member.relative_path),
                         sha256: calculate_sha256(&data),

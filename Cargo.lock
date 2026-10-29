@@ -1696,7 +1696,7 @@ dependencies = [
 [[package]]
 name = "dmgwiz"
 version = "1.1.0"
-source = "git+https://github.com/atomdrift-project/dmgwiz.git?rev=47c6e34877efa7447fc99f7c11a42422aff01a43#47c6e34877efa7447fc99f7c11a42422aff01a43"
+source = "git+https://github.com/atomdrift-project/dmgwiz.git#47c6e34877efa7447fc99f7c11a42422aff01a43"
 dependencies = [
  "adc",
  "bincode 1.3.3",
@@ -1921,7 +1921,7 @@ checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 [[package]]
 name = "filefacts"
 version = "2.0.1"
-source = "git+https://github.com/atomdrift-project/filefacts.git#755255a1717bf217153ec08cc9ee6eeeb63f503c"
+source = "git+https://github.com/atomdrift-project/filefacts.git#4afced3e2ef2247f42d777c8d4f4815a7450407a"
 dependencies = [
  "aho-corasick",
  "cab",
@@ -1953,6 +1953,7 @@ dependencies = [
  "sha2 0.10.9",
  "signal-hook",
  "stng",
+ "stng-process",
  "tar",
  "tempfile",
  "thiserror 2.0.21",
@@ -5130,8 +5131,8 @@ dependencies = [
 
 [[package]]
 name = "stng"
-version = "2.1.1"
-source = "git+https://github.com/atomdrift-project/stng.git#20da618e486b2142855121106161fa3f6e1659ef"
+version = "3.0.0"
+source = "git+https://github.com/atomdrift-project/stng.git#855d5f1132a67d9d9497d868f9880968aee3d59a"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5163,7 +5164,7 @@ dependencies = [
 [[package]]
 name = "stng-process"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/stng.git#20da618e486b2142855121106161fa3f6e1659ef"
+source = "git+https://github.com/atomdrift-project/stng.git#855d5f1132a67d9d9497d868f9880968aee3d59a"
 dependencies = [
  "libc",
 ]
@@ -5720,7 +5721,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#755255a1717bf217153ec08cc9ee6eeeb63f503c"
+source = "git+https://github.com/atomdrift-project/filefacts.git#4afced3e2ef2247f42d777c8d4f4815a7450407a"
 dependencies = [
  "cc",
  "tree-sitter",

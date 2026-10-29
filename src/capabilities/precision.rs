@@ -1046,7 +1046,10 @@ pub(crate) fn validate_hostile_composite_precision(
             &rule.r#for,
             rule.scope,
         ) || super::parsing::is_declared_dependency_security_hold_policy(
-            &rule.id, rule.all.as_deref(), &rule.r#for, rule.scope,
+            &rule.id,
+            rule.all.as_deref(),
+            &rule.r#for,
+            rule.scope,
         ) {
             continue;
         }

@@ -1220,14 +1220,18 @@ pub(crate) fn is_registry_security_hold_policy(
 /// Exact policy exception for a provider-confirmed held dependency on the
 /// manifest that declared it. This fact independently determines the verdict.
 pub(crate) fn is_declared_dependency_security_hold_policy(
-    id: &str, all: Option<&[Condition]>, file_types: &[RuleFileType],
+    id: &str,
+    all: Option<&[Condition]>,
+    file_types: &[RuleFileType],
     scope: Option<crate::composite_rules::Scope>,
 ) -> bool {
     id == "objectives/supply-chain/security-hold::declared-dependency-security-held"
         && file_types == [RuleFileType::PackageJson]
         && scope == Some(crate::composite_rules::Scope::File)
-        && all.is_some_and(|all| matches!(all, [Condition::Trait { id }]
-            if id == "metadata/package/dependencies/declaration::declared-dependency-security-held"))
+        && all.is_some_and(|all| {
+            matches!(all, [Condition::Trait { id }]
+            if id == "metadata/package/dependencies/declaration::declared-dependency-security-held")
+        })
 }
 
 /// Convert a raw composite rule to a final CompositeTrait, applying file-level defaults
@@ -3609,13 +3613,43 @@ mod declared_security_hold_policy_tests {
 
     #[test]
     fn confirmed_hold_is_independent_and_exemption_is_narrow() {
-        let leg = [Condition::Trait { id: "metadata/package/dependencies/declaration::declared-dependency-security-held".into() }];
+        let leg = [Condition::Trait {
+            id: "metadata/package/dependencies/declaration::declared-dependency-security-held"
+                .into(),
+        }];
         let id = "objectives/supply-chain/security-hold::declared-dependency-security-held";
-        assert!(is_declared_dependency_security_hold_policy(id, Some(&leg), &[RuleFileType::PackageJson], Some(Scope::File)));
-        assert!(!is_declared_dependency_security_hold_policy(id, Some(&leg), &[RuleFileType::Registry], Some(Scope::File)));
-        assert!(!is_declared_dependency_security_hold_policy(id, Some(&leg), &[RuleFileType::PackageJson], None));
-        assert!(!is_declared_dependency_security_hold_policy("other::id", Some(&leg), &[RuleFileType::PackageJson], Some(Scope::File)));
-        let unrelated = [Condition::Trait { id: "metadata/registry::version-removed".into() }];
-        assert!(!is_declared_dependency_security_hold_policy(id, Some(&unrelated), &[RuleFileType::PackageJson], Some(Scope::File)));
+        assert!(is_declared_dependency_security_hold_policy(
+            id,
+            Some(&leg),
+            &[RuleFileType::PackageJson],
+            Some(Scope::File)
+        ));
+        assert!(!is_declared_dependency_security_hold_policy(
+            id,
+            Some(&leg),
+            &[RuleFileType::Registry],
+            Some(Scope::File)
+        ));
+        assert!(!is_declared_dependency_security_hold_policy(
+            id,
+            Some(&leg),
+            &[RuleFileType::PackageJson],
+            None
+        ));
+        assert!(!is_declared_dependency_security_hold_policy(
+            "other::id",
+            Some(&leg),
+            &[RuleFileType::PackageJson],
+            Some(Scope::File)
+        ));
+        let unrelated = [Condition::Trait {
+            id: "metadata/registry::version-removed".into(),
+        }];
+        assert!(!is_declared_dependency_security_hold_policy(
+            id,
+            Some(&unrelated),
+            &[RuleFileType::PackageJson],
+            Some(Scope::File)
+        ));
     }
 }

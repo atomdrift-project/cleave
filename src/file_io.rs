@@ -83,12 +83,17 @@ fn mislabelled_bom_payload(data: &[u8]) -> Option<&[u8]> {
         .rposition(|&byte| byte != 0)
         .map_or(0, |i| i + 1);
     let text = &payload[..text_end];
-    if text.is_empty() || text.contains(&0) { return None; }
+    if text.is_empty() || text.contains(&0) {
+        return None;
+    }
     // A second fake BOM can occur after a command separator/newline. Validate
     // all remaining UTF-8 segments rather than decoding the whole ASCII body
     // as UTF-16 because one extra marker is not itself valid UTF-8.
     let mut rest = text;
-    while let Some(at) = rest.windows(2).position(|w| w == [0xff, 0xfe] || w == [0xfe, 0xff]) {
+    while let Some(at) = rest
+        .windows(2)
+        .position(|w| w == [0xff, 0xfe] || w == [0xfe, 0xff])
+    {
         std::str::from_utf8(&rest[..at]).ok()?;
         rest = &rest[at + 2..];
     }

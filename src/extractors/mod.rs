@@ -7,6 +7,7 @@ pub(crate) mod aes_payload;
 pub(crate) mod batch_self_hex;
 pub mod encoded_payload;
 pub(crate) mod fragment_gcm_pe;
+pub(crate) mod hex_rc4_nextbyte;
 pub(crate) mod macho_chacha;
 pub(crate) mod macho_integer_tables;
 pub(crate) mod metamorphic_graft;

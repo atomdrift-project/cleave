@@ -940,25 +940,25 @@ const ALLOWED_METADATA_FILE: &[&str] = &[
     "archive",           // Member counts of the archive itself
     "catalog",           // File/catalog identity and generated registries
     "comment",           // Comment volume and span
-    "encoded",   // Encoded content presence (base64); migrating to encoding
-    "encoding",  // Encoded content representation without a decoding operation
-    "entropy",   // Whole-file byte entropy; decoded-image measurements stay in image/
-    "extension", // File extension classification
-    "format",    // Text/data format identification (JSON, makefile)
-    "function",  // Shape of the functions the parser recovered
+    "encoded",           // Encoded content presence (base64); migrating to encoding
+    "encoding",          // Encoded content representation without a decoding operation
+    "entropy",           // Whole-file byte entropy; decoded-image measurements stay in image/
+    "extension",         // File extension classification
+    "format",            // Text/data format identification (JSON, makefile)
+    "function",          // Shape of the functions the parser recovered
     "invisible-unicode", // Invisible Unicode text properties
-    "import",    // How many distinct modules the file imports
-    "line",      // Line geometry: one-liners, very long lines, line counts
-    "literal",   // Literal collections, such as long numeric arrays
-    "magic",     // Magic byte signatures
-    "metrics",   // Text/file-level measurements
-    "naming",    // How names are formed (numeric suffixes, single-char ratio)
-    "padding",   // Runs of repeated filler: whitespace, uppercase, blank lines
-    "policy",    // Policy/config text identities
-    "profile",   // Text profile and wrapper shapes
-    "size",      // Degenerate file size and shape: tiny scripts, sparse strings
-    "string",    // Neutral string identities
-    "system-info", // System-information field-name vocabulary in file content
+    "import",            // How many distinct modules the file imports
+    "line",              // Line geometry: one-liners, very long lines, line counts
+    "literal",           // Literal collections, such as long numeric arrays
+    "magic",             // Magic byte signatures
+    "metrics",           // Text/file-level measurements
+    "naming",            // How names are formed (numeric suffixes, single-char ratio)
+    "padding",           // Runs of repeated filler: whitespace, uppercase, blank lines
+    "policy",            // Policy/config text identities
+    "profile",           // Text profile and wrapper shapes
+    "size",              // Degenerate file size and shape: tiny scripts, sparse strings
+    "string",            // Neutral string identities
+    "system-info",       // System-information field-name vocabulary in file content
 ];
 
 /// Allowed subdirectories in metadata/image/
@@ -1765,8 +1765,13 @@ mod tests {
         std::fs::create_dir_all(temp_dir.path().join("micro-behaviors/os/network/interface"))
             .unwrap();
         let errors = validate_directory_structure(temp_dir.path()).unwrap_err();
-        assert!(errors.iter().any(|e| e.contains("micro-behaviors/os/network")),
-            "Retired os/network must be rejected: {:?}", errors);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("micro-behaviors/os/network")),
+            "Retired os/network must be rejected: {:?}",
+            errors
+        );
     }
 
     #[test]

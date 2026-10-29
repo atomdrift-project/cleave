@@ -174,7 +174,35 @@ impl MachOAnalyzer {
         report: &mut AnalysisReport,
         base_offset: usize,
     ) {
-        for payload in crate::extractors::macho_integer_tables::recover(data, &ctx.parsed) {
+        for (payload, encoding) in
+            crate::extractors::macho_integer_tables::recover(data, &ctx.parsed)
+                .into_iter()
+                .map(|p| {
+                    (
+                        p,
+                        vec![
+                            "integer-sub-xor".to_string(),
+                            "hex".to_string(),
+                            "custom-base64".to_string(),
+                        ],
+                    )
+                })
+                .chain(
+                    crate::extractors::macho_hex_scripts::recover(data, &ctx.parsed)
+                        .into_iter()
+                        .map(|p| (p, vec!["hex".to_string(), "rc4".to_string()])),
+                )
+                .chain(
+                    crate::extractors::macho_hex_scripts::recover_custom(data, &ctx.parsed)
+                        .into_iter()
+                        .map(|p| (p, vec!["hex".to_string(), "custom-base64".to_string()])),
+                )
+                .chain(
+                    crate::extractors::macho_hex_scripts::recover_lcg(data, &ctx.parsed)
+                        .into_iter()
+                        .map(|p| (p, vec!["lcg-xor".to_string()])),
+                )
+        {
             if self
                 .cancellation
                 .as_ref()
@@ -191,11 +219,17 @@ impl MachOAnalyzer {
             else {
                 continue;
             };
-            let chain = vec![
-                "integer-sub-xor".to_string(),
-                "hex".to_string(),
-                "custom-base64".to_string(),
-            ];
+            // FAT slices can contain identical payloads. Attach one decoded
+            // child so the same finding is not reported twice.
+            let source_hash = crate::analyzers::utils::calculate_sha256(source.as_bytes());
+            if report.files.iter().any(|file| file.sha256 == source_hash) {
+                continue;
+            }
+            let is_lcg = encoding.first().is_some_and(|x| x == "lcg-xor");
+            let is_hex_rc4 = encoding.first().is_some_and(|x| x == "hex");
+            let is_custom_base64 =
+                encoding.last().is_some_and(|x| x == "custom-base64") && is_hex_rc4;
+            let chain = encoding;
             let path = crate::types::encode_decoded_path(
                 &logical_path.display().to_string(),
                 &chain,
@@ -231,12 +265,38 @@ impl MachOAnalyzer {
                     report.files.push(child);
                     report.files.extend(nested);
                     report.structure.push(StructuralFeature {
-                        id: "data/integer-table-script".to_string(),
-                        desc: "Script data recovered from integer tables and custom alphabet"
-                            .to_string(),
+                        id: if is_lcg {
+                            "data/lcg-xor-script"
+                        } else if is_custom_base64 {
+                            "data/hex-custom-base64-script"
+                        } else if is_hex_rc4 {
+                            "data/hex-rc4-script"
+                        } else {
+                            "data/integer-table-script"
+                        }
+                        .to_string(),
+                        desc: if is_lcg {
+                            "Script data recovered from LCG XOR"
+                        } else if is_custom_base64 {
+                            "Script data recovered from hex and custom Base64"
+                        } else if is_hex_rc4 {
+                            "Script data recovered from hex and RC4"
+                        } else {
+                            "Script data recovered from integer tables and custom alphabet"
+                        }
+                        .to_string(),
                         evidence: vec![Evidence {
                             method: "static-decode".to_string(),
-                            source: "macho_integer_tables".to_string(),
+                            source: if is_lcg {
+                                "macho_lcg_xor"
+                            } else if is_custom_base64 {
+                                "macho_hex_custom_base64"
+                            } else if is_hex_rc4 {
+                                "macho_hex_rc4"
+                            } else {
+                                "macho_integer_tables"
+                            }
+                            .to_string(),
                             value: format!(
                                 "{} recovered script bytes; no specimen code executed",
                                 source.len()

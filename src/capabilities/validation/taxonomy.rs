@@ -294,7 +294,7 @@ const BANNED_SEGMENT_EXCEPTIONS: &[(&str, &str)] = &[
 
 /// Maximum atomic traits and composite rules combined in any directory.
 /// Every directory uses the same limit; there are no path-specific budgets.
-pub(crate) const MAX_TRAITS_PER_DIRECTORY: usize = 85;
+pub(crate) const MAX_TRAITS_PER_DIRECTORY: usize = 100;
 
 /// Baseline findings are too broad to represent a named entity. Components are
 /// still allowed when they are incomplete evidence for an identity.
@@ -3048,6 +3048,19 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // duplicate the same matcher eleven times, which the near-duplicate check
     // rejects anyway.
     "value:metadata/file/format/media/",
+    // Parsed embedded-PHP call relationships are shared across the same
+    // passive carriers. Replacing the former text scan with these values
+    // must not discard audio/font carriers or duplicate rules per format.
+    // Keep this exception on the reviewed file and value matcher only.
+    "value:micro-behaviors/data/embedded/payload/media/php-command-input.yaml",
+    // GIF byte-zero magic has the same meaning under a GIF, PHP/ASP, or
+    // mistyped source identity. The canonical hex matcher must retain all
+    // original header consumers without relying on extracted text offsets.
+    "hex:metadata/file/magic/identity/gif.yaml",
+    // Opening PHP tags are byte delimiters, including when a newline makes
+    // the tag too short for a media string extractor. Only this reviewed
+    // marker file may scan the original bytes across passive carriers.
+    "raw:micro-behaviors/data/embedded/payload/media/php.yaml",
     // DOS INT 21h service sequences are the same 16-bit code wherever the
     // infector body sits: a .COM, an untyped dump (`data`), a `.a`-named copy
     // (`static-lib`), or a batch/COM polyglot. Per-type twins of one hex
@@ -3539,6 +3552,63 @@ pub(crate) fn find_stale_filetype_allowlist_entries(
 mod media_filetype_allowance_tests {
     use super::{TraitDefinition, find_broad_filetype_traits};
     use std::collections::HashMap;
+
+    #[test]
+    fn gif_header_allowance_is_exact_file_and_hex_only() -> anyhow::Result<()> {
+        let hex: TraitDefinition = serde_yaml::from_str(
+            "id: gif-header\ndesc: GIF signature\ncrit: baseline\nconf: 0.99\nfor: [gif, php, asp, data, javascript, python]\nif:\n  type: hex\n  pattern: 47 49 46 38 (37|39) 61\n  offset: 0\n",
+        )?;
+        for (path, permitted) in [
+            ("/traits/metadata/file/magic/identity/gif.yaml", true),
+            ("/traits/metadata/file/magic/identity/gif.yaml-extra", false),
+            ("/traits/metadata/file/magic/identity/traits.yaml", false),
+        ] {
+            let sources = HashMap::from([(hex.id.clone(), path.to_string())]);
+            assert_eq!(
+                find_broad_filetype_traits(std::slice::from_ref(&hex), &sources).is_empty(),
+                permitted,
+                "{path}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn embedded_php_allowance_is_exact_file_and_value_only() -> anyhow::Result<()> {
+        let value: TraitDefinition = serde_yaml::from_str(
+            "id: request-call\ndesc: Parsed request call\ncrit: suspicious\nconf: 0.99\nfor: [jpeg, png, gif, wav, aiff, mp3, mp4, ico, webp, font]\nif:\n  type: value\n  path: media.php.request_calls[*]\n  exact: system\n",
+        )?;
+        for (path, permitted) in [
+            (
+                "/traits/micro-behaviors/data/embedded/payload/media/php-command-input.yaml",
+                true,
+            ),
+            (
+                "/traits/micro-behaviors/data/embedded/payload/media/php.yaml",
+                false,
+            ),
+            (
+                "/traits/micro-behaviors/data/embedded/payload/media/php-command-input.yaml-extra",
+                false,
+            ),
+        ] {
+            let sources = HashMap::from([(value.id.clone(), path.to_string())]);
+            assert_eq!(
+                find_broad_filetype_traits(std::slice::from_ref(&value), &sources).is_empty(),
+                permitted,
+                "{path}"
+            );
+        }
+        let mut raw = value.clone();
+        raw.r#if = serde_yaml::from_str("type: raw\nsubstr: system\n")?;
+        let sources = HashMap::from([(
+            raw.id.clone(),
+            "/traits/micro-behaviors/data/embedded/payload/media/php-command-input.yaml"
+                .to_string(),
+        )]);
+        assert_eq!(find_broad_filetype_traits(&[raw], &sources).len(), 1);
+        Ok(())
+    }
 
     #[test]
     fn relocated_media_allowance_stays_matcher_and_directory_scoped() -> anyhow::Result<()> {

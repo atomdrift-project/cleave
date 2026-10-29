@@ -1968,7 +1968,7 @@ checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 [[package]]
 name = "filefacts"
 version = "2.0.1"
-source = "git+https://github.com/atomdrift-project/filefacts.git#036bda5e889100fc5be981a293ee8084ae0963c4"
+source = "git+https://github.com/atomdrift-project/filefacts.git#c830155da63f47be140626e891b1597198fe3389"
 dependencies = [
  "aho-corasick",
  "cab",
@@ -2941,9 +2941,9 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
 name = "libbz2-rs-sys"
-version = "0.2.5"
+version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34b357333733e8260735ba5894eb928c02ecc69c78715f01a8019e7fa7f2db4c"
+checksum = "32f454fd6831a29c0e827ed075bca2a15be201bd57f4168f0fd1041124eab17e"
 
 [[package]]
 name = "libc"
@@ -5212,7 +5212,7 @@ dependencies = [
 [[package]]
 name = "stng"
 version = "2.1.1"
-source = "git+https://github.com/atomdrift-project/stng.git#561dbed3cf9d517710a46582f0d4ef17a0687b5c"
+source = "git+https://github.com/atomdrift-project/stng.git#7f767a8b986e457b9d6d58aedd7c897b32c2737a"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5244,7 +5244,7 @@ dependencies = [
 [[package]]
 name = "stng-process"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/stng.git#561dbed3cf9d517710a46582f0d4ef17a0687b5c"
+source = "git+https://github.com/atomdrift-project/stng.git#7f767a8b986e457b9d6d58aedd7c897b32c2737a"
 dependencies = [
  "libc",
 ]
@@ -5843,7 +5843,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#036bda5e889100fc5be981a293ee8084ae0963c4"
+source = "git+https://github.com/atomdrift-project/filefacts.git#c830155da63f47be140626e891b1597198fe3389"
 dependencies = [
  "cc",
  "tree-sitter",

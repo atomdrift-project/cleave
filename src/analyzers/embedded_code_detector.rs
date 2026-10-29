@@ -1563,6 +1563,7 @@ fn file_type_for_script_language(language: &str) -> Option<FileType> {
         "php" => Some(FileType::Php),
         "powershell" => Some(FileType::PowerShell),
         "lua" => Some(FileType::Lua),
+        "vbscript" => Some(FileType::Vbs),
         _ => None,
     }
 }
@@ -1581,6 +1582,7 @@ fn encoding_chain_for_deobfuscation(result: &stng::script::DeobfuscationResult) 
 /// as a whole layer instead of shredded `ScriptDecode` fragments.
 fn host_may_contain_script_obfuscation(content: &str) -> bool {
     const NEEDLES: &[&str] = &[
+        "#@~^",
         "@(",
         "EncodedCommand",
         "encodedcommand",
@@ -1606,6 +1608,10 @@ fn host_may_contain_script_obfuscation(content: &str) -> bool {
         "IEX(",
     ];
     NEEDLES.iter().any(|needle| content.contains(*needle))
+        || content
+            .as_bytes()
+            .windows(7)
+            .any(|w| w.eq_ignore_ascii_case(b"execute"))
         || stng::script::detect::detect_script_language(content.as_bytes())
             == Some(stng::script::detect::ScriptLanguage::Lua)
 }
@@ -1759,6 +1765,11 @@ pub(crate) fn analyze_decoded_script_layer(
             .with_engine(engine.clone())
             .without_embedded_detection()
             .with_encoded_context(encoding_chain.clone())
+            .analyze_source_as_configured(Path::new(&virtual_path), decoded)
+    } else if file_type == FileType::Vbs {
+        super::generic::GenericAnalyzer::new(file_type)
+            .with_engine(engine.clone())
+            .without_embedded_detection()
             .analyze_source_as_configured(Path::new(&virtual_path), decoded)
     } else if file_type == FileType::Batch {
         super::generic::GenericAnalyzer::new(file_type)
@@ -2852,6 +2863,38 @@ composite_rules:
     fn test_looks_like_base64_rejects_prose() {
         let prose = "This is a normal English sentence with spaces and punctuation, which is definitely not base64 encoded binary content at all.";
         assert!(!looks_like_base64(prose));
+    }
+
+    #[test]
+    fn vbscript_encoder_yields_a_typed_nonrecursive_layer() {
+        let bytes = b"#@~^vQAAAA==\x09Um.bn:RZM2mP+K4B2;YcEq?mMrwDR?4nsVr#cIixE^sN~z1~m\x7fDO;DkV~R!Dsmm^4+~ /aVkDP WP4YOwk)&&k+m!.+.yl^rU+kRDW2zrhmonRDaY,]Onsw]wwb:Co\x7f D6O,[LPYb:\x7fGEDPXPLP.nT/\x5cMf c+6\x7f~&/,]D+hwYw'khlTnRD6OEB!~O.!2wEAAAA==^#~@\x0d\x0a";
+        let text = std::str::from_utf8(bytes).unwrap();
+        assert!(host_may_contain_script_obfuscation(text));
+        let layers =
+            analyze_script_deobfuscation_layers("renamed.vbe", text, &test_mapper(), 0, None);
+        assert_eq!(layers.len(), 1);
+        assert_eq!(layers[0].file_type, "vbs");
+        assert!(layers[0].path.contains("script"));
+        assert!(
+            analyze_script_deobfuscation_layers(
+                "renamed.vbe",
+                text,
+                &test_mapper(),
+                MAX_DECODE_DEPTH,
+                None
+            )
+            .is_empty()
+        );
+        assert!(
+            analyze_script_deobfuscation_layers(
+                "broken.vbe",
+                "#@~^truncated",
+                &test_mapper(),
+                0,
+                None
+            )
+            .is_empty()
+        );
     }
 
     fn test_mapper() -> crate::Engine {

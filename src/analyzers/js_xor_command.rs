@@ -2,7 +2,7 @@
 //! This is a bounded AST reducer, not a JS interpreter. Unknown bindings,
 //! mutations, escapes, callbacks, loop bodies or shell overrides stop recovery.
 use crate::analyzers::FileType;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
 
 const MAX_SOURCE: usize = 4 * 1024 * 1024;
@@ -65,6 +65,7 @@ struct Context<'a, 'tree> {
     nodes: Vec<Node<'tree>>,
     refs: HashMap<&'a str, Vec<Node<'tree>>>,
     definitions: HashMap<&'a str, Vec<Node<'tree>>>,
+    mutations: HashSet<&'a str>,
 }
 impl<'a, 'tree> Context<'a, 'tree> {
     fn text(&self, n: Node<'_>) -> Option<&'a str> {
@@ -79,27 +80,14 @@ impl<'a, 'tree> Context<'a, 'tree> {
     fn named(&self, n: Node<'_>, name: &str) -> bool {
         n.kind() == "identifier" && self.text(n) == Some(name)
     }
+    #[cfg(test)]
     fn mentions(&self, n: Node<'_>, name: &str) -> bool {
         self.refs(name).iter().any(|r| inside(*r, n))
     }
     fn mutated(&self, name: &str) -> bool {
-        self.nodes.iter().any(|n| {
-            let target = match n.kind() {
-                "assignment_expression" | "augmented_assignment_expression" => {
-                    n.child_by_field_name("left")
-                }
-                "update_expression" => n.child_by_field_name("argument"),
-                "unary_expression"
-                    if n.child_by_field_name("operator").and_then(|n| self.text(n))
-                        == Some("delete") =>
-                {
-                    n.child_by_field_name("argument")
-                }
-                _ => None,
-            };
-            target.is_some_and(|target| self.mentions(target, name))
-        })
+        self.mutations.contains(name)
     }
+
     fn declaration(&self, reference: Node<'tree>) -> Option<Node<'tree>> {
         let name = self.text(reference)?;
         let [definition] = self.definitions(name) else {
@@ -678,6 +666,71 @@ impl<'a, 'tree> Context<'a, 'tree> {
         })
     }
 }
+// Collect all identifiers and mutation targets in the same bounded traversal.
+fn collect_context(ast: filefacts::SourceAst<'_>) -> Option<Context<'_, '_>> {
+    let mut pending = vec![(ast.tree.root_node(), false)];
+    let mut context = Context {
+        source: ast.source,
+        nodes: vec![],
+        refs: HashMap::new(),
+        definitions: HashMap::new(),
+        mutations: HashSet::new(),
+    };
+    while let Some((n, mutating)) = pending.pop() {
+        if context.nodes.len() == MAX_NODES {
+            return None;
+        }
+        // Propagate assignment-target membership during this one tree walk.
+        // Every identifier inside the target is conservative mutation evidence,
+        // including computed properties and destructuring, as in the old
+        // byte-range check. No identifier query needs to scan the tree again.
+        let target = match n.kind() {
+            "assignment_expression" | "augmented_assignment_expression" => {
+                n.child_by_field_name("left")
+            }
+            "update_expression" => n.child_by_field_name("argument"),
+            "unary_expression"
+                if n.child_by_field_name("operator")
+                    .and_then(|n| context.text(n))
+                    == Some("delete") =>
+            {
+                n.child_by_field_name("argument")
+            }
+            _ => None,
+        };
+        pending.extend(children(n).into_iter().map(|child| {
+            (
+                child,
+                mutating || target.is_some_and(|target| inside(child, target)),
+            )
+        }));
+        if matches!(n.kind(), "with_statement")
+            || n.kind() == "call_expression"
+                && n.child_by_field_name("function")
+                    .is_some_and(|f| context.named(f, "eval"))
+        {
+            return None;
+        }
+        if matches!(
+            n.kind(),
+            "identifier"
+                | "shorthand_property_identifier"
+                | "shorthand_property_identifier_pattern"
+        ) && let Some(name) = context.text(n)
+        {
+            context.refs.entry(name).or_default().push(n);
+            if mutating {
+                context.mutations.insert(name);
+            }
+            if binding(n) {
+                context.definitions.entry(name).or_default().push(n);
+            }
+        }
+        context.nodes.push(n);
+    }
+    Some(context)
+}
+
 pub(crate) fn decode(ast: filefacts::SourceAst<'_>) -> Vec<Command> {
     if !matches!(ast.file_type, FileType::JavaScript | FileType::TypeScript)
         || ast.source.len() > MAX_SOURCE
@@ -688,39 +741,9 @@ pub(crate) fn decode(ast: filefacts::SourceAst<'_>) -> Vec<Command> {
     {
         return vec![];
     }
-    let mut pending = vec![ast.tree.root_node()];
-    let mut context = Context {
-        source: ast.source,
-        nodes: vec![],
-        refs: HashMap::new(),
-        definitions: HashMap::new(),
+    let Some(context) = collect_context(ast) else {
+        return vec![];
     };
-    while let Some(n) = pending.pop() {
-        if context.nodes.len() == MAX_NODES {
-            return vec![];
-        }
-        pending.extend(children(n));
-        if matches!(n.kind(), "with_statement")
-            || n.kind() == "call_expression"
-                && n.child_by_field_name("function")
-                    .is_some_and(|f| context.named(f, "eval"))
-        {
-            return vec![];
-        }
-        if matches!(
-            n.kind(),
-            "identifier"
-                | "shorthand_property_identifier"
-                | "shorthand_property_identifier_pattern"
-        ) && let Some(name) = context.text(n)
-        {
-            context.refs.entry(name).or_default().push(n);
-            if binding(n) {
-                context.definitions.entry(name).or_default().push(n);
-            }
-        }
-        context.nodes.push(n);
-    }
     if !context.buffer_global() {
         return vec![];
     }
@@ -785,6 +808,106 @@ mod tests {
     fn run(source: &str) -> Vec<Command> {
         run_as(source, "input.js")
     }
+    // Independent reference for the old conservative byte-range semantics.
+    fn mutation_oracle(context: &Context<'_, '_>, name: &str) -> bool {
+        context.nodes.iter().any(|n| {
+            let target = match n.kind() {
+                "assignment_expression" | "augmented_assignment_expression" => {
+                    n.child_by_field_name("left")
+                }
+                "update_expression" => n.child_by_field_name("argument"),
+                "unary_expression"
+                    if n.child_by_field_name("operator")
+                        .and_then(|n| context.text(n))
+                        == Some("delete") =>
+                {
+                    n.child_by_field_name("argument")
+                }
+                _ => None,
+            };
+            target.is_some_and(|target| context.mentions(target, name))
+        })
+    }
+
+    #[test]
+    fn mutation_index_preserves_nested_and_computed_target_semantics() {
+        let source = "a = value; b += rhs; ++c; d--; delete object[key];\n\
+            ({item: e, ...rest} = input); [f, g[index]] = list;\n\
+            outer[inner = key2] = rhs2; const untouched = readOnly;";
+        let analysis = crate::analysis_context::AnalysisContext::open(
+            std::path::Path::new("mutations.js"),
+            source.as_bytes(),
+        );
+        let context = collect_context(analysis.source_ast().unwrap()).unwrap();
+        for name in context.refs.keys() {
+            assert_eq!(
+                context.mutated(name),
+                mutation_oracle(&context, name),
+                "{name}"
+            );
+        }
+        for name in [
+            "a", "b", "c", "d", "object", "key", "e", "rest", "f", "g", "index", "outer", "inner",
+            "key2",
+        ] {
+            assert!(context.mutated(name), "{name}");
+        }
+        for name in [
+            "value",
+            "rhs",
+            "input",
+            "list",
+            "rhs2",
+            "untouched",
+            "readOnly",
+        ] {
+            assert!(!context.mutated(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn large_bundle_keeps_command_recovery() {
+        let mut source = map_source(57);
+        for n in 0..2_000 {
+            use std::fmt::Write;
+            writeln!(source, "ordinaryCall{n}(argument{n});").unwrap();
+        }
+        let commands = run(&source);
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].text, COMMAND);
+    }
+
+    #[test]
+    #[ignore = "relative timing benchmark; run in an optimized build on an idle host"]
+    fn mutation_index_avoids_quadratic_bundle_walks() {
+        let mut source = String::from("mutable++;\n");
+        let names: Vec<_> = (0..2_000).map(|n| format!("ordinaryCall{n}")).collect();
+        for name in &names {
+            use std::fmt::Write;
+            writeln!(source, "{name}(argument);").unwrap();
+        }
+        let analysis = crate::analysis_context::AnalysisContext::open(
+            std::path::Path::new("bundle.js"),
+            source.as_bytes(),
+        );
+        let context = collect_context(analysis.source_ast().unwrap()).unwrap();
+        let start = std::time::Instant::now();
+        for name in &names {
+            assert!(!std::hint::black_box(mutation_oracle(&context, name)));
+        }
+        let sequential = start.elapsed();
+        let start = std::time::Instant::now();
+        for name in &names {
+            assert!(!std::hint::black_box(context.mutated(name)));
+        }
+        let indexed = start.elapsed();
+        eprintln!("2,000 mutation lookups: tree walks={sequential:?}, indexed={indexed:?}");
+        assert!(
+            indexed * 8 < sequential,
+            "mutation lookup must avoid repeated full-tree walks"
+        );
+    }
+
     #[test]
     fn map_and_loop_recover_exact_bytes_with_varying_keys() {
         for key in [1, 57, 81, 255] {

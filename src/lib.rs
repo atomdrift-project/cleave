@@ -1801,17 +1801,108 @@ pub fn graft_located_reference_outcome_traits(
     options: &AnalysisOptions,
     spans: &std::collections::BTreeMap<String, Vec<filefacts::Span>>,
 ) -> Result<usize> {
-    let Some(file) = report.files.iter().find(|f| f.sha256 == file_sha) else {
+    graft_reference_outcomes_batch(report, &[(file_sha, spans)], options)
+}
+
+/// Apply a follow phase's changed facts, then reevaluate each affected container
+/// once. Rebuilding the archive-wide finding pool after every source makes a
+/// package with N declaring members pay for the same N-member pool N times.
+/// All member-local rules still run with their original source coordinates.
+/// Inner containers precede outer containers so retained child findings remain
+/// available to their parent; package correlation runs after all local facts.
+pub fn graft_reference_outcomes_batch(
+    report: &mut AnalysisReport,
+    sources: &[(
+        &str,
+        &std::collections::BTreeMap<String, Vec<filefacts::Span>>,
+    )],
+    options: &AnalysisOptions,
+) -> Result<usize> {
+    if sources.is_empty() {
         return Ok(0);
+    }
+    let mapper = shared_resources::capability_mapper_with_options(options)?;
+    let mut grafted = 0;
+    let mut parents = std::collections::BTreeSet::new();
+    let mut touched = false;
+    for (file_sha, spans) in sources {
+        if let Some(n) = graft_reference_outcome_local(report, file_sha, &mapper, spans) {
+            touched = true;
+            grafted += n;
+            if let Some(parent) = report
+                .files
+                .iter()
+                .find(|f| f.sha256 == *file_sha)
+                .and_then(|f| {
+                    f.path
+                        .rsplit_once("!!")
+                        .map(|(parent, _)| parent.to_owned())
+                })
+            {
+                parents.insert(parent);
+            }
+        }
+    }
+    if !touched {
+        return Ok(0);
+    }
+    // Reverse lexical order visits a nested path before its prefix.
+    for parent in parents.iter().rev() {
+        grafted += graft_reference_outcome_container(report, parent, &mapper);
+    }
+    let fallback_sha = sources[0].0;
+    // The atomic facts landed on one member, but a rule that convicts on them
+    // pairs them with facts from elsewhere in the artifact — the manifest that
+    // declared the reference sits beside the archive root that carries the
+    // package-shape metrics. Those composites were evaluated in the main pass,
+    // before the follow existed, so re-run the pooling scopes over everything
+    // the report now holds and graft what newly fires onto the root.
+    // Archive-level atomic findings live on the report itself, not on any one
+    // member, so pooling only the per-file lists misses exactly the facts an
+    // archive-wide rule pairs the member's with.
+    let pooled = report
+        .findings
+        .iter()
+        .chain(report.files.iter().flat_map(|f| &f.findings));
+    if !report.findings.is_empty() || report.files.iter().any(|f| !f.findings.is_empty()) {
+        // Graft onto the outermost file node, not `target.sha256`: a merged
+        // report assembled by a caller (scan's fetch phase grafts payload
+        // subtrees into it) does not necessarily carry a target digest, and
+        // grafting to an empty sha silently matches no file and drops the
+        // finding. The shallowest node is the artifact the pooled rule is a
+        // statement about; the declaring file is the fallback.
+        let root_sha = report
+            .files
+            .iter()
+            .min_by_key(|f| f.depth)
+            .map_or_else(|| fallback_sha.to_string(), |f| f.sha256.clone());
+        let fresh = mapper.evaluate_package_composites(pooled);
+        if !fresh.is_empty() {
+            grafted += report.graft_findings_deferred(&root_sha, fresh);
+        }
+    }
+    if grafted > 0 {
+        report.refresh_grafted_findings();
+    }
+    Ok(grafted)
+}
+
+fn graft_reference_outcome_local(
+    report: &mut AnalysisReport,
+    file_sha: &str,
+    mapper: &capabilities::CapabilityMapper,
+    spans: &std::collections::BTreeMap<String, Vec<filefacts::Span>>,
+) -> Option<usize> {
+    let Some(file) = report.files.iter().find(|f| f.sha256 == file_sha) else {
+        return None;
     };
     // Nothing was attributed to this file, so nothing new can fire.
     if !file.filefacts_metrics.as_ref().is_some_and(|m| {
         m.contains_key("references.declared_count")
             || m.contains_key("references.undeclared_import_count")
     }) {
-        return Ok(0);
+        return None;
     }
-    let mapper = shared_resources::capability_mapper_with_options(options)?;
 
     // A synthetic one-file report carrying just this file's facts. The bytes are
     // long gone by the follow phase, and the `references.*` traits are metric and
@@ -1846,9 +1937,9 @@ pub fn graft_located_reference_outcome_traits(
     let no_bytes: &[u8] = &[];
     let found = mapper.evaluate_traits_with_ast(&scratch, no_bytes, None, None);
     if found.is_empty() {
-        return Ok(0);
+        return None;
     }
-    let mut grafted = report.graft_findings(file_sha, found.clone());
+    let mut grafted = report.graft_findings_deferred(file_sha, found.clone());
     // File-local composites must see both the retained source observations and
     // the new follow facts. Archive pooling alone cannot evaluate these rules.
     scratch.findings.extend(found);
@@ -1862,93 +1953,56 @@ pub fn graft_located_reference_outcome_traits(
         None,
         &[],
     );
-    grafted += report.graft_findings(file_sha, local);
+    grafted += report.graft_findings_deferred(file_sha, local);
 
-    // Re-run the declaring member's immediate container with its real type
-    // and member origins. The registry/package helper below evaluates only
-    // registry-joined outer rules; it cannot evaluate archive-scoped rules.
-    // Keep unrelated (including nested) archives out of this evidence pool.
-    let parent_path = report
-        .files
-        .iter()
-        .find(|f| f.sha256 == file_sha)
-        .and_then(|f| {
-            f.path
-                .rsplit_once("!!")
-                .map(|(parent, _)| parent.to_owned())
-        });
-    if let Some(parent) = parent_path.and_then(|path| report.files.iter().find(|f| f.path == path))
-    {
-        let mut container = AnalysisReport::new(crate::types::TargetInfo {
-            path: parent.path.clone(),
-            file_type: parent.file_type.clone(),
-            size_bytes: parent.size,
-            sha256: parent.sha256.clone(),
-            architectures: None,
-        });
-        container.findings = parent.findings.clone();
-        container.filefacts_metrics = parent.filefacts_metrics.clone();
-        let mut nested = Vec::new();
-        let mut members = Vec::new();
-        let mut origins = rustc_hash::FxHashMap::default();
-        let bit = crate::composite_rules::FileType::from_str(&parent.file_type).type_bit();
-        for finding in &parent.findings {
+    Some(grafted)
+}
+
+fn graft_reference_outcome_container(
+    report: &mut AnalysisReport,
+    parent_path: &str,
+    mapper: &capabilities::CapabilityMapper,
+) -> usize {
+    let Some(parent) = report.files.iter().find(|f| f.path == parent_path) else {
+        return 0;
+    };
+    let mut container = AnalysisReport::new(crate::types::TargetInfo {
+        path: parent.path.clone(),
+        file_type: parent.file_type.clone(),
+        size_bytes: parent.size,
+        sha256: parent.sha256.clone(),
+        architectures: None,
+    });
+    container.findings = parent.findings.clone();
+    container.filefacts_metrics = parent.filefacts_metrics.clone();
+    let mut nested = Vec::new();
+    let mut members = Vec::new();
+    let mut origins = rustc_hash::FxHashMap::default();
+    let bit = crate::composite_rules::FileType::from_str(&parent.file_type).type_bit();
+    for finding in &parent.findings {
+        *origins.entry(finding.id.to_string()).or_default() |= bit;
+    }
+    for member in report.files.iter().filter(|f| {
+        f.path
+            .rsplit_once("!!")
+            .is_some_and(|(p, _)| p == parent.path)
+    }) {
+        let bit = crate::composite_rules::FileType::from_str(&member.file_type).type_bit();
+        for finding in &member.findings {
             *origins.entry(finding.id.to_string()).or_default() |= bit;
+            nested.push(finding);
         }
-        for member in report.files.iter().filter(|f| {
-            f.path
-                .rsplit_once("!!")
-                .is_some_and(|(p, _)| p == parent.path)
-        }) {
-            let bit = crate::composite_rules::FileType::from_str(&member.file_type).type_bit();
-            for finding in &member.findings {
-                *origins.entry(finding.id.to_string()).or_default() |= bit;
-                nested.push(finding);
-            }
-            members.push(member);
-        }
-        let fresh = mapper.evaluate_container_composites_with_members(
-            &container,
-            nested,
-            &parent.file_type,
-            Some(&origins),
-            Some(&members),
-        );
-        let parent_sha = parent.sha256.clone();
-        grafted += report.graft_findings(&parent_sha, fresh);
+        members.push(member);
     }
-
-    // The atomic facts landed on one member, but a rule that convicts on them
-    // pairs them with facts from elsewhere in the artifact — the manifest that
-    // declared the reference sits beside the archive root that carries the
-    // package-shape metrics. Those composites were evaluated in the main pass,
-    // before the follow existed, so re-run the pooling scopes over everything
-    // the report now holds and graft what newly fires onto the root.
-    // Archive-level atomic findings live on the report itself, not on any one
-    // member, so pooling only the per-file lists misses exactly the facts an
-    // archive-wide rule pairs the member's with.
-    let pooled = report
-        .findings
-        .iter()
-        .chain(report.files.iter().flat_map(|f| &f.findings));
-    if !report.findings.is_empty() || report.files.iter().any(|f| !f.findings.is_empty()) {
-        // Graft onto the outermost file node, not `target.sha256`: a merged
-        // report assembled by a caller (scan's fetch phase grafts payload
-        // subtrees into it) does not necessarily carry a target digest, and
-        // grafting to an empty sha silently matches no file and drops the
-        // finding. The shallowest node is the artifact the pooled rule is a
-        // statement about; the declaring file is the fallback.
-        let root_sha = report
-            .files
-            .iter()
-            .min_by_key(|f| f.depth)
-            .map_or_else(|| file_sha.to_string(), |f| f.sha256.clone());
-        let fresh = mapper.evaluate_package_composites(pooled);
-        if !fresh.is_empty() {
-            grafted += report.graft_findings(&root_sha, fresh);
-        }
-    }
-    Ok(grafted)
+    let fresh = mapper.evaluate_container_composites_with_members(
+        &container,
+        nested,
+        &parent.file_type,
+        Some(&origins),
+        Some(&members),
+    );
+    let parent_sha = parent.sha256.clone();
+    report.graft_findings_deferred(&parent_sha, fresh)
 }
 
 /// Graft package-level composite findings onto a report by correlating an
@@ -4292,8 +4346,12 @@ where
         total: Some(paths.len()),
     });
 
+    // Explicit file lists need the same admission order as directory scans.
+    // QA's digest order otherwise starts expensive archives late in the pass.
+    let mut paths = paths.to_vec();
+    sort_largest_first(&mut paths);
     let mem_gate = scan_mem_gate::ScanMemGate::new();
-    for_each_ordered(paths, &|file_path| {
+    for_each_ordered(&paths, &|file_path| {
         // Cancellation fast path: once SIGINT flips the flag, remaining slots
         // return immediately so the scan drains in-flight work rather than
         // starting new files. Mirrors scan_directory's par_bridge fast path.

@@ -216,6 +216,17 @@ pub fn precompile_yara(
     yara_engine::YaraEngine::precompile_to(out_dir, enable_third_party)
 }
 
+/// Bring the local compiled-YARA cache up to date with the active rule
+/// sources now, rather than on the first scan after: compiles only the buckets
+/// whose sources (or engine) changed since they were last compiled. Returns
+/// `(compiled, buckets)`.
+#[must_use]
+pub fn compile_yara_rules(enable_third_party: bool) -> (usize, usize) {
+    let mut engine = yara_engine::YaraEngine::new();
+    engine.load_all_rules(enable_third_party);
+    engine.compile_missing()
+}
+
 /// Check that a directory of pre-compiled YARA rules is complete and current
 /// for the rule sources in the active traits directory, without recompiling.
 ///

@@ -394,14 +394,16 @@ enum TierSource {
     Empty,
     /// Compile-or-load each tier on demand.
     Lazy {
-        /// Pre-compiled `.yrc` shipped inside the traits package (validated
-        /// against the rule sources at load). READ-ONLY: a bucket that fails to
-        /// deserialize from here recompiles into `cache_dir`, never back into
-        /// the package.
-        shipped_dir: Option<std::path::PathBuf>,
-        /// Local per-user compiled-cache directory, the only directory this
-        /// engine ever writes (`None` = caching disabled).
+        /// Local per-user compiled-cache directory, the only place compiled
+        /// rules are read from or written to (`None` = caching disabled).
+        ///
+        /// Never a traits tree: a `.yrc` is native code (yara-x deserializes
+        /// it into wasmtime, which maps its machine code as is), so it is only
+        /// loaded when this host compiled it — never from a downloaded bundle.
         cache_dir: Option<std::path::PathBuf>,
+        /// Per bucket, the [`bucket_tag`] its compiled file is named by. A
+        /// bucket with no tag is compiled but not cached.
+        bucket_tags: std::collections::BTreeMap<String, String>,
         traits_dir: std::path::PathBuf,
         third_party_dir: std::path::PathBuf,
         enable_third_party: bool,
@@ -489,6 +491,39 @@ struct YaraManifest {
     /// bytes are for a different serializer, whatever the sources say.
     #[serde(default)]
     engine_tag: Option<String>,
+    /// The cleave build that classified the sources this manifest describes
+    /// (counts, contexts, bucket routing all come from code, not rules).
+    #[serde(default)]
+    cleave_version: Option<String>,
+    /// Per bucket, a digest of what its compiled file is a function of — the
+    /// engine and that bucket's sources ([`bucket_tag`]). Lets a rule update
+    /// recompile only the buckets it changed.
+    #[serde(default)]
+    bucket_tags: std::collections::BTreeMap<String, String>,
+}
+
+/// What a bucket's compiled file is a function of: the engine that compiles it
+/// and the exact sources it compiles, in order.
+fn bucket_tag(bucket: &str, sources: &[(String, String)]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(engine_tag().to_le_bytes());
+    h.update(bucket.as_bytes());
+    for (namespace, source) in sources {
+        h.update([0]);
+        h.update(namespace.as_bytes());
+        h.update([0]);
+        h.update(source.as_bytes());
+    }
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Where a bucket compiled under `tag` lives in the cache. The tag is in the
+/// name, so a file only ever answers for the sources it was compiled from: a
+/// process still compiling from older rules writes a name no current reader
+/// looks up, instead of overwriting the current one.
+fn compiled_path(dir: &Path, bucket: &str, tag: &str) -> PathBuf {
+    dir.join(format!("{bucket}.{}.yrc", tag.get(..16).unwrap_or(tag)))
 }
 
 /// Serialize the rule-context map with its keys in sorted order.
@@ -633,8 +668,8 @@ impl YaraEngine {
     /// inner rayon), so it is safe to call from a rayon worker during a scan.
     fn build_tier(&self, bucket: &str) -> Option<yara_x::Rules> {
         let TierSource::Lazy {
-            shipped_dir,
             cache_dir,
+            bucket_tags,
             traits_dir,
             third_party_dir,
             enable_third_party,
@@ -645,32 +680,29 @@ impl YaraEngine {
             return None;
         };
 
-        // 1. Per-bucket compiled rule file — shipped precompile first, then the
-        //    local cache; deserialize + re-JIT just this one bucket.
-        for dir in [shipped_dir.as_ref(), cache_dir.as_ref()]
-            .into_iter()
-            .flatten()
-        {
-            let path = dir.join(format!("{bucket}.yrc"));
-            let bytes = match Self::read_compiled_bucket(&path) {
-                Ok(bytes) => bytes,
+        // 1. Per-bucket compiled rule file in the local cache; deserialize +
+        //    re-JIT just this one bucket.
+        let cached = cache_dir
+            .as_deref()
+            .zip(bucket_tags.get(bucket))
+            .map(|(dir, tag)| compiled_path(dir, bucket, tag));
+        if let Some(path) = &cached {
+            match Self::read_compiled_bucket(path) {
+                Ok(bytes) => match yara_x::Rules::deserialize(&bytes) {
+                    Ok(rules) => return Some(rules),
+                    Err(e) => {
+                        // `warn`, not `debug`: at `debug` a host can pay a full
+                        // compile per tier per process indefinitely with
+                        // nothing to show for it.
+                        YARA_PRECOMPILED_REJECTED.fetch_add(1, Ordering::Relaxed);
+                        tracing::warn!(bucket = %bucket, path = %path.display(), error = ?e, "compiled YARA bucket failed to deserialize (engine/yara-x version skew or corrupt file); recompiling from source");
+                    }
+                },
                 Err(error) => {
                     if path.exists() || path.with_extension("yrc.zst").exists() {
                         tracing::warn!(bucket = %bucket, path = %path.display(), %error,
                             "compiled YARA bucket could not be read; recompiling from source");
                     }
-                    continue;
-                }
-            };
-            match yara_x::Rules::deserialize(&bytes) {
-                Ok(rules) => return Some(rules),
-                Err(e) => {
-                    // `warn`, not `debug`: this is the silent degradation the
-                    // publish-side precompile gate exists to prevent, and at
-                    // `debug` a fleet can pay a full compile per tier per
-                    // process indefinitely with nothing to show for it.
-                    YARA_PRECOMPILED_REJECTED.fetch_add(1, Ordering::Relaxed);
-                    tracing::warn!(bucket = %bucket, path = %path.display(), error = ?e, "compiled YARA bucket failed to deserialize (engine/yara-x version skew or corrupt file); recompiling from source");
                 }
             }
         }
@@ -719,11 +751,11 @@ impl YaraEngine {
             );
             return Some(rules);
         }
-        if let Some(dir) = cache_dir
+        if let Some(path) = &cached
             && let Ok(bytes) = rules.serialize()
-            && std::fs::create_dir_all(dir).is_ok()
+            && std::fs::create_dir_all(path.parent().unwrap_or(path)).is_ok()
         {
-            Self::write_compiled_bucket(&dir.join(format!("{bucket}.yrc")), &bytes);
+            Self::write_compiled_bucket(path, &bytes);
         }
         Some(rules)
     }
@@ -856,93 +888,77 @@ impl YaraEngine {
         serde_json::from_slice(&bytes).ok()
     }
 
-    /// Read `dir`'s manifest and accept it only if it was built from the rule
-    /// sources currently loaded *and* by an engine that serializes the way this
-    /// one does.
-    ///
-    /// Shipped manifests (package content, `strict`) must carry a matching tag
-    /// — one that is absent, unparsable, or different means the `.yrc` were
-    /// built from other sources, and trusting them would silently scan with
-    /// wrong rules. Local cache manifests predating the tag are accepted for
-    /// compatibility (their directory key already binds them to the newest
-    /// `.yar` mtime); a *mismatching* tag still rejects them, which is what
-    /// finally invalidates the cache on inline-YAML rule edits.
-    ///
-    /// The engine tag is checked separately and for both kinds, because it is
-    /// orthogonal to the sources: a shipped set can be built from exactly these
-    /// rules and still be unreadable here if a different cleave compiled it.
-    /// Those two failures are indistinguishable without this — which is how a
-    /// producer/engine skew comes to report itself as "stale rules".
-    fn validated_manifest(
-        dir: &Path,
-        current_tag: Option<u64>,
-        strict: bool,
-        report_invalid: bool,
-    ) -> Option<YaraManifest> {
+    /// Read `dir`'s manifest and accept it only if it describes the rule
+    /// sources currently on disk, as loaded by this build of cleave, compiled
+    /// by an engine that serializes the way this one does. Anything else is a
+    /// cold start: sources are re-read and only changed buckets recompile (see
+    /// [`Self::retire_stale_buckets`]).
+    fn validated_manifest(dir: &Path, current_tag: Option<u64>) -> Option<YaraManifest> {
         let manifest = Self::read_manifest(dir)?;
-        let manifest_engine = manifest
-            .engine_tag
-            .as_deref()
-            .and_then(|s| u64::from_str_radix(s, 16).ok());
-        // An absent engine tag predates the field: fall through to the source
-        // check and let the per-bucket deserialize decide, exactly as before.
-        if let Some(engine) = manifest_engine
-            && engine != engine_tag()
-        {
-            if report_invalid {
-                tracing::warn!(
-                    dir = %dir.display(),
-                    manifest_engine = %format!("{engine:016x}"),
-                    this_engine = %format!("{:016x}", engine_tag()),
-                    "pre-compiled YARA rules were built by a different engine; \
-                     recompiling from source (rules are not stale — this build \
-                     serializes differently than the one that wrote them)"
-                );
-            } else {
-                tracing::debug!(
-                    dir = %dir.display(),
-                    "compiled YARA cache was written by a different engine; recompiling"
-                );
-            }
+        let hex = |tag: Option<u64>| tag.map(|t| format!("{t:016x}"));
+        let same_engine = manifest.engine_tag == hex(Some(engine_tag()));
+        if !same_engine {
             YARA_PRECOMPILED_REJECTED.fetch_add(1, Ordering::Relaxed);
-            return None;
         }
-        let manifest_tag = manifest
-            .source_tag
-            .as_deref()
-            .and_then(|s| u64::from_str_radix(s, 16).ok());
-        match (manifest_tag, current_tag) {
-            (Some(m), Some(c)) if m == c => Some(manifest),
-            (None, _) if !strict => Some(manifest),
-            (None, _) => {
-                if report_invalid {
-                    tracing::error!(
-                        dir = %dir.display(),
-                        "shipped pre-compiled YARA rules carry no source fingerprint; ignoring them (regenerate with yara-precompile)"
-                    );
-                } else {
-                    tracing::debug!(
-                        dir = %dir.display(),
-                        "shipped pre-compiled YARA rules carry no source fingerprint; using recovered local cache"
-                    );
-                }
-                None
-            }
-            (Some(_), _) => {
-                if report_invalid {
-                    tracing::error!(
-                        dir = %dir.display(),
-                        "compiled YARA rules do not match the rule sources on disk; ignoring them and recompiling"
-                    );
-                } else {
-                    tracing::debug!(
-                        dir = %dir.display(),
-                        "shipped pre-compiled YARA rules do not match the sources; using recovered local cache"
-                    );
-                }
-                None
+        let current = same_engine
+            && manifest.cleave_version.as_deref() == Some(env!("CARGO_PKG_VERSION"))
+            && current_tag.is_some()
+            && manifest.source_tag == hex(current_tag);
+        if !current {
+            tracing::debug!(
+                dir = %dir.display(),
+                "compiled YARA cache describes other sources or another build; recompiling what changed"
+            );
+        }
+        current.then_some(manifest)
+    }
+
+    /// Remove every compiled file in `dir` that is not a current bucket under
+    /// its current tag — a bucket whose sources (or engine) changed, one that
+    /// no longer exists, or a stray. The rest stay, so a rule update
+    /// recompiles only what it touched.
+    fn retire_stale_buckets(dir: &Path, tags: &std::collections::BTreeMap<String, String>) {
+        let current: std::collections::HashSet<PathBuf> = tags
+            .iter()
+            .map(|(bucket, tag)| compiled_path(dir, bucket, tag))
+            .collect();
+        for entry in walkdir::WalkDir::new(dir).into_iter().flatten() {
+            let path = entry.path();
+            let compiled = path.extension().is_some_and(|e| e == "yrc")
+                || path.to_string_lossy().ends_with(".yrc.zst");
+            let kept = current.contains(path) || current.contains(&path.with_extension(""));
+            if entry.file_type().is_file() && compiled && !kept {
+                let _ = std::fs::remove_file(path);
             }
         }
+    }
+
+    /// Compile every populated bucket that has no compiled file in the cache
+    /// yet, in parallel, leaving the others untouched (and unloaded). Returns
+    /// `(compiled, buckets)`.
+    pub(crate) fn compile_missing(&self) -> (usize, usize) {
+        let TierSource::Lazy {
+            cache_dir: Some(dir),
+            bucket_tags,
+            ..
+        } = &self.source
+        else {
+            return (0, self.populated_tiers.len());
+        };
+        let missing: Vec<&String> = self
+            .populated_tiers
+            .iter()
+            .filter(|bucket| {
+                bucket_tags.get(*bucket).is_some_and(|tag| {
+                    let path = compiled_path(dir, bucket, tag);
+                    !path.exists() && !path.with_extension("yrc.zst").exists()
+                })
+            })
+            .collect();
+        missing.par_iter().for_each(|bucket| {
+            let _ = self.build_tier(bucket);
+        });
+        (missing.len(), self.populated_tiers.len())
     }
 
     fn write_manifest(dir: &Path, manifest: &YaraManifest) {
@@ -1158,6 +1174,8 @@ impl YaraEngine {
                 populated_tiers,
                 source_tag,
                 engine_tag: Some(format!("{engine:016x}")),
+                cleave_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+                bucket_tags: std::collections::BTreeMap::new(),
             },
         );
         anyhow::ensure!(
@@ -1396,51 +1414,22 @@ impl YaraEngine {
         let traits_dir = crate::cache::traits_path();
         let third_party_dir = crate::cache::third_party_path();
 
-        // Resolve the two compiled-rule directories and the manifest to trust.
-        //
-        // Shipped precompiles (produced by `yara-precompile` into
-        // `third-party/compiled/`) take precedence when their source fingerprint
-        // matches the loaded rule sources: a load-only path with no in-process
-        // compilation, portable across arch/OS. The shipped directory is
-        // READ-ONLY; fallback compiles always land in the local cache.
-        // `CLEAVE_SKIP_YARA_CACHE` bypasses both, so a forced from-source
-        // recompile stays possible even with precompiles installed.
+        // The local compiled-rule cache, and its manifest when that describes
+        // the rule sources on disk as this build loads them.
+        // `CLEAVE_SKIP_YARA_CACHE` bypasses it, so a forced from-source
+        // recompile stays possible.
         let current_tag = crate::cache::rules_source_tag();
-        let (shipped_dir, cache_dir, manifest) = if crate::cache::skip_yara_cache() {
+        let (cache_dir, manifest) = if crate::cache::skip_yara_cache() {
             tracing::info!(
-                "Skipping YARA caches (CLEAVE_SKIP_YARA_CACHE / CLEAVE_SKIP_CACHE); compiling from source, shipped precompiles ignored"
+                "Skipping the YARA cache (CLEAVE_SKIP_YARA_CACHE / CLEAVE_SKIP_CACHE); compiling from source"
             );
-            (None, None, None)
+            (None, None)
         } else {
-            let shipped = third_party_dir.join("compiled");
             let cache_dir = crate::cache::yara_cache_path(enable_third_party).ok();
-            // Validate the local cache dir regardless of the shipped outcome:
-            // build_tier falls back to it per bucket, so leftover files compiled
-            // from different sources must not survive here either.
-            let local_manifest = cache_dir
+            let manifest = cache_dir
                 .as_ref()
-                .and_then(|dir| Self::validated_manifest(dir, current_tag, false, false));
-            if local_manifest.is_none()
-                && let Some(dir) = &cache_dir
-                && dir.exists()
-            {
-                let _ = std::fs::remove_dir_all(dir);
-            }
-            // A valid local manifest proves a prior process already recovered
-            // from stale package content. Keep checking shipped artifacts so a
-            // valid complete bundle retains precedence, but do not report the
-            // same recoverable packaging error on every process invocation.
-            let report_shipped_invalid = local_manifest.is_none();
-            match Self::validated_manifest(&shipped, current_tag, true, report_shipped_invalid) {
-                Some(manifest) => {
-                    tracing::info!(
-                        "Using shipped pre-compiled YARA rules at {}",
-                        shipped.display()
-                    );
-                    (Some(shipped), cache_dir, Some(manifest))
-                }
-                None => (None, cache_dir, local_manifest),
-            }
+                .and_then(|dir| Self::validated_manifest(dir, current_tag));
+            (cache_dir, manifest)
         };
 
         // Warm path: a manifest restores counts/contexts/namespaces without
@@ -1454,8 +1443,8 @@ impl YaraEngine {
             self.tiers = Self::tier_cells(manifest.populated_tiers.iter().map(String::as_str));
             self.populated_tiers = manifest.populated_tiers.into_iter().collect();
             self.source = TierSource::Lazy {
-                shipped_dir,
                 cache_dir,
+                bucket_tags: manifest.bucket_tags,
                 traits_dir,
                 third_party_dir,
                 enable_third_party,
@@ -1492,7 +1481,13 @@ impl YaraEngine {
         let builtin_count = builtin_count + inline_namespaces.len();
         self.rule_counts = (builtin_count, third_party_count);
 
+        let bucket_tags: std::collections::BTreeMap<String, String> = tier_sources
+            .iter()
+            .filter(|(_, sources)| !sources.is_empty())
+            .map(|(bucket, sources)| (bucket.clone(), bucket_tag(bucket, sources)))
+            .collect();
         if let Some(dir) = &cache_dir {
+            Self::retire_stale_buckets(dir, &bucket_tags);
             Self::write_manifest(
                 dir,
                 &YaraManifest {
@@ -1503,6 +1498,8 @@ impl YaraEngine {
                     populated_tiers: self.populated_tiers.iter().cloned().collect(),
                     source_tag: current_tag.map(|t| format!("{t:016x}")),
                     engine_tag: Some(format!("{:016x}", engine_tag())),
+                    cleave_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+                    bucket_tags: bucket_tags.clone(),
                 },
             );
             let _ = crate::cache::cleanup_old_caches(dir);
@@ -1513,8 +1510,8 @@ impl YaraEngine {
         let sources = OnceLock::new();
         let _ = sources.set(tier_sources);
         self.source = TierSource::Lazy {
-            shipped_dir: None,
             cache_dir,
+            bucket_tags,
             traits_dir,
             third_party_dir,
             enable_third_party,
@@ -5375,6 +5372,8 @@ rule ELASTIC_Windows_Generic_Threat : FILE
             populated_tiers: vec!["pe".to_string(), FALLBACK_BUCKET.to_string()],
             source_tag: Some(format!("{:016x}", 0xdead_beef_u64)),
             engine_tag: Some(format!("{:016x}", engine_tag())),
+            cleave_version: None,
+            bucket_tags: std::collections::BTreeMap::new(),
         };
         YaraEngine::write_manifest(dir.path(), &manifest);
 
@@ -5435,8 +5434,8 @@ rule ELASTIC_Windows_Generic_Threat : FILE
         engine.populated_tiers.insert(bucket.to_string());
         engine.tiers = YaraEngine::tier_cells([bucket]);
         engine.source = TierSource::Lazy {
-            shipped_dir: None,
             cache_dir: Some(dir.path().to_path_buf()),
+            bucket_tags: [(bucket.to_string(), "0123456789abcdef".to_string())].into(),
             traits_dir: dir.path().to_path_buf(),
             third_party_dir: dir.path().to_path_buf(),
             enable_third_party: false,
@@ -5445,7 +5444,7 @@ rule ELASTIC_Windows_Generic_Threat : FILE
         // First access compiles from source and writes the per-bucket cache file.
         assert!(engine.tier_rules(bucket).is_some());
         assert!(
-            dir.path().join(format!("{bucket}.yrc")).exists(),
+            compiled_path(dir.path(), bucket, "0123456789abcdef").exists(),
             "compiling a bucket must write its per-bucket cache file"
         );
 
@@ -5455,8 +5454,8 @@ rule ELASTIC_Windows_Generic_Threat : FILE
         warm.populated_tiers.insert(bucket.to_string());
         warm.tiers = YaraEngine::tier_cells([bucket]);
         warm.source = TierSource::Lazy {
-            shipped_dir: None,
             cache_dir: Some(dir.path().to_path_buf()),
+            bucket_tags: [(bucket.to_string(), "0123456789abcdef".to_string())].into(),
             traits_dir: dir.path().to_path_buf(),
             third_party_dir: dir.path().to_path_buf(),
             enable_third_party: false,
@@ -5484,8 +5483,8 @@ rule ELASTIC_Windows_Generic_Threat : FILE
         engine.populated_tiers.insert(bucket.to_string());
         engine.tiers = YaraEngine::tier_cells([bucket]);
         engine.source = TierSource::Lazy {
-            shipped_dir: None,
             cache_dir: Some(dir.path().to_path_buf()),
+            bucket_tags: [(bucket.to_string(), "0123456789abcdef".to_string())].into(),
             traits_dir: dir.path().to_path_buf(),
             third_party_dir: dir.path().to_path_buf(),
             enable_third_party: false,
@@ -5494,118 +5493,122 @@ rule ELASTIC_Windows_Generic_Threat : FILE
 
         assert!(engine.tier_rules(bucket).is_none());
         assert!(
-            !dir.path().join(format!("{bucket}.yrc")).exists(),
+            !compiled_path(dir.path(), bucket, "0123456789abcdef").exists(),
             "empty buckets must not create cache files"
         );
     }
 
-    #[test]
-    fn test_shipped_dir_is_read_only_fallback_writes_to_local_cache() {
-        let shipped = tempfile::tempdir().unwrap();
-        let local = tempfile::tempdir().unwrap();
-        let bucket = "pe";
-        // A corrupt shipped bucket (version skew / truncation stand-in) must
-        // fall back to a source compile that lands in the LOCAL cache; the
-        // shipped file is package content and stays byte-identical.
-        let shipped_yrc = shipped.path().join(format!("{bucket}.yrc"));
-        std::fs::write(&shipped_yrc, b"not a compiled rule set").unwrap();
-
-        let mut sources = HashMap::new();
-        sources.insert(
-            bucket.to_string(),
-            vec![(
-                "test_ns".to_string(),
-                r#"rule r { strings: $a = "abc" condition: $a }"#.to_string(),
-            )],
-        );
-        let cell = OnceLock::new();
-        let _ = cell.set(sources);
-
-        let mut engine = YaraEngine::new_for_test();
-        engine.populated_tiers.insert(bucket.to_string());
-        engine.tiers = YaraEngine::tier_cells([bucket]);
-        engine.source = TierSource::Lazy {
-            shipped_dir: Some(shipped.path().to_path_buf()),
-            cache_dir: Some(local.path().to_path_buf()),
-            traits_dir: local.path().to_path_buf(),
-            third_party_dir: local.path().to_path_buf(),
-            enable_third_party: false,
-            sources: cell,
-        };
-        assert!(engine.tier_rules(bucket).is_some());
-        assert_eq!(
-            std::fs::read(&shipped_yrc).unwrap(),
-            b"not a compiled rule set",
-            "shipped precompile dir must never be written by the engine"
-        );
-        assert!(
-            local.path().join(format!("{bucket}.yrc")).exists(),
-            "fallback compile must be cached in the local cache dir"
-        );
-    }
-
-    #[test]
-    fn test_validated_manifest_source_tag() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut manifest = YaraManifest {
+    fn cache_manifest(source_tag: u64, bucket_tags: &[(&str, &str)]) -> YaraManifest {
+        YaraManifest {
             builtin_count: 1,
             third_party_count: 0,
             inline_namespaces: Vec::new(),
             rule_contexts: HashMap::new(),
-            populated_tiers: vec!["pe".to_string()],
-            source_tag: Some(format!("{:016x}", 0xabcd_u64)),
+            populated_tiers: bucket_tags.iter().map(|(b, _)| (*b).to_string()).collect(),
+            source_tag: Some(format!("{source_tag:016x}")),
             engine_tag: Some(format!("{:016x}", engine_tag())),
-        };
-        YaraEngine::write_manifest(dir.path(), &manifest);
-
-        // Matching tag: accepted in both modes.
-        assert!(YaraEngine::validated_manifest(dir.path(), Some(0xabcd), true, true).is_some());
-        assert!(YaraEngine::validated_manifest(dir.path(), Some(0xabcd), false, true).is_some());
-        // Mismatching tag: rejected in both modes.
-        assert!(YaraEngine::validated_manifest(dir.path(), Some(0x1234), true, true).is_none());
-        assert!(YaraEngine::validated_manifest(dir.path(), Some(0x1234), false, true).is_none());
-
-        // Missing tag: rejected for shipped dirs, tolerated for legacy local caches.
-        manifest.source_tag = None;
-        YaraEngine::write_manifest(dir.path(), &manifest);
-        assert!(YaraEngine::validated_manifest(dir.path(), Some(0xabcd), true, true).is_none());
-        assert!(YaraEngine::validated_manifest(dir.path(), Some(0xabcd), false, true).is_some());
+            cleave_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            bucket_tags: bucket_tags
+                .iter()
+                .map(|(b, t)| ((*b).to_string(), (*t).to_string()))
+                .collect(),
+        }
     }
 
-    /// The engine tag rejects on its own axis: rules built from exactly the
-    /// right sources are still refused when another build compiled them, and
-    /// the refusal does not depend on `strict` — a cache written by a different
-    /// local build is as unreadable as a shipped one.
+    /// A cache manifest is trusted only for the sources on disk, this build,
+    /// and this engine; a missing field vouches for nothing.
+    #[test]
+    fn test_validated_manifest_requires_sources_build_and_engine() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = cache_manifest(0xabcd, &[("pe", "t")]);
+        YaraEngine::write_manifest(dir.path(), &manifest);
+        assert!(YaraEngine::validated_manifest(dir.path(), Some(0xabcd)).is_some());
+        assert!(YaraEngine::validated_manifest(dir.path(), Some(0x1234)).is_none());
+        assert!(YaraEngine::validated_manifest(dir.path(), None).is_none());
+
+        manifest.source_tag = None;
+        YaraEngine::write_manifest(dir.path(), &manifest);
+        assert!(YaraEngine::validated_manifest(dir.path(), Some(0xabcd)).is_none());
+
+        manifest = cache_manifest(0xabcd, &[("pe", "t")]);
+        manifest.cleave_version = Some("0.0.0-other".to_string());
+        YaraEngine::write_manifest(dir.path(), &manifest);
+        assert!(YaraEngine::validated_manifest(dir.path(), Some(0xabcd)).is_none());
+
+        manifest = cache_manifest(0xabcd, &[("pe", "t")]);
+        manifest.cleave_version = None;
+        YaraEngine::write_manifest(dir.path(), &manifest);
+        assert!(YaraEngine::validated_manifest(dir.path(), Some(0xabcd)).is_none());
+    }
+
+    /// The engine tag rejects on its own axis — rules built from exactly the
+    /// right sources are still refused when another build compiled them — and
+    /// the refusal is counted, not silent.
     #[test]
     fn test_validated_manifest_engine_tag() {
         let dir = tempfile::tempdir().unwrap();
-        let mut manifest = YaraManifest {
-            builtin_count: 1,
-            third_party_count: 0,
-            inline_namespaces: Vec::new(),
-            rule_contexts: HashMap::new(),
-            populated_tiers: vec!["pe".to_string()],
-            source_tag: Some(format!("{:016x}", 0xabcd_u64)),
-            engine_tag: Some(format!("{:016x}", engine_tag())),
-        };
+        let mut manifest = cache_manifest(0xabcd, &[("pe", "t")]);
         YaraEngine::write_manifest(dir.path(), &manifest);
-        assert!(YaraEngine::validated_manifest(dir.path(), Some(0xabcd), true, true).is_some());
+        assert!(YaraEngine::validated_manifest(dir.path(), Some(0xabcd)).is_some());
 
-        // Sources still match; a different producer wrote the bytes.
         let before = yara_precompiled_misses();
         manifest.engine_tag = Some(format!("{:016x}", engine_tag() ^ 0xffff_ffff_u64));
         YaraEngine::write_manifest(dir.path(), &manifest);
-        assert!(YaraEngine::validated_manifest(dir.path(), Some(0xabcd), true, true).is_none());
-        assert!(YaraEngine::validated_manifest(dir.path(), Some(0xabcd), false, true).is_none());
+        assert!(YaraEngine::validated_manifest(dir.path(), Some(0xabcd)).is_none());
         assert!(
             yara_precompiled_misses() > before,
             "an engine-tag rejection must be counted, not silent"
         );
 
-        // Absent tag predates the field: fall through to the source check.
         manifest.engine_tag = None;
         YaraEngine::write_manifest(dir.path(), &manifest);
-        assert!(YaraEngine::validated_manifest(dir.path(), Some(0xabcd), true, true).is_some());
+        assert!(YaraEngine::validated_manifest(dir.path(), Some(0xabcd)).is_none());
+    }
+
+    /// A rule update recompiles only what it touched: a bucket whose tag
+    /// changed, or that is gone, loses its compiled file; the rest keep theirs,
+    /// nested (MIME-named) buckets included.
+    #[test]
+    fn test_retire_stale_buckets_keeps_unchanged_buckets() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = |bucket: &str, tag: &str| compiled_path(dir.path(), bucket, tag);
+        for (bucket, tag) in [
+            ("pe", "same"),
+            ("js", "old"),
+            ("gone", "x"),
+            ("application/x-zsh", "same"),
+        ] {
+            let path = file(bucket, tag);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"compiled").unwrap();
+        }
+        std::fs::write(dir.path().join("manifest.json"), b"{}").unwrap();
+        let now = [("pe", "same"), ("js", "new"), ("application/x-zsh", "same")]
+            .iter()
+            .map(|(b, t)| ((*b).to_string(), (*t).to_string()))
+            .collect();
+        YaraEngine::retire_stale_buckets(dir.path(), &now);
+        assert!(file("pe", "same").exists(), "unchanged bucket kept");
+        assert!(
+            file("application/x-zsh", "same").exists(),
+            "nested bucket kept"
+        );
+        assert!(!file("js", "old").exists(), "changed bucket retired");
+        assert!(!file("gone", "x").exists(), "removed bucket retired");
+        assert!(
+            dir.path().join("manifest.json").exists(),
+            "only compiled files are retired"
+        );
+    }
+
+    /// Two buckets with the same sources but different names, or the same name
+    /// and different sources, never share a tag.
+    #[test]
+    fn test_bucket_tag_covers_name_and_sources() {
+        let src = |text: &str| vec![("ns".to_string(), text.to_string())];
+        assert_eq!(bucket_tag("pe", &src("a")), bucket_tag("pe", &src("a")));
+        assert_ne!(bucket_tag("pe", &src("a")), bucket_tag("pe", &src("b")));
+        assert_ne!(bucket_tag("pe", &src("a")), bucket_tag("elf", &src("a")));
     }
 
     /// The probe must actually produce a usable fingerprint; `u64::MAX` is the

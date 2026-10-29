@@ -450,9 +450,7 @@ const ALLOWED_MB_MEM: &[&str] = &[
 
 /// Allowed subdirectories in micro-behaviors/network/
 ///
-/// Local network resources. Everything except `interface` is the target home of
-/// the matching micro-behaviors/os/network/ leaf, which stays allowed while the
-/// migration is in progress.
+/// Local network resources, including interfaces and their configuration.
 const ALLOWED_MB_NETWORK: &[&str] = &[
     "connections",
     "dns", // Resolver configuration; DNS wire exchanges stay communications/dns
@@ -488,7 +486,6 @@ const ALLOWED_MB_OS: &[&str] = &[
     "message",
     "module",
     "msdos",
-    "network",
     "package-manager",
     "pam",
     "privilege",
@@ -1763,22 +1760,20 @@ mod tests {
     }
 
     #[test]
+    fn test_retired_os_network_is_rejected() {
+        let temp_dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(temp_dir.path().join("micro-behaviors/os/network/interface"))
+            .unwrap();
+        let errors = validate_directory_structure(temp_dir.path()).unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("micro-behaviors/os/network")),
+            "Retired os/network must be rejected: {:?}", errors);
+    }
+
+    #[test]
     fn test_taxonomy_migration_old_and_new_homes_coexist() {
         // Each pair is (legacy home, target home) from TAXONOMY.md's migration
         // map. Both must validate while rules move between them.
         let pairs = [
-            (
-                "micro-behaviors/os/network/route",
-                "micro-behaviors/network/route",
-            ),
-            (
-                "micro-behaviors/os/network/share",
-                "micro-behaviors/network/share",
-            ),
-            (
-                "micro-behaviors/os/network/tunnel",
-                "micro-behaviors/network/tunnel",
-            ),
             (
                 "micro-behaviors/communications/ipc/irc",
                 "micro-behaviors/communications/irc",

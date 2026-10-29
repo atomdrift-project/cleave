@@ -986,34 +986,27 @@ pub(crate) fn traits_revision_fingerprint_for(traits_dir: &Path) -> i64 {
     i64::from_ne_bytes(digest_u64(&digest).to_ne_bytes())
 }
 
-/// Generate a cache key based on the newest `.yar`/`.yara` file mtime and third-party flag.
+/// The YARA compiled-rule cache directory name for the active traits tree.
 ///
-/// Only pure YARA rule files are considered, so editing trait YAMLs does not
-/// force a full YARA recompile. Falls back to binary mtime when no rule files exist.
-///
-/// Includes the cleave version so that upgrading the binary invalidates the cache.
-pub(crate) fn yara_cache_key(third_party_enabled: bool) -> Result<String> {
-    let mtime = most_recent_yar_file()
-        .map(|(t, _)| t)
-        .or_else(|_| binary_mtime())?;
-    let timestamp = system_time_nanos(mtime)?;
-
+/// Stable across rule updates and cleave upgrades on purpose: what a compiled
+/// bucket is valid for is recorded per bucket in the directory's manifest
+/// (engine and sources), so an update recompiles only the buckets it changed
+/// instead of starting from an empty directory. Distinct trait roots and the
+/// third-party setting still get directories of their own.
+pub(crate) fn yara_cache_key(third_party_enabled: bool) -> String {
     let suffix = if third_party_enabled {
         "with-3p"
     } else {
         "builtin"
     };
-    let version = env!("CARGO_PKG_VERSION");
-
-    // v4 is a *directory* holding `manifest.json` + one `<tier>.yrc` per tier,
-    // each compiled lazily on first scan. v3 was a single all-tiers blob whose
-    // cold build held every tier's JIT'd native code resident at once.
-    Ok(format!("yara-rules-v4-{version}-{timestamp}-{suffix}"))
+    // v5 keeps per-bucket tags in its manifest. v4 was keyed by the newest
+    // `.yar` mtime, so every update started cold; v3 was one all-tiers blob.
+    format!("yara-rules-v5-{}-{suffix}", traits_dir_tag(&traits_path()))
 }
 
 /// Path to the YARA rules cache *directory* (per-tier compiled rules + manifest).
 pub fn yara_cache_path(third_party_enabled: bool) -> Result<PathBuf> {
-    let cache_key = yara_cache_key(third_party_enabled)?;
+    let cache_key = yara_cache_key(third_party_enabled);
     Ok(cache_dir()?.join(cache_key))
 }
 
@@ -1329,15 +1322,13 @@ mod tests {
     #[test]
     fn test_yara_cache_key_format() {
         // Test that cache key has expected format
-        if let Ok(key) = yara_cache_key(false) {
-            assert!(key.starts_with("yara-rules-v4-"));
-            assert!(key.ends_with("-builtin"));
-        }
+        let key = yara_cache_key(false);
+        assert!(key.starts_with("yara-rules-v5-"));
+        assert!(key.ends_with("-builtin"));
 
-        if let Ok(key) = yara_cache_key(true) {
-            assert!(key.starts_with("yara-rules-v4-"));
-            assert!(key.ends_with("-with-3p"));
-        }
+        let key = yara_cache_key(true);
+        assert!(key.starts_with("yara-rules-v5-"));
+        assert!(key.ends_with("-with-3p"));
     }
 
     #[test]
@@ -1535,7 +1526,7 @@ mod tests {
     fn test_yara_cache_path_includes_cache_key() {
         if let Ok(path) = yara_cache_path(false) {
             let path_str = path.to_string_lossy();
-            assert!(path_str.contains("yara-rules-v4-"));
+            assert!(path_str.contains("yara-rules-v5-"));
         }
     }
 

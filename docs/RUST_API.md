@@ -11,10 +11,6 @@ run `cleave --help`. For the output schema, see
 [../FILE_FORMATS.md](../FILE_FORMATS.md); this document does not
 duplicate it.
 
-Cleave is also a library dependency of [litmus](https://github.com/atomdrift-project/litmus);
-litmus's response envelope embeds an `AnalysisReport` as the `raw`
-field.
-
 ## Library entry points
 
 All entry points live in the `cleave` crate root.

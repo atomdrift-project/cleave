@@ -1169,7 +1169,7 @@ pub(crate) fn utf8_view(binary_data: &[u8], range: (usize, usize)) -> std::borro
 /// threads and clearing them here would invalidate other workers' entries. Use
 /// `clear_regex_caches()` from a single thread when memory pressure demands it.
 pub fn clear_thread_local_caches() {
-    crate::ip_validator::clear_current_file_id();
+    crate::ip_validator::clear_cache();
 }
 
 /// Clear the process-global regex caches.

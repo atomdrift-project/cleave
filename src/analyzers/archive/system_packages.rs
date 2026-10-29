@@ -190,7 +190,7 @@ pub(crate) fn list_7z_entries_from_file(path: &Path) -> Result<Vec<ArchiveEntry>
     let bin = crate::analyzers::sfx_detector::sevenzip_cmd().context("7z is not installed")?;
     let mut command = std::process::Command::new(bin);
     command
-        .args(["l", "-y", "-p", "--"])
+        .args(["l", "-slt", "-y", "-p", "--"])
         .arg(path)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -209,61 +209,45 @@ pub(crate) fn list_7z_entries_from_file(path: &Path) -> Result<Vec<ArchiveEntry>
         anyhow::bail!("7z listing failed with status {}", output.status);
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut in_table = false;
-    let mut entries = Vec::new();
-    for line in stdout.lines() {
-        if line.starts_with("-------------------") {
-            if in_table {
-                break;
-            }
-            in_table = true;
-            continue;
-        }
-        if !in_table || line.trim().is_empty() {
-            continue;
-        }
+    // Windows builds of 7-Zip end lines with CRLF.
+    let stdout = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");
+    Ok(parse_7z_technical_listing(&stdout))
+}
 
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 5 {
-            continue;
-        }
-        let Some(size_bytes) = parts.get(3).and_then(|s| s.parse::<u64>().ok()) else {
-            continue;
-        };
-        let name_start = if parts
-            .get(4)
-            .is_some_and(|s| s.chars().all(|c| c.is_ascii_digit()))
-        {
-            5
-        } else {
-            4
-        };
-        if parts.len() <= name_start {
-            continue;
-        }
-        let name = parts[name_start..].join(" ");
-        let file_type =
-            crate::analyzers::detect_file_type_from_path(Path::new(&name)).report_file_type();
-        let compressed_size = parts
-            .get(4)
-            .filter(|s| s.chars().all(|c| c.is_ascii_digit()))
-            .and_then(|s| s.parse::<u64>().ok());
-
-        entries.push(ArchiveEntry {
-            path: name.replace('\\', "/"),
-            file_type,
-            sha256: String::new(),
-            size_bytes,
-            compressed_size,
-            compression_method: Some("7z".to_string()),
-            entry_type: Some("regular".to_string()),
-            encrypted: true,
-            ..ArchiveEntry::default()
-        });
-    }
-
-    Ok(entries)
+/// Parse `7z l -slt` output: one `Key = value` block per member, after the
+/// `----------` line that ends the archive's own block. Unlike the columnar
+/// listing, a value is everything after `Key = `, so member names keep their
+/// spacing and cannot shift into neighbouring columns.
+fn parse_7z_technical_listing(stdout: &str) -> Vec<ArchiveEntry> {
+    let Some((_, members)) = stdout.split_once("\n----------\n") else {
+        return Vec::new();
+    };
+    members
+        .split("\n\n")
+        .filter_map(|block| {
+            let field = |key: &str| {
+                block.lines().find_map(|line| {
+                    line.strip_prefix(key)
+                        .and_then(|rest| rest.strip_prefix(" = "))
+                })
+            };
+            let name = field("Path")?;
+            let size_bytes = field("Size")?.parse::<u64>().ok()?;
+            let is_dir = field("Attributes").is_some_and(|a| a.starts_with('D'));
+            Some(ArchiveEntry {
+                path: name.replace('\\', "/"),
+                file_type: crate::analyzers::detect_file_type_from_path(Path::new(name))
+                    .report_file_type(),
+                sha256: String::new(),
+                size_bytes,
+                compressed_size: field("Packed Size").and_then(|v| v.parse().ok()),
+                compression_method: Some("7z".to_string()),
+                entry_type: Some(if is_dir { "directory" } else { "regular" }.to_string()),
+                encrypted: true,
+                ..ArchiveEntry::default()
+            })
+        })
+        .collect()
 }
 
 /// Extract a VHD with the existing bounded 7-Zip subprocess path. The virtual
@@ -965,7 +949,7 @@ pub(crate) fn extract_rar(
                         continue;
                     }
 
-                    // Note: RAR unrar crate doesn't filefacts packed_size, so we can't check
+                    // Note: RAR unrar crate doesn't expose packed_size, so we can't check
                     // compression ratio directly. We rely on unpacked_size limit above.
 
                     // Sanitize path
@@ -1199,6 +1183,19 @@ mod cab_partial_member_tests {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seven_zip_technical_listing_keeps_names_intact() {
+        let out = "Listing archive: t.7z\n\n--\nPath = t.7z\nType = 7z\n\n----------\n\
+            Path = d\nSize = 0\nPacked Size = 0\nAttributes = D drwxr-xr-x\n\n\
+            Path = x  y.txt\nSize = 1\nPacked Size = 5\nAttributes = A -rw-r--r--\n";
+        let entries = parse_7z_technical_listing(out);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].entry_type.as_deref(), Some("directory"));
+        assert_eq!(entries[1].path, "x  y.txt");
+        assert_eq!(entries[1].size_bytes, 1);
+        assert_eq!(entries[1].compressed_size, Some(5));
+    }
 
     fn cpio_fixture(entries: &[(&str, u32, &[u8])]) -> Vec<u8> {
         let mut bytes = Vec::new();

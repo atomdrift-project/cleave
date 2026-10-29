@@ -47,11 +47,10 @@ env:
   CLEAVE_NO_UPDATE_CHECK: "1"
 
 jobs:
-  # Cheapest job, highest value. This repo routinely carries temporary
-  # `[patch]` entries pointing at ../filefacts (or another sibling) while a
-  # cross-repo change is in
-  # flight (see the comment block at the bottom of Cargo.toml). Shipping one
-  # would build a release nobody else can reproduce. Mirrors scripts/pre-commit.
+  # Cheapest job, highest value. Local development sometimes points a
+  # dependency at a sibling checkout (`path = "../filefacts"`) while a
+  # cross-repo change is in flight; shipping one would build a release nobody
+  # else can reproduce. Mirrors scripts/pre-commit.
   guard:
     name: guard
     runs-on: ubuntu-24.04
@@ -65,8 +64,7 @@ jobs:
 
       - name: Reject local path overrides
         # Same regex as scripts/pre-commit, including the `[^#]` guard that
-        # keeps commented-out patches (Cargo.toml keeps a running log of them)
-        # from tripping it. Keep the two in sync.
+        # keeps commented-out overrides from tripping it. Keep the two in sync.
         run: |
           if grep -nE '^[[:space:]]*[^#].*path[[:space:]]*=[[:space:]]*"\.\.' Cargo.toml; then
             echo "::error file=Cargo.toml::local path override committed - push the dep and pin a git rev instead"
@@ -86,15 +84,45 @@ jobs:
           key: cargo-home-guard-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-home-guard-${{ runner.os }}-
 
-      - run: cargo fmt --all --check
+      # The same checks as `make lint`, so a clean local run means a clean CI run.
+      - run: make lint
 
-      # Matches `make lint` exactly, so a clean local run means a clean CI run.
-      - run: cargo clippy --locked -- -D warnings
+      - name: Dependency policy (advisories, licenses, sources)
+        run: |
+          cargo install --locked cargo-deny@${CARGO_DENY_VERSION}
+          cargo deny --locked check
+        env:
+          CARGO_DENY_VERSION: "0.20.2"
 
       # A `--locked` build fails outright on a stale lockfile, but this catches
       # the subtler case of a lockfile that resolves but wasn't committed.
       - name: Cargo.lock unchanged
         run: git diff --exit-code Cargo.lock
+
+  # Unit, workspace and integration tests, exactly as `make test` runs them.
+  test:
+    name: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Cache cargo home
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-home-test-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-home-test-${{ runner.os }}-
+
+      # Tests that need unredistributable samples print `SKIP:` and pass.
+      - run: make test
 
   # Not gated on `guard`: a cold build is ~25-45 min per target and serializing
   # them behind clippy would double the wall clock for no safety gain.

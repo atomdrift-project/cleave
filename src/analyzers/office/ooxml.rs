@@ -12,7 +12,6 @@ const OOXML_ENTRY_READ_LIMIT: u64 = 50 * 1024 * 1024;
 
 /// Parsed OOXML document.
 #[derive(Debug)]
-#[allow(dead_code)] // Fields used for Debug output and future analysis expansion
 pub(crate) struct OoxmlDocument {
     /// Document subtype (Word, Excel, PowerPoint)
     pub doc_subtype: OoxmlSubtype,
@@ -24,8 +23,6 @@ pub(crate) struct OoxmlDocument {
     pub dde_links: Vec<String>,
     /// Embedded objects that contain PE/ELF executables
     pub embedded_executables: Vec<String>,
-    /// Document metadata
-    pub metadata: OoxmlMetadata,
     /// Whether the document is encrypted
     pub has_encryption: bool,
     /// ZIP entry names
@@ -36,10 +33,6 @@ pub(crate) struct OoxmlDocument {
     pub content_types_xml: Option<String>,
     /// Decompressed Excel workbook XML when available
     pub workbook_xml: Option<String>,
-    /// Decompressed Excel workbook relationship XML when available
-    pub workbook_rels_xml: Option<String>,
-    /// Decompressed Excel styles XML when available
-    pub excel_styles_xml: Option<String>,
     /// Decompressed Excel macrosheet XML when available
     pub excel_macrosheet_xml: Option<String>,
     /// Printable strings recovered from vbaProject.bin when present
@@ -76,26 +69,6 @@ pub(crate) struct Reference {
     pub rel_type: String,
 }
 
-/// Document metadata from docProps/core.xml (Dublin Core) and
-/// docProps/app.xml (Office-specific application metadata).
-///
-/// Field names mirror the OPC element tags so the office values tree
-/// snake_case mapping is mechanical.
-#[derive(Debug, Default)]
-pub(crate) struct OoxmlMetadata {
-    pub creator: Option<String>,
-    pub last_modified_by: Option<String>,
-    pub created: Option<String>,
-    pub modified: Option<String>,
-    pub application: Option<String>,
-    pub company: Option<String>,
-    pub title: Option<String>,
-    pub subject: Option<String>,
-    pub description: Option<String>,
-    pub keywords: Option<String>,
-    pub category: Option<String>,
-}
-
 /// Read OOXML entries from either a filefacts ZIP index or a local ZIP parser.
 trait OoxmlEntryReader {
     fn entry_names(&self) -> &[String];
@@ -126,7 +99,10 @@ impl<'a> ZipArchiveReader<'a> {
         for i in 0..archive.len() {
             let entry = archive.by_index(i)?;
             max_entry_size = max_entry_size.max(entry.size());
-            entry_names.push(entry.name().to_string());
+            entry_names.push(entry.name().map_or_else(
+                |_| String::from_utf8_lossy(entry.name_raw()).into_owned(),
+                std::borrow::Cow::into_owned,
+            ));
         }
 
         Ok(Self {
@@ -254,7 +230,6 @@ fn parse_ooxml_from_reader<R: OoxmlEntryReader>(reader: &mut R) -> OoxmlDocument
     let external_refs = find_external_refs(reader, &entry_names);
     let dde_links = find_dde_links(reader, &entry_names);
     let embedded_executables = find_embedded_executables(reader, &entry_names);
-    let metadata = extract_metadata(reader);
     let content_types_xml = read_zip_entry(reader, "[Content_Types].xml")
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned());
     let word_document_xml = match doc_subtype {
@@ -264,16 +239,6 @@ fn parse_ooxml_from_reader<R: OoxmlEntryReader>(reader: &mut R) -> OoxmlDocument
     };
     let workbook_xml = match doc_subtype {
         OoxmlSubtype::Excel => read_zip_entry(reader, "xl/workbook.xml")
-            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
-        _ => None,
-    };
-    let workbook_rels_xml = match doc_subtype {
-        OoxmlSubtype::Excel => read_zip_entry(reader, "xl/_rels/workbook.xml.rels")
-            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
-        _ => None,
-    };
-    let excel_styles_xml = match doc_subtype {
-        OoxmlSubtype::Excel => read_zip_entry(reader, "xl/styles.xml")
             .map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
         _ => None,
     };
@@ -296,14 +261,11 @@ fn parse_ooxml_from_reader<R: OoxmlEntryReader>(reader: &mut R) -> OoxmlDocument
         external_refs,
         dde_links,
         embedded_executables,
-        metadata,
         has_encryption,
         entry_names,
         word_document_xml,
         content_types_xml,
         workbook_xml,
-        workbook_rels_xml,
-        excel_styles_xml,
         excel_macrosheet_xml,
         vba_project_strings,
         max_entry_size,
@@ -528,48 +490,6 @@ fn find_embedded_executables<R: OoxmlEntryReader>(
     found
 }
 
-/// Extract metadata from docProps/core.xml and docProps/app.xml.
-fn extract_metadata<R: OoxmlEntryReader>(reader: &mut R) -> OoxmlMetadata {
-    let mut meta = OoxmlMetadata::default();
-
-    // Parse core.xml (Dublin Core metadata)
-    if let Some(data) = read_zip_entry(reader, "docProps/core.xml") {
-        let text = String::from_utf8_lossy(&data);
-        if let Some(doc) = parse_xml_safe(&text) {
-            for node in doc.descendants() {
-                match node.tag_name().name() {
-                    "creator" => meta.creator = node.text().map(String::from),
-                    "lastModifiedBy" => meta.last_modified_by = node.text().map(String::from),
-                    "created" => meta.created = node.text().map(String::from),
-                    "modified" => meta.modified = node.text().map(String::from),
-                    "title" => meta.title = node.text().map(String::from),
-                    "subject" => meta.subject = node.text().map(String::from),
-                    "description" => meta.description = node.text().map(String::from),
-                    "keywords" => meta.keywords = node.text().map(String::from),
-                    "category" => meta.category = node.text().map(String::from),
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    // Parse app.xml (application metadata)
-    if let Some(data) = read_zip_entry(reader, "docProps/app.xml") {
-        let text = String::from_utf8_lossy(&data);
-        if let Some(doc) = parse_xml_safe(&text) {
-            for node in doc.descendants() {
-                match node.tag_name().name() {
-                    "Application" => meta.application = node.text().map(String::from),
-                    "Company" => meta.company = node.text().map(String::from),
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    meta
-}
-
 /// Read a ZIP entry by name, returning None on any error.
 fn read_zip_entry<R: OoxmlEntryReader>(reader: &mut R, name: &str) -> Option<Vec<u8>> {
     reader.read_entry(name)
@@ -623,7 +543,6 @@ mod tests {
         let doc = parse_ooxml_with_archive_entries(&data, &entries)?;
         assert_eq!(doc.doc_subtype, OoxmlSubtype::Word);
         assert!(doc.max_entry_size > 0);
-        assert_eq!(doc.metadata.application.as_deref(), Some("Word"));
         assert_eq!(doc.external_refs.len(), 1);
         assert_eq!(
             doc.external_refs[0].target,

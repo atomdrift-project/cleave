@@ -672,7 +672,7 @@ pub fn configure_jemalloc_low_memory() {
         ))
     ))]
     {
-        // tikv-jemalloc-ctl 0.6 doesn't filefacts dirty_decay_ms/muzzy_decay_ms
+        // tikv-jemalloc-ctl 0.6 doesn't expose dirty_decay_ms/muzzy_decay_ms
         // as typed helpers, so use the raw mallctl interface.
         // SAFETY: ssize_t (isize) is the correct type for these settings per jemalloc docs.
         unsafe {

@@ -14,7 +14,7 @@
 //! - H₂: 2 unique micro-behavior categories (Db, Po)
 
 use crate::elements::{
-    category_to_element, Element, HYDROGEN_MICRO, MENDELEVIUM, OXYGEN, POTASSIUM, THORIUM,
+    Element, HYDROGEN_MICRO, MENDELEVIUM, OXYGEN, POTASSIUM, THORIUM, category_to_element,
 };
 use crate::types::Severity;
 use rustc_hash::{FxHashMap, FxHashSet};

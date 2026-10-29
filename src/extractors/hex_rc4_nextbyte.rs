@@ -101,6 +101,7 @@ pub(crate) fn recover(b: &[u8]) -> Option<Member> {
     None
 }
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     #[test]

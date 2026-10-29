@@ -869,7 +869,7 @@ fn lookup_dangerous_clsid(clsid: &str) -> Option<&'static str> {
 ///
 /// The OLE property set format (MS-OLEPS) uses fixed-offset records.
 /// Both streams share the same outer structure; only the property IDs
-/// they filefacts differ.
+/// they expose differ.
 fn extract_metadata(comp: &mut cfb::CompoundFile<Cursor<&[u8]>>) -> DocumentMetadata {
     let mut meta = DocumentMetadata::default();
 

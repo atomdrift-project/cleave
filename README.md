@@ -1,3 +1,5 @@
+<p align="center"><img src="media/logo.svg" alt="" width="96"></p>
+
 # cleave
 
 [![Latest release](https://img.shields.io/github/v/release/atomdrift-project/cleave)](https://github.com/atomdrift-project/cleave/releases/latest)
@@ -39,7 +41,7 @@ brew install atomdrift-project/tap/cleave
 
 ### Build from source
 
-Source builds require Git, Make, a C/C++ toolchain, and Rust 1.94 or newer.
+Source builds require Git, Make, a C/C++ toolchain, and Rust 1.97 or newer.
 
 ```bash
 git clone https://github.com/atomdrift-project/cleave.git
@@ -99,6 +101,10 @@ cleave diff v1.2.0/ v1.3.0/
 # Show the installed traits revision and exact rule inventory.
 cleave version
 ```
+
+<p align="center">
+  <img src="media/diff.png" alt="cleave diff comparing two releases" width="760">
+</p>
 
 Given the same bytes, traits bundle, options, and installed analysis tools,
 cleave's findings are deterministic. Reports include an analysis timestamp, so

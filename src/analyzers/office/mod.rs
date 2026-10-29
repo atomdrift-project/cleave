@@ -1175,20 +1175,11 @@ impl OfficeAnalyzer {
         let word_xml = doc.word_document_xml.as_deref().unwrap_or("");
         let content_types_xml = doc.content_types_xml.as_deref().unwrap_or("");
         let workbook_xml = doc.workbook_xml.as_deref().unwrap_or("");
-        // The workbook .rels and styles XML strings are unused by the
-        // analyzer now that the matching findings live in trait YAML;
-        // the trait base scans the full file content directly via the
-        // capability mapper.
-        let _ = (&doc.workbook_rels_xml, &doc.excel_styles_xml);
         let excel_macrosheet_xml = doc.excel_macrosheet_xml.as_deref().unwrap_or("");
         let raw_surface = String::from_utf8_lossy(data);
 
-        // XLM (Excel 4.0 macro) substring counts.  Computed once and
-        // reused both by the existing inline finding thresholds and by
-        // the `office.xlm` metric struct emitted at the end of the
-        // function.  Once equivalent traits land in the traits repo,
-        // the inline finding pushes can be removed and the counts will
-        // continue to be exposed via metrics for trait authors.
+        // XLM (Excel 4.0 macro) substring counts, exposed as `office.xlm.*`
+        // metrics for traits.
         let xlm_formula_fill = excel_macrosheet_xml.matches("FORMULA.FILL").count();
         let xlm_run = excel_macrosheet_xml.matches("RUN(").count();
         let xlm_char = excel_macrosheet_xml.matches("CHAR(").count();
@@ -1199,38 +1190,6 @@ impl OfficeAnalyzer {
         let xlm_call = excel_macrosheet_xml.matches("CALL(").count();
         let xlm_very_hidden = workbook_xml.matches("state=\"veryHidden\"").count();
         let xlm_auto_open = workbook_xml.matches("_xlnm.Auto_open").count();
-
-        if doc.doc_subtype == ooxml::OoxmlSubtype::Excel {
-            // Excel structural findings
-            // (excel-workbook-part / excel-macroenabled-content /
-            //  excel4-macrosheet-content / excel4-macrosheet-part /
-            //  excel4-macrosheet-relationship / excel4-veryhidden-sheet /
-            //  excel4-auto-open-name / excel4-style-key-material) are now
-            // emitted by the trait base via
-            // `metadata/document/office/macro/excel-vba.yaml`.  The
-            // capability mapper at the end of `analyze_office` scans
-            // for those text patterns and produces the same findings
-            // — keeping them inline here would just double-emit and
-            // get merged by the dedup pass.
-            //
-            // The content-type / workbook substring checks remain in the
-            // `content_types_xml` / `workbook_xml` strings the analyzer
-            // already collects; the trait base scans the same surfaces.
-            // XLM count-threshold findings (formula_fill ≥ 8, run ≥ 12,
-            // char ≥ 200, get_cell ≥ 3, day_now ≥ 2) are now emitted
-            // by the metric-typed traits in
-            // `micro-behaviors/process/create/macro/office/compat_missing.yaml`.
-            // The counts themselves remain on `office.xlm.*` for any
-            // future tuning. Keeping the locals named/used so the
-            // capability mapper has consistent values to reference.
-            let _ = (
-                xlm_formula_fill,
-                xlm_run,
-                xlm_char,
-                xlm_get_cell,
-                xlm_day_now,
-            );
-        }
 
         let mut has_concealed_script = false;
         if !word_xml.is_empty() {

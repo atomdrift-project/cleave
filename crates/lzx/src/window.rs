@@ -34,11 +34,8 @@ pub enum WindowSize {
     MB32 = 0x0200_0000,
 }
 
-/// A sliding window of a certain size.
-///
-/// A `std::collections::VecDeque` is not used because the `deque_make_contiguous` feature
-/// is [nightly-only experimental](https://github.com/rust-lang/rust/issues/70929).
-pub struct Window {
+/// A sliding window of a certain size, stored as a ring buffer whose length is a power of two.
+pub(crate) struct Window {
     pos: usize,
     buffer: Box<[u8]>,
 }
@@ -68,12 +65,12 @@ impl WindowSize {
     }
 
     pub(crate) fn create_buffer(&self) -> Window {
-        // The window must be at least as big as the smallest chunk, or else we can't possibly
-        // contain an entire chunk inside of the sliding window.
-        assert!(self.value() >= MAX_CHUNK_SIZE);
+        // The window must be at least as big as the largest chunk, or else we can't possibly
+        // contain an entire chunk inside of the sliding window. Every variant satisfies this.
+        debug_assert!(self.value() >= MAX_CHUNK_SIZE);
 
-        // We can use bit operations if we rely on this assumption so make sure it holds.
-        assert!(self.value().is_power_of_two());
+        // Wrapping uses bit masks, which relies on every variant being a power of two.
+        debug_assert!(self.value().is_power_of_two());
 
         Window {
             pos: 0,
@@ -90,19 +87,30 @@ impl Window {
         }
     }
 
-    pub fn push(&mut self, value: u8) {
+    pub(crate) fn push(&mut self, value: u8) {
         self.buffer[self.pos] = value;
         self.advance(1);
     }
 
-    pub fn copy_from_self(&mut self, offset: usize, length: usize) {
+    /// Appends `length` bytes copied from `offset` bytes behind the current position.
+    ///
+    /// The offset comes from the bitstream (an uncompressed block header sets the repeated
+    /// offsets to arbitrary values), so one reaching past the window is a decode error.
+    pub(crate) fn copy_from_self(
+        &mut self,
+        offset: usize,
+        length: usize,
+    ) -> Result<(), DecodeFailed> {
+        if offset > self.buffer.len() {
+            return Err(DecodeFailed::WindowTooSmall);
+        }
+
         // For the fast path:
         // * Source cannot wrap around
         // * `copy_within` won't overwrite as we go but we need that
         // * Destination cannot wrap around
         if offset <= self.pos && length <= offset && self.pos + length < self.buffer.len() {
             // Best case: neither source or destination wrap around
-            // TODO write a test for this because it used to fail
             let start = self.pos - offset;
             self.buffer.copy_within(start..start + length, self.pos);
         } else {
@@ -121,11 +129,12 @@ impl Window {
         }
 
         self.advance(length);
+        Ok(())
     }
 
-    pub fn copy_from_bitstream(
+    pub(crate) fn copy_from_bitstream(
         &mut self,
-        bitstream: &mut Bitstream,
+        bitstream: &mut Bitstream<'_>,
         len: usize,
     ) -> Result<(), DecodeFailed> {
         if len > self.buffer.len() {
@@ -146,7 +155,7 @@ impl Window {
         Ok(())
     }
 
-    pub fn past_view(&mut self, len: usize) -> Result<&mut [u8], DecodeFailed> {
+    pub(crate) fn past_view(&mut self, len: usize) -> Result<&mut [u8], DecodeFailed> {
         if len > MAX_CHUNK_SIZE {
             return Err(DecodeFailed::ChunkTooLong);
         }
@@ -174,6 +183,7 @@ impl Window {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 
@@ -209,9 +219,11 @@ mod tests {
         assert_eq!(window.pos, 2);
         assert_eq!(&window.buffer[window.buffer.len() - 2..], &[1, 2]);
         assert_eq!(&window.buffer[..2], &[3, 4]);
-        assert!(window.buffer[2..window.buffer.len() - 2]
-            .iter()
-            .all(|&x| x == 0));
+        assert!(
+            window.buffer[2..window.buffer.len() - 2]
+                .iter()
+                .all(|&x| x == 0)
+        );
     }
 
     #[test]
@@ -221,7 +233,7 @@ mod tests {
         window.buffer[1] = 2;
         window.buffer[2] = 3;
         window.pos = 3;
-        window.copy_from_self(3, 2);
+        window.copy_from_self(3, 2).unwrap();
         assert_eq!(window.pos, 5);
         assert_eq!(&window.buffer[..5], &[1, 2, 3, 1, 2]);
         assert!(window.buffer[5..].iter().all(|&x| x == 0));
@@ -234,7 +246,7 @@ mod tests {
         window.buffer[1] = 2;
         window.buffer[2] = 3;
         window.pos = 3;
-        window.copy_from_self(2, 3);
+        window.copy_from_self(2, 3).unwrap();
         assert_eq!(window.pos, 6);
         assert_eq!(&window.buffer[..6], &[1, 2, 3, 2, 3, 2]);
         assert!(window.buffer[6..].iter().all(|&x| x == 0));
@@ -246,13 +258,15 @@ mod tests {
         window.buffer[window.buffer.len() - 3] = 1;
         window.buffer[window.buffer.len() - 2] = 2;
         window.pos = window.buffer.len() - 1;
-        window.copy_from_self(2, 2);
+        window.copy_from_self(2, 2).unwrap();
         assert_eq!(window.pos, 1);
         assert_eq!(window.buffer[0], 2);
         assert_eq!(&window.buffer[window.buffer.len() - 3..], &[1, 2, 1]);
-        assert!(window.buffer[1..window.buffer.len() - 3]
-            .iter()
-            .all(|&x| x == 0));
+        assert!(
+            window.buffer[1..window.buffer.len() - 3]
+                .iter()
+                .all(|&x| x == 0)
+        );
     }
 
     #[test]
@@ -261,7 +275,7 @@ mod tests {
         window.buffer[window.buffer.len() - 4] = 1;
         window.buffer[window.buffer.len() - 3] = 2;
         window.pos = window.buffer.len() - 2;
-        window.copy_from_self(2, 2);
+        window.copy_from_self(2, 2).unwrap();
         assert_eq!(window.pos, 0);
     }
 
@@ -273,13 +287,72 @@ mod tests {
         window.buffer[0] = 3;
         window.buffer[1] = 4;
         window.pos = 2;
-        window.copy_from_self(4, 3);
+        window.copy_from_self(4, 3).unwrap();
         assert_eq!(window.pos, 5);
         assert_eq!(&window.buffer[..5], &[3, 4, 1, 2, 3]);
         assert_eq!(&window.buffer[window.buffer.len() - 2..], &[1, 2]);
-        assert!(window.buffer[5..window.buffer.len() - 2]
-            .iter()
-            .all(|&x| x == 0));
+        assert!(
+            window.buffer[5..window.buffer.len() - 2]
+                .iter()
+                .all(|&x| x == 0)
+        );
+    }
+
+    /// The non-wrapping `copy_within` fast path must agree with a byte-at-a-time copy at
+    /// each of its boundaries: source starting at index 0 (`offset == pos`), source and
+    /// destination adjacent (`length == offset`), and destination ending just before the
+    /// end of the buffer. The remaining cases fall through to the slow path and pin it too.
+    #[test]
+    fn copy_from_self_matches_bytewise_copy() {
+        let len = WindowSize::KB32.value();
+        let cases = [
+            (3, 3, 2),           // source at index 0
+            (10, 4, 4),          // length == offset
+            (len - 10, 9, 9),    // destination ends one byte before the end
+            (len - 10, 2, 9),    // overlapping, so slow path
+            (len - 9, 9, 9),     // destination reaches the end, so slow path
+            (5, 8, 3),           // source wraps, so slow path
+            (len - 2, 3, 6),     // destination wraps, so slow path
+            (len - 1, len, 257), // offset of a whole window
+        ];
+
+        for (pos, offset, length) in cases {
+            let mut window = WindowSize::KB32.create_buffer();
+            window
+                .buffer
+                .iter_mut()
+                .enumerate()
+                .for_each(|(i, x)| *x = (i * 7 % 251) as u8);
+            window.pos = pos;
+
+            let mut expected = window.buffer.clone();
+            for i in 0..length {
+                expected[(pos + i) % len] = expected[(len + pos + i - offset) % len];
+            }
+
+            window.copy_from_self(offset, length).unwrap();
+            assert_eq!(
+                window.pos,
+                (pos + length) % len,
+                "pos={pos}, offset={offset}"
+            );
+            assert!(
+                window.buffer == expected,
+                "pos={pos}, offset={offset}, length={length}"
+            );
+        }
+    }
+
+    #[test]
+    fn copy_from_self_beyond_window_is_an_error() {
+        let mut window = WindowSize::KB32.create_buffer();
+        window.pos = 10;
+        let offset = window.buffer.len() + 1;
+        assert_eq!(
+            window.copy_from_self(offset, 2),
+            Err(DecodeFailed::WindowTooSmall)
+        );
+        assert_eq!(window.pos, 10);
     }
 
     #[test]
@@ -312,9 +385,11 @@ mod tests {
         window.copy_from_bitstream(&mut bitstream, 4).unwrap();
         assert_eq!(window.pos, 0);
         assert_eq!(&window.buffer[window.buffer.len() - 4..], &[1, 2, 3, 4]);
-        assert!(window.buffer[..window.buffer.len() - 4]
-            .iter()
-            .all(|&x| x == 0));
+        assert!(
+            window.buffer[..window.buffer.len() - 4]
+                .iter()
+                .all(|&x| x == 0)
+        );
     }
 
     #[test]

@@ -120,7 +120,7 @@ pub fn physical_cpu_count() -> Option<usize> {
 
 #[cfg(any(target_os = "illumos", target_os = "solaris"))]
 fn cpu_count_impl() -> Option<usize> {
-    extern "C" {
+    unsafe extern "C" {
         fn sysconf(name: i32) -> i64;
     }
     // From <sys/unistd.h> on illumos/Solaris: _SC_NPROCESSORS_ONLN = 15. This is
@@ -145,7 +145,7 @@ fn cpu_count_impl() -> Option<usize> {
 
 #[cfg(target_os = "macos")]
 fn total_memory_impl() -> Option<u64> {
-    extern "C" {
+    unsafe extern "C" {
         fn sysctlbyname(
             name: *const core::ffi::c_char,
             oldp: *mut std::ffi::c_void,
@@ -199,7 +199,7 @@ fn current_rss_impl() -> Option<u64> {
     const MACH_TASK_BASIC_INFO_COUNT: u32 =
         (std::mem::size_of::<MachTaskBasicInfo>() / std::mem::size_of::<i32>()) as u32;
 
-    extern "C" {
+    unsafe extern "C" {
         fn mach_task_self() -> u32;
         fn task_info(
             target_task: u32,
@@ -488,7 +488,7 @@ fn current_rss_impl() -> Option<u64> {
 fn total_memory_impl() -> Option<u64> {
     // All three BSDs support sysctl hw.physmem via the C API.
     // FreeBSD/NetBSD return a u64, OpenBSD returns a long (i64 on 64-bit).
-    extern "C" {
+    unsafe extern "C" {
         fn sysctl(
             name: *const i32,
             namelen: u32,
@@ -553,7 +553,7 @@ fn total_memory_impl() -> Option<u64> {
     target_os = "solaris"
 ))]
 fn getrusage_maxrss() -> Option<u64> {
-    extern "C" {
+    unsafe extern "C" {
         fn getrusage(who: i32, usage: *mut Rusage) -> i32;
     }
 
@@ -599,7 +599,7 @@ fn getrusage_maxrss() -> Option<u64> {
 /// release).
 #[cfg(target_os = "freebsd")]
 fn current_rss_impl() -> Option<u64> {
-    extern "C" {
+    unsafe extern "C" {
         fn sysctl(
             name: *const i32,
             namelen: u32,
@@ -697,7 +697,7 @@ fn total_memory_impl() -> Option<u64> {
     // sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGESIZE) is POSIX and works on
     // illumos/Solaris with no extra dependencies. In zones this returns the
     // zone's rcap-capped memory when set, else the host RAM.
-    extern "C" {
+    unsafe extern "C" {
         fn sysconf(name: i32) -> i64;
     }
     // From <unistd.h> on illumos: _SC_PAGESIZE=11, _SC_PHYS_PAGES=500.
@@ -818,7 +818,7 @@ fn current_rss_impl() -> Option<u64> {
     extern "system" {
         fn GetCurrentProcess() -> isize;
         fn K32GetProcessMemoryInfo(process: isize, pmc: *mut ProcessMemoryCounters, cb: u32)
-            -> i32;
+        -> i32;
     }
 
     // SAFETY: ProcessMemoryCounters is a repr(C) struct of plain integers, for
@@ -948,7 +948,7 @@ fn cpu_time_impl() -> Option<CpuTime> {
 /// `sysctlbyname` returning an array of N C `long`s, for `kern.cp_time`.
 #[cfg(target_os = "freebsd")]
 fn sysctlbyname_longs<const N: usize>(name: &core::ffi::CStr) -> Option<[i64; N]> {
-    extern "C" {
+    unsafe extern "C" {
         fn sysctlbyname(
             name: *const core::ffi::c_char,
             oldp: *mut std::ffi::c_void,
@@ -979,7 +979,7 @@ fn sysctlbyname_longs<const N: usize>(name: &core::ffi::CStr) -> Option<[i64; N]
 /// platforms whose physical-core sysctls return an `int`: macOS and FreeBSD.
 #[cfg(any(target_os = "macos", target_os = "freebsd"))]
 fn sysctlbyname_int(name: &core::ffi::CStr) -> Option<usize> {
-    extern "C" {
+    unsafe extern "C" {
         fn sysctlbyname(
             name: *const core::ffi::c_char,
             oldp: *mut std::ffi::c_void,
@@ -1010,7 +1010,7 @@ fn sysctlbyname_int(name: &core::ffi::CStr) -> Option<usize> {
 /// helper, zero is valid (notably for `v_cache_count`).
 #[cfg(target_os = "freebsd")]
 fn sysctlbyname_u32(name: &core::ffi::CStr) -> Option<u32> {
-    extern "C" {
+    unsafe extern "C" {
         fn sysctlbyname(
             name: *const core::ffi::c_char,
             oldp: *mut std::ffi::c_void,
@@ -1410,7 +1410,8 @@ cpu_info:5:cpu_info5:state\ton-line
     #[test]
     fn zfs_credit_rejects_incomplete_or_malformed_stats() {
         for stats in [
-            "", "size 4 1000\nc_min 4 100\n",
+            "",
+            "size 4 1000\nc_min 4 100\n",
             "size 4 bad\nc_min 4 0\nmru_evictable_data 4 20\nmfu_evictable_data 4 10\n",
             "size 4 1000\nsize 4 2000\nc_min 4 0\nmru_evictable_data 4 20\nmfu_evictable_data 4 10\n",
             "size 4 1000\nc_min 4 0\nmru_evictable_data 2 20\nmfu_evictable_data 4 10\n",

@@ -9,17 +9,6 @@ use super::strings::StringExtractor;
 use stng::{ExtractedString, StringMethod};
 
 #[test]
-fn test_normalize_symbol() {
-    assert_eq!(
-        StringExtractor::normalize_symbol("sym.imp.malloc"),
-        "malloc"
-    );
-    assert_eq!(StringExtractor::normalize_symbol("fcn.main"), "main");
-    assert_eq!(StringExtractor::normalize_symbol("_printf"), "printf");
-    assert_eq!(StringExtractor::normalize_symbol("normal"), "normal");
-}
-
-#[test]
 fn test_symbol_map_enrichment() {
     let mut imports = std::collections::HashSet::new();
     imports.insert("malloc".to_string());
@@ -30,17 +19,9 @@ fn test_symbol_map_enrichment() {
     let raw = vec![ExtractedString {
         value: "malloc".to_string(),
         data_offset: 0,
-        section: None,
         method: StringMethod::RawScan,
         kind: None,
-        raw: None,
-        source: None,
-        fragments: None,
-        section_size: None,
-        section_executable: None,
-        section_writable: None,
-        architecture: None,
-        function_meta: None,
+        ..ExtractedString::default()
     }];
     let strings = extractor.convert_stng_strings(&raw);
     let malloc = strings.iter().find(|s| s.value == "malloc");

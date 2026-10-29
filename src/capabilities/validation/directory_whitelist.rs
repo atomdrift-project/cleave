@@ -243,7 +243,7 @@ const ALLOWED_MICRO_BEHAVIORS: &[&str] = &[
 /// analog). Generic extension capabilities map to their technique homes
 /// instead: messaging → communications/ipc/message/, storage → data/db/
 /// web-storage/, alarms → time/schedule/, scripting → process/inject/,
-/// webRequest → process/hook/, cookies → communications/http/cookies/, etc.
+/// webRequest → communications/http/intercept/, cookies → communications/http/cookies/, etc.
 const ALLOWED_MB_BROWSER_EXTENSION: &[&str] = &[
     "action",     // toolbar action / popup surface
     "lifecycle",  // runtime lifecycle / identity / browser.* namespace
@@ -311,7 +311,8 @@ const ALLOWED_MB_CRYPTO: &[&str] = &[
 
 /// Allowed subdirectories in micro-behaviors/data/
 const ALLOWED_MB_DATA: &[&str] = &[
-    "arithmetic", // Numeric and bitwise operations, independent of representation
+    "arithmetic", // Numerical and mixed numerical/bitwise expressions
+    "bitwise",    // XOR, masks, shifts and Boolean bit manipulation
     "app",
     "archive",
     "buffer",
@@ -325,6 +326,7 @@ const ALLOWED_MB_DATA: &[&str] = &[
     "control-flow",
     "crypto",
     "db",
+    "document", // Document manipulation; macro containers do not imply process creation.
     "decode",
     "decompress",
     "dns",
@@ -400,6 +402,7 @@ const ALLOWED_MB_FS: &[&str] = &[
 
 /// Allowed subdirectories in micro-behaviors/hardware/
 const ALLOWED_MB_HARDWARE: &[&str] = &[
+    "audio", // Audio output/playback; input capture is a separate operation.
     "block",
     "display",
     "flash",
@@ -430,6 +433,7 @@ const ALLOWED_MB_MEM: &[&str] = &[
     "heap-spray",
     "inline-asm",
     "lock",
+    "local-storage", // Thread/fiber-local allocation and access, not execution control.
     // Address-space mappings and their removal, independent of backing store.
     "map",
     // Required out-of-bounds write mechanism; an unsafe API alone does not qualify.
@@ -519,30 +523,83 @@ const ALLOWED_MB_PROCESS: &[&str] = &[
     "fd",
     // Fiber management; a fiber is not a thread.
     "fiber",
-    "fork",
     "hook",
     "identity",
     "info",
     "inject",
     "interpreter",
-    "io",
     "lifecycle",
     "pid",
     "resources",
-    "script",
+    "stdio", // Reading, writing and relaying explicit process standard streams.
     "sync",
     "terminate",
     "thread",
-    "threading", // Legacy; migrating to thread, sync and work
-    "tls",
     "tty",
-    "user",
     // Work queues, pools and task submission; not thread creation.
     "work",
 ];
 
+/// Retired process categories: execution host is not the affected resource.
+/// Keep aligned with traits/scripts/review/process-taxonomy-policy.json.
+const RETIRED_PROCESS_PATHS: &[&str] = &[
+    "micro-behaviors/process/io",
+    "micro-behaviors/process/tls",
+    "micro-behaviors/process/sync/lock-free",
+    "micro-behaviors/process/hook/console",
+    "micro-behaviors/process/hook/web-storage",
+    "micro-behaviors/process/hook/webextension",
+    "micro-behaviors/process/hook/xhr",
+    "micro-behaviors/process/hook/event",
+    "micro-behaviors/process/hook/delegate",
+    "micro-behaviors/process/hook/vb6",
+    "micro-behaviors/process/create/agent",
+    "micro-behaviors/process/create/ai-agent-cli",
+    "micro-behaviors/process/create/ai-cli-agent",
+    "micro-behaviors/process/create/channel-agent",
+    "micro-behaviors/process/create/permission-agent",
+    "micro-behaviors/process/create/unattended-agent",
+    "micro-behaviors/process/create/help-agent",
+    "micro-behaviors/process/create/hcom",
+    "micro-behaviors/process/create/compile",
+    "micro-behaviors/process/create/vcs",
+    "micro-behaviors/process/create/macro",
+    "micro-behaviors/process/create/load",
+    "micro-behaviors/process/enumerate/apps",
+    "micro-behaviors/process/enumerate/editor",
+    "micro-behaviors/process/interpreter/document-api",
+    "micro-behaviors/process/interpreter/webview",
+    "micro-behaviors/process/interpreter/npm",
+    "micro-behaviors/process/interpreter/alias",
+    "micro-behaviors/process/interpreter/pipeline",
+    "micro-behaviors/process/fork",
+    "micro-behaviors/process/script",
+    "micro-behaviors/process/threading",
+    "micro-behaviors/process/user",
+    "micro-behaviors/process/create/shell/git",
+    "micro-behaviors/process/create/shell/hg",
+    "micro-behaviors/process/create/shell/build",
+    "micro-behaviors/process/create/shell/player",
+    "micro-behaviors/process/create/shell/infrastructure",
+    "micro-behaviors/process/create/shell/security",
+    "micro-behaviors/process/create/shell/systemd-tmpfiles",
+    "micro-behaviors/process/create/radare2",
+    "micro-behaviors/process/create/unix-utils",
+    "micro-behaviors/process/create/skill",
+    "micro-behaviors/process/create/task",
+    "micro-behaviors/process/create/loader",
+    "micro-behaviors/process/create/shell/guard",
+    "micro-behaviors/process/create/shell/test",
+    "micro-behaviors/process/daemonize/service-path",
+    "micro-behaviors/process/inject/handle",
+    "micro-behaviors/process/inject/memory",
+    "micro-behaviors/process/terminate/crash",
+    "micro-behaviors/process/lifecycle/self-repair",
+    "micro-behaviors/process/create/construction",
+];
+
 /// Allowed subdirectories in micro-behaviors/revision-control/
-const ALLOWED_MB_REVISION_CONTROL: &[&str] = &["git"];
+const ALLOWED_MB_REVISION_CONTROL: &[&str] = &["git", "repository"];
 
 /// Allowed subdirectories in micro-behaviors/time/
 const ALLOWED_MB_TIME: &[&str] = &["query", "schedule", "sleep", "timing"];
@@ -1477,6 +1534,18 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
         }
     }
 
+    // Banned subtrees cannot return under a new nested leaf. Root bans also
+    // live in ALLOWED_MB_PROCESS; this list records the deeper boundaries.
+    for retired in RETIRED_PROCESS_PATHS {
+        if traits_path.join(retired).is_dir() {
+            errors.push(format!(
+                "Retired process taxonomy directory: '{retired}'\n  \
+                 Classify by the affected resource or operation, not its execution host. \
+                 See TAXONOMY.md and scripts/review/process-taxonomy-policy.json."
+            ));
+        }
+    }
+
     // Check well-known/
     if let Ok(entries) = std::fs::read_dir(traits_path.join("well-known")) {
         for entry in entries.flatten() {
@@ -1794,10 +1863,6 @@ mod tests {
                 "micro-behaviors/data/checksum",
             ),
             (
-                "micro-behaviors/process/threading/queue",
-                "micro-behaviors/process/work",
-            ),
-            (
                 "objectives/command-and-control/dropper/staging",
                 "objectives/execution/staging",
             ),
@@ -1845,6 +1910,33 @@ mod tests {
         std::fs::create_dir_all(traits_path.join("micro-behaviors/network/misc")).unwrap();
         let errors = validate_directory_structure(traits_path).unwrap_err();
         assert!(errors.iter().any(|e| e.contains("misc")));
+    }
+
+    #[test]
+    fn retired_process_subtrees_are_rejected_and_resource_homes_are_allowed() {
+        for retired in RETIRED_PROCESS_PATHS {
+            let temp = TempDir::new().unwrap();
+            std::fs::create_dir_all(temp.path().join(retired).join("nested")).unwrap();
+            let errors = validate_directory_structure(temp.path()).unwrap_err();
+            assert!(errors.iter().any(|e| e.contains(retired)), "{errors:?}");
+        }
+        let temp = TempDir::new().unwrap();
+        for path in [
+            "micro-behaviors/process/stdio/relay",
+            "micro-behaviors/process/hook/interception",
+            "micro-behaviors/process/create/fork",
+            "micro-behaviors/process/interpreter/eval/direct",
+            "micro-behaviors/process/sync/condition",
+            "micro-behaviors/data/stream/write",
+            "micro-behaviors/data/document/open",
+            "micro-behaviors/mem/local-storage",
+            "micro-behaviors/revision-control/repository",
+            "micro-behaviors/communications/http/intercept",
+        ] {
+            std::fs::create_dir_all(temp.path().join(path)).unwrap();
+        }
+        let result = validate_directory_structure(temp.path());
+        assert!(result.is_ok(), "{result:?}");
     }
 
     #[test]

@@ -373,42 +373,6 @@ fn test_analyze_directory_json_output() {
         .stdout(predicate::str::contains(r#""v":"9""#));
 }
 
-/// Test that --yara flag enables YARA (deprecated feature, disabled by default)
-/// Ignored by default: YARA rules are slow to compile in debug builds
-/// Run with: cargo test --release test_yara_flag -- --ignored
-#[test]
-#[ignore]
-fn test_yara_flag() {
-    let temp_dir = TempDir::new().unwrap();
-    let script = temp_dir.path().join("test.sh");
-    fs::write(&script, "#!/bin/bash\n").unwrap();
-
-    assert_cmd::cargo_bin_cmd!("cleave")
-        .env("CLEAVE_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
-        .args(["analyze", script.to_str().unwrap(), "--yara"])
-        .assert()
-        .success();
-}
-
-/// Test that --third-party-yara enables third-party YARA rules
-/// Ignored by default: YARA rules are slow to compile in debug builds
-/// Run with: cargo test --release test_yara_third_party_flag -- --ignored
-#[test]
-#[ignore]
-fn test_yara_third_party_flag() {
-    let temp_dir = TempDir::new().unwrap();
-    let script = temp_dir.path().join("test.sh");
-    fs::write(&script, "#!/bin/bash\n").unwrap();
-
-    // Third-party YARA is opt-in (disabled by default)
-    // This test verifies the --third-party-yara flag enables it
-    assert_cmd::cargo_bin_cmd!("cleave")
-        .env("CLEAVE_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
-        .args(["analyze", script.to_str().unwrap(), "--third-party-yara"])
-        .assert()
-        .success();
-}
-
 /// Test strings command with nonexistent file
 #[test]
 fn test_strings_nonexistent_file() {

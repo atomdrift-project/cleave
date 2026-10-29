@@ -760,7 +760,7 @@ impl super::CapabilityMapper {
             return;
         }
 
-        // Iterate to fixed point: removing a finding can filefacts further suppressions
+        // Iterate to fixed point: removing a finding can expose further suppressions
         // in rules whose `unless:` referenced the just-removed finding.
         loop {
             let all_ids: FxHashSet<&str> = findings.iter().map(|f| f.id.as_str()).collect();

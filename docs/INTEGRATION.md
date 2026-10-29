@@ -22,20 +22,12 @@ notable=1, suspicious=40, hostile=120. Reference:
 **CLI streaming**: `--format jsonl` emits one report per line for
 pipelines.
 
-**Library stability** is weaker than the CLI surface.
-Breaking changes between minor releases until 1.0. Pin a commit. The
-JSON `AnalysisReport` is stable within a major version regardless of
-path.
+**Library stability** is weaker than the CLI surface: the Rust API may
+change between minor releases, so pin a version or commit. The JSON
+`AnalysisReport` is stable within a major version.
 
 **Operational requirements** for the library: 8 MB rayon stack,
 `kill_all_rizin_groups()` at shutdown, cooperative cancellation via
 `AnalysisOptions::cancellation`. See
 [RUST_API.md#operational-notes](RUST_API.md#operational-notes).
 
-## Upstream
-
-[Litmus](https://github.com/atomdrift-project/litmus) is the canonical
-consumer: it embeds the library, exposes its own HTTP and worker
-modes, and wraps each `AnalysisReport` as the `raw` field of a
-classification envelope. See its
-[INTEGRATION.md](../../litmus/docs/INTEGRATION.md).

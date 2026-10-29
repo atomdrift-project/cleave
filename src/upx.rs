@@ -2,7 +2,7 @@
 //!
 //! This module detects and unpacks UPX-compressed binaries for analysis.
 
-use std::io::{Read, Write};
+use std::io::Write;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tempfile::NamedTempFile;
@@ -13,6 +13,9 @@ use thiserror::Error;
 /// analysis itself asks its engine ([`crate::Engine`]), so a per-call
 /// `disable_upx` never reaches analyses running alongside it.
 static UPX_DISABLED: AtomicBool = AtomicBool::new(false);
+
+/// How long one `upx -d` may run.
+const UPX_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// Disable UPX decompression for every later `AnalysisOptions` call.
 pub(crate) fn disable_upx() {
@@ -37,18 +40,14 @@ pub(crate) enum UPXError {
 /// A stable description of why UPX decompression failed.
 ///
 /// `upx` reports errors against the temporary file it was handed, so its stderr
-/// carries a path that is different on every run:
+/// carries a path that differs on every run:
 ///
 /// ```text
 /// upx: /tmp/.tmpJYEaZH: Exception: checksum error
 /// ```
 ///
-/// That string used to be interpolated straight into the
-/// `metadata/binary/layout/compression::upx-decompression-failed` finding, which meant the same
-/// sample produced a different description on each scan — two reports of one
-/// file could not be diffed, and the triage line carried a path that means
-/// nothing to the reader. Classify the failure into a fixed vocabulary instead
-/// and keep the raw stderr in the debug log.
+/// Findings use this fixed vocabulary instead, so two reports of one file
+/// diff cleanly; the raw stderr goes to the debug log.
 pub(crate) struct UpxFailure {
     /// Fixed text, safe to compare across runs and machines.
     pub description: &'static str,
@@ -213,15 +212,15 @@ impl UPXDecompressor {
         Some(copy)
     }
 
+    /// The `upx` binary, probed once.
+    fn command() -> Option<std::path::PathBuf> {
+        static UPX: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+        crate::subprocess::probed_tool(&UPX, &["upx"], &["--version"])
+    }
+
     /// Check if the upx binary is available.
     pub(crate) fn is_available() -> bool {
-        let Some(upx) = filefacts::tools::resolve("upx") else {
-            return false;
-        };
-        Command::new(upx)
-            .arg("--version")
-            .output()
-            .is_ok_and(|output| output.status.success())
+        Self::command().is_some()
     }
 
     fn copy_to_writable_temp(data: &[u8]) -> Result<NamedTempFile, UPXError> {
@@ -239,70 +238,32 @@ impl UPXDecompressor {
     /// Use the same byte snapshot as the analyzer. Archive members may have
     /// only a virtual path and no reopenable filesystem backing.
     pub(crate) fn decompress(data: &[u8]) -> Result<Vec<u8>, UPXError> {
-        let Some(upx) = filefacts::tools::resolve("upx") else {
+        let Some(upx) = Self::command() else {
             return Err(UPXError::NotInstalled);
         };
-        if !Self::is_available() {
-            return Err(UPXError::NotInstalled);
-        }
 
-        // Create a temporary file to hold a copy for decompression
-        // (upx -d modifies the file in place, so we work on a copy)
+        // upx -d rewrites the file in place, so it works on a private copy.
         let temp_file = Self::copy_to_writable_temp(data)?;
         let temp_path = temp_file.path();
 
-        // Run upx -d on the temporary copy with a timeout.
-        // stdout → null: -q mode produces nothing useful; null avoids a drain thread.
-        // stderr → piped: captured for error messages on failure.
-        let mut child = Command::new(upx)
+        let mut command = Command::new(upx);
+        command
             .arg("-d")
-            .arg("-q") // Quiet mode
+            .arg("-q")
             .arg(temp_path)
+            .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .env_clear()
-            .envs(crate::subprocess::allowed_env())
-            .spawn()?;
-
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| std::io::Error::other("UPX process stderr pipe was not captured"))?;
-        let (stderr_tx, stderr_rx) = std::sync::mpsc::channel();
-        let stderr_thread = std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            let mut stderr = stderr;
-            let _ = stderr.read_to_end(&mut buf);
-            let _ = stderr_tx.send(buf);
-        });
-
-        let timeout = std::time::Duration::from_secs(120);
-        let start = std::time::Instant::now();
-        let status = loop {
-            if let Some(status) = child.try_wait()? {
-                break status;
-            }
-            if start.elapsed() > timeout {
-                if let Err(e) = child.kill() {
-                    tracing::debug!("UPX kill failed (may have already exited): {}", e);
-                }
-                if let Err(e) = child.wait() {
-                    tracing::debug!("UPX wait after kill failed: {}", e);
-                }
-                let _ = stderr_thread.join();
-                return Err(UPXError::DecompressionFailed(
-                    "UPX decompression timed out".to_string(),
-                ));
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            .stderr(std::process::Stdio::piped());
+        crate::subprocess::scrub_env(&mut command);
+        let Some(output) = crate::subprocess::output_with_timeout(&mut command, UPX_TIMEOUT)?
+        else {
+            return Err(UPXError::DecompressionFailed(
+                "UPX decompression timed out".to_string(),
+            ));
         };
-
-        let _ = stderr_thread.join();
-        let stderr = stderr_rx.recv().unwrap_or_default();
-
-        if !status.success() {
-            let stderr_str = String::from_utf8_lossy(&stderr);
-            return Err(UPXError::DecompressionFailed(stderr_str.to_string()));
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(UPXError::DecompressionFailed(stderr.to_string()));
         }
 
         // Read back the decompressed data with size limit (100 MB)

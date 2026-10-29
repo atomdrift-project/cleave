@@ -11,9 +11,8 @@
 //! - Trait matching
 
 use cleave::{AnalysisInput, FileType};
-use once_cell::sync::Lazy;
-use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::LazyLock as Lazy;
 
 /// Shared fixture for UTF-16 tests - normalized once, analyzed once, reused across tests.
 /// This intentionally bypasses the full trait/YARA pipeline for the real malware sample,
@@ -24,11 +23,8 @@ struct Utf16Fixture {
 }
 
 static UTF16_ANALYSIS: Lazy<Option<Arc<Utf16Fixture>>> = Lazy::new(|| {
-    let sample = PathBuf::from("tests/samples/utf16le_wsh_dropper.js");
-    if !sample.exists() {
-        return None;
-    }
-
+    let (_dir, sample) =
+        crate::support::sample_file("tests/fixtures/malware/utf16le_wsh_dropper.js");
     let normalized = cleave::file_io::read_file_normalized(&sample).ok()?;
     let normalized_text = String::from_utf8(normalized.as_slice().to_vec()).ok()?;
     let file_type = FileType::JavaScript;

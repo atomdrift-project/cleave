@@ -1,12 +1,13 @@
 //! Regression coverage for FileFacts recognition of standalone DOS boot sectors.
 
-use cleave::{AnalysisOptions, analyze_file};
+use cleave::{AnalysisOptions, analyze_bytes};
 
 #[test]
 fn shimmer_boot_sector_is_analyzed_as_data_and_exposes_embedded_strings() -> anyhow::Result<()> {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/dos-boot/shimmer.d");
-    let report = analyze_file(
-        &path,
+    let sample = crate::support::sample("testdata/dos-boot/shimmer.d");
+    let report = analyze_bytes(
+        &sample,
+        "shimmer.d",
         &AnalysisOptions {
             disable_yara: true,
             disable_radare2: true,

@@ -1,12 +1,19 @@
 [package]
 name = "cleave"
 version = "3.0.0-beta.2"
-edition = "2024"
+edition.workspace = true
 # support current + two older releases
-rust-version = "1.97"
-authors = ["The Atomdrift Project"]
+rust-version.workspace = true
+authors.workspace = true
 description = "Deep static analysis tool for extracting features from binaries and source code"
-license = "Apache-2.0"
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+# Git dependencies keep cleave off crates.io; it ships as binaries and as a
+# git dependency.
+publish = false
+keywords = ["malware", "static-analysis", "security", "supply-chain", "yara"]
+categories = ["command-line-utilities", "parsing"]
 default-run = "cleave"
 
 [lints]
@@ -14,6 +21,13 @@ workspace = true
 
 [workspace]
 members = [".", "crates/scpt", "crates/malecule", "crates/sysmem", "crates/yara-classify", "crates/pyinstx", "crates/lzx", "cleave-macros"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.97"
+authors = ["The Atomdrift Project"]
+license = "Apache-2.0"
+repository = "https://github.com/atomdrift-project/cleave"
 
 # Strict but pragmatic lints - similar to the Rust project itself
 [workspace.lints.rust]
@@ -121,7 +135,7 @@ serde_json = { version = "1.0", features = ["raw_value"] }
 serde_yaml = "0.9"
 simd-json = "0.17"
 toml = "1.1"
-bincode = { package = "cu-bincode", git = "https://github.com/copper-project/cu-bincode", features = ["serde", "alloc", "std"] }
+bincode = { package = "cu-bincode", git = "https://github.com/copper-project/cu-bincode", rev = "3c3041a3278cafb1c73701eeecb7961b7ecf6814", features = ["serde", "alloc", "std"] }
 
 # CLI
 clap = { version = "4.6", features = ["derive", "env"] }
@@ -130,7 +144,7 @@ terminal_size = "0.4"
 
 # File operations
 walkdir = "2.5"
-zip = { version = "8.6", default-features = true }
+zip = { version = "9", default-features = true }
 sevenz-rust = { version = "0.6", features = ["aes256"] }
 apple-xar = { version = "0.20", default-features = false }
 tar = "0.4"
@@ -140,7 +154,7 @@ bzip2 = "0.6"
 xz2 = "0.1"
 ar = "0.9"
 cpio = "0.4"
-zstd = "0.13"
+zstd = "0.14"
 # The original `unrar` crate vendors UnRAR 7.10 (2024) and is no longer
 # receiving upstream security refreshes. The maintained fork receives newer
 # UnRAR releases; keep the dependency alias so the extraction code's API name
@@ -152,7 +166,7 @@ cab = "0.6"
 # Pinned to the fork carrying the LZMA/ULMO codec work (PR pending upstream at
 # citruz/dmgwiz). default-features = false drops the crypto (openssl/ring) and
 # cli (clap) features cleave doesn't use.
-dmgwiz = { git = "https://github.com/atomdrift-project/dmgwiz.git", default-features = false }
+dmgwiz = { git = "https://github.com/atomdrift-project/dmgwiz.git", rev = "47c6e34877efa7447fc99f7c11a42422aff01a43", default-features = false }
 lzx = { path = "crates/lzx" }
 # Pinned to 0.39 because rusqlite 0.40 pulls libsqlite3-sys 0.38, whose build
 # script uses the still-unstable cfg_select! macro (rust-lang/rust#115585) and
@@ -234,7 +248,6 @@ tracing = "0.1"
 # dependency here re-arms the bridge for the whole binary.
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "ansi", "smallvec", "std"] }
 
-once_cell = "1.21"
 fs_squashfs = { package = "rust-fs-squashfs", version = "0.4" }
 fs_core = { package = "rust-fs-core", version = "0.3" }
 
@@ -246,18 +259,6 @@ path = "src/lib.rs"
 name = "cleave"
 path = "src/main.rs"
 test = false  # Tests run via lib.rs - eliminates ~1700 duplicate tests
-
-# No #[test] lives in these; without test = false every `cargo test` links a
-# full debug harness binary for each of them for nothing.
-[[bin]]
-name = "regenerate_testdata"
-path = "src/bin/regenerate_testdata.rs"
-test = false
-
-[[bin]]
-name = "yara-precompile"
-path = "src/bin/yara-precompile.rs"
-test = false
 
 [features]
 default = ["jemalloc", "lint"]
@@ -312,8 +313,6 @@ tikv-jemalloc-ctl = { version = "0.7", optional = true, features = ["stats"] }
 assert_cmd = "2.2"
 backhand = { version = "0.25.5", default-features = false, features = ["error-strings", "gzip"] }
 criterion = { version = "0.8", features = ["html_reports"] }
-insta = { version = "1.49", features = ["yaml"] }
-once_cell = "1.21"  # For shared test initialization
 predicates = "3.1"
 proptest = "1.12"
 
@@ -373,8 +372,8 @@ opt-level = 3
 [profile.dev.package.cleave]
 opt-level = 3
 
-# Trait/capability init parses 6490 YAML files into 35k+ regex traits on
-# every cleave invocation — yaml + regex compile dominate subprocess startup.
+# Trait/capability init parses every trait YAML file and compiles its regexes
+# on every cleave invocation; yaml + regex compile dominate subprocess startup.
 [profile.dev.package.regex]
 opt-level = 3
 
@@ -387,13 +386,11 @@ opt-level = 3
 [profile.dev.package.aho-corasick]
 opt-level = 3
 
-# Forked tree-sitter, for the illumos fix. Both crates must come from the
-# fork together because tree-sitter uses its in-tree tree-sitter-language and
-# Cargo permits only one linked copy in the dependency graph.
 [patch.crates-io]
-# Inherited from a sibling by update-deps: [patch] applies only in the root.
-tree-sitter-bash = { git = "https://github.com/tstromberg/tree-sitter-bash" }
-tree-sitter = { git = "https://github.com/tstromberg/tree-sitter", branch = "master" }
-tree-sitter-language = { git = "https://github.com/tstromberg/tree-sitter", branch = "master" }
-
-
+# tree-sitter carries an illumos build fix not yet released upstream; both
+# crates must come from the same fork because tree-sitter uses its in-tree
+# tree-sitter-language and Cargo links only one copy. tree-sitter-bash is
+# patched here, not in filefacts, because [patch] applies only in the root.
+tree-sitter-bash = { git = "https://github.com/tstromberg/tree-sitter-bash", rev = "b672c98bad245e1cc41ff698782afe12b9a2718c" }
+tree-sitter = { git = "https://github.com/tstromberg/tree-sitter", rev = "b6a85b1062dac229f8008613d5017edeadbcfa97" }
+tree-sitter-language = { git = "https://github.com/tstromberg/tree-sitter", rev = "b6a85b1062dac229f8008613d5017edeadbcfa97" }

@@ -1,10 +1,10 @@
 //! Malecule builder - constructs malecules from analysis findings.
 
 use crate::elements::{
-    category_to_element, CARBON, HYDROGEN_MICRO, MENDELEVIUM, OXYGEN, POTASSIUM, THORIUM,
+    CARBON, HYDROGEN_MICRO, MENDELEVIUM, OXYGEN, POTASSIUM, THORIUM, category_to_element,
 };
-use crate::formula::{generate_formula, FindingInput};
-use crate::layout::{apply_layout, LayoutAlgorithm};
+use crate::formula::{FindingInput, generate_formula};
+use crate::layout::{LayoutAlgorithm, apply_layout};
 use crate::types::{Malecule, Severity};
 use rustc_hash::FxHashMap;
 

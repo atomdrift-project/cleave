@@ -200,15 +200,6 @@ fn count_unbounded_any_wildcards(query: &str) -> usize {
     count
 }
 
-/// Clear the shared AST query cache.
-#[allow(dead_code)] // Called via clear_thread_local_caches
-pub(crate) fn clear_ast_query_cache() {
-    let _queries = QUERY_COMPILER.lock();
-    let _banks = COMBINED_QUERY_COMPILER.lock();
-    QUERY_CACHE.write().clear();
-    COMBINED_QUERY_CACHE.write().clear();
-}
-
 /// Match mode for AST pattern matching
 #[derive(Clone, Copy)]
 enum MatchMode {

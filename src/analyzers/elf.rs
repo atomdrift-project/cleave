@@ -227,7 +227,6 @@ impl ElfAnalyzer {
         let parsed_values = ctx.parsed.values();
         let parsed_metrics = ctx.parsed.metrics();
         let filefacts_ok = parsed_values.get("elf.machine").is_some();
-        let parse_failed = parsed_metrics.get("elf.parse_failed").is_some();
         let parse_panicked = parsed_metrics.get("elf.parse_panicked").is_some();
 
         let is_core_dump = filefacts_ok
@@ -236,7 +235,7 @@ impl ElfAnalyzer {
                 .and_then(|v| v.as_str())
                 .is_some_and(|s| s == "core");
 
-        let (_r2_strings, elf_content_end) = if filefacts_ok {
+        let elf_content_end = if filefacts_ok {
             tools_used.push("filefacts".to_string());
             report.target.architectures = Some(vec![
                 parsed_values
@@ -299,8 +298,6 @@ impl ElfAnalyzer {
                 .iter_kind(filefacts::SymbolKind::Function)
                 .filter_map(crate::analysis_context::project_filefacts_function)
                 .collect();
-            let r2_strings_extracted: Option<Vec<stng::ExtractedString>> = None;
-
             // ELF overlay detection: data after the last PT_LOAD segment.
             let image_end = ctx
                 .parsed
@@ -391,9 +388,7 @@ impl ElfAnalyzer {
                         .unwrap_or(0)
                 })
                 .unwrap_or(0);
-            let content_end = sections_end.max(segments_end);
-
-            (r2_strings_extracted, content_end)
+            sections_end.max(segments_end)
         } else {
             // Filefacts's ELF parse failed (or it didn't identify the bytes
             // as ELF at all). Emit the structural finding, salvage
@@ -458,8 +453,7 @@ impl ElfAnalyzer {
                 .iter_kind(filefacts::SymbolKind::Function)
                 .filter_map(crate::analysis_context::project_filefacts_function)
                 .collect();
-            let _ = (parse_failed, precomputed_sha256);
-            (None, 0u64)
+            0
         };
 
         // --- Shared post-processing (strings, embedded code, metrics, overlay) ---

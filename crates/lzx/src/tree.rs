@@ -7,7 +7,7 @@ use crate::{Bitstream, DecodeFailed};
 /// The canonical tree cannot be used to decode elements. Instead, it behaves like a builder for
 /// instances of the actual tree that can decode elements efficiently.
 #[derive(Debug)]
-pub struct CanonicalTree {
+pub(crate) struct CanonicalTree {
     // > Each tree element can have a path length of [0, 16], where a zero path length indicates
     // > that the element has a zero frequency and is not present in the tree.
     //
@@ -15,14 +15,14 @@ pub struct CanonicalTree {
     path_lengths: Vec<u8>,
 }
 
-pub struct Tree {
+pub(crate) struct Tree {
     path_lengths: Vec<u8>,
     largest_length: NonZeroU8,
     huffman_tree: Vec<u16>,
 }
 
 impl CanonicalTree {
-    pub fn new(count: usize) -> Self {
+    pub(crate) fn new(count: usize) -> Self {
         Self {
             // > In the case of the very first such tree, the delta is calculated against a tree
             // > in which all elements have a zero path length.
@@ -37,7 +37,7 @@ impl CanonicalTree {
     /// be used to better decode elements.
     // > an LZXD decoder uses only the path lengths of the Huffman tree to reconstruct the
     // > identical tree,
-    pub fn create_instance_allow_empty(&self) -> Result<Option<Tree>, DecodeFailed> {
+    pub(crate) fn create_instance_allow_empty(&self) -> Result<Option<Tree>, DecodeFailed> {
         // The ideas implemented by this method are heavily inspired from LeonBlade's xnbcli
         // on GitHub.
         //
@@ -98,15 +98,15 @@ impl CanonicalTree {
     /// be used to better decode elements.
     // > an LZXD decoder uses only the path lengths of the Huffman tree to reconstruct the
     // > identical tree,
-    pub fn create_instance(&self) -> Result<Tree, DecodeFailed> {
+    pub(crate) fn create_instance(&self) -> Result<Tree, DecodeFailed> {
         self.create_instance_allow_empty()?
             .ok_or(DecodeFailed::EmptyTree)
     }
 
     // Note: the tree already exists and is used to apply the deltas.
-    pub fn update_range_with_pretree(
+    pub(crate) fn update_range_with_pretree(
         &mut self,
-        bitstream: &mut Bitstream,
+        bitstream: &mut Bitstream<'_>,
         range: Range<usize>,
     ) -> Result<(), DecodeFailed> {
         // > Each of the 17 possible values of (len[x] - prev_len[x]) mod 17, plus three
@@ -187,11 +187,14 @@ impl CanonicalTree {
 
 impl Tree {
     /// Create a new usable tree instance directly from known path lengths.
-    pub fn from_path_lengths(path_lengths: Vec<u8>) -> Result<Self, DecodeFailed> {
+    pub(crate) fn from_path_lengths(path_lengths: Vec<u8>) -> Result<Self, DecodeFailed> {
         CanonicalTree { path_lengths }.create_instance()
     }
 
-    pub fn decode_element(&self, bitstream: &mut Bitstream) -> Result<u16, DecodeFailed> {
+    pub(crate) fn decode_element(
+        &self,
+        bitstream: &mut Bitstream<'_>,
+    ) -> Result<u16, DecodeFailed> {
         // Perform the inverse translation, peeking as many bits as our tree is…
         let code = self.huffman_tree[bitstream.peek_bits(self.largest_length.get()) as usize];
 
@@ -212,6 +215,7 @@ impl fmt::Debug for Tree {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

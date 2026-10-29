@@ -150,6 +150,11 @@ pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
 
     // If target is a directory, process files recursively
     if path.is_dir() {
+        if out.format == cli::OutputFormat::Json {
+            anyhow::bail!(
+                "--format json writes one report; use --format jsonl to scan a directory"
+            );
+        }
         let options_arc = std::sync::Arc::new(options);
 
         // Sink: one of three destinations, all configured up front so the
@@ -190,10 +195,13 @@ pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
                 let formatted = match *result {
                     Ok(lib_report) => {
                         let mut report = prepare_output_report(lib_report);
-                        let Ok(res) = format_report_output(&mut report, &out) else {
-                            return;
-                        };
-                        res
+                        match format_report_output(&mut report, &out) {
+                            Ok(res) => res,
+                            Err(e) => {
+                                tracing::error!(path = %file_path_str, error = %e, "formatting report failed");
+                                return;
+                            }
+                        }
                     }
                     Err(e) => {
                         // Cancellation is expected while draining after Ctrl-C. The

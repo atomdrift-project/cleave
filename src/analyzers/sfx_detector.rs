@@ -88,14 +88,7 @@ enum InnoExtractDiagnosticKind {
     UnexpectedLoaderRevision,
     LoaderChecksumMismatch,
     SetupDataVersionUndetermined,
-    #[cfg_attr(
-        not(all(target_os = "linux", target_arch = "x86_64")),
-        allow(
-            dead_code,
-            reason = "only the Linux x86_64 long-path fallback constructs it"
-        )
-    )]
-    LongMemberPathRemapped,
+    LongMemberPath,
     GenericFailure,
 }
 
@@ -108,9 +101,7 @@ impl InnoExtractDiagnosticKind {
             Self::LoaderChecksumMismatch => {
                 "file/sfx/inno-setup/extraction/loader-checksum-mismatch"
             }
-            Self::LongMemberPathRemapped => {
-                "file/sfx/inno-setup/extraction/long-member-path-remapped"
-            }
+            Self::LongMemberPath => "file/sfx/inno-setup/extraction/long-member-path",
             Self::SetupDataVersionUndetermined => {
                 "file/sfx/inno-setup/extraction/setup-data-version-undetermined"
             }
@@ -122,8 +113,8 @@ impl InnoExtractDiagnosticKind {
         match self {
             Self::UnexpectedLoaderRevision => "Innoextract found unexpected setup loader revision",
             Self::LoaderChecksumMismatch => "Innoextract found setup loader checksum mismatch",
-            Self::LongMemberPathRemapped => {
-                "Inno Setup member path exceeded the filesystem limit and was shortened for analysis"
+            Self::LongMemberPath => {
+                "Inno Setup member name exceeds the filesystem limit; that member was not extracted"
             }
             Self::SetupDataVersionUndetermined => {
                 "Innoextract could not determine setup data version"
@@ -137,15 +128,15 @@ impl InnoExtractDiagnosticKind {
             Self::UnexpectedLoaderRevision | Self::LoaderChecksumMismatch => {
                 Criticality::Suspicious
             }
-            Self::LongMemberPathRemapped
-            | Self::SetupDataVersionUndetermined
-            | Self::GenericFailure => Criticality::Notable,
+            Self::LongMemberPath | Self::SetupDataVersionUndetermined | Self::GenericFailure => {
+                Criticality::Notable
+            }
         }
     }
 
     fn conf(self) -> f32 {
         match self {
-            Self::LongMemberPathRemapped => 0.99,
+            Self::LongMemberPath => 0.99,
             Self::GenericFailure => 0.86,
             _ => 0.95,
         }
@@ -153,7 +144,7 @@ impl InnoExtractDiagnosticKind {
 
     fn attack(self) -> Option<&'static str> {
         match self {
-            Self::LongMemberPathRemapped => None,
+            Self::LongMemberPath => None,
             _ => Some("T1027.009"),
         }
     }
@@ -522,58 +513,14 @@ fn analyze_pyinstaller_in_memory(
     }
 }
 
-/// The path of the first of `names` that resolves and passes `probe_args`.
-///
-/// Only a success is remembered (in `cached`). A probe can fail for a moment:
-/// a spawn refused while the machine is short of processes or threads, a
-/// start slower than [`crate::subprocess::PROBE_TIMEOUT`] under load. Caching
-/// that failure turned the tool off for the rest of the process, so a
-/// long-running server silently stopped extracting every archive that needed
-/// it. A failed probe is logged and retried by the next caller instead.
-fn probed_tool(
-    cached: &'static OnceLock<std::path::PathBuf>,
-    names: &[&str],
-    probe_args: &[&str],
-) -> Option<std::path::PathBuf> {
-    if let Some(path) = cached.get() {
-        return Some(path.clone());
-    }
-    for name in names {
-        let Some(path) = filefacts::tools::resolve(name) else {
-            continue;
-        };
-        let mut probe = std::process::Command::new(&path);
-        probe
-            .args(probe_args)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        crate::subprocess::scrub_env(&mut probe);
-        match crate::subprocess::output_with_timeout(&mut probe, crate::subprocess::PROBE_TIMEOUT) {
-            Ok(Some(_)) => return Some(cached.get_or_init(|| path).clone()),
-            Ok(None) => tracing::warn!(
-                tool = %path.display(),
-                timeout_secs = crate::subprocess::PROBE_TIMEOUT.as_secs(),
-                "tool probe timed out; skipping it for this file"
-            ),
-            Err(error) => tracing::warn!(
-                tool = %path.display(),
-                %error,
-                "tool probe failed to run; skipping it for this file"
-            ),
-        }
-    }
-    None
-}
-
 fn innoextract_cmd() -> Option<std::path::PathBuf> {
     static CHOICE: OnceLock<std::path::PathBuf> = OnceLock::new();
-    probed_tool(&CHOICE, &["innoextract"], &["--version"])
+    crate::subprocess::probed_tool(&CHOICE, &["innoextract"], &["--version"])
 }
 
 pub(crate) fn sevenzip_cmd() -> Option<std::path::PathBuf> {
     static CHOICE: OnceLock<std::path::PathBuf> = OnceLock::new();
-    probed_tool(&CHOICE, &["7zz", "7z", "7za", "7zr"], &["i"])
+    crate::subprocess::probed_tool(&CHOICE, &["7zz", "7z", "7za", "7zr"], &["i"])
 }
 
 pub(crate) fn run_7z(src: &Path, out: &Path) -> bool {
@@ -626,31 +573,6 @@ fn run_innoextract(command: &Path, src: &Path, out: &Path) -> InnoExtractResult 
             }],
         },
         Ok(Some(output)) => {
-            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-            if !output.status.success()
-                && crate::analyzers::inno_long_path::reports_overlong_output(&output.stderr)
-                && clear_extraction_directory(out).is_ok()
-            {
-                match crate::analyzers::inno_long_path::run(command.as_os_str(), &args) {
-                    Ok((status, _stderr, remapped))
-                        if libc::WIFEXITED(status)
-                            && libc::WEXITSTATUS(status) == 0
-                            && remapped > 0 =>
-                    {
-                        return InnoExtractResult {
-                            extracted: true,
-                            diagnostics: vec![InnoExtractDiagnostic {
-                                kind: InnoExtractDiagnosticKind::LongMemberPathRemapped,
-                                message: format!(
-                                    "shortened {remapped} overlong Inno Setup output path(s) for analysis"
-                                ),
-                            }],
-                        };
-                    }
-                    _ => {}
-                }
-            }
-
             let stderr = String::from_utf8_lossy(&output.stderr);
             InnoExtractResult {
                 extracted: output.status.success(),
@@ -667,18 +589,20 @@ fn run_innoextract(command: &Path, src: &Path, out: &Path) -> InnoExtractResult 
     }
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-fn clear_extraction_directory(path: &Path) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(path)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        if file_type.is_dir() {
-            std::fs::remove_dir_all(entry.path())?;
-        } else {
-            std::fs::remove_file(entry.path())?;
-        }
+/// Whether an innoextract error line reports an output file it could not
+/// create because one path component is longer than the 255-byte name limit
+/// of common filesystems.
+fn names_overlong_output_file(line: &str) -> bool {
+    if !line.to_ascii_lowercase().contains("open output file") {
+        return false;
     }
-    Ok(())
+    let (Some(start), Some(end)) = (line.find('"'), line.rfind('"')) else {
+        return false;
+    };
+    end > start
+        && line[start + 1..end]
+            .split(['/', '\\'])
+            .any(|component| component.len() > 255)
 }
 
 fn classify_innoextract_diagnostics(output: &str) -> Vec<InnoExtractDiagnostic> {
@@ -702,6 +626,12 @@ fn classify_innoextract_diagnostics(output: &str) -> Vec<InnoExtractDiagnostic> 
         if let Some(message) = matching_diagnostic_line(output, &lower, needle) {
             diagnostics.push(InnoExtractDiagnostic { kind, message });
         }
+    }
+    if let Some(line) = output.lines().find(|line| names_overlong_output_file(line)) {
+        diagnostics.push(InnoExtractDiagnostic {
+            kind: InnoExtractDiagnosticKind::LongMemberPath,
+            message: truncate_diagnostic(line.trim()),
+        });
     }
 
     if diagnostics.is_empty() && !output.trim().is_empty() {
@@ -1353,14 +1283,15 @@ mod tests {
 
     #[test]
     fn test_build_inno_long_member_path_finding_is_not_malware_attribution() {
-        let finding = build_innoextract_finding(&InnoExtractDiagnostic {
-            kind: InnoExtractDiagnosticKind::LongMemberPathRemapped,
-            message: "shortened 1 overlong Inno Setup output path(s) for analysis".to_string(),
-        });
+        let long = "a".repeat(300);
+        let stderr = format!("Error: could not open output file \"app/{long}.dll\"");
+        let diagnostics = classify_innoextract_diagnostics(&stderr);
+        assert_eq!(diagnostics.len(), 1);
+        let finding = build_innoextract_finding(&diagnostics[0]);
 
         assert_eq!(
             finding.id,
-            "file/sfx/inno-setup/extraction/long-member-path-remapped"
+            "file/sfx/inno-setup/extraction/long-member-path"
         );
         assert_eq!(finding.crit, Criticality::Notable);
         assert_eq!(finding.attack, None);

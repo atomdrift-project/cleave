@@ -388,6 +388,7 @@ pub(crate) fn decode(source: &str) -> Option<String> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     fn packed() -> String {

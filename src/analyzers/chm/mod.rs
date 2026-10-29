@@ -273,22 +273,11 @@ impl std::error::Error for DecompressionBomb {}
 /// Decompress an LZX-encoded MSCompressed/Content stream into a flat
 /// byte buffer using the reset points provided by `rt`.
 ///
-/// **Two CHM-specific framing details vs. stock `lzxd`:**
-///
-/// 1. CHM uses plain LZX, not LZX-DELTA — there is no E8-translation
-///    flag bit at the start of the bitstream. We construct the decoder
-///    via [`Lzxd::new_plain`] so the first block header reads at the
-///    correct alignment.
-///
-/// 2. Each LZX block in a CHM stream encodes exactly `block_len` (32
-///    KB by spec) bytes of decompressed output, even when that's more
-///    than the file's actual content. The decoder must be asked for
-///    `block_len` per call; we then truncate the final block to the
-///    real `uncompressed_size`. Asking for the truncated count
-///    directly causes the decoder to fall short of the encoded block
-///    boundary and corrupt later state — this is why the earlier
-///    "ask for the actual remaining" approach failed with "invalid
-///    path lengths" on real samples.
+/// Each LZX block in a CHM stream encodes exactly `block_len` (32 KB by spec)
+/// bytes of decompressed output, even when that is more than the file's
+/// content. The decoder must be asked for `block_len` per call; the final
+/// block is then truncated to `uncompressed_size`. Asking for less leaves the
+/// decoder short of the encoded block boundary and corrupts later state.
 ///
 /// The decoder is reset at every reset interval (every
 /// `reset_interval_chunks` blocks) per CHM convention.

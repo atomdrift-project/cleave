@@ -3,7 +3,7 @@
 //! Identifies environment variable access and categorizes by sensitivity.
 
 use crate::types::{
-    AnalysisReport, EnvVarAccessType, EnvVarCategory, EnvVarInfo, Evidence, Finding, StringInfo,
+    AnalysisReport, EnvVarAccessType, EnvVarCategory, EnvVarInfo, Evidence, StringInfo,
 };
 
 /// Extract environment variable access from strings and categorize them
@@ -188,7 +188,6 @@ fn analyze_env_var(name: &str, source: &str, access_type: EnvVarAccessType) -> E
             location: None,
             ..Default::default()
         }],
-        referenced_by_traits: Vec::new(),
     }
 }
 
@@ -284,47 +283,11 @@ fn classify_env_var_category(name: &str) -> EnvVarCategory {
     EnvVarCategory::Other
 }
 
-/// NOTE: All detections moved to YAML with composite rules + count_min:
-/// - Credential harvesting: traits/objectives/credential-access/env/harvesting.yaml
-/// - LD_PRELOAD/DYLD_INSERT_LIBRARIES: traits/objectives/evasion/library-injection/env/preload.yaml
-/// - User discovery (>= 2 user vars): traits/objectives/discovery/env/user-discovery.yaml
-/// - System discovery (>= 2 system vars): traits/objectives/discovery/env/system-discovery.yaml
-/// - PATH manipulation: traits/objectives/persistence/env/path-manipulation.yaml
-/// - Android platform: traits/objectives/discovery/platform/android-env.yaml
-/// - Display check: traits/objectives/discovery/env/display-check.yaml
-/// - SSH check: traits/objectives/anti-analysis/env/ssh-detection.yaml
-#[must_use]
-pub(crate) fn generate_traits_from_env_vars(_env_vars: &[EnvVarInfo]) -> Vec<Finding> {
-    Vec::new()
-}
-
-/// Main entry point: analyze environment variables and link to traits
+/// Add the environment variables named in `report.strings` to those the
+/// format analyzer already recorded.
 pub(crate) fn analyze_and_link_env_vars(report: &mut AnalysisReport) {
-    // Step 1: Start with existing env_vars (from script analyzers like Python)
-    // then add env vars extracted from strings
-    let mut env_vars = report.env_vars.clone();
-    env_vars.extend(extract_envvars_from_strings(&report.strings));
-
-    // Step 2: Generate behavioral traits from patterns
-    // NOTE: Basic env API detection (getenv, setenv, etc.) is now handled by YAML traits
-    // in traits/micro-behaviors/os/env/vars/traits.yaml via symbol matching
-    let new_traits = generate_traits_from_env_vars(&env_vars);
-
-    // Step 3: Add back-references
-    for trait_obj in &new_traits {
-        // Mark env vars that contributed to this trait
-        for env_var in &mut env_vars {
-            if trait_obj.evidence.iter().any(|e| e.value == env_var.name) {
-                env_var
-                    .referenced_by_traits
-                    .push(trait_obj.id.clone().to_string());
-            }
-        }
-    }
-
-    // Store results
-    report.env_vars = env_vars;
-    report.findings.extend(new_traits);
+    let from_strings = extract_envvars_from_strings(&report.strings);
+    report.env_vars.extend(from_strings);
 }
 
 #[cfg(test)]

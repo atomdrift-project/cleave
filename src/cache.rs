@@ -142,6 +142,25 @@ pub fn skip_yara_cache() -> bool {
     false
 }
 
+/// Largest value read back from an on-disk cache. Cache files live in a
+/// directory other processes may write, so a planted entry must not be able to
+/// decompress without bound.
+pub(crate) const MAX_CACHED_VALUE_BYTES: u64 = 2 << 30;
+
+/// Decompress a zstd stream read from the cache, failing past
+/// [`MAX_CACHED_VALUE_BYTES`].
+pub(crate) fn decode_cached_zstd(reader: impl std::io::Read) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut out = Vec::new();
+    zstd::stream::read::Decoder::new(reader)?
+        .take(MAX_CACHED_VALUE_BYTES + 1)
+        .read_to_end(&mut out)?;
+    if out.len() as u64 > MAX_CACHED_VALUE_BYTES {
+        return Err(std::io::Error::other("cached value exceeds the size limit"));
+    }
+    Ok(out)
+}
+
 /// Write `bytes` to `path` atomically: a temp file in the same directory
 /// (so the final `rename` stays on one filesystem), then an atomic rename.
 ///
@@ -199,8 +218,8 @@ pub fn format_age(secs: u64) -> String {
 pub fn cache_dir() -> Result<PathBuf> {
     if let Ok(explicit) = std::env::var("CLEAVE_CACHE_DIR") {
         let cache_path = PathBuf::from(explicit);
-        fs::create_dir_all(&cache_path)
-            .with_context(|| format!("creating CLEAVE_CACHE_DIR at {}", cache_path.display()))?;
+        create_private_dir(&cache_path)
+            .with_context(|| format!("using CLEAVE_CACHE_DIR at {}", cache_path.display()))?;
         return Ok(cache_path);
     }
 
@@ -215,19 +234,44 @@ pub fn cache_dir() -> Result<PathBuf> {
             anyhow::bail!("Failed to resolve user cache directory");
         };
         let cache_path = base_cache.join("atomdrift").join("cleave");
+        create_private_dir(&cache_path)
+            .with_context(|| format!("using cache directory {}", cache_path.display()))?;
+        let probe = cache_path.join(".write-test");
+        fs::write(&probe, b"ok")
+            .with_context(|| format!("cache directory {} is not writable", cache_path.display()))?;
+        let _ = fs::remove_file(probe);
+        Ok(cache_path)
+    }
+}
 
-        if fs::create_dir_all(&cache_path).is_ok() {
-            let probe = cache_path.join(".write-test");
-            if fs::write(&probe, b"ok").is_ok() {
-                let _ = fs::remove_file(probe);
-                return Ok(cache_path);
-            }
+/// Create `path` if needed and confirm only the current user can write it.
+///
+/// The cache holds compiled YARA rules, which are native code, and a marker
+/// that lets trait loading skip validation. A directory another user can write
+/// would let them plant either, so such a directory is refused rather than used.
+fn create_private_dir(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(path)?;
+        let meta = fs::metadata(path)?;
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        let uid = unsafe { libc::geteuid() };
+        if meta.uid() != uid {
+            anyhow::bail!("owned by uid {}, not the current user ({uid})", meta.uid());
         }
-
-        anyhow::bail!(
-            "Failed to create writable cache directory at {}",
-            cache_path.display()
-        )
+        if meta.mode() & 0o022 != 0 {
+            anyhow::bail!("writable by other users (mode {:o})", meta.mode() & 0o777);
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir_all(path)?;
+        Ok(())
     }
 }
 
@@ -670,27 +714,6 @@ pub(crate) fn rules_source_tag() -> Option<u64> {
     let tag = compute_shared_rules_source_tag(&traits_dir)?;
     store_source_tag(&traits_dir, revision, tag);
     Some(tag)
-}
-
-/// [`rules_source_tag`] with the on-disk memo bypassed: always hashes the rule
-/// sources as they stand.
-///
-/// Used where the tag is written into an artifact rather than merely compared
-/// against one — pre-compilation and the staleness check that gates publishing.
-/// Those hash the bytes themselves rather than trust any memo.
-pub(crate) fn rules_source_tag_uncached() -> Option<u64> {
-    compute_rules_source_tag(&traits_path())
-}
-
-/// Hash every rule source under `traits_dir` by traits-relative path and
-/// contents.
-///
-/// Always rereads disk for publication checks. Normal loading shares the
-/// immutable snapshot through `compute_shared_rules_source_tag` instead.
-/// The portable, order-independent FNV fold is unchanged.
-fn compute_rules_source_tag(traits_dir: &Path) -> Option<u64> {
-    let sources = crate::rule_sources::RuleSources::fresh(traits_dir).ok()?;
-    source_tag_from_snapshot(traits_dir, &sources)
 }
 
 fn compute_shared_rules_source_tag(traits_dir: &Path) -> Option<u64> {
@@ -1227,6 +1250,27 @@ mod tests {
     use std::io::Write;
     use std::time::Duration;
 
+    #[cfg(unix)]
+    #[test]
+    fn a_cache_dir_other_users_can_write_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let shared = tmp.path().join("shared");
+        create_private_dir(&shared).unwrap();
+        assert_eq!(
+            fs::metadata(&shared).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        fs::set_permissions(&shared, fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(create_private_dir(&shared).is_err());
+    }
+
+    #[test]
+    fn cached_values_round_trip_through_the_bounded_decoder() {
+        let small = zstd::encode_all(&b"ok"[..], 1).unwrap();
+        assert_eq!(decode_cached_zstd(small.as_slice()).unwrap(), b"ok");
+    }
+
     /// A traits tree with one YARA rule file and one plain trait file.
     fn traits_tree(dir: &Path) -> (PathBuf, PathBuf) {
         let rule = dir.join("third-party/vendor/rules.yar");
@@ -1240,6 +1284,12 @@ mod tests {
         )
         .unwrap();
         (rule, trait_file)
+    }
+
+    /// Hash the rule sources under `traits_dir` as they stand on disk.
+    fn compute_rules_source_tag(traits_dir: &Path) -> Option<u64> {
+        let sources = crate::rule_sources::RuleSources::fresh(traits_dir).ok()?;
+        source_tag_from_snapshot(traits_dir, &sources)
     }
 
     /// The failure this tag exists to catch: a rule edit that leaves the file's

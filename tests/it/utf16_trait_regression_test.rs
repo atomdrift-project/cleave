@@ -3,7 +3,6 @@
 
 use assert_cmd::Command;
 use predicates::prelude::*;
-use std::path::Path;
 use std::time::{Duration, Instant};
 
 /// End-to-end regression for the UTF-16 sample's trait evaluation path.
@@ -16,12 +15,9 @@ use std::time::{Duration, Instant};
 #[test]
 #[ignore = "targeted end-to-end regression; run directly when validating the UTF-16 trait path"]
 fn test_utf16_sample_full_analysis_completes_within_90_seconds() {
-    let sample = Path::new("tests/samples/utf16le_wsh_dropper.js");
-    assert!(
-        sample.exists(),
-        "UTF-16 regression sample missing: {}",
-        sample.display()
-    );
+    let (_dir, sample) =
+        crate::support::sample_file("tests/fixtures/malware/utf16le_wsh_dropper.js");
+    let sample = sample.as_path();
 
     let mut cmd = Command::cargo_bin("cleave").expect("Failed to locate cleave binary");
     let start = Instant::now();

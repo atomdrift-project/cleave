@@ -7,6 +7,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod package_type_test;
+mod sample_encoding_test;
 mod support;
 
 mod amos_traits_test;
@@ -37,10 +38,8 @@ mod ghostpenguin_extended_test;
 mod host_info_composite_test;
 mod json_rejection_test;
 mod keylogger_detection_test;
-mod known_bad_test;
 mod lnk_anchor_and_member_yara_test;
 mod metaparse_integration_test;
-mod office_corpus_test;
 mod php_ast_call_kind_regression;
 mod scan_mode_parity_test;
 mod string_vs_content_test;

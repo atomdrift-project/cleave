@@ -62,14 +62,6 @@ const CORE_SAMPLES: &[(&str, &str)] = &[
         "tests/fixtures/lang_strings/rust_native",
     ),
     (
-        "script_kworker_23kb",
-        "tests/fixtures/malware/kworker_obfuscated_1",
-    ),
-    (
-        "python_xmrig_1kb",
-        "tests/fixtures/malware/ultralytics_xmrig.py",
-    ),
-    (
         "java_suspicious_1.4kb",
         "tests/fixtures/java/Suspicious.class",
     ),
@@ -122,10 +114,6 @@ fn bench_analyze_yara(c: &mut Criterion) {
         (
             "rust_native_525kb",
             "tests/fixtures/lang_strings/rust_native",
-        ),
-        (
-            "script_kworker_23kb",
-            "tests/fixtures/malware/kworker_obfuscated_1",
         ),
     ];
 
@@ -195,10 +183,6 @@ fn bench_analyze_file_cached(c: &mut Criterion) {
             "go_linux_amd64_2.3mb",
             "tests/fixtures/lang_strings/go_linux_amd64",
         ),
-        (
-            "script_kworker_23kb",
-            "tests/fixtures/malware/kworker_obfuscated_1",
-        ),
     ];
 
     let opts = fast_options();
@@ -237,10 +221,6 @@ fn bench_analyze_file_uncached(c: &mut Criterion) {
         (
             "go_linux_amd64_2.3mb",
             "tests/fixtures/lang_strings/go_linux_amd64",
-        ),
-        (
-            "script_kworker_23kb",
-            "tests/fixtures/malware/kworker_obfuscated_1",
         ),
     ];
 
@@ -311,7 +291,6 @@ fn bench_analyze_archive(c: &mut Criterion) {
         ("zip_187b", "tests/fixtures/archives/test.zip"),
         ("tar_gz_356b", "tests/fixtures/archives/test.tar.gz"),
         ("encrypted_7z_239b", "testdata/encrypted.7z"),
-        ("malware_zip_424kb", "testdata/malware/midd.zip"),
     ];
 
     let opts = fast_options();

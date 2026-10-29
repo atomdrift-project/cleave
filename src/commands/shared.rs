@@ -51,17 +51,37 @@ pub(crate) struct SymbolInfo {
 // Input Handling
 // ============================================================================
 
-/// Read paths from stdin, one per line.
-/// Filters out empty lines and comments (lines starting with #).
+/// Read paths from stdin, one per line, skipping empty lines and comments
+/// (lines starting with `#`).
+///
+/// File names are attacker-controlled, so a line that is not UTF-8 is logged
+/// and skipped; it never ends the list. Only a line ending (`\n` or `\r\n`)
+/// is stripped: leading and trailing spaces are part of a file name.
 pub(crate) fn read_paths_from_stdin() -> Vec<String> {
-    let stdin = std::io::stdin();
-    let reader = stdin.lock();
-    reader
-        .lines()
-        .map_while(Result::ok)
-        .map(|line| line.trim().to_string())
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .collect()
+    paths_from_lines(std::io::stdin().lock())
+}
+
+fn paths_from_lines(reader: impl BufRead) -> Vec<String> {
+    let mut paths = Vec::new();
+    for line in reader.split(b'\n') {
+        let line = match line {
+            Ok(line) => line,
+            Err(e) => {
+                tracing::error!(error = %e, "failed to read paths from stdin");
+                break;
+            }
+        };
+        let line = line.strip_suffix(b"\r").unwrap_or(&line);
+        match std::str::from_utf8(line) {
+            Ok(path) if path.is_empty() || path.starts_with('#') => {}
+            Ok(path) => paths.push(path.to_string()),
+            Err(_) => tracing::warn!(
+                path = %String::from_utf8_lossy(line).escape_debug(),
+                "skipping non-UTF-8 path from stdin"
+            ),
+        }
+    }
+    paths
 }
 
 /// Expand paths, replacing "-" with paths read from stdin.
@@ -324,6 +344,12 @@ pub(crate) fn extract_strings_from_ast(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_non_utf8_path_does_not_end_the_list() {
+        let input: &[u8] = b"a.bin\r\n\xff\xfe.bin\n\n# note\n b c \nlast";
+        assert_eq!(paths_from_lines(input), ["a.bin", " b c ", "last"]);
+    }
 
     /// The report is built from the bytes the caller passes, not re-read from
     /// disk: `test-rules` passes UTF-16 text already normalized to UTF-8, and

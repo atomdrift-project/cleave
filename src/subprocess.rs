@@ -21,6 +21,11 @@ pub(crate) const EXTRACT_TIMEOUT: Duration = Duration::from_secs(600);
 /// How often a running tool is checked for exit.
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
+/// Most bytes kept from one of a tool's output streams. The rest is read and
+/// discarded so the tool never blocks on a full pipe. A listing of the largest
+/// archive cleave will open fits well within this.
+const MAX_CAPTURE_BYTES: u64 = 128 << 20;
+
 /// The environment variables a tool parsing untrusted input may inherit: what
 /// it needs to find helpers, temp space, and a locale, plus the variables a
 /// Windows process needs to start. Everything else, such as API tokens and
@@ -58,12 +63,18 @@ pub(crate) fn scrub_env(command: &mut Command) {
 ///
 /// Stdout and stderr, when `command` pipes them, are drained on helper
 /// threads while waiting, so a tool cannot stall on a full pipe; unpiped
-/// streams come back empty. Returns `Ok(None)` when the tool was killed for
-/// running past `timeout`.
+/// streams come back empty, and each keeps at most [`MAX_CAPTURE_BYTES`].
+/// Returns `Ok(None)` when the tool was killed for running past `timeout`.
+///
+/// On Unix the tool runs in its own process group, and a timeout kills the
+/// whole group: a helper the tool spawned would otherwise keep the output
+/// pipes open and block the drain threads after the tool itself is gone.
 pub(crate) fn output_with_timeout(
     command: &mut Command,
     timeout: Duration,
 ) -> io::Result<Option<Output>> {
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(command, 0);
     let mut child = command.spawn()?;
     let stdout = child.stdout.take().map(drain);
     let stderr = child.stderr.take().map(drain);
@@ -82,7 +93,8 @@ fn drain(mut pipe: impl Read + Send + 'static) -> JoinHandle<Vec<u8>> {
         let mut buf = Vec::new();
         // A read error only truncates the captured output; the exit status
         // still reports how the tool fared.
-        let _ = pipe.read_to_end(&mut buf);
+        let _ = (&mut pipe).take(MAX_CAPTURE_BYTES).read_to_end(&mut buf);
+        let _ = io::copy(&mut pipe, &mut io::sink());
         buf
     })
 }
@@ -98,6 +110,7 @@ fn wait_with_timeout(child: &mut Child, timeout: Duration) -> io::Result<Option<
             return Ok(Some(status));
         }
         if Instant::now() >= deadline {
+            kill_group(child);
             // Kill fails only if the tool exited in the meantime; either way
             // `wait` reaps it.
             let _ = child.kill();
@@ -106,6 +119,62 @@ fn wait_with_timeout(child: &mut Child, timeout: Duration) -> io::Result<Option<
         }
         std::thread::sleep(POLL_INTERVAL);
     }
+}
+
+/// The path of the first of `names` that resolves and passes `probe_args`.
+///
+/// Only a success is remembered (in `cached`): a probe can fail transiently
+/// (spawn refused under load, a start slower than [`PROBE_TIMEOUT`]), and a
+/// long-running process must not lose the tool for good because of one. A
+/// failed probe is logged and retried by the next caller.
+pub(crate) fn probed_tool(
+    cached: &'static std::sync::OnceLock<std::path::PathBuf>,
+    names: &[&str],
+    probe_args: &[&str],
+) -> Option<std::path::PathBuf> {
+    if let Some(path) = cached.get() {
+        return Some(path.clone());
+    }
+    for name in names {
+        let Some(path) = filefacts::tools::resolve(name) else {
+            continue;
+        };
+        let mut probe = Command::new(&path);
+        probe
+            .args(probe_args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        scrub_env(&mut probe);
+        match output_with_timeout(&mut probe, PROBE_TIMEOUT) {
+            Ok(Some(_)) => return Some(cached.get_or_init(|| path).clone()),
+            Ok(None) => tracing::warn!(
+                tool = %path.display(),
+                timeout_secs = PROBE_TIMEOUT.as_secs(),
+                "tool probe timed out; skipping it for this file"
+            ),
+            Err(error) => tracing::warn!(
+                tool = %path.display(),
+                %error,
+                "tool probe failed to run; skipping it for this file"
+            ),
+        }
+    }
+    None
+}
+
+/// Kill the process group [`output_with_timeout`] started `child` in.
+fn kill_group(child: &Child) {
+    #[cfg(unix)]
+    if let Ok(pid) = libc::pid_t::try_from(child.id()) {
+        // SAFETY: kill has no memory-safety preconditions; a negative pid
+        // names the process group the child leads, created at spawn.
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = child;
 }
 
 #[cfg(all(test, unix))]
@@ -148,6 +217,20 @@ mod tests {
         if std::env::var_os("PATH").is_some() {
             assert!(stdout.lines().any(|line| line.starts_with("PATH=")));
         }
+    }
+
+    #[test]
+    fn a_timeout_kills_the_tools_children_too() {
+        // The grandchild inherits stdout; if it survived, draining would block
+        // until it exited.
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "sleep 30 & sleep 30"])
+            .stdout(Stdio::piped());
+        let started = Instant::now();
+        let output = output_with_timeout(&mut command, Duration::from_millis(200)).unwrap();
+        assert!(output.is_none());
+        assert!(started.elapsed() < Duration::from_secs(10));
     }
 
     #[test]

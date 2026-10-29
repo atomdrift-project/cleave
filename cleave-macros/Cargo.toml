@@ -1,7 +1,13 @@
 [package]
 name = "cleave-macros"
 version = "0.1.0"
-edition = "2021"
+authors.workspace = true
+license.workspace = true
+description = "Derive macros for cleave's file-type tables"
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
 
 [lints]
 workspace = true

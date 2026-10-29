@@ -179,7 +179,7 @@ pub struct Args {
     #[arg(long, value_name = "PLATFORMS", default_value = "all")]
     pub platforms: String,
 
-    /// Custom traits directory (overrides CLEAVE_TRAITS_DIR env var and default "traits")
+    /// Traits directory to load rules from (overrides CLEAVE_TRAITS_DIR and the installed rules)
     #[arg(long, value_name = "DIR")]
     pub traits_dir: Option<String>,
 
@@ -995,7 +995,7 @@ pub enum DetectFileType {
 pub enum OutputFormat {
     /// Raw JSON snapshot of the in-memory report, for offline rendering
     Snapshot,
-    /// JSON output (single object)
+    /// One JSON object for a single file (use jsonl for directories)
     Json,
     /// JSONL output (newline-delimited JSON) for streaming
     Jsonl,

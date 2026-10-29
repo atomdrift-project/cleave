@@ -72,14 +72,14 @@ struct DecodeInfo<'a> {
 }
 
 #[derive(Debug)]
-pub enum Decoded {
+pub(crate) enum Decoded {
     Single(u8),
     Match { offset: usize, length: usize },
     Read(usize),
 }
 
 #[derive(Debug)]
-pub enum Kind {
+pub(crate) enum Kind {
     Verbatim {
         main_tree: Tree,
         length_tree: Option<Tree>,
@@ -96,11 +96,11 @@ pub enum Kind {
 
 /// Note that this is not the block header, but the head of the block's body, which includes
 /// everything except the tail of the block data (either uncompressed data or token sequence).
-pub struct Block {
+pub(crate) struct Block {
     /// Only 24 bits may be used.
-    pub remaining: u32,
-    pub size: u32,
-    pub kind: Kind,
+    pub(crate) remaining: u32,
+    pub(crate) size: u32,
+    pub(crate) kind: Kind,
 }
 
 /// Read the pretrees for the main and length tree, and with those also read the trees
@@ -108,7 +108,7 @@ pub struct Block {
 ///
 /// This is used when reading a verbatim or aligned block.
 fn read_main_and_length_trees(
-    bitstream: &mut Bitstream,
+    bitstream: &mut Bitstream<'_>,
     state: &mut DecoderState,
 ) -> Result<(), DecodeFailed> {
     // Verbatim block
@@ -137,13 +137,13 @@ fn read_main_and_length_trees(
 }
 
 fn decode_element(
-    bitstream: &mut Bitstream,
+    bitstream: &mut Bitstream<'_>,
     r: &mut [u32; 3],
     DecodeInfo {
         aligned_offset_tree,
         main_tree,
         length_tree,
-    }: DecodeInfo,
+    }: DecodeInfo<'_>,
 ) -> Result<Decoded, DecodeFailed> {
     // Decoding Matches and Literals (Aligned and Verbatim Blocks)
     let main_element = main_tree.decode_element(bitstream)?;
@@ -164,10 +164,9 @@ fn decode_element(
                 + 7
                 + 2
         } else {
-            length_header + 2 // no length footer
-                              // Decoding a match length (if a match length < 257).
+            // No length footer.
+            length_header + 2
         };
-        assert_ne!(match_length, 0);
 
         let position_slot = (main_element - 256) >> 3;
 
@@ -213,43 +212,10 @@ fn decode_element(
             r[0] = match_offset;
         }
 
-        // Check for extra length.
-        // > If the match length is 257 or larger, the encoded match length token
-        // > (or match length, as specified in section 2.6) value is 257, and an
-        // > encoded Extra Length field follows the other match encoding components,
-        // > as specified in section 2.6.7, in the bitstream.
-
-        // TODO for some reason, if we do this, parsing .xnb files with window size
-        //      64KB, it breaks and stops decompressing correctly, but no idea why.
-        /*
-        let match_length = if match_length == 257 {
-            // Decode the extra length.
-            let extra_len = if bitstream.read_bit() != 0 {
-                if bitstream.read_bit() != 0 {
-                    if bitstream.read_bit() != 0 {
-                        // > Prefix 0b111; Number of bits to decode 15;
-                        bitstream.read_bits(15)
-                    } else {
-                        // > Prefix 0b110; Number of bits to decode 12;
-                        bitstream.read_bits(12) + 1024 + 256
-                    }
-                } else {
-                    // > Prefix 0b10; Number of bits to decode 10;
-                    bitstream.read_bits(10) + 256
-                }
-            } else {
-                // > Prefix 0b0; Number of bits to decode 8;
-                bitstream.read_bits(8)
-            };
-
-            // Get the match length (if match length >= 257).
-            // In all cases,
-            // > Base value to add to decoded value 257 + …
-            257 + extra_len
-        } else {
-            match_length as u16
-        };
-        */
+        // LZX DELTA (MS-PATCH section 2.6.7) follows a match length of 257 with an Extra
+        // Length field. Plain LZX, as used by CAB, CHM and XNB, has no such field: 257 is
+        // its maximum match length. Only the plain form is decoded, matching libmspack,
+        // which reads Extra Length only in delta mode.
 
         // Get match length and offset. Perform copy and paste work.
         Decoded::Match {
@@ -261,7 +227,7 @@ fn decode_element(
 
 impl Block {
     pub(crate) fn read(
-        bitstream: &mut Bitstream,
+        bitstream: &mut Bitstream<'_>,
         state: &mut DecoderState,
     ) -> Result<Self, DecodeFailed> {
         // > Each block of compressed data begins with a 3-bit Block Type field.
@@ -327,7 +293,7 @@ impl Block {
 
     pub(crate) fn decode_element(
         &self,
-        bitstream: &mut Bitstream,
+        bitstream: &mut Bitstream<'_>,
         r: &mut [u32; 3],
     ) -> Result<Decoded, DecodeFailed> {
         match &self.kind {

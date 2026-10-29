@@ -30,7 +30,6 @@ pub mod breadcrumb;
 pub mod cache;
 pub mod cancellation;
 pub mod context;
-pub mod decoders;
 mod engine;
 pub mod enriched;
 mod entropy;
@@ -40,16 +39,21 @@ pub mod ip_validator;
 mod leaf_affinity;
 pub mod mem_profile;
 pub mod memory_tracker;
+#[cfg(test)]
+mod path_mapper_test;
 pub mod rule_sources;
 pub mod rule_update;
 mod shared_resources;
 pub mod strings;
+#[cfg(test)]
+mod strings_test;
 mod subprocess;
 #[cfg(feature = "lint")]
 pub mod test_rules;
 #[cfg(all(test, feature = "lint"))]
-/// Test module for rule filters.
-pub mod test_rules_filters_test;
+mod test_rules_filters_test;
+#[cfg(test)]
+mod test_samples;
 pub(crate) mod traits_fingerprint;
 pub mod traits_repo;
 mod upx;
@@ -70,6 +74,7 @@ pub mod malecule_bridge;
 pub mod model_facts;
 pub mod output;
 pub mod path_mapper;
+mod payload_filter;
 pub mod random_validator;
 pub mod report_input;
 pub mod theme;
@@ -184,6 +189,7 @@ pub use capabilities::CapabilityMapper;
 pub use composite_rules::Platform;
 pub use engine::Engine;
 pub use rayon_nest::{mark_thread_background, set_parallel_owner_caps};
+pub use types::FileAnalysis;
 pub use types::binary::StringInfo;
 pub use types::code_structure::{BinaryProperties, SourceCodeMetrics};
 pub use types::core::{AnalysisReport, Criticality, TargetInfo};
@@ -192,29 +198,12 @@ pub use types::diff::{
     ScopeDiff, ScopeDiffs, ScopeRocs, SectionChange, StringChange, SymbolChange, SymbolKind,
     TraitChange,
 };
-// `TextMetrics` typed struct retired with the cleave→filefacts
-// text-metrics migration; downstream consumers should read keys
-// from `report.filefacts_metrics` (BTreeMap<String, f64>) under the
-// `text.*` prefix instead.
-pub use types::FileAnalysis;
 pub use types::traits_findings::{Evidence, Finding, FindingKind, Trait, TraitKind};
 
 // Re-export cache management functions
 pub use shared_resources::{
     reload_capability_mapper, set_compact_member_retention, set_skip_traits_override,
 };
-
-/// Pre-compile all YARA rules into portable, per-tier `.yrc` files plus a
-/// `manifest.json` in `out_dir` — the producer side run offline by the
-/// `yara-precompile` tool (a peer to `yara-update`, run after it). The `.yrc`
-/// hold WASM bytecode (not native code), so one build is loadable on every
-/// client architecture and OS. Returns `(builtin_count, third_party_count)`.
-pub fn precompile_yara(
-    out_dir: &std::path::Path,
-    enable_third_party: bool,
-) -> anyhow::Result<(usize, usize)> {
-    yara_engine::YaraEngine::precompile_to(out_dir, enable_third_party)
-}
 
 /// Bring the local compiled-YARA cache up to date with the active rule
 /// sources now, rather than on the first scan after: compiles only the buckets
@@ -227,18 +216,6 @@ pub fn compile_yara_rules(enable_third_party: bool) -> (usize, usize) {
     engine.compile_missing()
 }
 
-/// Check that a directory of pre-compiled YARA rules is complete and current
-/// for the rule sources in the active traits directory, without recompiling.
-///
-/// The engine silently ignores compiled rules that don't match their sources
-/// and falls back to compiling in-process, so stale artifacts cost every client
-/// the very work they exist to avoid while producing no visible symptom. This
-/// is the cheap check (one traits walk, no compilation) that makes that state
-/// fail a `validate` run instead.
-pub fn check_precompiled_yara(dir: &std::path::Path) -> anyhow::Result<()> {
-    yara_engine::YaraEngine::check_precompiled(dir)
-}
-
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 
@@ -248,455 +225,6 @@ pub(crate) fn hash_str(s: &str) -> u64 {
     let mut hasher = FxHasher::default();
     s.hash(&mut hasher);
     hasher.finish()
-}
-
-fn looks_like_actionable_payload_preview(preview: &str) -> bool {
-    let preview = preview.trim();
-    if preview.is_empty() || preview == "<binary data>" {
-        return false;
-    }
-
-    let markers = [
-        "#!",
-        "<?php",
-        "function ",
-        "import ",
-        "from ",
-        "const ",
-        "let ",
-        "var ",
-        "curl ",
-        "wget ",
-        "powershell",
-        "cmd.exe",
-        "bash ",
-        "sh ",
-        "http://",
-        "https://",
-    ];
-    markers.iter().any(|marker| preview.contains(marker))
-}
-
-fn looks_like_actionable_source_payload_preview(preview: &str) -> bool {
-    let preview = preview.trim_start();
-    let leading_markers = [
-        "<?php",
-        "function ",
-        "import ",
-        "from ",
-        "const ",
-        "let ",
-        "var ",
-        "curl ",
-        "wget ",
-        "powershell",
-        "cmd.exe",
-        "bash ",
-        "sh ",
-    ];
-
-    preview.starts_with("#!/")
-        || leading_markers
-            .iter()
-            .any(|marker| preview.starts_with(marker))
-        || preview.contains("http://")
-        || preview.contains("https://")
-}
-
-fn is_benign_unicode_escape_payload(payload: &types::ExtractedPayload) -> bool {
-    if !payload
-        .encoding_chain
-        .iter()
-        .any(|encoding| encoding == "unicode-escape")
-    {
-        return false;
-    }
-
-    let decoded = String::from_utf8_lossy(&payload.data);
-    decoded.contains('\u{1b}')
-        && decoded.contains("colors ?")
-        && decoded.contains("${m}")
-        && decoded.contains(": m")
-}
-
-fn is_generated_python_codec_unicode_escape(report: &types::AnalysisReport) -> bool {
-    report.target.file_type == "python"
-        && report.strings.iter().any(|s| {
-            s.value.contains("Python Character Mapping Codec") && s.value.contains("gencodec.py")
-        })
-}
-
-fn should_skip_unknown_encoded_payload_for_text(
-    file_type: &FileType,
-    payload: &types::ExtractedPayload,
-) -> bool {
-    if payload.detected_type != FileType::Unknown {
-        return false;
-    }
-
-    let is_textual = file_type.is_source_code()
-        || matches!(
-            file_type,
-            FileType::Markdown | FileType::Text | FileType::Data
-        );
-    if !is_textual {
-        return false;
-    }
-
-    if payload
-        .encoding_chain
-        .first()
-        .is_some_and(|encoding| encoding == "xor")
-    {
-        return !looks_like_actionable_source_payload_preview(&payload.preview);
-    }
-
-    payload.encoding_chain == ["url"] && !looks_like_actionable_payload_preview(&payload.preview)
-}
-
-fn should_skip_unknown_svg_path_xor_base64_payload(
-    file_type: &FileType,
-    payload: &types::ExtractedPayload,
-    source: &[u8],
-) -> bool {
-    if payload.detected_type != FileType::Unknown
-        || payload.encoding_chain != ["xor", "base64"]
-        || looks_like_actionable_payload_preview(&payload.preview)
-    {
-        return false;
-    }
-
-    if !matches!(file_type, FileType::JavaScript | FileType::TypeScript) {
-        return false;
-    }
-
-    let offset = payload.original_offset.min(source.len());
-    let start = offset.saturating_sub(8192);
-    let end = offset.saturating_add(8192).min(source.len());
-    let context = String::from_utf8_lossy(&source[start..end]);
-
-    let has_svg_context = context.contains("createElement(\"svg\"")
-        || context.contains("createElement('svg'")
-        || context.contains("viewBox")
-        || context.contains("fillRule")
-        || context.contains("clipRule")
-        || context.contains("dangerouslySetInnerHTML");
-
-    has_svg_context
-        && (looks_like_svg_path_data_fragment(payload.preview.trim())
-            || source_literal_at_offset_looks_like_svg_path(source, offset))
-}
-
-fn looks_like_svg_path_data_fragment(preview: &str) -> bool {
-    if preview.contains("d=\"M")
-        || preview.contains("d:'M")
-        || preview.contains("d:\"M")
-        || preview.contains("viewBox")
-        || preview.contains("clipRule")
-        || preview.contains("fillRule")
-    {
-        return true;
-    }
-
-    let trimmed = preview.trim_matches(|c: char| c == '"' || c == '\'' || c.is_whitespace());
-    if trimmed.len() < 16 || trimmed.contains('{') || trimmed.contains(';') {
-        return false;
-    }
-
-    let mut total = 0usize;
-    let mut allowed = 0usize;
-    let mut digits = 0usize;
-    let mut path_commands = 0usize;
-    let mut alpha_non_path = 0usize;
-
-    for ch in trimmed.chars() {
-        if ch.is_whitespace() {
-            continue;
-        }
-        total += 1;
-        if ch.is_ascii_digit() {
-            digits += 1;
-        }
-        if matches!(
-            ch,
-            'M' | 'm'
-                | 'L'
-                | 'l'
-                | 'H'
-                | 'h'
-                | 'V'
-                | 'v'
-                | 'C'
-                | 'c'
-                | 'S'
-                | 's'
-                | 'Q'
-                | 'q'
-                | 'T'
-                | 't'
-                | 'A'
-                | 'a'
-                | 'Z'
-                | 'z'
-        ) {
-            path_commands += 1;
-        } else if ch.is_ascii_alphabetic() {
-            alpha_non_path += 1;
-        }
-        if ch.is_ascii_digit()
-            || matches!(
-                ch,
-                '.' | '-'
-                    | '+'
-                    | ','
-                    | '"'
-                    | '\''
-                    | 'M'
-                    | 'm'
-                    | 'L'
-                    | 'l'
-                    | 'H'
-                    | 'h'
-                    | 'V'
-                    | 'v'
-                    | 'C'
-                    | 'c'
-                    | 'S'
-                    | 's'
-                    | 'Q'
-                    | 'q'
-                    | 'T'
-                    | 't'
-                    | 'A'
-                    | 'a'
-                    | 'Z'
-                    | 'z'
-            )
-        {
-            allowed += 1;
-        }
-    }
-
-    total > 0
-        && digits >= 6
-        && path_commands >= 1
-        && alpha_non_path == 0
-        && allowed * 100 / total >= 85
-}
-
-fn source_literal_at_offset_looks_like_svg_path(source: &[u8], offset: usize) -> bool {
-    let start = offset.saturating_sub(512);
-    let end = offset.saturating_add(512).min(source.len());
-    let local = &source[start..end];
-    let rel_offset = offset.saturating_sub(start).min(local.len());
-
-    for quote in *b"\"'" {
-        let Some(before) = local[..rel_offset].iter().rposition(|&b| b == quote) else {
-            continue;
-        };
-        let Some(after_rel) = local[rel_offset..].iter().position(|&b| b == quote) else {
-            continue;
-        };
-        let after = rel_offset + after_rel;
-        if after <= before + 1 {
-            continue;
-        }
-        let literal = String::from_utf8_lossy(&local[before + 1..after]);
-        if literal.len() <= 4096 && looks_like_svg_path_data_fragment(&literal) {
-            return true;
-        }
-    }
-
-    false
-}
-
-fn smallest_section_for_offset(
-    offset: usize,
-    sections: &[types::Section],
-) -> Option<&types::Section> {
-    sections
-        .iter()
-        .filter(|section| {
-            let Some(section_offset) = section.offset else {
-                return false;
-            };
-            let start = section_offset as usize;
-            let end = start.saturating_add(section.size as usize);
-            offset >= start && offset < end
-        })
-        .min_by_key(|section| section.size)
-}
-
-fn should_skip_unknown_xor_payload_for_binary(
-    file_type: &FileType,
-    payload: &types::ExtractedPayload,
-    sections: &[types::Section],
-    report: &types::AnalysisReport,
-) -> bool {
-    if payload.encoding_chain.len() != 1
-        || payload.encoding_chain[0] != "xor"
-        || payload.detected_type != FileType::Unknown
-    {
-        return false;
-    }
-
-    let Some(section) = smallest_section_for_offset(payload.original_offset, sections) else {
-        return false;
-    };
-
-    if *file_type == FileType::Elf {
-        let name = section.name.as_str();
-        let is_elf_metadata_section = matches!(
-            name,
-            ".comment"
-                | ".ident"
-                | ".copyright"
-                | ".gnu_debuglink"
-                | ".symtab"
-                | ".strtab"
-                | ".shstrtab"
-                | ".SUNW_ctf"
-        ) || name.starts_with(".debug");
-
-        let is_unloaded_metadata = section.address == Some(0);
-
-        return is_elf_metadata_section && is_unloaded_metadata;
-    }
-
-    if *file_type == FileType::Pe {
-        // Heuristic: PE signed by a third-party developer with a large
-        // export surface (a code-signing library binary). Detected via
-        // a `metadata/signed/leaf::*` Notable finding plus a non-trivial
-        // export count from `report.exports`.
-        let in_readonly_data = section.name == ".rdata";
-        let is_signed_leaf = report
-            .findings
-            .iter()
-            .any(|f| f.id.starts_with("metadata/signed/leaf::"));
-        let has_large_export_surface = report.exports.len() >= 50;
-
-        return in_readonly_data
-            && is_signed_leaf
-            && has_large_export_surface
-            && !looks_like_actionable_payload_preview(&payload.preview);
-    }
-
-    false
-}
-
-/// Recognise a signed-Python-extension PE (e.g. a CPython runtime DLL)
-/// whose `.rdata`-resident hex payloads are part of unicodedata /
-/// Unicode property tables. Reads filefacts's `pe.signatures[0].subject`
-/// and falls back on `report.findings` / `report.exports` /
-/// `report.strings` counts (all populated already on the analyse path).
-fn is_signed_python_extension(report: &types::AnalysisReport) -> bool {
-    let signer_psf = report
-        .filefacts
-        .as_ref()
-        .and_then(|e| e.values.get("pe"))
-        .and_then(|pe| pe.get("signatures"))
-        .and_then(|s| s.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|sig| sig.get("subject"))
-        .and_then(|v| v.as_str())
-        .is_some_and(|subject| subject.contains("Python Software Foundation"));
-    signer_psf
-        && report.exports.len() <= 2
-        && report.functions.len() >= 100
-        && report.strings.len() >= 2000
-}
-
-fn is_elf_metadata_offset(offset: usize, sections: &[types::Section]) -> bool {
-    let Some(section) = sections
-        .iter()
-        .filter(|section| {
-            let Some(section_offset) = section.offset else {
-                return false;
-            };
-            let start = section_offset as usize;
-            let end = start.saturating_add(section.size as usize);
-            offset >= start && offset < end
-        })
-        .min_by_key(|section| section.size)
-    else {
-        return false;
-    };
-
-    let name = section.name.as_str();
-    let is_elf_metadata_section = matches!(
-        name,
-        ".comment"
-            | ".ident"
-            | ".copyright"
-            | ".gnu_debuglink"
-            | ".symtab"
-            | ".strtab"
-            | ".shstrtab"
-            | ".SUNW_ctf"
-    ) || name.starts_with(".debug");
-
-    is_elf_metadata_section && section.address == Some(0)
-}
-
-fn should_skip_unknown_url_markup_payload(payload: &types::ExtractedPayload) -> bool {
-    if !payload.encoding_chain.iter().any(|e| e == "url")
-        || payload.detected_type != FileType::Unknown
-    {
-        return false;
-    }
-
-    let preview = payload.preview.trim().to_lowercase();
-    if preview.is_empty() || preview == "<binary data>" {
-        return false;
-    }
-
-    let markup_markers = [
-        "<!doctype",
-        "<html",
-        "<body",
-        "<script",
-        "<a ",
-        "<form",
-        "<div",
-        "<span",
-        "<table",
-        "<li>",
-        "href=\"http",
-        "rel=\"nofollow\"",
-        "target=\"_blank\"",
-        "&nbsp;",
-    ];
-
-    if markup_markers.iter().any(|marker| preview.contains(marker)) {
-        return true;
-    }
-
-    let payload_markers = [
-        "http://",
-        "https://",
-        "/bin/",
-        "curl ",
-        "wget ",
-        "powershell",
-        "cmd.exe",
-        "bash ",
-        "sh ",
-        ".exe",
-        ".dll",
-        ".sh",
-        "/api/",
-        "user-agent",
-    ];
-    if payload_markers
-        .iter()
-        .any(|marker| preview.contains(marker))
-    {
-        return false;
-    }
-
-    let space_count = preview.chars().filter(char::is_ascii_whitespace).count();
-    let alpha_count = preview.chars().filter(char::is_ascii_alphabetic).count();
-    alpha_count >= 24 && space_count >= 4
 }
 
 pub use composite_rules::evaluators::{clear_regex_caches, clear_thread_local_caches};
@@ -1087,7 +615,7 @@ impl std::fmt::Debug for SkipPredicate {
 /// Callers (e.g. litmus) create one per request and pass it via
 /// [`AnalysisOptions::phase`]. Cleave updates it at each major stage
 /// (archive extraction, YARA, structural analysis, …) so the caller
-/// can filefacts the current phase in diagnostic endpoints like `/_/requests`.
+/// can expose the current phase in diagnostic endpoints like `/_/requests`.
 ///
 /// Trackers created via [`PhaseTracker::with_label`] register themselves
 /// in a process-global list so [`start_rayon_diagnostics`] can enumerate
@@ -2321,116 +1849,8 @@ pub(crate) fn process_encoded_payloads(
         {
             break;
         }
-        // Skip benign encoded payloads (certificate URLs, PDB paths)
-        let preview_lower = payload.preview.to_lowercase();
-        if payload.encoding_chain.iter().any(|e| e == "url") {
-            // Skip URL-encoded strings from certificate/PKI infrastructure
-            if preview_lower.contains("microsoft.com/pki")
-                || preview_lower.contains("microsoft.com/pkiops")
-                || preview_lower.contains("crl.microsoft.com")
-                || preview_lower.contains("verisign.com")
-                || preview_lower.contains("digicert.com")
-                || preview_lower.contains("symantec.com")
-                || preview_lower.starts_with("http") && preview_lower.contains("ocsp.")
-                || preview_lower.starts_with("http") && preview_lower.contains("/crl/")
-                || preview_lower.starts_with("http") && preview_lower.contains("/certs/")
-            {
-                tracing::debug!("Skipping benign PKI URL payload: {}", payload.preview);
-                continue;
-            }
-            if should_skip_unknown_url_markup_payload(&payload) {
-                tracing::debug!(
-                    "Skipping URL-decoded markup fragment from unknown payload: {}",
-                    payload.preview
-                );
-                continue;
-            }
-        }
-        if payload.encoding_chain.iter().any(|e| e == "unicode-escape") {
-            // Skip unicode-escape strings that are Windows file paths (PDB, build paths)
-            // or JSON parser error messages containing U+XXXX references
-            if payload.preview.contains(":\\")
-                || payload.preview.contains(".pdb")
-                || payload.preview.contains("must be escaped")
-                || payload.preview.contains("control character U+")
-                || is_benign_unicode_escape_payload(&payload)
-                || (payload.detected_type == FileType::Unknown
-                    && is_generated_python_codec_unicode_escape(report))
-            {
-                tracing::debug!(
-                    "Skipping benign unicode-escape payload: {}",
-                    payload.preview
-                );
-                continue;
-            }
-        }
-        if file_type == FileType::Pe
-            && !payload.encoding_chain.is_empty()
-            && payload.encoding_chain.iter().all(|e| e == "hex")
-            && payload.detected_type == FileType::Unknown
-            && is_signed_python_extension(report)
-        {
-            tracing::debug!(
-                "Skipping unknown hex payload in signed Python extension data tables: {}",
-                payload.preview
-            );
-            continue;
-        }
-        if payload.encoding_chain.len() == 1
-            && payload.encoding_chain[0] == "xor"
-            && payload.detected_type == FileType::Unknown
-            && payload.preview.len() < 32
-        {
-            tracing::debug!("Skipping short unknown xor fragment: {}", payload.preview);
-            continue;
-        }
-        if should_skip_unknown_encoded_payload_for_text(&file_type, &payload) {
-            tracing::debug!(
-                "Skipping unknown encoded fragment in text/source file: {}",
-                payload.preview
-            );
-            continue;
-        }
-        if should_skip_unknown_svg_path_xor_base64_payload(&file_type, &payload, source) {
-            tracing::debug!(
-                "Skipping SVG path fragment misdecoded as xor/base64 payload: {}",
-                payload.preview
-            );
-            continue;
-        }
-        if should_skip_unknown_xor_payload_for_binary(
-            &file_type,
-            &payload,
-            &report.sections,
-            report,
-        ) {
-            tracing::debug!(
-                "Skipping unknown xor fragment in ELF metadata section: {}",
-                payload.preview
-            );
-            continue;
-        }
-        if payload.encoding_chain.len() == 1
-            && payload.encoding_chain[0] == "xor"
-            && payload.detected_type == FileType::Unknown
-            && report
-                .findings
-                .iter()
-                .any(|f| f.id == "metadata/binary/framework::dotnet-assembly")
-            && report
-                .findings
-                .iter()
-                .any(|f| f.id == "metadata/package/versioning::pe-version-resource")
-            && report.findings.iter().any(|f| {
-                f.id == "micro-behaviors/data/compress/library::dotnet-gzip-compression"
-                    || f.id
-                        == "micro-behaviors/data/embedded/payload::dotnet-getmanifestresourcestream"
-            })
-        {
-            tracing::debug!(
-                "Skipping unknown xor fragment in versioned .NET resource library: {}",
-                payload.preview
-            );
+        if let Some(reason) = payload_filter::skip_reason(file_type, &payload, source, report) {
+            tracing::debug!(reason, preview = %payload.preview, "skipping decoded payload");
             continue;
         }
 
@@ -2762,10 +2182,6 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             architectures: None,
         }));
     }
-
-    // Set current file ID for IP validation cache
-    let file_id = hash_str(&sha256_hex);
-    ip_validator::set_current_file_id(file_id);
 
     // Check analysis cache before running the full pipeline
     set_phase("cleave:cache_lookup");
@@ -3539,7 +2955,9 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                     .as_deref()
                     .and_then(|location| location.strip_prefix("offset:"))
                     .and_then(|value| value.parse::<usize>().ok());
-                offset.is_some_and(|offset| is_elf_metadata_offset(offset, &report.sections))
+                offset.is_some_and(|offset| {
+                    payload_filter::is_elf_metadata_offset(offset, &report.sections)
+                })
             })
         });
     }
@@ -4852,102 +4270,5 @@ mod tests {
                 .any(|f| f.id.contains("deep-nesting")),
             "depth-0 analysis should not produce deep-nesting finding"
         );
-    }
-
-    #[test]
-    #[allow(clippy::expect_used)]
-    fn test_skip_unknown_url_markup_payload() {
-        let payload = types::ExtractedPayload {
-            data: Vec::new(),
-            encoding_chain: vec!["url".to_string()],
-            detected_type: FileType::Unknown,
-            preview: "<body><a href=\"http://example.com\">doc</a>".to_string(),
-            original_offset: 0,
-        };
-        assert!(should_skip_unknown_url_markup_payload(&payload));
-
-        let payload = types::ExtractedPayload {
-            data: Vec::new(),
-            encoding_chain: vec!["url".to_string()],
-            detected_type: FileType::Unknown,
-            preview: "http://example.com/api/v1/ping".to_string(),
-            original_offset: 0,
-        };
-        assert!(!should_skip_unknown_url_markup_payload(&payload));
-
-        let payload = types::ExtractedPayload {
-            data: Vec::new(),
-            encoding_chain: vec!["url".to_string()],
-            detected_type: FileType::Unknown,
-            preview: "beginning of the revealed that the television series".to_string(),
-            original_offset: 0,
-        };
-        assert!(should_skip_unknown_url_markup_payload(&payload));
-    }
-
-    #[test]
-    fn test_skip_unknown_xor_noise_in_source() {
-        let payload = |encoding_chain: &[&str], preview: &str| types::ExtractedPayload {
-            data: Vec::new(),
-            encoding_chain: encoding_chain
-                .iter()
-                .map(|value| (*value).to_string())
-                .collect(),
-            detected_type: FileType::Unknown,
-            preview: preview.to_string(),
-            original_offset: 703,
-        };
-        let xor_noise = payload(&["xor"], "n#!,,h5n%80/243l3l5l5n%80/243l4()3i=2%45");
-        assert!(should_skip_unknown_encoded_payload_for_text(
-            &FileType::JavaScript,
-            &xor_noise
-        ));
-
-        let nested_binary = payload(&["xor", "base64"], "<binary data>");
-        assert!(should_skip_unknown_encoded_payload_for_text(
-            &FileType::JavaScript,
-            &nested_binary
-        ));
-
-        let shell_payload = payload(&["xor"], "#!/bin/sh\ncurl https://example.test/p");
-        assert!(!should_skip_unknown_encoded_payload_for_text(
-            &FileType::JavaScript,
-            &shell_payload
-        ));
-
-        let javascript_payload = payload(&["xor"], "const payload = fetch('https://example.test')");
-        assert!(!should_skip_unknown_encoded_payload_for_text(
-            &FileType::JavaScript,
-            &javascript_payload
-        ));
-    }
-
-    #[test]
-    fn test_skip_unknown_svg_path_xor_base64_payload() {
-        let source = br#"function Icon(){return d.createElement("svg",{xmlns:"http://www.w3.org/2000/svg",viewBox:"0 0 20 20"},d.createElement("path",{d:"M14 6c-.762 0-1.52.02-2.271.062C10.157 6.148 9 7.472 9 8.998v2.24c0 1.519 1.147 2.839 2.71 2.935.214.013.428.024.642.034.2.009.385.09.518.224l2.35 2.35a.75.75 0 001.28-.531v-2.07z"}))}"#;
-
-        let payload = types::ExtractedPayload {
-            data: Vec::new(),
-            encoding_chain: vec!["xor".to_string(), "base64".to_string()],
-            detected_type: FileType::Unknown,
-            preview: "<binary data>".to_string(),
-            original_offset: 260,
-        };
-
-        assert!(should_skip_unknown_svg_path_xor_base64_payload(
-            &FileType::JavaScript,
-            &payload,
-            source
-        ));
-
-        let actionable = types::ExtractedPayload {
-            preview: "const a=require('child_process')".to_string(),
-            ..payload
-        };
-        assert!(!should_skip_unknown_svg_path_xor_base64_payload(
-            &FileType::JavaScript,
-            &actionable,
-            source
-        ));
     }
 }

@@ -4208,6 +4208,29 @@ impl ArchiveAnalyzer {
             })
             .collect();
 
+        // Static PyArmor recovery requires its companion runtime. Preserve
+        // original members and attach decoded bytecode as a separate child;
+        // encrypted format identity itself supplies no hostile classification.
+        let mut decoded = Vec::new();
+        for member in &members {
+            if !member.data.windows(8).any(|v| v == b"PY000000") { continue; }
+            for runtime in &members {
+                if !runtime.data.windows(12).any(|v| v == b"pyarmor-vax-") { continue; }
+                if let Some(data) = crate::extractors::pyarmor::recover(&runtime.data, &member.data) {
+                    decoded.push(MemoryArchiveMember {
+                        relative_path: format!("{}.pyarmor-decoded.pyc", member.relative_path),
+                        sha256: calculate_sha256(&data),
+                        data: data.into(),
+                        file_type: FileType::PythonBytecode,
+                        container_kind: Some("pyarmor-v8-decoded".to_string()),
+                    });
+                    break;
+                }
+            }
+        }
+        let mut members = members;
+        members.extend(decoded);
+
         // Find the SHA-256 of the bundled Python shared library, if present.
         // Identifies the exact CPython distribution (official, embeddable,
         // conda, custom rebuild) — strong "who built this" signal.

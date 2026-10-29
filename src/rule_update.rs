@@ -209,6 +209,9 @@ pub fn update(dir: &Path, force: bool, quiet: bool) -> Result<(), Error> {
             artifact.date,
             dir.display()
         ));
+    }
+    compile_installed(dir, quiet);
+    if !quiet {
         warn_if_behind(&manifest);
     }
     Ok(())
@@ -271,7 +274,37 @@ pub fn pin(dir: &Path, commit: &str) -> Result<(), Error> {
     print_status(&format!("Pinning traits to {} ({})...", key, artifact.date));
     install(dir, artifact, &format!("pin:{key}"), &channel)?;
     print_status(&format!("Traits pinned to {} at {}", key, dir.display()));
+    compile_installed(dir, false);
     Ok(())
+}
+
+/// Compile the YARA rules just installed into `dir` — now, as part of the
+/// update, rather than in the first scan after it. Only the buckets whose
+/// sources changed are compiled; a bundle never carries compiled rules (see
+/// [`unpack_bundle`]), so this host's cache is the only place they come from.
+///
+/// Only for the tree scans actually read: an update of some other directory
+/// has nothing here to warm.
+fn compile_installed(dir: &Path, quiet: bool) {
+    crate::cache::invalidate_traits_scan();
+    let canonical = |p: &Path| std::fs::canonicalize(p).ok();
+    if canonical(dir).is_none() || canonical(dir) != canonical(&crate::cache::traits_path()) {
+        return;
+    }
+    let started = std::time::Instant::now();
+    let (compiled, buckets) = crate::compile_yara_rules(true);
+    if compiled == 0 {
+        return;
+    }
+    let message = format!(
+        "Compiled {compiled} of {buckets} YARA rule sets in {:.1}s",
+        started.elapsed().as_secs_f64()
+    );
+    if quiet {
+        tracing::info!("{message}");
+    } else {
+        print_status(&message);
+    }
 }
 
 // --- internals --------------------------------------------------------------
@@ -671,6 +704,22 @@ fn install(dir: &Path, artifact: &Artifact, source: &str, channel: &Channel) -> 
     let name = dir
         .file_name()
         .map_or_else(|| "traits".into(), |n| n.to_string_lossy());
+    // Held until the swap is done: concurrent updaters (an auto-update, an
+    // explicit `update-rules`, a server's reload) would otherwise share the
+    // fixed staging path below, one deleting what another is extracting, and
+    // install a partial tree whose sidecar claims the whole commit.
+    let lock_path = sibling(parent, &format!(".{name}.lock"));
+    let lock = std::fs::File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|e| format!("opening {}: {e}", lock_path.display()))?;
+    match lock.lock() {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::Unsupported => {}
+        Err(e) => return Err(format!("locking {}: {e}", lock_path.display())),
+    }
     let staging = sibling(parent, &format!(".{name}-staging"));
     let backup = sibling(parent, &format!(".{name}-backup"));
     remove_any(&staging);
@@ -706,6 +755,10 @@ fn install(dir: &Path, artifact: &Artifact, source: &str, channel: &Channel) -> 
 /// the one produced by `git archive --format=tar`.
 fn unpack_bundle<R: Read>(reader: R, staging: &Path, pack_rules: bool) -> Result<(), String> {
     let mut archive = tar::Archive::new(reader);
+    // `git archive` writes group-writable modes (its default `tar.umask` is
+    // 0002), and tar applies them as given: on a host whose users share a
+    // primary group, any of them could then edit the rules every scan runs.
+    archive.set_mask(0o022);
     let mut written = std::collections::HashSet::new();
     let entries = archive
         .entries()
@@ -723,6 +776,16 @@ fn unpack_bundle<R: Read>(reader: R, staging: &Path, pack_rules: bool) -> Result
             .path()
             .map_err(|e| format!("reading tar entry path: {e}"))?
             .into_owned();
+        // Compiled rules are native code (see `yara_engine`'s cache); a
+        // bundle's are never installed, whatever an older publisher shipped.
+        if path.starts_with("third-party/compiled") {
+            continue;
+        }
+        // A `.git` would mark the installed tree as a checkout, and every later
+        // update — the one that would replace a bad bundle — leaves those alone.
+        if path.starts_with(".git") {
+            return Err(format!("reserved tar entry: {}", path.display()));
+        }
         if !kind.is_file() && !kind.is_dir() {
             return Err(format!(
                 "unsupported tar entry type {kind:?} at {}",
@@ -747,7 +810,7 @@ fn unpack_bundle<R: Read>(reader: R, staging: &Path, pack_rules: bool) -> Result
             && path != Path::new("third-party/config.yaml")
             && matches!(
                 path.extension().and_then(|e| e.to_str()),
-                Some("yaml" | "yml" | "yar" | "yara" | "yrc")
+                Some("yaml" | "yml" | "yar" | "yara")
             );
         if pack {
             // tar::Entry::unpack_in validates paths for ordinary files. The
@@ -1042,12 +1105,16 @@ mod tests {
                 "third-party/rule.yar",
                 b"rule probe { condition: true }".as_slice(),
             ),
-            ("third-party/compiled/php.yrc", b"compiled probe".as_slice()),
         ] {
             assert!(!staging.join(path).exists());
             assert!(staging.join(format!("{path}.zst")).is_file());
             let sources = crate::rule_sources::RuleSources::fresh(&staging).unwrap();
             assert_eq!(&*sources.file(Path::new(path)).unwrap().bytes, bytes);
+        }
+        // Compiled rules are native code: a bundle's are never installed.
+        for root in [&staging, &plain] {
+            let compiled = root.join("third-party/compiled/php.yrc");
+            assert!(!compiled.exists() && !compiled.with_extension("yrc.zst").exists());
         }
         assert_eq!(
             std::fs::read(staging.join("third-party/config.yaml")).unwrap(),

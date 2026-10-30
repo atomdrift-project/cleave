@@ -579,10 +579,11 @@ fn db_path() -> Option<&'static Path> {
 /// Open a new connection to `path` with WAL mode and the cache schema.
 fn open_connection(path: &Path) -> Result<Connection, rusqlite::Error> {
     let conn = Connection::open(path)?;
+    // Set this before even the journal/schema pragmas: opening a reader is
+    // also optional work and must not inherit rusqlite's five-second default.
+    conn.busy_timeout(std::time::Duration::ZERO)?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
-    // Optional persistence must never park an analysis worker.
-    conn.busy_timeout(std::time::Duration::ZERO)?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS toplevel_report_cache (
             sha256 TEXT NOT NULL,

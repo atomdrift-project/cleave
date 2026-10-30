@@ -4081,3 +4081,9 @@ mod tests {
         );
     }
 }
+
+/// Give optional background cache persistence up to one second to drain at CLI exit.
+/// Call after analysis workers have joined; results are already available in memory.
+pub fn flush_analysis_cache() {
+    analysis_cache::flush_pending();
+}

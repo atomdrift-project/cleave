@@ -94,7 +94,7 @@ pub fn expand_paths(paths: Vec<String>, format: &crate::cli::OutputFormat) -> Ve
         if path == "-" {
             if !stdin_read {
                 let stdin_paths = read_paths_from_stdin();
-                if *format == crate::cli::OutputFormat::Terminal {
+                if *format != crate::cli::OutputFormat::Json {
                     eprintln!("Read {} paths from stdin", stdin_paths.len());
                 }
                 expanded.extend(stdin_paths);
@@ -296,12 +296,8 @@ pub(crate) fn extract_strings_from_ast(
         .collect();
 
     match format {
-        crate::cli::OutputFormat::Json
-        | crate::cli::OutputFormat::Jsonl
-        | crate::cli::OutputFormat::Snapshot => {
-            Ok(serde_json::to_string_pretty(&filtered_strings)?)
-        }
-        crate::cli::OutputFormat::Terminal | crate::cli::OutputFormat::Tiny => {
+        crate::cli::OutputFormat::Json => Ok(serde_json::to_string_pretty(&filtered_strings)?),
+        crate::cli::OutputFormat::Annotate | crate::cli::OutputFormat::Toc => {
             let mut output = String::new();
             output.push_str(&format!(
                 "Extracted {} strings from {} (AST-based)\n\n",

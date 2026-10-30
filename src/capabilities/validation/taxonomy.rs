@@ -294,7 +294,7 @@ const BANNED_SEGMENT_EXCEPTIONS: &[(&str, &str)] = &[
 
 /// Maximum atomic traits and composite rules combined in any directory.
 /// Every directory uses the same limit; there are no path-specific budgets.
-pub(crate) const MAX_TRAITS_PER_DIRECTORY: usize = 120;
+pub(crate) const MAX_TRAITS_PER_DIRECTORY: usize = 93;
 
 /// Baseline findings are too broad to represent a named entity. Components are
 /// still allowed when they are incomplete evidence for an identity.
@@ -2292,7 +2292,12 @@ pub(crate) fn find_sibling_name_restatement(
                     || long
                         .strip_prefix(short)
                         .is_some_and(|tail| WORD_FORMS.contains(&tail));
-                if restates {
+                // Cross-cutting file profiles combine network and process evidence;
+                // the general network profile retains other network observations.
+                let distinct_cross_cutting_profile = parent == "metadata/file/profile"
+                    && short == "network"
+                    && long == "network-process";
+                if restates && !distinct_cross_cutting_profile {
                     out.push((parent.to_string(), short.to_string(), long.to_string()));
                 }
             }
@@ -2300,6 +2305,29 @@ pub(crate) fn find_sibling_name_restatement(
     }
     out.sort();
     out
+}
+
+#[cfg(test)]
+#[test]
+fn network_process_profile_is_a_specific_sibling_exception() {
+    let dirs = [
+        "metadata/file/profile/network",
+        "metadata/file/profile/network-process",
+        "metadata/file/profile/network-other",
+        "other/profile/network",
+        "other/profile/network-process",
+    ]
+    .map(str::to_string);
+    let findings = find_sibling_name_restatement(&dirs);
+    assert!(!findings.contains(&(
+        "metadata/file/profile".into(), "network".into(), "network-process".into()
+    )));
+    assert!(findings.contains(&(
+        "metadata/file/profile".into(), "network".into(), "network-other".into()
+    )));
+    assert!(findings.contains(&(
+        "other/profile".into(), "network".into(), "network-process".into()
+    )));
 }
 
 /// Find directories with too many rules (suggests need for subdirectories).
@@ -2367,17 +2395,26 @@ pub(crate) fn find_oversized_source_directories(
 #[cfg(test)]
 #[test]
 fn physical_directory_budget_counts_qualified_ids() {
-    let sources = (0..86)
-        .map(|i| {
-            (
-                format!("well-known/example::rule-{i}"),
-                "./well-known/example/identity/rules.yaml".to_string(),
-            )
-        })
-        .collect();
+    // The qualified IDs all name `well-known/example`, yet the rules live in
+    // one physical directory, which is what the budget counts.
+    let sources = |n: usize| -> HashMap<String, String> {
+        (0..n)
+            .map(|i| {
+                (
+                    format!("well-known/example::rule-{i}"),
+                    "./well-known/example/identity/rules.yaml".to_string(),
+                )
+            })
+            .collect()
+    };
+    let root = std::path::Path::new(".");
+    assert!(find_oversized_source_directories(&sources(MAX_TRAITS_PER_DIRECTORY), root).is_empty());
     assert_eq!(
-        find_oversized_source_directories(&sources, std::path::Path::new(".")),
-        vec![("well-known/example/identity".to_string(), 86)]
+        find_oversized_source_directories(&sources(MAX_TRAITS_PER_DIRECTORY + 1), root),
+        vec![(
+            "well-known/example/identity".to_string(),
+            MAX_TRAITS_PER_DIRECTORY + 1
+        )]
     );
 }
 
@@ -2996,6 +3033,8 @@ fn broad_filetype_category(cond: &Condition) -> &'static str {
 /// `text` matcher in an allowlisted `text:` directory passes; the same directory
 /// does **not** license a broad `value`/`symbol`/etc. matcher.
 pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
+    // Scanner identifier and rule names are also quoted in security documentation.
+    "text:metadata/lang/source/naming/security/query-review-scanner-types-detection-security-scanner-traits.yaml",
     // Shared XOR AST productions are portable across the explicitly scoped
     // grammars. Lua exponentiation and other grammars are excluded; Swift has
     // its own production. One canonical predicate avoids per-language copies.
@@ -3699,6 +3738,8 @@ pub(crate) fn find_wellknown_missing_size_filter(
                 && !(is_basename_fact(t)
                     && matches!(t.crit, Criticality::Component | Criticality::Notable))
                 && !is_low_tier_named_binary_fact(t)
+                // A Go import path is provenance evidence, not a size-bounded identity.
+                && t.id != "well-known/tool/detection/titus::titus-secret-scan-implementation"
                 && t.size_min.is_none()
                 && t.size_max.is_none()
         })
@@ -3798,6 +3839,8 @@ pub(crate) fn find_wellknown_missing_section_filter(
                 && trait_targets_only_binaries(t)
                 // This reviewed whole-file marker must retain its original scope.
                 && t.id != "well-known/app/system/adobe-acrobat-updater::adobe-acrobat-updater-text"
+                // Go package paths can be emitted in different binary sections.
+                && t.id != "well-known/tool/detection/titus::titus-secret-scan-implementation"
                 && condition_supports_section_filter(&t.r#if)
                 && !condition_has_section_filter(&t.r#if)
         })

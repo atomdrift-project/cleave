@@ -192,11 +192,10 @@ pub fn run_with_options(
     // answers. Compiled-rule caches remain available. Route validation issues
     // through the chosen output format.
     cleave::validation_controls::set_validation_output_format(Some(match format {
-        OutputFormat::Tiny => cleave::validation_controls::ValidationOutputFormat::Tiny,
-        OutputFormat::Json | OutputFormat::Jsonl | OutputFormat::Snapshot => {
-            cleave::validation_controls::ValidationOutputFormat::Json
+        OutputFormat::Json => cleave::validation_controls::ValidationOutputFormat::Json,
+        OutputFormat::Annotate | OutputFormat::Toc => {
+            cleave::validation_controls::ValidationOutputFormat::Terminal
         }
-        OutputFormat::Terminal => cleave::validation_controls::ValidationOutputFormat::Terminal,
     }));
     let options = cleave::AnalysisOptions {
         yara: true,
@@ -366,11 +365,10 @@ fn print_performance_issues(
         return;
     }
     let rendered = match format {
-        OutputFormat::Tiny => validation_controls::format_validation_issues_tiny(issues),
-        OutputFormat::Json | OutputFormat::Jsonl | OutputFormat::Snapshot => {
-            validation_controls::format_validation_issues_json(issues)
+        OutputFormat::Json => validation_controls::format_validation_issues_json(issues),
+        OutputFormat::Annotate | OutputFormat::Toc => {
+            validation_controls::format_validation_issues_terminal(issues)
         }
-        OutputFormat::Terminal => validation_controls::format_validation_issues_terminal(issues),
     };
     eprintln!("{rendered}");
 }
@@ -424,15 +422,14 @@ struct FixtureCount {
 
 fn format_validate_output(report: &ValidateOutput, format: &OutputFormat) -> String {
     match format {
-        OutputFormat::Json | OutputFormat::Jsonl | OutputFormat::Snapshot => {
+        OutputFormat::Json => {
             let json = serde_json::to_string_pretty(report).unwrap_or_else(|_| "{}".to_string());
             format!(
                 "{json}
 "
             )
         }
-        OutputFormat::Tiny => format_validate_tiny(report),
-        OutputFormat::Terminal => format_validate_terminal(report),
+        OutputFormat::Annotate | OutputFormat::Toc => format_validate_terminal(report),
     }
 }
 
@@ -455,20 +452,6 @@ fn format_validate_terminal(report: &ValidateOutput) -> String {
         validation_controls::format_disabled_validators_terminal(),
         fixture_counts(&report.fixtures)
     )
-}
-
-fn format_validate_tiny(report: &ValidateOutput) -> String {
-    let mut out = String::from("validate ok\n");
-    for (category, validators) in &report.disabled_validators {
-        let labels = validators
-            .iter()
-            .map(|validator| validator.display_id)
-            .collect::<Vec<_>>()
-            .join(",");
-        out.push_str(&format!("disabled {category}={labels}\n"));
-    }
-    out.push_str(&format!("fixtures {}\n", fixture_counts(&report.fixtures)));
-    out
 }
 
 /// Discover every file, including dotfiles, without reading fixture contents.

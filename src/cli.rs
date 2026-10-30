@@ -139,13 +139,22 @@ pub struct Args {
     #[arg(value_name = "PATH")]
     pub paths: Vec<String>,
 
-    /// Output as JSONL (machine-readable, streaming). Shorthand for --format jsonl.
-    #[arg(long)]
-    pub json: bool,
-
-    /// Output format: terminal (default), tiny, json, jsonl, or a replay snapshot
-    #[arg(long, value_enum, global = true)]
+    /// Output format: annotate (default), toc, or json. The last of --format,
+    /// --annotate, --toc, and --json wins.
+    #[arg(long, value_enum, global = true, overrides_with_all = ["annotate", "toc", "json"])]
     pub format: Option<OutputFormat>,
+
+    /// Shorthand for --format annotate.
+    #[arg(long, global = true, overrides_with_all = ["format", "toc", "json"])]
+    pub annotate: bool,
+
+    /// Shorthand for --format toc.
+    #[arg(long, global = true, overrides_with_all = ["format", "annotate", "json"])]
+    pub toc: bool,
+
+    /// Shorthand for --format json.
+    #[arg(long, global = true, overrides_with_all = ["format", "annotate", "toc"])]
+    pub json: bool,
 
     /// Write output to file
     #[arg(short, long, global = true)]
@@ -244,31 +253,30 @@ impl Args {
         DisabledComponents::from_components(&self.disable)
     }
 
-    /// Get the output format based on --format flag, --json flag, or CLEAVE_FORMAT env var.
-    /// Precedence: --format > --json > CLEAVE_FORMAT > Terminal (default)
+    /// The output format from --format or its shorthands, else the
+    /// CLEAVE_FORMAT env var, else annotate. Clap keeps only the last of
+    /// --format, --annotate, --toc, and --json.
     #[must_use]
     pub fn format(&self) -> OutputFormat {
-        // --format takes precedence over everything
         if let Some(format) = self.format {
             return format;
         }
         if self.json {
-            return OutputFormat::Jsonl;
+            return OutputFormat::Json;
         }
-        // Fall back to CLEAVE_FORMAT env var
+        if self.toc {
+            return OutputFormat::Toc;
+        }
+        if self.annotate {
+            return OutputFormat::Annotate;
+        }
         if let Ok(val) = std::env::var("CLEAVE_FORMAT") {
-            match val.to_lowercase().as_str() {
-                "json" => return OutputFormat::Json,
-                "jsonl" => return OutputFormat::Jsonl,
-                "tiny" => return OutputFormat::Tiny,
-                "snapshot" => return OutputFormat::Snapshot,
-                "terminal" => return OutputFormat::Terminal,
-                _ => {
-                    eprintln!("warning: unknown CLEAVE_FORMAT '{val}', using terminal");
-                }
+            match <OutputFormat as clap::ValueEnum>::from_str(&val, true) {
+                Ok(format) => return format,
+                Err(_) => eprintln!("warning: unknown CLEAVE_FORMAT '{val}', using annotate"),
             }
         }
-        OutputFormat::Terminal
+        OutputFormat::Annotate
     }
 
     /// Parse --platforms flag into a vector of Platform values
@@ -994,16 +1002,14 @@ pub enum DetectFileType {
 /// Output format for analysis and extraction commands.
 #[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq)]
 pub enum OutputFormat {
-    /// Raw JSON snapshot of the in-memory report, for offline rendering
-    Snapshot,
-    /// One JSON object for a single file (use jsonl for directories)
+    /// Source context around each finding, annotated with what matched
+    #[value(alias("terminal"))]
+    Annotate,
+    /// Table of contents: one row per finding, grouped by namespace
+    Toc,
+    /// One JSON object per line, one line per file target
+    #[value(alias("jsonl"))]
     Json,
-    /// JSONL output (newline-delimited JSON) for streaming
-    Jsonl,
-    /// Human-readable terminal output
-    Terminal,
-    /// Compact one-line-per-finding text output for small LLMs
-    Tiny,
 }
 
 #[cfg(test)]
@@ -1025,12 +1031,12 @@ mod tests {
             "render",
             "before.json",
             "--format",
-            "tiny",
+            "toc",
             "-o",
             "view.txt",
         ])
         .unwrap();
-        assert_eq!(args.format(), OutputFormat::Tiny);
+        assert_eq!(args.format(), OutputFormat::Toc);
         assert_eq!(args.output.as_deref(), Some("view.txt"));
         assert!(matches!(args.command, Some(Command::Render { args })
             if args.input == "before.json"));
@@ -1210,20 +1216,51 @@ mod tests {
     fn test_parse_json_flag() {
         let args = Args::try_parse_from(["cleave", "--json", "file.bin"]).unwrap();
         assert!(args.json);
-        assert!(matches!(args.format(), OutputFormat::Jsonl));
+        assert!(matches!(args.format(), OutputFormat::Json));
     }
 
     #[test]
     fn test_parse_no_json_flag() {
         let args = Args::try_parse_from(["cleave", "file.bin"]).unwrap();
         assert!(!args.json);
-        assert!(matches!(args.format(), OutputFormat::Terminal));
+        assert!(matches!(args.format(), OutputFormat::Annotate));
     }
 
     #[test]
     fn test_parse_format_json() {
         let args = Args::try_parse_from(["cleave", "--format", "json", "file.bin"]).unwrap();
         assert!(matches!(args.format(), OutputFormat::Json));
+    }
+
+    #[test]
+    fn format_shorthands_last_one_wins() {
+        let parse = |args: &[&str]| {
+            let mut argv = vec!["cleave"];
+            argv.extend_from_slice(args);
+            argv.push("file.bin");
+            Args::try_parse_from(argv).unwrap().format()
+        };
+        assert_eq!(parse(&["--toc"]), OutputFormat::Toc);
+        assert_eq!(parse(&["--annotate"]), OutputFormat::Annotate);
+        assert_eq!(parse(&["--json"]), OutputFormat::Json);
+        assert_eq!(parse(&["--format", "toc", "--json"]), OutputFormat::Json);
+        assert_eq!(parse(&["--json", "--format", "toc"]), OutputFormat::Toc);
+        assert_eq!(parse(&["--json", "--annotate"]), OutputFormat::Annotate);
+        assert_eq!(parse(&["--toc", "--json"]), OutputFormat::Json);
+        // Global: accepted after a subcommand too.
+        let args = Args::try_parse_from(["cleave", "render", "r.json", "--toc"]).unwrap();
+        assert_eq!(args.format(), OutputFormat::Toc);
+    }
+
+    #[test]
+    fn retired_formats_alias_or_fail() {
+        let parse = |f| Args::try_parse_from(["cleave", "--format", f, "file.bin"]);
+        assert_eq!(parse("jsonl").unwrap().format(), OutputFormat::Json);
+        assert_eq!(parse("terminal").unwrap().format(), OutputFormat::Annotate);
+        for retired in ["tiny", "snapshot"] {
+            let error = parse(retired).unwrap_err();
+            assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue);
+        }
     }
 
     #[test]
@@ -1258,7 +1295,7 @@ mod tests {
         .unwrap();
 
         assert!(args.json);
-        assert!(matches!(args.format(), OutputFormat::Jsonl));
+        assert!(matches!(args.format(), OutputFormat::Json));
         assert_eq!(args.output, Some("output.json".to_string()));
         assert!(args.verbose);
         assert_eq!(args.paths, vec!["file1.bin", "file2.bin"]);
@@ -1270,20 +1307,6 @@ mod tests {
         let result = Args::try_parse_from(["cleave"]);
         assert!(result.is_ok());
         assert!(result.unwrap().paths.is_empty());
-    }
-
-    #[test]
-    fn test_output_format_clone() {
-        let format = OutputFormat::Jsonl;
-        let cloned = format;
-        assert!(matches!(cloned, OutputFormat::Jsonl));
-    }
-
-    #[test]
-    fn test_output_format_debug() {
-        let format = OutputFormat::Terminal;
-        let debug_str = format!("{:?}", format);
-        assert!(debug_str.contains("Terminal"));
     }
 
     #[test]

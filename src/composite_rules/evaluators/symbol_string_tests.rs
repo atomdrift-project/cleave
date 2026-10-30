@@ -3991,3 +3991,28 @@ fn raw_unicode_absence_gate_preserves_lossy_replacement_matches() {
         assert_eq!(result.matched, matched, "{needle}");
     }
 }
+
+#[test]
+fn raw_regex_length_bound_survives_many_short_candidates() {
+    let report = create_test_report();
+    let mut data = b"A!".repeat(10_001);
+    data.extend_from_slice(&vec![b'A'; 4096]);
+    let ctx = create_test_context(&report, &data);
+    let regex = "A+".to_string();
+    let result = super::eval_raw(
+        TextPattern {
+            regex: Some(&regex),
+            ..TextPattern::default()
+        },
+        (Some(4096), None),
+        None,
+        None,
+        &ContentLocationParams::default(),
+        &ctx,
+        None,
+    );
+    assert!(
+        result.matched,
+        "short candidates must not hide a later long match"
+    );
+}

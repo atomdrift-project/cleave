@@ -577,7 +577,11 @@ fn test_system_binary_false_positive_sanity() {
         return;
     }
 
+    let traits_dir = TempDir::new().unwrap();
     let output = isolated_cleave_cmd()
+        // This smoke test does not exercise traits; use an empty local tree
+        // so its output does not depend on the developer's installed dataset.
+        .env("CLEAVE_TRAITS_DIR", traits_dir.path())
         .args(["--json", "analyze", binary])
         .output()
         .unwrap();

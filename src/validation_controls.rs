@@ -363,7 +363,6 @@ pub(crate) fn fatal_severity_threshold() -> Severity {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ValidationOutputFormat {
     Terminal,
-    Tiny,
     Json,
 }
 
@@ -1303,33 +1302,6 @@ pub(crate) fn format_validation_issues_terminal(issues: &[ValidationIssue]) -> S
     out.push_str("\nsuggested fixes\n");
     for line in issue_fix_lines(issues) {
         out.push_str(&format!("  {line}\n"));
-    }
-    out
-}
-
-#[must_use]
-pub(crate) fn format_validation_issues_tiny(issues: &[ValidationIssue]) -> String {
-    if issues.is_empty() {
-        return String::new();
-    }
-
-    let mut out = String::new();
-    out.push_str(&format!("validation failed issues={}\n", issues.len()));
-    out.push_str("counts\n");
-    for (label, count) in issue_counts(issues) {
-        out.push_str(&format!("{label} {count}\n"));
-    }
-    for issue in issues {
-        out.push_str(&format!(
-            "{} {} {}\n",
-            issue.location(),
-            issue.label,
-            issue.message
-        ));
-    }
-    out.push_str("fixes\n");
-    for line in issue_fix_lines(issues) {
-        out.push_str(&format!("{line}\n"));
     }
     out
 }

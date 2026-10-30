@@ -94,10 +94,9 @@ traits:
                     .any(|finding| finding.id.as_str()
                         == "micro-behaviors/ui/terminal::ready-output")
             );
-            let incomplete = report
-                .findings
-                .iter()
-                .any(|finding| finding.id.as_str() == "metadata/file/archive::partial-extraction");
+            let incomplete = report.findings.iter().any(|finding| {
+                finding.id.as_str() == "metadata/archive/parsing::partial-extraction"
+            });
             assert_eq!(incomplete, malformed, "gzip={gzip}, malformed={malformed}");
         }
     }
@@ -106,10 +105,9 @@ traits:
             cleave::analyze_bytes(&rpm(payload, true), "unsupported.rpm", &options).unwrap();
         assert!(report.files.is_empty());
         assert!(
-            report
-                .findings
-                .iter()
-                .any(|finding| finding.id.as_str() == "metadata/file/archive::partial-extraction")
+            report.findings.iter().any(
+                |finding| finding.id.as_str() == "metadata/archive/parsing::partial-extraction"
+            )
         );
         let facts = report
             .filefacts

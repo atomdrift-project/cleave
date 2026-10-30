@@ -31,10 +31,8 @@ pub fn run(
         cleave::diff::diff_paths(Path::new(old), Path::new(new), options, mask, limit_changes)?;
 
     match format {
-        cli::OutputFormat::Json | cli::OutputFormat::Jsonl | cli::OutputFormat::Snapshot => {
-            Ok(serde_json::to_string(&report)?)
-        }
-        cli::OutputFormat::Terminal | cli::OutputFormat::Tiny => {
+        cli::OutputFormat::Json => Ok(serde_json::to_string(&report)?),
+        cli::OutputFormat::Annotate | cli::OutputFormat::Toc => {
             Ok(cleave::diff::format::format_terminal(&report))
         }
     }

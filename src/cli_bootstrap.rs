@@ -114,7 +114,7 @@ pub(crate) fn init_logging(
             || format!("Failed to open log file {log_file}"),
         )?));
 
-        if format == cli::OutputFormat::Terminal {
+        if format != cli::OutputFormat::Json {
             eprintln!("Logging to: {}", log_file);
         }
 
@@ -350,7 +350,7 @@ pub(crate) fn configure_rayon_thread_pool(validating: bool) {
 }
 
 pub(crate) fn print_version_banner(format: cli::OutputFormat) {
-    if format == cli::OutputFormat::Terminal {
+    if format != cli::OutputFormat::Json {
         let traits_ver = cleave::traits_repo::version()
             .map(|v| format!(": {v}"))
             .unwrap_or_default();

@@ -21,8 +21,47 @@ fn write_catalog(root: &Path, namespace: &str, count: usize) {
     std::fs::write(leaf.join("catalog.yaml"), yaml).unwrap();
 }
 
+/// `cleave validate` over `root`: whether it passed, and its report.
+fn validate(root: &Path) -> (bool, String) {
+    let output = Command::new(env!("CARGO_BIN_EXE_cleave"))
+        .args([
+            "--traits-dir",
+            root.to_str().unwrap(),
+            "validate",
+            "--exclude",
+            "validation",
+        ])
+        .env("CLEAVE_SKIP_CACHE", "1")
+        .env_remove("CLEAVE_VALIDATE_SOFT")
+        .output()
+        .unwrap();
+    (
+        output.status.success(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+/// The per-directory rule budget the binary enforces, read from its own
+/// oversized-directory report so these tests follow the configured limit.
+fn directory_budget() -> usize {
+    static BUDGET: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *BUDGET.get_or_init(|| {
+        let temp = tempfile::tempdir().unwrap();
+        write_catalog(temp.path(), "metadata/file/naming", 1000);
+        let (_, stderr) = validate(temp.path());
+        stderr
+            .lines()
+            .find_map(|line| {
+                let rest = line.split("(limit ").nth(1)?;
+                rest.trim_end_matches(')').parse().ok()
+            })
+            .unwrap_or_else(|| panic!("no directory budget in the report: {stderr}"))
+    })
+}
+
 #[test]
-fn former_exempt_catalogs_accept_100_and_reject_101() {
+fn former_exempt_catalogs_accept_the_budget_and_reject_one_more() {
+    let budget = directory_budget();
     for namespace in [
         "metadata/file/naming",
         "metadata/filename",
@@ -44,26 +83,10 @@ fn former_exempt_catalogs_accept_100_and_reject_101() {
         "metadata/lang/source/literal",
     ] {
         let temp = tempfile::tempdir().unwrap();
-        for (count, accepted) in [(100, true), (101, false)] {
+        for (count, accepted) in [(budget, true), (budget + 1, false)] {
             write_catalog(temp.path(), namespace, count);
-            let output = Command::new(env!("CARGO_BIN_EXE_cleave"))
-                .args([
-                    "--traits-dir",
-                    temp.path().to_str().unwrap(),
-                    "validate",
-                    "--exclude",
-                    "validation",
-                ])
-                .env("CLEAVE_SKIP_CACHE", "1")
-                .env_remove("CLEAVE_VALIDATE_SOFT")
-                .output()
-                .unwrap();
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            assert_eq!(
-                output.status.success(),
-                accepted,
-                "{namespace} with {count} rules: {stderr}"
-            );
+            let (ok, stderr) = validate(temp.path());
+            assert_eq!(ok, accepted, "{namespace} with {count} rules: {stderr}");
             if !accepted {
                 assert!(stderr.contains("policy/oversized-dir"), "{stderr}");
                 assert!(stderr.contains(namespace), "{stderr}");
@@ -72,30 +95,17 @@ fn former_exempt_catalogs_accept_100_and_reject_101() {
     }
 }
 
+/// Sibling sparseness is advice, not a gate: a two-child partition loads at
+/// any size, and the soft sparse-sibling warning needs ten or more children.
 #[test]
-fn former_sparse_partition_uses_the_same_35_rule_threshold() {
+fn former_sparse_partition_is_accepted_at_any_size() {
     let temp = tempfile::tempdir().unwrap();
-    for (second_count, accepted) in [(17, false), (18, true)] {
+    for second_count in [17, 18] {
         write_catalog(temp.path(), "micro-behaviors/fs/swap/on", 17);
         write_catalog(temp.path(), "micro-behaviors/fs/swap/off", second_count);
-        let output = Command::new(env!("CARGO_BIN_EXE_cleave"))
-            .args([
-                "--traits-dir",
-                temp.path().to_str().unwrap(),
-                "validate",
-                "--exclude",
-                "validation",
-            ])
-            .env("CLEAVE_SKIP_CACHE", "1")
-            .env_remove("CLEAVE_VALIDATE_SOFT")
-            .output()
-            .unwrap();
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(output.status.success(), accepted, "{stderr}");
-        if !accepted {
-            assert!(stderr.contains("sparse"), "{stderr}");
-            assert!(stderr.contains("micro-behaviors/fs/swap"), "{stderr}");
-        }
+        let (ok, stderr) = validate(temp.path());
+        assert!(ok, "{stderr}");
+        assert!(!stderr.contains("sparse-siblings"), "{stderr}");
     }
 }
 
@@ -116,19 +126,7 @@ fn artifact_subject_roots_are_admitted_with_narrow_platform_contracts() {
             let yaml = std::fs::read_to_string(&path).unwrap();
             std::fs::write(path, yaml.replace("[unix, windows]", "[all]")).unwrap();
         }
-        let output = Command::new(env!("CARGO_BIN_EXE_cleave"))
-            .args([
-                "--traits-dir",
-                temp.path().to_str().unwrap(),
-                "validate",
-                "--exclude",
-                "validation",
-            ])
-            .env("CLEAVE_SKIP_CACHE", "1")
-            .env_remove("CLEAVE_VALIDATE_SOFT")
-            .output()
-            .unwrap();
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        let (ok, stderr) = validate(temp.path());
         if namespace == "metadata/not-an-artifact-subject" {
             // The existing unknown-directory check emits its diagnostic at
             // load time; its CLI exit policy is outside this admission change.
@@ -137,7 +135,7 @@ fn artifact_subject_roots_are_admitted_with_narrow_platform_contracts() {
                 "{stderr}"
             );
         } else {
-            assert_eq!(output.status.success(), accepted, "{namespace}: {stderr}");
+            assert_eq!(ok, accepted, "{namespace}: {stderr}");
             assert!(
                 !stderr.contains("Unknown metadata/ subdirectory"),
                 "{stderr}"
@@ -151,8 +149,9 @@ fn artifact_subject_roots_are_admitted_with_narrow_platform_contracts() {
 
 #[test]
 fn mixed_credential_values_can_occupy_the_item_ancestor_without_a_larger_budget() {
+    let budget = directory_budget();
     let temp = tempfile::tempdir().unwrap();
-    for (count, accepted) in [(100, true), (101, false)] {
+    for (count, accepted) in [(budget, true), (budget + 1, false)] {
         write_catalog(
             temp.path(),
             "objectives/exfiltration/stealer/credential/value",
@@ -163,20 +162,8 @@ fn mixed_credential_values_can_occupy_the_item_ancestor_without_a_larger_budget(
             "objectives/exfiltration/stealer/credential/value/key",
             1,
         );
-        let output = Command::new(env!("CARGO_BIN_EXE_cleave"))
-            .args([
-                "--traits-dir",
-                temp.path().to_str().unwrap(),
-                "validate",
-                "--exclude",
-                "validation",
-            ])
-            .env("CLEAVE_SKIP_CACHE", "1")
-            .env_remove("CLEAVE_VALIDATE_SOFT")
-            .output()
-            .unwrap();
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(output.status.success(), accepted, "{stderr}");
+        let (ok, stderr) = validate(temp.path());
+        assert_eq!(ok, accepted, "{stderr}");
         assert!(!stderr.contains("policy/leaf-yaml"), "{stderr}");
         if !accepted {
             assert!(stderr.contains("policy/oversized-dir"), "{stderr}");
@@ -204,19 +191,7 @@ fn archive_family_scope_follows_the_shared_fact_producer() {
         std::fs::write(leaf.join("scope.yaml"), format!(
             "defaults:\n  platforms: [unix, windows, android]\n  for: [archives{extra}]\n  crit: notable\ntraits:\n- id: recorded-path\n  desc: Recorded archive member path\n  if: {{type: value, path: '{path}', exact: sentinel}}\n"
         )).unwrap();
-        let output = Command::new(env!("CARGO_BIN_EXE_cleave"))
-            .args([
-                "--traits-dir",
-                temp.path().to_str().unwrap(),
-                "validate",
-                "--exclude",
-                "validation",
-            ])
-            .env("CLEAVE_SKIP_CACHE", "1")
-            .env_remove("CLEAVE_VALIDATE_SOFT")
-            .output()
-            .unwrap();
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        let (_, stderr) = validate(temp.path());
         // The CLI currently reports broad-scope diagnostics without changing
         // its exit status when validation is excluded, so inspect the report.
         assert_eq!(

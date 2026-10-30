@@ -19,7 +19,7 @@ notable=1, suspicious=40, hostile=120. Reference:
 
 **File format coverage** lives in [../FILE_FORMATS.md](../FILE_FORMATS.md).
 
-**CLI streaming**: `--format jsonl` emits one report per line for
+**CLI streaming**: `--format json` emits one report per line for
 pipelines.
 
 **Library stability** is weaker than the CLI surface: the Rust API may

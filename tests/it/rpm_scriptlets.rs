@@ -104,7 +104,7 @@ composite_rules:
             report
                 .findings
                 .iter()
-                .any(|f| f.id.as_str() == "metadata/file/archive::partial-extraction"),
+                .any(|f| f.id.as_str() == "metadata/archive/parsing::partial-extraction"),
             unsupported_payload
         );
     }
@@ -150,6 +150,6 @@ composite_rules:
         report
             .findings
             .iter()
-            .any(|f| f.id.as_str() == "metadata/file/archive::partial-extraction")
+            .any(|f| f.id.as_str() == "metadata/archive/parsing::partial-extraction")
     );
 }

@@ -5008,11 +5008,8 @@ mod taxonomy_tests {
         let id = "well-known/app/media/plex::plex-transcoder-h264-options-binary";
         let mut fact = leaf(id, Criticality::Notable);
         fact.r#for = vec![FileType::Pe];
-        fact.r#if =
-            crate::yaml::from_str("type: text\nsubstr: TranscoderH264Options\n").unwrap();
-        assert!(
-            find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty()
-        );
+        fact.r#if = crate::yaml::from_str("type: text\nsubstr: TranscoderH264Options\n").unwrap();
+        assert!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty());
 
         fact.crit = Criticality::Suspicious;
         assert_eq!(
@@ -5157,16 +5154,15 @@ mod taxonomy_tests {
 
     #[test]
     fn test_oversized_dir_uses_uniform_combined_limit() {
-        assert_eq!(MAX_TRAITS_PER_DIRECTORY, 120);
         let reviewed_path = "micro-behaviors/communications/http/url/path";
-        let reviewed_rules: Vec<_> = (0..101)
+        let reviewed_rules: Vec<_> = (0..MAX_TRAITS_PER_DIRECTORY + 2)
             .map(|i| make_trait(&format!("{reviewed_path}::r{i}"), "other::t"))
             .collect();
         assert_eq!(
             find_oversized_trait_directories(&reviewed_rules, &[]),
-            vec![(reviewed_path.to_string(), 101)]
+            vec![(reviewed_path.to_string(), MAX_TRAITS_PER_DIRECTORY + 2)]
         );
-        let unreviewed_sibling: Vec<_> = (0..101)
+        let unreviewed_sibling: Vec<_> = (0..MAX_TRAITS_PER_DIRECTORY + 2)
             .map(|i| {
                 make_trait(
                     &format!("micro-behaviors/communications/http/url/host::r{i}"),
@@ -5178,7 +5174,7 @@ mod taxonomy_tests {
             find_oversized_trait_directories(&unreviewed_sibling, &[]),
             vec![(
                 "micro-behaviors/communications/http/url/host".to_string(),
-                101
+                MAX_TRAITS_PER_DIRECTORY + 2
             )]
         );
         for dir in [
@@ -9967,18 +9963,20 @@ mod stale_filetype_allowlist {
     }
 
     /// A prefix that no longer exists is reported while its neighbours are not.
+    /// Entries are type-qualified, so one path can appear under several
+    /// matcher types; dropping the path makes every one of them stale.
     #[test]
     fn only_the_unmatched_prefix_is_reported() {
+        let prefix_of = |e: &str| e.split_once(':').map(|(_, prefix)| prefix.to_owned());
+        let dropped = BROAD_FILETYPE_ALLOWLIST
+            .iter()
+            .find_map(|e| prefix_of(e))
+            .expect("at least one entry");
         let mut sources: HashMap<String, String> = HashMap::new();
-        let mut skipped = None;
         for (i, e) in BROAD_FILETYPE_ALLOWLIST.iter().enumerate() {
-            let Some((_, prefix)) = e.split_once(':') else {
+            let Some(prefix) = prefix_of(e).filter(|p| *p != dropped) else {
                 continue;
             };
-            if skipped.is_none() {
-                skipped = Some(*e);
-                continue;
-            }
             sources.insert(
                 format!("t{i}"),
                 if prefix.ends_with(".yaml") || prefix.ends_with(".yml") {
@@ -9989,10 +9987,14 @@ mod stale_filetype_allowlist {
             );
         }
         let stale = find_stale_filetype_allowlist_entries(&sources);
-        let skipped = skipped.expect("at least one entry");
-        assert!(
-            stale.contains(&skipped),
-            "the dropped prefix must be flagged"
+        let expected: Vec<&str> = BROAD_FILETYPE_ALLOWLIST
+            .iter()
+            .copied()
+            .filter(|e| prefix_of(e).as_deref() == Some(dropped.as_str()))
+            .collect();
+        assert_eq!(
+            stale, expected,
+            "only the dropped prefix {dropped} must be flagged"
         );
     }
 }

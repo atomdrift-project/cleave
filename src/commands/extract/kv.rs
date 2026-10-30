@@ -132,10 +132,8 @@ fn flatten(value: &Value, prefix: &str, entries: &mut Vec<KvEntry>) {
 
 fn format_output(entries: &[KvEntry], target: &str, format: &cli::OutputFormat) -> Result<String> {
     match format {
-        cli::OutputFormat::Json | cli::OutputFormat::Jsonl | cli::OutputFormat::Snapshot => {
-            Ok(serde_json::to_string_pretty(entries)?)
-        }
-        cli::OutputFormat::Terminal | cli::OutputFormat::Tiny => {
+        cli::OutputFormat::Json => Ok(serde_json::to_string_pretty(entries)?),
+        cli::OutputFormat::Annotate | cli::OutputFormat::Toc => {
             let mut out = String::new();
             out.push_str(&format!(
                 "Extracted {} values from {}\n\n",

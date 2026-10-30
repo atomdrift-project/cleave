@@ -3,7 +3,7 @@
 use cleave::{AnalysisOptions, analyze_bytes};
 
 #[test]
-fn shimmer_boot_sector_is_analyzed_as_data_and_exposes_embedded_strings() -> anyhow::Result<()> {
+fn shimmer_boot_sector_is_recognized_and_exposes_embedded_strings() -> anyhow::Result<()> {
     let sample = crate::support::sample("testdata/dos-boot/shimmer.d");
     let report = analyze_bytes(
         &sample,
@@ -16,7 +16,8 @@ fn shimmer_boot_sector_is_analyzed_as_data_and_exposes_embedded_strings() -> any
         },
     )?;
 
-    assert_eq!(report.target.file_type, "data");
+    // filefacts names a standalone FAT boot sector rather than calling it data.
+    assert_eq!(report.target.file_type, "fat_boot_sector");
     assert!(
         report
             .strings

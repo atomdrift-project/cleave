@@ -133,7 +133,7 @@ fn run() -> Result<()> {
         let rendered = cleave::report_input::run(render_args, |loaded| {
             let report = &loaded.report;
             match format {
-                cli::OutputFormat::Json | cli::OutputFormat::Jsonl => {
+                cli::OutputFormat::Json => {
                     // Preserve an existing profile: omitted facts cannot be restored.
                     let facts = if loaded.fact_profile.is_some() {
                         cleave::types::Facts::Full
@@ -148,15 +148,11 @@ fn run() -> Result<()> {
                     compact.fetched.clone_from(&loaded.fetched);
                     Ok(serde_json::to_string(&compact)? + "\n")
                 }
-                cli::OutputFormat::Snapshot => Ok(serde_json::to_string(report)? + "\n"),
-                cli::OutputFormat::Tiny => Ok(cleave::output::format_context(
-                    report,
-                    &cleave::output::TinyOpts::tiny(),
-                )),
-                cli::OutputFormat::Terminal => Ok(cleave::output::format_context(
+                cli::OutputFormat::Annotate => Ok(cleave::output::format_context(
                     report,
                     &cleave::output::TinyOpts::terminal(),
                 )),
+                cli::OutputFormat::Toc => Ok(cleave::output::format_toc(report)),
             }
         })?;
         return write_output(&rendered, args.output, format);

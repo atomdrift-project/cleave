@@ -403,11 +403,8 @@ pub(crate) fn write_output(
     // names, section names, and structured values. Keep JSON byte-for-byte
     // machine-readable; terminal formats retain renderer SGR colors while all
     // other control sequences become visible text.
-    let safe_result = matches!(
-        format,
-        cli::OutputFormat::Terminal | cli::OutputFormat::Tiny
-    )
-    .then(|| cleave::output::sanitize_terminal_output(result));
+    let safe_result = (format != cli::OutputFormat::Json)
+        .then(|| cleave::output::sanitize_terminal_output(result));
     let result = safe_result.as_deref().unwrap_or(result);
 
     if let Some(output_path) = output_path {
@@ -419,7 +416,7 @@ pub(crate) fn write_output(
             fs::write(&output_path, result)
                 .context(format!("Failed to write output to {}", output_path))?;
         }
-        if format == cli::OutputFormat::Terminal {
+        if format != cli::OutputFormat::Json {
             eprintln!("Results written to: {}", output_path);
         }
     } else {

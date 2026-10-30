@@ -220,10 +220,8 @@ fn format_strings_output(
     format: &cli::OutputFormat,
 ) -> Result<String> {
     match format {
-        cli::OutputFormat::Json | cli::OutputFormat::Jsonl | cli::OutputFormat::Snapshot => {
-            Ok(serde_json::to_string_pretty(&strings)?)
-        }
-        cli::OutputFormat::Terminal | cli::OutputFormat::Tiny => {
+        cli::OutputFormat::Json => Ok(serde_json::to_string_pretty(&strings)?),
+        cli::OutputFormat::Annotate | cli::OutputFormat::Toc => {
             let mut output = String::new();
 
             // Sort strings by offset to show them in file order

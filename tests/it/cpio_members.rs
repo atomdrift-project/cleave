@@ -85,7 +85,7 @@ traits:
                 .findings
                 .iter()
                 .chain(report.files.iter().flat_map(|f| &f.findings))
-                .any(|f| f.id.as_str() == "metadata/file/archive::partial-extraction");
+                .any(|f| f.id.as_str() == "metadata/archive/parsing::partial-extraction");
             assert_eq!(incomplete, partial, "compressed={compressed}");
         }
     }
@@ -97,6 +97,6 @@ traits:
         report
             .findings
             .iter()
-            .all(|f| f.id.as_str() != "metadata/file/archive::partial-extraction")
+            .all(|f| f.id.as_str() != "metadata/archive/parsing::partial-extraction")
     );
 }

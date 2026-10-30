@@ -611,7 +611,12 @@ pub(super) fn oversized_directories<'a>(input: &'a ValidationInput<'a>) -> Repor
                 "   Merely moving the same broad set to another location is not a fix; keep splits technique-based and platform-neutral where possible. Every directory has a configured rule limit; exceptions require explicit approval after a complete relevance audit.\n"
             );
             for (dir_path, count) in &oversized_dirs {
-                eprintln!("   {}: {} rules", dir_path, count);
+                eprintln!(
+                    "   {}: {} rules (limit {})",
+                    dir_path,
+                    count,
+                    crate::capabilities::validation::MAX_TRAITS_PER_DIRECTORY
+                );
             }
             eprintln!();
             warnings.push_id(

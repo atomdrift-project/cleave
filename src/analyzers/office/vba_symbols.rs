@@ -3,7 +3,7 @@
 //! VBA *symbol extraction* (Declare / CreateObject / GetObject / Sub /
 //! Function) lives entirely in filefacts and flows into cleave through
 //! the typed `Imports` / `Functions` views on
-//! [`crate::analysis_context::AnalysisContext`]. This module retains
+//! `AnalysisContext`. This module retains
 //! only the cleave-side helpers the office analyzer uses alongside
 //! those symbols:
 //!

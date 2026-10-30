@@ -1,7 +1,7 @@
 //! ELF binary analyzer for Linux executables.
 //!
 //! Every ELF-internal helper takes a non-optional
-//! [`crate::analysis_context::AnalysisContext`]: structural data
+//! `AnalysisContext`: structural data
 //! (sections, segments, dynamic-section facts, notes) is read from
 //! `filefacts`'s typed views; this analyzer never parses the file itself.
 

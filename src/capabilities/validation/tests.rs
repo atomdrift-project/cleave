@@ -5004,6 +5004,36 @@ mod taxonomy_tests {
     }
 
     #[test]
+    fn reviewed_preference_name_allowance_is_specific() {
+        let id = "well-known/app/media/plex::plex-transcoder-h264-options-binary";
+        let mut fact = leaf(id, Criticality::Notable);
+        fact.r#for = vec![FileType::Pe];
+        fact.r#if =
+            crate::yaml::from_str("type: text\nsubstr: TranscoderH264Options\n").unwrap();
+        assert!(
+            find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty()
+        );
+
+        fact.crit = Criticality::Suspicious;
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+            1
+        );
+        fact.crit = Criticality::Notable;
+        fact.id = "well-known/app/media/other::preference".to_string();
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+            1
+        );
+        fact.id = id.to_string();
+        fact.r#if = crate::yaml::from_str("type: text\nsubstr: Transcoder\n").unwrap();
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[fact], &HashMap::new()).len(),
+            1
+        );
+    }
+
+    #[test]
     fn flags_baseline_leaf_referenced_only_in_unless() {
         let traits = vec![leaf(
             "objectives/evasion/x::benign-ctx",
@@ -5127,7 +5157,7 @@ mod taxonomy_tests {
 
     #[test]
     fn test_oversized_dir_uses_uniform_combined_limit() {
-        assert_eq!(MAX_TRAITS_PER_DIRECTORY, 100);
+        assert_eq!(MAX_TRAITS_PER_DIRECTORY, 99);
         let reviewed_path = "micro-behaviors/communications/http/url/path";
         let reviewed_rules: Vec<_> = (0..101)
             .map(|i| make_trait(&format!("{reviewed_path}::r{i}"), "other::t"))

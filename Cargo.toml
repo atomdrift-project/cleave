@@ -264,9 +264,6 @@ default = ["jemalloc", "lint"]
 # validation on load). Scanning never runs it; library users that only analyze
 # files can drop it with `default-features = false`.
 lint = []
-# Skip YARA rule loading in tests for faster execution
-# Unit tests that don't need YARA scanning use this
-test_fast = []
 # Opt-in parking_lot deadlock detection (debug aid). OFF by default because it
 # adds global lock-registry bookkeeping to every acquire/release. Build with:
 # cargo build --features deadlock-detection

@@ -1,7 +1,7 @@
 //! Context: the bytes around a file's findings, and the notes that label them.
 //!
-//! [`capture`] runs while a file's bytes are in hand. Each shown finding claims
-//! the bytes it matched — an atomic trait up to [`ATOMIC_MAX_MATCHES`] spans, a
+//! `capture` runs while a file's bytes are in hand. Each shown finding claims
+//! the bytes it matched — an atomic trait up to `ATOMIC_MAX_MATCHES` spans, a
 //! composite its strongest leg no stronger match already holds — widened by a
 //! criticality-sized margin ([`Criticality::hex_context`]); overlapping windows
 //! merge into one [`ContextLine`]. A textual file labels each window with the
@@ -100,9 +100,9 @@ pub(crate) fn capture(
 
 /// The notes on each of a file's context windows, indexed like `context`.
 ///
-/// Every shown finding is placed exactly as [`capture`] placed it, attached to
+/// Every shown finding is placed exactly as `capture` placed it, attached to
 /// the window holding its offset, and each window's notes are reduced to the
-/// ones worth showing ([`dedup_notes`]). A finding inherited from a member
+/// ones worth showing (`dedup_notes`). A finding inherited from a member
 /// (`src`) brings no spans of its own (inheritance strips them), but as a
 /// composite it may still label this file's own matching legs. Provenance is
 /// deliberately ignored: a stored report cannot always tell an inherited

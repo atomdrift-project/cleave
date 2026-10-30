@@ -17,7 +17,7 @@ fn batch_analysis_preserves_filefacts_symbols_and_decoded_text() -> anyhow::Resu
     let report = analyze_file(
         &path,
         &AnalysisOptions {
-            disable_yara: true,
+            yara: false,
             ..AnalysisOptions::default()
         },
     )?;

@@ -183,28 +183,28 @@ fn extract_vendor(namespace: &str) -> &str {
 /// Returns `None` if the rule is disabled via override.
 /// Lookup priority: rule override > source default > global default
 #[must_use]
-pub fn third_party_criticality(namespace: &str, trait_id: Option<&str>) -> Option<String> {
+pub(crate) fn third_party_criticality(namespace: &str, trait_id: Option<&str>) -> Option<String> {
     let vendor = extract_vendor(namespace);
     config().criticality_for(vendor, trait_id)
 }
 
 /// Override an upstream rule description without changing its provenance.
 #[must_use]
-pub fn third_party_description(trait_id: &str) -> Option<String> {
+pub(crate) fn third_party_description(trait_id: &str) -> Option<String> {
     config().description_for(trait_id).map(str::to_owned)
 }
 
 /// Return the matched `unless` finding for a third-party YARA trait, if any.
 /// These guards are checked after YAML traits and composites for the same file.
 #[must_use]
-pub fn third_party_unless_match(trait_id: &str, finding_ids: &[&str]) -> Option<String> {
+pub(crate) fn third_party_unless_match(trait_id: &str, finding_ids: &[&str]) -> Option<String> {
     config().suppressed_by_unless(trait_id, finding_ids)
 }
 
 /// Get all disabled rule IDs from the config.
 /// Returns a set of trait IDs (format: `namespace::rule_name`) that should be excluded.
 #[must_use]
-pub fn disabled_rule_ids() -> std::collections::HashSet<String> {
+pub(crate) fn disabled_rule_ids() -> std::collections::HashSet<String> {
     config()
         .overrides
         .iter()

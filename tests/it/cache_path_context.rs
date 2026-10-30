@@ -108,9 +108,9 @@ fn cache_preserves_archive_and_memory_api_context() {
         let root = std::path::Path::new(&root);
         cleave::traits_repo::set_override_dir(Some(root.join("rules")));
         let options = cleave::AnalysisOptions {
-            disable_yara: true,
-            disable_radare2: true,
-            disable_upx: true,
+            yara: false,
+            rizin: false,
+            upx: false,
             ..Default::default()
         };
         // Only harmless source text is packaged; nothing is compiled or run.

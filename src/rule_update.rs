@@ -19,7 +19,7 @@
 //!
 //! [`crate::enriched::enabled`] chooses the channel; holding a token does not.
 //! Asked for enriched, a token the Worker will not honour is an error, never a
-//! quiet downgrade to public rules — see [`enriched_manifest`].
+//! quiet downgrade to public rules — see `enriched_manifest`.
 
 use std::collections::BTreeMap;
 use std::io::{self, Cursor, Read};
@@ -92,18 +92,6 @@ impl std::fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
-
-impl From<String> for Error {
-    fn from(message: String) -> Self {
-        Error::Other(message)
-    }
-}
-
-impl From<&str> for Error {
-    fn from(message: &str) -> Self {
-        Error::Other(message.to_string())
-    }
-}
 
 fn print_status(message: &str) {
     eprintln!("{}", crate::output::escape_control_chars(message));
@@ -180,8 +168,8 @@ pub fn update(dir: &Path, force: bool, quiet: bool) -> Result<(), Error> {
     // non-quiet update — stays patient so a slow first fetch still completes.
     let connect = (quiet && installed(dir).is_some()).then_some(CONNECT_TIMEOUT);
     let (manifest, channel) = fetch_manifest(connect)?;
-    let (key, source) = resolve(&manifest)?;
-    let artifact = artifact_for(&manifest, &key)?;
+    let (key, source) = resolve(&manifest).map_err(Error::Other)?;
+    let artifact = artifact_for(&manifest, &key).map_err(Error::Other)?;
 
     if !force
         && installed(dir)
@@ -204,7 +192,7 @@ pub fn update(dir: &Path, force: bool, quiet: bool) -> Result<(), Error> {
             source
         ));
     }
-    install(dir, artifact, &source, &channel)?;
+    install(dir, artifact, &source, &channel).map_err(Error::Other)?;
     tracing::info!(
         event = "enriched.rules",
         channel = channel.name(),
@@ -237,8 +225,8 @@ pub fn check(dir: &Path) -> Result<(), Error> {
         return Ok(());
     }
     let (manifest, _) = fetch_manifest(None)?;
-    let (key, source) = resolve(&manifest)?;
-    let artifact = artifact_for(&manifest, &key)?;
+    let (key, source) = resolve(&manifest).map_err(Error::Other)?;
+    let artifact = artifact_for(&manifest, &key).map_err(Error::Other)?;
 
     match installed(dir) {
         Some(i) if i.commit.starts_with(&key) && (!cfg!(windows) || i.packed_rules) => {
@@ -279,10 +267,11 @@ pub fn pin(dir: &Path, commit: &str) -> Result<(), Error> {
             format!(
                 "no published bundle for commit {commit} (only pointed-to commits have bundles)"
             )
-        })?;
-    let artifact = artifact_for(&manifest, &key)?;
+        })
+        .map_err(Error::Other)?;
+    let artifact = artifact_for(&manifest, &key).map_err(Error::Other)?;
     print_status(&format!("Pinning traits to {} ({})...", key, artifact.date));
-    install(dir, artifact, &format!("pin:{key}"), &channel)?;
+    install(dir, artifact, &format!("pin:{key}"), &channel).map_err(Error::Other)?;
     print_status(&format!("Traits pinned to {} at {}", key, dir.display()));
     compile_installed(dir, false);
     Ok(())
@@ -387,16 +376,22 @@ impl Channel {
 
 fn fetch_manifest(connect: Option<Duration>) -> Result<(Manifest, Channel), Error> {
     let (bytes, channel) = if crate::enriched::enabled() {
-        let held = crate::enriched::token().map_err(Error::Enriched)?;
+        let held = crate::enriched::token().map_err(|e| Error::Enriched(format!("{e:#}")))?;
         let (bytes, token, _) = enriched_manifest(held, connect)?;
         (bytes, Channel::Enriched(token))
     } else {
-        let fetched = download(&Channel::Public, MANIFEST, connect).map_err(|e| e.message)?;
+        let fetched =
+            download(&Channel::Public, MANIFEST, connect).map_err(|e| Error::Other(e.message))?;
         (fetched.bytes, Channel::Public)
     };
-    let text = String::from_utf8(bytes).map_err(|e| format!("manifest is not valid UTF-8: {e}"))?;
-    let manifest = toml::from_str(&text)
-        .map_err(|e| format!("parsing manifest {}/{MANIFEST}: {e}", channel.base()))?;
+    let text = String::from_utf8(bytes)
+        .map_err(|e| Error::Other(format!("manifest is not valid UTF-8: {e}")))?;
+    let manifest = toml::from_str(&text).map_err(|e| {
+        Error::Other(format!(
+            "parsing manifest {}/{MANIFEST}: {e}",
+            channel.base()
+        ))
+    })?;
     Ok((manifest, channel))
 }
 
@@ -428,7 +423,7 @@ pub fn refresh(force: bool, quiet: bool) -> Result<(), Error> {
 ///
 /// No token and no terminal to ask on, or none accepted.
 pub fn sign_in() -> Result<(), Error> {
-    match crate::enriched::token().map_err(Error::Enriched)? {
+    match crate::enriched::token().map_err(|e| Error::Enriched(format!("{e:#}")))? {
         Some(_) => Ok(()),
         None => enrich(),
     }
@@ -483,7 +478,7 @@ fn connect_device(
         .unwrap_or_else(|| "atomdrift".to_string());
     let label = format!("{tool} on {}", std::env::consts::OS);
     let Connected { token, progress } =
-        crate::enriched::connect(&label).map_err(Error::Enriched)?;
+        crate::enriched::connect(&label).map_err(|e| Error::Enriched(format!("{e:#}")))?;
     progress.set("Approved. Connecting…");
 
     let started = std::time::Instant::now();

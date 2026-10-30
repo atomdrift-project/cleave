@@ -42,9 +42,9 @@ traits:
     .unwrap();
     cleave::traits_repo::set_override_dir(Some(rules.path().to_path_buf()));
     let options = cleave::AnalysisOptions {
-        disable_yara: true,
-        disable_radare2: true,
-        disable_upx: true,
+        yara: false,
+        rizin: false,
+        upx: false,
         ..Default::default()
     };
     for compressed in [false, true] {

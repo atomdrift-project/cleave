@@ -3,9 +3,14 @@
 //! An [`Engine`] bundles everything besides the input that decides what an
 //! analysis reports: the trait rules, the YARA rules, and the settings that
 //! change what is unpacked and what is kept. Analyzers carry the engine and
-//! read all of this from it, never from process-wide state, so a result
-//! depends only on the engine and the input, and engines with different
-//! settings can analyze side by side in one process.
+//! read these from it, so engines with different [`Settings`] can analyze
+//! side by side in one process.
+//!
+//! One process-wide input remains, folded into the analysis cache key: the
+//! shared YARA engine. It is loaded once per process, so `CLEAVE_SKIP_YARA`,
+//! `CLEAVE_BUILTIN_YARA_ONLY` and
+//! [`crate::yara_engine::set_builtin_yara_only_override`] apply to every
+//! engine that scans with it.
 
 use crate::capabilities::CapabilityMapper;
 use crate::types::AnalysisReport;
@@ -262,18 +267,12 @@ impl Engine {
 impl Engine {
     /// The engine `options` describe: the process's shared rules and YARA
     /// engine for them (loaded on first use, then reused), with `options`'
-    /// YARA, UPX and rizin settings and full member retention. Build one at startup
-    /// and analyze every file with it.
-    ///
-    /// Only `options` count: unlike the `AnalysisOptions` free functions, the
-    /// process-wide switches ([`crate::disable_upx`],
-    /// [`crate::set_compact_member_retention`]) do not apply. Use
-    /// [`Self::with_compact_members`] for compact folding.
+    /// settings. Build one at startup and analyze every file with it.
     ///
     /// # Errors
     /// When the rules cannot be loaded.
     pub fn for_options(options: &AnalysisOptions) -> anyhow::Result<Self> {
-        crate::shared_resources::explicit_engine_for_options(options)
+        crate::shared_resources::engine_for_options(options)
     }
 
     /// Analyze the file at `path`.
@@ -428,7 +427,7 @@ traits:
             zip.finish().unwrap();
         }
         let options = AnalysisOptions {
-            disable_yara: true,
+            yara: false,
             ..AnalysisOptions::default()
         };
         let report = Engine::for_options(&options)
@@ -472,7 +471,7 @@ mod retry_settings_tests {
             rizin_retry_timeout: Some(std::time::Duration::from_secs(120)),
             ..crate::AnalysisOptions::default()
         };
-        let settings = crate::shared_resources::settings_from_options(&options);
+        let settings = crate::shared_resources::settings_for_options(&options);
         assert_eq!(settings.rizin_timeout, options.rizin_timeout);
         assert_eq!(settings.rizin_retry_timeout, options.rizin_retry_timeout);
         let _parser_options = super::filefacts_options(&settings);

@@ -1,7 +1,7 @@
 //! PE (Portable Executable) analyzer for Windows binaries.
 //!
 //! Every PE-internal helper takes a non-optional
-//! [`crate::analysis_context::AnalysisContext`]: structural data
+//! `AnalysisContext`: structural data
 //! (sections, imports, exports, characteristics) is read from
 //! `filefacts`'s typed views; this analyzer never parses the file itself.
 // Parses attacker-controlled bytes: index and offset arithmetic must be

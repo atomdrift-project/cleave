@@ -19,7 +19,7 @@ const SNAPSHOT_READERS: usize = 6;
 
 /// One source file from an immutable rule tree snapshot.
 #[derive(Clone, Debug)]
-pub struct SourceFile {
+pub(crate) struct SourceFile {
     /// Path relative to the snapshot root.
     pub relative_path: PathBuf,
     /// Exact bytes read for both fingerprinting and compilation.
@@ -37,7 +37,7 @@ impl SourceFile {
 
 /// Frozen source contents and directory layout for one loading cycle.
 #[derive(Debug)]
-pub struct RuleSources {
+pub(crate) struct RuleSources {
     root: PathBuf,
     files: Vec<SourceFile>,
     directories: Vec<PathBuf>,
@@ -53,7 +53,7 @@ impl RuleSources {
     /// rules whose text resembles the malware they detect, and losing a few
     /// rules must not cost every other one. A tree in which no file could be
     /// read still fails, so a permissions problem never loads as an empty set.
-    pub fn fresh(root: &Path) -> Result<Self> {
+    pub(crate) fn fresh(root: &Path) -> Result<Self> {
         let started = std::time::Instant::now();
         let root =
             fs::canonicalize(root).with_context(|| format!("resolving {}", root.display()))?;
@@ -187,17 +187,17 @@ impl RuleSources {
 
     /// Source files in sorted walk order.
     #[must_use]
-    pub fn files(&self) -> &[SourceFile] {
+    pub(crate) fn files(&self) -> &[SourceFile] {
         &self.files
     }
     /// Directory layout, including the root as an empty relative path.
     #[must_use]
-    pub fn directories(&self) -> &[PathBuf] {
+    pub(crate) fn directories(&self) -> &[PathBuf] {
         &self.directories
     }
     /// Look up a source by its root-relative path.
     #[must_use]
-    pub fn file(&self, relative: &Path) -> Option<&SourceFile> {
+    pub(crate) fn file(&self, relative: &Path) -> Option<&SourceFile> {
         self.lookup.get(relative).map(|&i| &self.files[i])
     }
 
@@ -245,7 +245,7 @@ const MAX_SNAPSHOTS: usize = 8;
 
 /// Reuse the snapshot for this load. Never hold a lock while doing parallel I/O:
 /// nested Rayon work may re-enter this function.
-pub fn shared(root: &Path) -> Result<Arc<RuleSources>> {
+pub(crate) fn shared(root: &Path) -> Result<Arc<RuleSources>> {
     let root = fs::canonicalize(root)?;
     {
         let snapshots = SOURCES.read();

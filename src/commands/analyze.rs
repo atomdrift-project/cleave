@@ -108,21 +108,22 @@ pub fn analysis_options(config: &AnalyzeConfig<'_>) -> cleave::AnalysisOptions {
         config.platforms.to_vec()
     };
     cleave::AnalysisOptions {
-        enable_third_party_yara: config.enable_third_party && !config.disabled.third_party,
+        third_party_yara: config.enable_third_party && !config.disabled.third_party,
         zip_passwords: config.zip_passwords.to_vec(),
-        disable_yara: config.disabled.yara,
-        disable_radare2: config.disabled.rizin,
+        yara: !config.disabled.yara,
+        rizin: !config.disabled.rizin,
         rizin_timeout: None,
         rizin_retry_timeout: None,
         rizin_max_bytes: None,
         rizin_native_arch_only: false,
-        disable_upx: config.disabled.upx,
+        upx: !config.disabled.upx,
+        compact_members: false,
         all_files: config.all_files,
         platforms: platforms_lib,
         min_hostile_precision: config.min_hostile_precision,
         min_suspicious_precision: config.min_suspicious_precision,
-        enable_precision_scoring: false,
-        enable_full_validation: config.enable_full_validation,
+        precision_scoring: false,
+        full_validation: config.enable_full_validation,
         max_memory_file_size: config.max_memory_file_size,
         slow_rule_ms: config.slow_rule_ms,
         max_scan_file_size: config.max_scan_file_size,
@@ -137,14 +138,18 @@ pub fn analysis_options(config: &AnalyzeConfig<'_>) -> cleave::AnalysisOptions {
 
 /// Analyze a single file or directory and render the result in the requested format.
 pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
-    let path = Path::new(config.target);
+    run_targets(config, &[config.target.to_string()])
+}
 
-    if !path.exists() {
-        anyhow::bail!("Path does not exist: {}", config.target);
+/// Analyze every target. One file renders straight to the returned string, as
+/// before. Anything more streams through one sink as results complete:
+/// explicit files are analyzed in parallel (unfiltered, like a single file)
+/// and each directory is walked with the shared scan pipeline. Every target is
+/// checked before any work starts.
+pub fn run_targets(config: &AnalyzeConfig<'_>, targets: &[String]) -> Result<String> {
+    if let Some(missing) = targets.iter().find(|t| !Path::new(t.as_str()).exists()) {
+        anyhow::bail!("Path does not exist: {}", missing);
     }
-
-    let options = analysis_options(config);
-
     let out = Output {
         format: *config.format,
         min_crit: config.min_crit,
@@ -153,112 +158,125 @@ pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
         max_file_crit: config.max_file_crit,
         facts: config.facts,
     };
+    let options = analysis_options(config);
 
-    // If target is a directory, process files recursively
-    if path.is_dir() {
-        if out.format == cli::OutputFormat::Json {
-            anyhow::bail!(
-                "--format json writes one report; use --format jsonl to scan a directory"
-            );
-        }
-        let options_arc = std::sync::Arc::new(options);
+    let (dirs, files): (Vec<&String>, Vec<&String>) =
+        targets.iter().partition(|t| Path::new(t.as_str()).is_dir());
+    if let ([], [file]) = (dirs.as_slice(), files.as_slice()) {
+        return analyze_and_format(file, &options, &out);
+    }
+    if out.format == cli::OutputFormat::Json {
+        anyhow::bail!(
+            "--format json writes one report; use --format jsonl for a directory or several targets"
+        );
+    }
 
-        // Sink: one of three destinations, all configured up front so the
-        // per-file callback stays cheap. Streaming to the output file used to
-        // spool every formatted chunk through an unbounded crossbeam channel
-        // and then join into a single String at the end — on a 1M-file scan
-        // that buffered ~1 GiB before the first byte hit disk. Open the file
-        // once and let the callback write to it under a mutex instead.
-        enum Sink {
-            Stdout,
-            File(std::sync::Mutex<std::io::BufWriter<std::fs::File>>),
-        }
-        let sink = match config.output_path {
+    let sink = Sink::open(config)?;
+    let emit = |event: cleave::ScanEvent| emit_event(event, &out, &sink);
+    if !files.is_empty() {
+        let files: Vec<std::path::PathBuf> = files
+            .iter()
+            .map(|f| std::path::PathBuf::from(f.as_str()))
+            .collect();
+        cleave::scan_files(&files, &options, emit)?;
+    }
+    for dir in dirs {
+        cleave::scan_directory(Path::new(dir.as_str()), &options, emit)?;
+    }
+    sink.finish()?;
+    Ok(String::new())
+}
+
+/// Where streamed results go, opened once so the per-file callback stays
+/// cheap. Writing straight to the output file (rather than spooling every
+/// chunk and joining at the end) keeps a million-file scan from buffering
+/// gigabytes before the first byte reaches disk.
+enum Sink {
+    Stdout,
+    File(std::sync::Mutex<std::io::BufWriter<std::fs::File>>),
+}
+
+impl Sink {
+    fn open(config: &AnalyzeConfig<'_>) -> Result<Self> {
+        Ok(match config.output_path {
             Some(path) if config.output_to_file => {
                 let file = std::fs::File::create(path)
                     .with_context(|| format!("Failed to open output file {}", path))?;
-                // 256 KiB buffer: big enough that per-file JSONL writes (~1–5 KiB)
-                // don't thrash the lock+flush path, small enough that process
-                // death loses at most one buffer's worth of already-formatted
-                // results.
+                // 256 KiB: per-file JSONL writes (~1–5 KiB) don't thrash the
+                // lock+flush path, and process death loses at most one buffer
+                // of already-formatted results.
                 Sink::File(std::sync::Mutex::new(std::io::BufWriter::with_capacity(
                     256 * 1024,
                     file,
                 )))
             }
             _ => Sink::Stdout,
-        };
+        })
+    }
 
-        cleave::scan_directory(path, &options_arc, |event| match event {
-            cleave::ScanEvent::Start { total } => {
-                tracing::info!(total = ?total, "Starting directory scan");
+    fn write(&self, formatted: &str) {
+        match self {
+            Sink::Stdout => {
+                print!("{}", formatted);
+                let _ = std::io::stdout().flush();
             }
-            cleave::ScanEvent::File {
-                path: file_path,
-                result,
-            } => {
-                let file_path_str = file_path.to_string_lossy().to_string();
-                let formatted = match *result {
-                    Ok(lib_report) => {
-                        let mut report = prepare_output_report(lib_report);
-                        match format_report_output(&mut report, &out) {
-                            Ok(res) => res,
-                            Err(e) => {
-                                tracing::error!(path = %file_path_str, error = %e, "formatting report failed");
-                                return;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        // Cancellation is expected while draining after Ctrl-C. The
-                        // signal handler already gives the user one concise status
-                        // line; don't turn every in-flight file into an error.
-                        if !cleave::cancellation::is_cancelled() {
-                            tracing::error!(path = %file_path_str, error = %e, "Analysis failed");
-                        }
-                        String::new()
-                    }
-                };
-                if formatted.is_empty() {
-                    return;
-                }
-                match &sink {
-                    Sink::Stdout => {
-                        print!("{}", formatted);
-                        let _ = std::io::stdout().flush();
-                    }
-                    Sink::File(writer) => {
-                        // A poisoned mutex means a prior callback panicked while
-                        // holding the lock mid-write — the buffer may be partial
-                        // but continuing to append is still the best we can do;
-                        // losing output is worse than losing strict JSONL framing.
-                        let mut w = writer
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        if let Err(e) = w.write_all(formatted.as_bytes()) {
-                            tracing::error!(error = %e, "failed to write streamed output chunk");
-                        }
-                    }
+            Sink::File(writer) => {
+                // A poisoned mutex means a prior callback panicked mid-write; the
+                // buffer may be partial, but appending beats losing output.
+                let mut w = writer
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if let Err(e) = w.write_all(formatted.as_bytes()) {
+                    tracing::error!(error = %e, "failed to write streamed output chunk");
                 }
             }
-        })?;
+        }
+    }
 
-        // Flush the file buffer before returning so write_output sees a
-        // fully-written file. write_output is a no-op for our empty return.
-        // Scan has joined, so we own the Mutex exclusively; into_inner skips
-        // the lock entirely.
-        if let Sink::File(writer) = sink {
+    /// Flush the file so `write_output` (a no-op for the empty result) finds
+    /// it complete. Every scan has joined, so the mutex is uncontended.
+    fn finish(self) -> Result<()> {
+        if let Sink::File(writer) = self {
             writer
                 .into_inner()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .flush()
                 .context("Failed to flush streamed output file")?;
         }
-        return Ok(String::new());
+        Ok(())
     }
+}
 
-    // Single file analysis
-    analyze_and_format(config.target, &options, &out)
+fn emit_event(event: cleave::ScanEvent, out: &Output, sink: &Sink) {
+    let cleave::ScanEvent::File { path, result } = event else {
+        if let cleave::ScanEvent::Start { total } = event {
+            tracing::info!(total = ?total, "Starting scan");
+        }
+        return;
+    };
+    let formatted = match *result {
+        Ok(lib_report) => {
+            let mut report = prepare_output_report(lib_report);
+            match format_report_output(&mut report, out) {
+                Ok(res) => res,
+                Err(e) => {
+                    tracing::error!(path = %path.display(), error = %e, "formatting report failed");
+                    return;
+                }
+            }
+        }
+        Err(e) => {
+            // Cancellation is expected while draining after Ctrl-C; the signal
+            // handler already printed one status line.
+            if !cleave::cancellation::is_cancelled() {
+                tracing::error!(path = %path.display(), error = %e, "Analysis failed");
+            }
+            return;
+        }
+    };
+    if !formatted.is_empty() {
+        sink.write(&formatted);
+    }
 }
 
 /// Analyze a single file and format the output.

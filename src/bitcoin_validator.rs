@@ -30,7 +30,7 @@ pub(crate) fn validate_bitcoin_address(s: &str) -> bool {
 
 /// Check if a text string contains at least one valid Bitcoin address.
 #[must_use]
-pub fn contains_bitcoin_address(text: &str) -> bool {
+pub(crate) fn contains_bitcoin_address(text: &str) -> bool {
     let Some(pattern) = btc_addr_pattern() else {
         return false;
     };

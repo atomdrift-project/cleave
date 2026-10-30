@@ -34,7 +34,7 @@ macro_rules! static_regex {
 }
 
 mod analysis_cache;
-pub mod analysis_context;
+pub(crate) mod analysis_context;
 pub mod breadcrumb;
 pub mod cache;
 pub mod cancellation;
@@ -43,23 +43,23 @@ mod engine;
 pub mod enriched;
 mod entropy;
 pub(crate) mod env;
-pub mod extractors;
+pub(crate) mod extractors;
 pub mod file_io;
-pub mod ip_validator;
+pub(crate) mod ip_validator;
 mod leaf_affinity;
 pub mod mem_profile;
 pub mod memory_tracker;
 #[cfg(test)]
 mod path_mapper_test;
-pub mod rule_sources;
+pub(crate) mod rule_sources;
 pub mod rule_update;
 mod shared_resources;
-pub mod strings;
+pub(crate) mod strings;
 #[cfg(test)]
 mod strings_test;
 mod subprocess;
 #[cfg(feature = "lint")]
-pub mod test_rules;
+pub(crate) mod test_rules;
 #[cfg(all(test, feature = "lint"))]
 mod test_rules_filters_test;
 #[cfg(test)]
@@ -73,27 +73,27 @@ pub(crate) mod validation_performance;
 // Public modules
 pub mod analyzers;
 mod base64_validator;
-pub mod bitcoin_validator;
+pub(crate) mod bitcoin_validator;
 pub mod capabilities;
 pub mod cli;
 pub mod commands;
-pub mod composite_rules;
+pub(crate) mod composite_rules;
 pub mod diff;
-pub mod env_mapper;
+pub(crate) mod env_mapper;
 mod formula;
 pub mod model_facts;
 pub mod output;
-pub mod path_mapper;
+pub(crate) mod path_mapper;
 mod payload_filter;
-pub mod random_validator;
+pub(crate) mod random_validator;
 pub mod report_input;
 pub mod theme;
+pub(crate) mod third_party_config;
+pub(crate) mod third_party_yara;
 pub mod tool_resolution;
-pub mod third_party_config;
-pub mod third_party_yara;
 pub mod types;
 pub mod update_check;
-pub mod update_manifest;
+pub(crate) mod update_manifest;
 mod yaml;
 pub mod yara_engine;
 
@@ -182,9 +182,7 @@ pub use types::diff::{
 pub use types::traits_findings::{Evidence, Finding, FindingKind, Trait, TraitKind};
 
 // Re-export cache management functions
-pub use shared_resources::{
-    reload_capability_mapper, set_compact_member_retention, set_skip_traits_override,
-};
+pub use shared_resources::{reload_capability_mapper, set_skip_traits_override};
 
 /// Bring the local compiled-YARA cache up to date with the active rule
 /// sources now, rather than on the first scan after: compiles only the buckets
@@ -227,11 +225,6 @@ use std::sync::Arc;
 /// No-op on non-Unix platforms.
 pub fn kill_all_rizin_groups() {
     filefacts::rizin::kill_all_rizin_groups();
-}
-
-/// Disable UPX integration process-wide.
-pub fn disable_upx() {
-    upx::disable_upx();
 }
 
 /// Process YARA scan results and add them to the analysis report.
@@ -509,14 +502,14 @@ pub fn create_analysis_report(
 /// ones and ignore the rest.
 #[derive(Debug, Clone)]
 pub struct AnalysisOptions {
-    /// Enable third-party YARA rules
-    pub enable_third_party_yara: bool,
+    /// Load the third-party YARA rules alongside the built-in ones.
+    pub third_party_yara: bool,
     /// Passwords to try for encrypted ZIP files
     pub zip_passwords: Vec<String>,
-    /// Disable YARA scanning
-    pub disable_yara: bool,
-    /// Disable rizin analysis (the field keeps its historical name)
-    pub disable_radare2: bool,
+    /// Scan with YARA.
+    pub yara: bool,
+    /// Disassemble native binaries with rizin.
+    pub rizin: bool,
     /// Wall-clock budget for one rizin run on a native binary. A run past it
     /// is killed and the binary keeps its static facts; the report then
     /// records [`types::AnalysisGap::DisassemblyIncomplete`] and is not cached.
@@ -530,8 +523,14 @@ pub struct AnalysisOptions {
     /// Disassemble only the host-native slice of a fat Mach-O; the other
     /// slices never run on this host and are most of the cost.
     pub rizin_native_arch_only: bool,
-    /// Disable UPX unpacking
-    pub disable_upx: bool,
+    /// Unpack UPX-packed binaries and analyze the unpacked image.
+    pub upx: bool,
+    /// Fold archive members into their container keeping only what the
+    /// compact projection renders: drop `kv` (except on files a rule reaches
+    /// through a `<filename>::` path) and `filefacts.values`. For consumers
+    /// that never emit the full v3 schema; on member-heavy archives those
+    /// fields dominate memory.
+    pub compact_members: bool,
     /// Include all files in directory scans, even unknown types
     pub all_files: bool,
     /// Platform filters for composite rule evaluation
@@ -540,10 +539,10 @@ pub struct AnalysisOptions {
     pub min_hostile_precision: f32,
     /// Minimum precision threshold for suspicious composite rules
     pub min_suspicious_precision: f32,
-    /// Whether to compute precision scores and emit precision warnings while loading rules.
-    pub enable_precision_scoring: bool,
-    /// Enable comprehensive validation of capability definitions
-    pub enable_full_validation: bool,
+    /// Compute precision scores and emit precision warnings while loading rules.
+    pub precision_scoring: bool,
+    /// Run full validation of the rule definitions while loading them.
+    pub full_validation: bool,
     /// Maximum file size (bytes) to load into memory from archives
     pub max_memory_file_size: u64,
     /// Warn threshold for slow rule evaluation in milliseconds (default: 4000).
@@ -818,24 +817,25 @@ pub fn start_rayon_diagnostics() {
 impl Default for AnalysisOptions {
     fn default() -> Self {
         Self {
-            enable_third_party_yara: true,
+            third_party_yara: true,
             zip_passwords: cli::DEFAULT_ZIP_PASSWORDS
                 .iter()
                 .map(std::string::ToString::to_string)
                 .collect(),
-            disable_yara: false,
-            disable_radare2: false,
+            yara: true,
+            rizin: true,
             rizin_timeout: None,
             rizin_retry_timeout: None,
             rizin_max_bytes: None,
             rizin_native_arch_only: false,
-            disable_upx: false,
+            upx: true,
+            compact_members: false,
             all_files: false,
             platforms: vec![composite_rules::Platform::All],
             min_hostile_precision: CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
             min_suspicious_precision: CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
-            enable_precision_scoring: false,
-            enable_full_validation: false,
+            precision_scoring: false,
+            full_validation: false,
             max_memory_file_size: 512 * 1024 * 1024, // 512 MB default
             slow_rule_ms: capabilities::CapabilityMapper::DEFAULT_SLOW_RULE_MS,
             max_scan_file_size: 600 * 1024 * 1024, // 600 MB default
@@ -941,21 +941,6 @@ pub fn prewarm_yara_buckets_background(enable_third_party: bool) {
 pub fn prefetch_shared_resources(enable_third_party: bool) {
     prefetch_yara_engine(enable_third_party);
     prefetch_capability_mapper();
-}
-
-/// [`prefetch_shared_resources`], kept for embedders that still pass the old
-/// regex-prewarm flag. The flag is ignored: trait regexes always compile
-/// lazily on first use.
-///
-/// The prewarm compiled every pattern in a persisted memo -- the union of all
-/// patterns any earlier scan had compiled, ~79k of them -- and held them for
-/// the life of the process, and it paid for itself nowhere: a
-/// one-shot scan of a 12-byte file went from 4.8 GiB and 44 s of CPU to
-/// 0.8 GiB and 6.4 s without it, and a long-lived server lost no first-request
-/// latency while its peak fell by 2.6 GiB. Recording the memo also cost every
-/// process a 4.5 MB parse on its first compile and a rewrite after each scan.
-pub fn prefetch_shared_resources_with(enable_third_party: bool, _prewarm_regexes: bool) {
-    prefetch_shared_resources(enable_third_party);
 }
 
 /// Log end-of-scan engine statistics at `info`: per-phase thread-time (and
@@ -1142,9 +1127,12 @@ impl EngineFor<'_> {
         report.target.path = label.to_string();
         report.analysis_timestamp = Some(chrono::Utc::now());
         report.cache_hit = true;
-        if let Self::Given(engine) = self {
-            report.engine = Some((*engine).clone());
-        }
+        report.engine = Some(match self {
+            Self::Given(engine) => (*engine).clone(),
+            Self::Options => {
+                shared_resources::rendering_engine(shared_resources::settings_for_options(options))
+            }
+        });
         Some(report)
     }
 
@@ -3187,23 +3175,23 @@ where
         .unwrap_or_else(rayon::current_num_threads)
         .max(1)
         .min(items.len());
-    crate::rayon_nest::set_toplevel_pending(items.len());
+    let pending = crate::rayon_nest::PendingPaths::new(items.len());
     let pull = || -> bool {
         let i = next.fetch_add(1, Ordering::Relaxed);
         let Some(item) = items.get(i) else {
             return false;
         };
-        crate::rayon_nest::set_toplevel_pending(items.len().saturating_sub(i + 1));
+        pending.admit();
         f(item);
         true
     };
-    // A lane that finds a member's analysis already in flight on another
-    // thread (seven archives carrying one 10 MB bundle start in the same
-    // wave) pulls the next path from this queue instead of idling until the
-    // owner finishes — see `ReportFlight::wait_yielding`.
-    crate::rayon_nest::with_wait_work(&pull, || {
-        let started = AtomicUsize::new(0);
-        (0..lanes).into_par_iter().for_each(|_| {
+    let started = AtomicUsize::new(0);
+    (0..lanes).into_par_iter().for_each(|_| {
+        // A lane that finds a member's analysis already in flight on another
+        // thread (seven archives carrying one 10 MB bundle start in the same
+        // wave) pulls the next path from this queue instead of idling until
+        // the owner finishes — see `ReportFlight::wait_yielding`.
+        crate::rayon_nest::with_wait_work(&pull, || {
             started.fetch_add(1, Ordering::AcqRel);
             loop {
                 // Once every lane runs (no lane job is left in any queue to be
@@ -3220,7 +3208,6 @@ where
             }
         });
     });
-    crate::rayon_nest::set_toplevel_pending(usize::MAX);
 }
 
 /// Analyze a single already-discovered file under the shared scan pipeline:
@@ -3696,7 +3683,7 @@ pub fn diff_files<P: AsRef<Path>>(old: P, new: P) -> Result<AnalysisReport> {
 
 /// Validate the configured traits directory with full validation enabled.
 pub fn validate_traits() -> Result<()> {
-    let resolved = traits_repo::resolve_and_ensure().map_err(anyhow::Error::msg)?;
+    let resolved = traits_repo::resolve_and_ensure()?;
     capabilities::CapabilityMapper::from_directory_with_options(
         resolved.as_path(),
         capabilities::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
@@ -3854,7 +3841,7 @@ mod tests {
         // Distinct payload so the content-keyed report cache can't collide.
         let payload = b"#!/bin/sh\necho analyze_bytes_shared_parity_probe\n";
         let options = AnalysisOptions {
-            disable_yara: true,
+            yara: false,
             ..Default::default()
         };
 
@@ -4017,7 +4004,7 @@ mod tests {
         // Skip YARA: this test checks depth-limit handling, not YARA matches,
         // and the YARA engine load adds ~60s of unnecessary init.
         let options = AnalysisOptions {
-            disable_yara: true,
+            yara: false,
             ..AnalysisOptions::default()
         };
         let engine = shared_resources::engine_for_options(&options)
@@ -4074,7 +4061,7 @@ mod tests {
 
         let options = AnalysisOptions {
             all_files: true,
-            disable_yara: true,
+            yara: false,
             ..AnalysisOptions::default()
         };
         let engine = shared_resources::engine_for_options(&options)

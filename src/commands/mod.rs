@@ -72,7 +72,9 @@ pub mod validate_testdata;
 pub use shared::expand_paths;
 
 // Re-export command functions for main.rs
-pub use analyze::{AnalyzeConfig, analysis_options, run as analyze_command};
+pub use analyze::{
+    AnalyzeConfig, analysis_options, run as analyze_command, run_targets as analyze_targets,
+};
 pub use diff::run as diff_command;
 pub use extract::{
     kv::run as extract_kv_command,

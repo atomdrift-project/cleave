@@ -138,9 +138,9 @@ fn archive_member_findings_are_deterministic() -> anyhow::Result<()> {
     // YARA/radare2 are irrelevant to the AST-query drift and only slow the test;
     // the tree-sitter path stays enabled.
     let options = cleave::AnalysisOptions {
-        disable_yara: true,
-        disable_radare2: true,
-        disable_upx: true,
+        yara: false,
+        rizin: false,
+        upx: false,
         ..Default::default()
     };
 

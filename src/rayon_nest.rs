@@ -18,22 +18,45 @@ use std::cell::Cell;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 static TOPLEVEL_IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
-/// Top-level paths a directory scan has not yet admitted (`usize::MAX` when
-/// no ordered scan is running). Once fewer remain than there are pool
-/// threads the lanes are about to idle, and the bounded-owner rule that
-/// keeps sibling archives serial no longer buys anything: every in-flight
-/// analysis may fan out. Without this the scan's tail is one whale walking
-/// its members one by one on one thread while the other workers sleep.
-static TOPLEVEL_PENDING: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Ordered scans running, and the top-level paths they have not yet admitted
+/// between them. Once fewer remain than there are pool threads the lanes are
+/// about to idle, and the bounded-owner rule that keeps sibling archives
+/// serial no longer buys anything: every in-flight analysis may fan out.
+/// Without this the scan's tail is one whale walking its members one by one
+/// on one thread while the other workers sleep. Summed across scans so
+/// concurrent scans in one process neither reset nor hide each other's queues.
+static ORDERED_SCANS: AtomicUsize = AtomicUsize::new(0);
+static TOPLEVEL_PENDING: AtomicUsize = AtomicUsize::new(0);
 
-pub(crate) fn set_toplevel_pending(n: usize) {
-    TOPLEVEL_PENDING.store(n, Ordering::Release);
+/// An ordered scan's share of [`TOPLEVEL_PENDING`], returned when dropped.
+pub(crate) struct PendingPaths(AtomicUsize);
+
+impl PendingPaths {
+    pub(crate) fn new(n: usize) -> Self {
+        TOPLEVEL_PENDING.fetch_add(n, Ordering::AcqRel);
+        ORDERED_SCANS.fetch_add(1, Ordering::AcqRel);
+        Self(AtomicUsize::new(n))
+    }
+
+    /// One path admitted; called at most once per path.
+    pub(crate) fn admit(&self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+        TOPLEVEL_PENDING.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
-/// The directory scan is draining: too few top-level paths remain to keep
+impl Drop for PendingPaths {
+    fn drop(&mut self) {
+        TOPLEVEL_PENDING.fetch_sub(*self.0.get_mut(), Ordering::AcqRel);
+        ORDERED_SCANS.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// An ordered scan is draining: too few top-level paths remain to keep
 /// every pool thread busy at the top level.
 pub(crate) fn toplevel_draining() -> bool {
-    TOPLEVEL_PENDING.load(Ordering::Acquire) < rayon::current_num_threads()
+    ORDERED_SCANS.load(Ordering::Acquire) > 0
+        && TOPLEVEL_PENDING.load(Ordering::Acquire) < rayon::current_num_threads()
 }
 static NEXT_TOPLEVEL_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -128,82 +151,74 @@ pub(crate) fn adopt_isolation(counters: &'static IsolatedCounters) {
 }
 
 /// Work a lane can do instead of idling in a single-flight wait: the next
-/// top-level path of the ordered scan queue. Installed by `for_each_ordered`
-/// for the duration of the scan (`None` outside it). Callers take the lock,
-/// copy the hook and bump `WAIT_WORK_ACTIVE` *before* unlocking; the
-/// uninstaller clears the slot under the lock and then waits for
-/// `WAIT_WORK_ACTIVE` to drain, so the borrowed closure never outlives its
-/// scope.
-static WAIT_WORK: std::sync::Mutex<Option<&'static (dyn Fn() -> bool + Sync)>> =
-    std::sync::Mutex::new(None);
-static WAIT_WORK_ACTIVE: AtomicUsize = AtomicUsize::new(0);
-static WAIT_WORK_RUNS: AtomicUsize = AtomicUsize::new(0);
+/// top-level path of the ordered scan this thread is a lane of. Per thread,
+/// so concurrent scans each pull only from their own queue.
+#[derive(Clone, Copy)]
+struct WaitWork {
+    hook: *const (),
+    call: unsafe fn(*const ()) -> bool,
+}
 
 thread_local! {
+    static WAIT_WORK: Cell<Option<WaitWork>> = const { Cell::new(None) };
     /// Depth of scan paths this thread is analyzing *inside* a single-flight
     /// wait. A nested path never pulls further work (bounded stack, no wait
     /// chains through this thread).
     static WAIT_WORK_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
 
-struct WaitWorkGuard(());
+static WAIT_WORK_RUNS: AtomicUsize = AtomicUsize::new(0);
 
-impl Drop for WaitWorkGuard {
-    fn drop(&mut self) {
-        *WAIT_WORK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-        while WAIT_WORK_ACTIVE.load(Ordering::Acquire) != 0 {
-            std::thread::yield_now();
-        }
-    }
-}
-
-/// Run `body` with `hook` installed as the wait-time work source.
+/// Run `body` on this thread with `hook` as its wait-time work source.
 ///
 /// `hook` returns `true` when it ran a job (the caller re-checks its wait
-/// condition) and `false` when the queue is exhausted.
-///
-/// Scoped as a closure rather than handing back a guard: a returned guard
-/// carries no borrow of `hook`, so safe code could drop `hook` first or
-/// `mem::forget` the guard and leave a dangling `&'static` in the global slot.
-pub(crate) fn with_wait_work<R>(hook: &(dyn Fn() -> bool + Sync), body: impl FnOnce() -> R) -> R {
-    // SAFETY: the extended reference lives only in `WAIT_WORK`. `_guard` never
-    // leaves this frame, so it cannot be leaked, and it drops before this
-    // function returns or unwinds: it clears the slot and waits out every call
-    // already in flight. `hook` is borrowed for this whole call, so it
-    // outlives every use of the extended reference.
-    let hook: &'static (dyn Fn() -> bool + Sync) = unsafe { std::mem::transmute(hook) };
-    *WAIT_WORK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook);
-    let _guard = WaitWorkGuard(());
+/// condition) and `false` when the queue is exhausted. The previous source,
+/// if any, is restored afterwards, so scans nest.
+pub(crate) fn with_wait_work<F, R>(hook: &F, body: impl FnOnce() -> R) -> R
+where
+    F: Fn() -> bool + Sync,
+{
+    /// # Safety
+    /// `hook` must point to a live `F`.
+    unsafe fn call<F: Fn() -> bool>(hook: *const ()) -> bool {
+        // SAFETY: guaranteed by the caller (see `run_wait_work`).
+        unsafe { (*hook.cast::<F>())() }
+    }
+    struct Restore(Option<WaitWork>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            WAIT_WORK.with(|slot| slot.set(self.0));
+        }
+    }
+    let installed = WaitWork {
+        hook: std::ptr::from_ref(hook).cast(),
+        call: call::<F>,
+    };
+    let _restore = Restore(WAIT_WORK.with(|slot| slot.replace(Some(installed))));
     body()
 }
 
-/// Run one queued scan path on this thread, if any is installed and this
-/// thread is not already inside such a job. Returns whether a job ran.
+/// Run one queued scan path on this thread, if this thread is a scan lane and
+/// not already inside such a job. Returns whether a job ran.
 pub(crate) fn run_wait_work() -> bool {
     if WAIT_WORK_DEPTH.with(Cell::get) > 0 {
         return false;
     }
-    let slot = WAIT_WORK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let Some(hook) = *slot else { return false };
-    // Bump under the lock so the uninstaller's drain sees this call.
-    WAIT_WORK_ACTIVE.fetch_add(1, Ordering::AcqRel);
-    drop(slot);
+    let Some(work) = WAIT_WORK.with(Cell::get) else {
+        return false;
+    };
     struct Active;
     impl Drop for Active {
         fn drop(&mut self) {
             WAIT_WORK_DEPTH.with(|d| d.set(d.get() - 1));
-            WAIT_WORK_ACTIVE.fetch_sub(1, Ordering::AcqRel);
         }
     }
     WAIT_WORK_DEPTH.with(|d| d.set(d.get() + 1));
     let _active = Active;
-    let ran = hook();
+    // SAFETY: `WAIT_WORK` holds `work` only inside `with_wait_work`'s frame on
+    // this thread, which borrows the hook for its whole duration and restores
+    // the slot before returning or unwinding; this call runs within it.
+    let ran = unsafe { (work.call)(work.hook) };
     if ran {
         WAIT_WORK_RUNS.fetch_add(1, Ordering::Relaxed);
     }
@@ -805,5 +820,43 @@ mod tests {
             assert_eq!(nested_ran.load(Ordering::Relaxed), 0);
         });
         assert!(!run_wait_work(), "uninstalled");
+    }
+
+    #[test]
+    fn wait_work_is_per_thread_and_nested_scans_restore_the_outer_queue() {
+        let outer_ran = AtomicUsize::new(0);
+        let outer = || {
+            outer_ran.fetch_add(1, Ordering::Relaxed);
+            true
+        };
+        let inner = || false;
+        with_wait_work(&outer, || {
+            std::thread::scope(|s| {
+                s.spawn(|| assert!(!run_wait_work(), "another thread sees no queue"));
+            });
+            with_wait_work(&inner, || assert!(!run_wait_work(), "inner queue is empty"));
+            assert!(run_wait_work(), "outer queue restored");
+        });
+        assert_eq!(outer_ran.load(Ordering::Relaxed), 1);
+        assert!(!run_wait_work());
+    }
+
+    #[test]
+    fn concurrent_scans_share_one_pending_total() {
+        let _lock = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let threads = rayon::current_num_threads();
+        let a = PendingPaths::new(threads);
+        let b = PendingPaths::new(threads);
+        assert!(!toplevel_draining());
+        for _ in 0..threads {
+            a.admit();
+        }
+        assert!(!toplevel_draining(), "b still holds a full queue");
+        drop(b);
+        assert!(toplevel_draining(), "a has nothing left to admit");
+        drop(a);
+        assert!(!toplevel_draining(), "no ordered scan running");
     }
 }

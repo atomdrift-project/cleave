@@ -1575,8 +1575,8 @@ mod tests {
         let settings = Settings::default();
         let a = AnalysisOptions::default();
         let b = AnalysisOptions {
-            enable_third_party_yara: !a.enable_third_party_yara,
-            disable_upx: !a.disable_upx,
+            third_party_yara: !a.third_party_yara,
+            upx: !a.upx,
             platforms: vec![crate::composite_rules::Platform::Linux],
             ..AnalysisOptions::default()
         };
@@ -2518,7 +2518,7 @@ mod tests {
     fn test_options_hash_varies_with_options() {
         let opts1 = AnalysisOptions::default();
         let opts2 = AnalysisOptions {
-            disable_yara: true,
+            yara: false,
             ..AnalysisOptions::default()
         };
 

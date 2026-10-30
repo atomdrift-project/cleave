@@ -38,10 +38,6 @@ pub struct YaraScan {
 /// 0 = unset, 1 = force builtin-only, -1 = force third-party-allowed.
 static BUILTIN_YARA_ONLY_OVERRIDE: AtomicI8 = AtomicI8::new(0);
 
-/// Process-wide override for skipping YARA entirely. Used by tests that don't
-/// need YARA scanning to keep startup time low.
-static SKIP_YARA_OVERRIDE: AtomicI8 = AtomicI8::new(0);
-
 fn decode(atom: &AtomicI8) -> Option<bool> {
     match atom.load(Ordering::Relaxed) {
         1 => Some(true),
@@ -67,12 +63,6 @@ pub fn set_builtin_yara_only_override(value: Option<bool>) {
     store(&BUILTIN_YARA_ONLY_OVERRIDE, value);
 }
 
-/// Force YARA scanning off for the rest of the process. Mirrors
-/// `CLEAVE_SKIP_YARA` but without env-var mutation.
-pub fn set_skip_yara_override(value: Option<bool>) {
-    store(&SKIP_YARA_OVERRIDE, value);
-}
-
 fn builtin_yara_only_active() -> bool {
     if let Some(v) = decode(&BUILTIN_YARA_ONLY_OVERRIDE) {
         return v;
@@ -81,9 +71,6 @@ fn builtin_yara_only_active() -> bool {
 }
 
 fn skip_yara_active() -> bool {
-    if let Some(v) = decode(&SKIP_YARA_OVERRIDE) {
-        return v;
-    }
     crate::env::flag("CLEAVE_SKIP_YARA")
 }
 
@@ -1116,7 +1103,7 @@ impl YaraEngine {
 
         // Fast path: skip YARA entirely for tests that don't need it
         if skip_yara_active() {
-            tracing::info!("YARA skipped (CLEAVE_SKIP_YARA or override)");
+            tracing::info!("YARA skipped (CLEAVE_SKIP_YARA)");
             return (0, 0);
         }
 

@@ -121,14 +121,16 @@ fn explicit_traits_dir_from(override_dir: Option<PathBuf>, env: Option<String>) 
 
 /// The explicit traits directory (API override or `CLEAVE_TRAITS_DIR`), if one
 /// was given, checked to exist.
-fn checked_explicit_dir() -> Option<Result<PathBuf, String>> {
+fn checked_explicit_dir() -> Option<anyhow::Result<PathBuf>> {
     let explicit = explicit_traits_dir()?;
     let path = PathBuf::from(&explicit);
     Some(if path.exists() {
         tracing::debug!("Using traits from explicit override: {}", path.display());
         Ok(path)
     } else {
-        Err(format!("traits dir override {explicit} does not exist"))
+        Err(anyhow::anyhow!(
+            "traits dir override {explicit} does not exist"
+        ))
     })
 }
 
@@ -136,7 +138,7 @@ fn checked_explicit_dir() -> Option<Result<PathBuf, String>> {
 ///
 /// Returns the path to a usable traits directory, or an error if traits cannot
 /// be obtained.
-pub fn resolve_and_ensure() -> Result<PathBuf, String> {
+pub fn resolve_and_ensure() -> anyhow::Result<PathBuf> {
     migrate_legacy_install();
     checked_explicit_dir().unwrap_or_else(ensure_data_dir)
 }
@@ -147,7 +149,7 @@ pub fn resolve_and_ensure() -> Result<PathBuf, String> {
 /// When a held token alone chose the Enriched tree and it cannot be installed
 /// — refused, or offline — the run falls back to the open-source tree rather
 /// than scan with no rules at all. Under `--enriched` the failure stands.
-fn ensure_data_dir() -> Result<PathBuf, String> {
+fn ensure_data_dir() -> anyhow::Result<PathBuf> {
     let data_dir = default_traits_dir();
     if has_traits(&data_dir) {
         if cfg!(windows)
@@ -167,7 +169,7 @@ fn ensure_data_dir() -> Result<PathBuf, String> {
             crate::enriched::fall_back(&e.to_string());
             ensure_data_dir()
         }
-        Err(e) => Err(format!(
+        Err(e) => Err(anyhow::anyhow!(
             "Failed to install traits from the update bucket: {e}\n\nRun 'cleave update-rules' to install."
         )),
     }
@@ -177,13 +179,13 @@ fn ensure_data_dir() -> Result<PathBuf, String> {
 ///
 /// Same resolution order as [`resolve_and_ensure`], but a missing install is
 /// an error. Used by hot-reload paths, which must not block on a download.
-pub fn try_resolve() -> Result<PathBuf, String> {
+pub fn try_resolve() -> anyhow::Result<PathBuf> {
     checked_explicit_dir().unwrap_or_else(|| {
         let data_dir = default_traits_dir();
         if has_traits(&data_dir) {
             Ok(data_dir)
         } else {
-            Err(format!(
+            Err(anyhow::anyhow!(
                 "Traits not found at {} (run 'cleave update-rules' to install)",
                 data_dir.display()
             ))

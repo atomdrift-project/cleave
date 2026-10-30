@@ -6,17 +6,13 @@
 //! The namespace format used for third-party rules is `"3p.{vendor}[.{subdir}...]"`.
 
 use crate::composite_rules::{Arch, Platform};
-pub use yara_classify::{
-    filetype_from_magic, has_module_reference, infer_filetypes, infer_filetypes_from_metadata_text,
-    infer_filetypes_from_namespace, infer_filetypes_from_tags, inject_condition_filetype_hints,
-};
 
 /// Derive the trait ID for a third-party YARA match.
 ///
 /// The namespace format is `"3p.{vendor}[.{subdir}...]"`.
 /// Returns a path like `"third_party/{vendor}/[{platform}/][{type}/]{family}"`.
 #[must_use]
-pub fn derive_trait_id(namespace: &str, rule_name: &str, _os_meta: Option<&str>) -> String {
+pub(crate) fn derive_trait_id(namespace: &str, rule_name: &str, _os_meta: Option<&str>) -> String {
     // Parse "3p.vendor[.subdir...]" -> vendor, subdirs
     let without_prefix = namespace.strip_prefix("3p.").unwrap_or(namespace);
     let (vendor, rest) = match without_prefix.find('.') {
@@ -40,7 +36,7 @@ pub fn derive_trait_id(namespace: &str, rule_name: &str, _os_meta: Option<&str>)
 ///
 /// Priority: `os` metadata first, then rule name prefix (e.g. `Win32_`, `Linux_`).
 /// Returns empty vec if unknown — rule applies to all platforms.
-pub fn platforms_from_name_and_os(rule_name: &str, os_meta: Option<&str>) -> Vec<Platform> {
+pub(crate) fn platforms_from_name_and_os(rule_name: &str, os_meta: Option<&str>) -> Vec<Platform> {
     if let Some(os) = os_meta {
         let mut platforms = Vec::new();
         for token in os.to_lowercase().split(',').map(str::trim) {
@@ -101,62 +97,6 @@ pub fn platforms_from_name_and_os(rule_name: &str, os_meta: Option<&str>) -> Vec
 
 fn prefers_unix_php_platform(rule_name: &str) -> bool {
     yara_classify::infer_filetypes(rule_name, None) == vec!["php"]
-}
-
-/// Map platforms to the filetype strings expected by the YARA file-type filter.
-///
-/// Returns lowercase type strings compatible with `scan_bytes`'s filter:
-/// Windows → ["pe", "dll"], Unix ELF platforms → ["elf", "so"], macOS → ["macho", "dylib"].
-/// Returns empty slice for platforms with no reliable binary constraint.
-#[must_use]
-pub fn filetypes_from_platforms(platforms: &[Platform]) -> Vec<&'static str> {
-    let mut types: Vec<&'static str> = Vec::new();
-    for platform in platforms {
-        match platform {
-            Platform::Windows => {
-                if !types.contains(&"pe") {
-                    types.push("pe");
-                    types.push("dll");
-                }
-            }
-            Platform::Linux
-            | Platform::Unix
-            | Platform::Solaris
-            | Platform::FreeBsd
-            | Platform::OpenBsd
-            | Platform::NetBsd
-            | Platform::DragonFlyBsd
-            | Platform::OpenWrt
-            | Platform::Qnx => {
-                if !types.contains(&"elf") {
-                    types.push("elf");
-                    types.push("so");
-                }
-            }
-            Platform::MacOS => {
-                if !types.contains(&"macho") {
-                    types.push("macho");
-                    types.push("dylib");
-                }
-            }
-            Platform::All
-            | Platform::Android
-            | Platform::Ios
-            | Platform::Aix
-            | Platform::Esxi
-            | Platform::Zos
-            | Platform::Appliance
-            | Platform::RouterOs
-            | Platform::FortiOs
-            | Platform::PanOs
-            | Platform::IosXe
-            | Platform::Junos
-            | Platform::Netscaler
-            | Platform::Ivanti
-            | Platform::VxWorks => {}
-        }
-    }
-    types
 }
 
 /// Parse `arch_context` metadata from Elastic-style third-party YARA rules.
@@ -224,7 +164,7 @@ fn platform_filetypes_from_rule_name(rule_name: &str) -> Vec<&'static str> {
 ///
 /// Called from `yara_engine::build_yara_match` when a rule gets filetype tags.
 /// At `--verbose` log level this lets operators see which rules map to which types.
-pub fn log_filetype_association(
+pub(crate) fn log_filetype_association(
     rule_name: &str,
     namespace: &str,
     filetypes: &[String],
@@ -527,6 +467,10 @@ fn normalize_yaraforge_vendor(key: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use yara_classify::{
+        has_module_reference, infer_filetypes, infer_filetypes_from_metadata_text,
+        infer_filetypes_from_namespace, infer_filetypes_from_tags, inject_condition_filetype_hints,
+    };
 
     #[test]
     fn test_yaraforge_reversinglabs_emotet() {
@@ -845,131 +789,6 @@ mod tests {
         // "win,win32" should not produce duplicate Windows entries
         let result = platforms_from_name_and_os("SomeRule", Some("win,win32"));
         assert_eq!(result, vec![Platform::Windows]);
-    }
-
-    // ------------------------------------------------------------------
-    // Filetype mapping from platforms
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn test_filetypes_from_windows() {
-        assert_eq!(
-            filetypes_from_platforms(&[Platform::Windows]),
-            vec!["pe", "dll"]
-        );
-    }
-
-    #[test]
-    fn test_filetypes_from_linux() {
-        assert_eq!(
-            filetypes_from_platforms(&[Platform::Linux]),
-            vec!["elf", "so"]
-        );
-    }
-
-    #[test]
-    fn test_filetypes_from_unix() {
-        // Unix is treated the same as Linux for binary format purposes
-        assert_eq!(
-            filetypes_from_platforms(&[Platform::Unix]),
-            vec!["elf", "so"]
-        );
-    }
-
-    #[test]
-    fn test_filetypes_from_macos() {
-        assert_eq!(
-            filetypes_from_platforms(&[Platform::MacOS]),
-            vec!["macho", "dylib"]
-        );
-    }
-
-    #[test]
-    fn test_filetypes_from_android_empty() {
-        // Android doesn't map to a specific binary format we filter on
-        assert!(filetypes_from_platforms(&[Platform::Android]).is_empty());
-    }
-
-    #[test]
-    fn test_filetypes_from_ios_empty() {
-        assert!(filetypes_from_platforms(&[Platform::Ios]).is_empty());
-    }
-
-    #[test]
-    fn test_filetypes_from_all_empty() {
-        assert!(filetypes_from_platforms(&[Platform::All]).is_empty());
-    }
-
-    #[test]
-    fn test_filetypes_from_empty() {
-        assert!(filetypes_from_platforms(&[]).is_empty());
-    }
-
-    #[test]
-    fn test_filetypes_multiple_platforms_no_duplicates() {
-        // Linux + Unix both map to ELF — result should have no duplicates
-        let types = filetypes_from_platforms(&[Platform::Linux, Platform::Unix]);
-        assert_eq!(
-            types,
-            vec!["elf", "so"],
-            "Linux+Unix should deduplicate to a single ELF set"
-        );
-    }
-
-    #[test]
-    fn test_filetypes_windows_and_linux_combined() {
-        let types = filetypes_from_platforms(&[Platform::Windows, Platform::Linux]);
-        assert!(types.contains(&"pe"));
-        assert!(types.contains(&"dll"));
-        assert!(types.contains(&"elf"));
-        assert!(types.contains(&"so"));
-        assert_eq!(types.len(), 4);
-    }
-
-    // ------------------------------------------------------------------
-    // End-to-end: rule name → platform → filetype strings
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn test_win32_name_yields_pe_dll_filetypes() {
-        let platforms = platforms_from_name_and_os("Win32_Trojan_Foo", None);
-        let types = filetypes_from_platforms(&platforms);
-        assert!(types.contains(&"pe"));
-        assert!(types.contains(&"dll"));
-        // Should NOT contain ELF types
-        assert!(!types.contains(&"elf"));
-        assert!(!types.contains(&"so"));
-    }
-
-    #[test]
-    fn test_linux_name_yields_elf_so_filetypes() {
-        let platforms = platforms_from_name_and_os("Linux_Backdoor_Bash_e427876d", None);
-        let types = filetypes_from_platforms(&platforms);
-        assert!(types.contains(&"elf"));
-        assert!(types.contains(&"so"));
-        assert!(!types.contains(&"pe"));
-        assert!(!types.contains(&"macho"));
-    }
-
-    #[test]
-    fn test_macos_name_yields_macho_dylib_filetypes() {
-        let platforms =
-            platforms_from_name_and_os("MacOS_Infostealer_MdQuerySecret_12345678", None);
-        let types = filetypes_from_platforms(&platforms);
-        assert!(types.contains(&"macho"));
-        assert!(types.contains(&"dylib"));
-        assert!(!types.contains(&"pe"));
-        assert!(!types.contains(&"elf"));
-    }
-
-    #[test]
-    fn test_generic_name_yields_no_filetypes() {
-        let platforms = platforms_from_name_and_os("DarkCloud_Stealer", None);
-        let types = filetypes_from_platforms(&platforms);
-        assert!(
-            types.is_empty(),
-            "Generic rule name should produce no filetype constraint"
-        );
     }
 
     #[test]

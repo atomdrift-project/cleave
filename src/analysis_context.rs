@@ -349,7 +349,7 @@ fn extend_with_owner_qualified_import(imports: &mut Vec<Import>, import: &Import
 /// shape. Returns None for non-Function variants (defensive — callers
 /// should already pre-filter).
 #[must_use]
-pub fn project_filefacts_function(sym: &filefacts::Symbol) -> Option<Function> {
+pub(crate) fn project_filefacts_function(sym: &filefacts::Symbol) -> Option<Function> {
     let filefacts::Symbol::Function {
         name,
         offset,

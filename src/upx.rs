@@ -4,28 +4,11 @@
 
 use std::io::Write;
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
 use tempfile::NamedTempFile;
 use thiserror::Error;
 
-/// Process-wide UPX switch behind [`crate::disable_upx`]. Only the
-/// `AnalysisOptions` entry points read it, when they build their engine; an
-/// analysis itself asks its engine ([`crate::Engine`]), so a per-call
-/// `disable_upx` never reaches analyses running alongside it.
-static UPX_DISABLED: AtomicBool = AtomicBool::new(false);
-
 /// How long one `upx -d` may run.
 const UPX_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
-
-/// Disable UPX decompression for every later `AnalysisOptions` call.
-pub(crate) fn disable_upx() {
-    UPX_DISABLED.store(true, Ordering::Relaxed);
-}
-
-/// Whether [`disable_upx`] was called.
-pub(crate) fn is_disabled() -> bool {
-    UPX_DISABLED.load(Ordering::Relaxed)
-}
 
 #[derive(Debug, Error)]
 pub(crate) enum UPXError {

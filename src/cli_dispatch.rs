@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 use cleave::cli;
 use cleave::commands::{
-    AnalyzeConfig, IterFilesConfig, analyze_command, diff_command, expand_paths,
-    extract_exports_command, extract_functions_command, extract_imports_command,
-    extract_kv_command, extract_metrics_command, extract_sections_command, extract_strings_command,
+    AnalyzeConfig, IterFilesConfig, diff_command, expand_paths, extract_exports_command,
+    extract_functions_command, extract_imports_command, extract_kv_command,
+    extract_metrics_command, extract_sections_command, extract_strings_command,
     extract_symbols_command, inspect_command, iter_files_command,
 };
 #[cfg(feature = "lint")]
@@ -62,14 +62,7 @@ fn analyze_config<'a>(ctx: &'a AnalyzeDispatchContext<'a>, target: &'a str) -> A
 }
 
 fn analyze_targets(targets: &[String], ctx: &AnalyzeDispatchContext<'_>) -> Result<String> {
-    if *ctx.format == cli::OutputFormat::Json && targets.len() > 1 {
-        anyhow::bail!("--format json writes one report; use --format jsonl for several targets");
-    }
-    let mut results = Vec::with_capacity(targets.len());
-    for target in targets {
-        results.push(analyze_command(&analyze_config(ctx, target))?);
-    }
-    Ok(results.join(""))
+    cleave::commands::analyze_targets(&analyze_config(ctx, ""), targets)
 }
 
 fn run_analyze_paths(
@@ -92,11 +85,11 @@ fn run_analyze_paths(
 fn run_update_rules(force: bool, check: bool, pin: Option<String>) -> Result<()> {
     let dir = cleave::traits_repo::install_target();
     if let Some(commit) = pin {
-        cleave::rule_update::pin(&dir, &commit).map_err(anyhow::Error::msg)?;
+        cleave::rule_update::pin(&dir, &commit)?;
     } else if check {
-        cleave::rule_update::check(&dir).map_err(anyhow::Error::msg)?;
+        cleave::rule_update::check(&dir)?;
     } else {
-        cleave::rule_update::refresh(force, false).map_err(anyhow::Error::msg)?;
+        cleave::rule_update::refresh(force, false)?;
     }
 
     Ok(())

@@ -296,7 +296,7 @@ impl Platform {
 
 /// True when rule platforms and active scan platform filters overlap, including umbrellas.
 #[must_use]
-pub fn platforms_intersect(rule: &[Platform], filters: &[Platform]) -> bool {
+pub(crate) fn platforms_intersect(rule: &[Platform], filters: &[Platform]) -> bool {
     if rule.is_empty() || filters.is_empty() {
         return true;
     }

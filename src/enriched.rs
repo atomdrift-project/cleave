@@ -81,7 +81,7 @@ pub fn required() -> bool {
 ///
 /// A saved token file that others can read, or that cannot be read or
 /// parsed: a fault to fix rather than a token to quietly do without.
-pub fn resolve(required: bool) -> Result<(), String> {
+pub fn resolve(required: bool) -> anyhow::Result<()> {
     let switch = env_switch(std::env::var(ENABLE_ENV).ok().as_deref());
     let required = required || switch == Some(true);
     REQUIRED.store(required, Ordering::Relaxed);
@@ -210,7 +210,7 @@ pub fn token_path() -> Option<PathBuf> {
 ///
 /// A saved file that others can read, or that cannot be read or parsed. Each is
 /// a fault to fix rather than a token to quietly do without.
-pub fn token() -> Result<Option<(Token, Source)>, String> {
+pub fn token() -> anyhow::Result<Option<(Token, Source)>> {
     if let Some(token) = std::env::var(TOKEN_ENV).ok().and_then(|v| Token::parse(&v)) {
         return Ok(Some((token, Source::Env)));
     }
@@ -220,31 +220,31 @@ pub fn token() -> Result<Option<(Token, Source)>, String> {
     Ok(read_token_file(&path)?.map(|token| (token, Source::File)))
 }
 
-fn read_token_file(path: &Path) -> Result<Option<Token>, String> {
+fn read_token_file(path: &Path) -> anyhow::Result<Option<Token>> {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("reading {}: {e}", path.display())),
+        Err(e) => return Err(anyhow::anyhow!("reading {}: {e}", path.display())),
     };
     check_private(path)?;
-    let file: TokenFile =
-        serde_json::from_str(&text).map_err(|e| format!("parsing {}: {e}", path.display()))?;
+    let file: TokenFile = serde_json::from_str(&text)
+        .map_err(|e| anyhow::anyhow!("parsing {}: {e}", path.display()))?;
     Token::parse(&file.token)
         .map(Some)
-        .ok_or_else(|| format!("{} holds no usable token", path.display()))
+        .ok_or_else(|| anyhow::anyhow!("{} holds no usable token", path.display()))
 }
 
 /// Refuse a token file anyone but its owner can read or write, as ssh refuses
 /// a private key: a token another account can read is a token to revoke.
 #[cfg(unix)]
-fn check_private(path: &Path) -> Result<(), String> {
+fn check_private(path: &Path) -> anyhow::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let mode = std::fs::metadata(path)
-        .map_err(|e| format!("reading {}: {e}", path.display()))?
+        .map_err(|e| anyhow::anyhow!("reading {}: {e}", path.display()))?
         .permissions()
         .mode();
     if mode & 0o077 != 0 {
-        return Err(format!(
+        return Err(anyhow::anyhow!(
             "{} is accessible to other users (mode {:o}); run: chmod 600 '{}'",
             path.display(),
             mode & 0o777,
@@ -255,7 +255,7 @@ fn check_private(path: &Path) -> Result<(), String> {
 }
 
 #[cfg(not(unix))]
-fn check_private(_path: &Path) -> Result<(), String> {
+fn check_private(_path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
@@ -267,22 +267,25 @@ fn check_private(_path: &Path) -> Result<(), String> {
 /// # Errors
 ///
 /// When there is no config directory, or it cannot be written.
-pub fn save(token: &Token) -> Result<PathBuf, String> {
-    let path = token_path().ok_or("no config directory to save the token in")?;
+pub fn save(token: &Token) -> anyhow::Result<PathBuf> {
+    let path =
+        token_path().ok_or_else(|| anyhow::anyhow!("no config directory to save the token in"))?;
     write_token_file(&path, token)?;
     Ok(path)
 }
 
-fn write_token_file(path: &Path, token: &Token) -> Result<(), String> {
+fn write_token_file(path: &Path, token: &Token) -> anyhow::Result<()> {
     use std::io::Write;
-    let dir = path.parent().ok_or("token path has no parent")?;
+    let dir = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("token path has no parent"))?;
     let mut builder = std::fs::DirBuilder::new();
     builder.recursive(true);
     #[cfg(unix)]
     std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
     builder
         .create(dir)
-        .map_err(|e| format!("creating {}: {e}", dir.display()))?;
+        .map_err(|e| anyhow::anyhow!("creating {}: {e}", dir.display()))?;
 
     let staging = path.with_extension("json.tmp");
     drop(std::fs::remove_file(&staging));
@@ -293,7 +296,7 @@ fn write_token_file(path: &Path, token: &Token) -> Result<(), String> {
     let body = serde_json::to_string(&TokenFile {
         token: token.secret().to_string(),
     })
-    .map_err(|e| format!("rendering token file: {e}"))?;
+    .map_err(|e| anyhow::anyhow!("rendering token file: {e}"))?;
     let written = options.open(&staging).and_then(|mut file| {
         file.write_all(body.as_bytes())?;
         file.write_all(b"\n")?;
@@ -301,7 +304,7 @@ fn write_token_file(path: &Path, token: &Token) -> Result<(), String> {
     });
     if let Err(e) = written.and_then(|()| std::fs::rename(&staging, path)) {
         drop(std::fs::remove_file(&staging));
-        return Err(format!("writing {}: {e}", path.display()));
+        return Err(anyhow::anyhow!("writing {}: {e}", path.display()));
     }
     Ok(())
 }
@@ -498,10 +501,10 @@ pub struct Connected {
 ///
 /// No terminal to show the link on, dash unreachable, the code expiring
 /// unapproved, or Ctrl-C.
-pub fn connect(label: &str) -> Result<Connected, String> {
+pub fn connect(label: &str) -> anyhow::Result<Connected> {
     use std::time::{Duration, Instant};
     if !interactive() {
-        return Err(format!(
+        return Err(anyhow::anyhow!(
             "isotope13 Enriched needs a token: {}",
             how_to_get_one()
         ));
@@ -510,19 +513,19 @@ pub fn connect(label: &str) -> Result<Connected, String> {
     let body = serde_json::json!({ "label": label }).to_string();
     let (status, text) = dash.post("device/code", &body)?;
     if status != 200 {
-        return Err(format!(
+        return Err(anyhow::anyhow!(
             "{DASH_URL} could not start a connection (HTTP {status})"
         ));
     }
-    let start: DeviceStart =
-        serde_json::from_str(&text).map_err(|e| format!("{DASH_URL} answered oddly: {e}"))?;
+    let start: DeviceStart = serde_json::from_str(&text)
+        .map_err(|e| anyhow::anyhow!("{DASH_URL} answered oddly: {e}"))?;
     let expires = Duration::from_secs(start.expires_in.clamp(60, 3600));
     let interval = Duration::from_secs(start.interval.clamp(1, 60));
     let link = start
         .verification_uri_complete
         .unwrap_or(start.verification_uri);
     if !is_dash_link(&link) {
-        return Err(format!(
+        return Err(anyhow::anyhow!(
             "{DASH_URL} sent an approval link that is not its own"
         ));
     }
@@ -537,14 +540,14 @@ pub fn connect(label: &str) -> Result<Connected, String> {
         // Slept in slices so Ctrl-C is noticed within the second.
         for _ in 0..interval.as_secs() {
             if crate::cancellation::is_cancelled() {
-                return Err("connection cancelled".to_string());
+                return Err(anyhow::anyhow!("connection cancelled"));
             }
             std::thread::sleep(Duration::from_secs(1));
         }
         if started.elapsed() > expires {
-            return Err(
-                "the code expired before it was approved; run again for a new one".to_string(),
-            );
+            return Err(anyhow::anyhow!(
+                "the code expired before it was approved; run again for a new one"
+            ));
         }
         let (status, text) = match dash.post("device/token", &poll) {
             Ok(answer) => answer,
@@ -560,19 +563,20 @@ pub fn connect(label: &str) -> Result<Connected, String> {
         let answer: DevicePoll = serde_json::from_str(&text).unwrap_or_default();
         match (status, answer.token) {
             (200, Some(token)) => {
-                let token = Token::parse(&token).ok_or("dash issued a token that is not one")?;
+                let token = Token::parse(&token)
+                    .ok_or_else(|| anyhow::anyhow!("dash issued a token that is not one"))?;
                 tracing::info!(event = "enriched.device", outcome = "connected", tid = %token.fingerprint());
                 return Ok(Connected { token, progress });
             }
             (202, _) => {}
             (410, _) => {
-                return Err(
-                    "the code expired or was already used; run again for a new one".to_string(),
-                );
+                return Err(anyhow::anyhow!(
+                    "the code expired or was already used; run again for a new one"
+                ));
             }
             (status, _) => {
                 let reason = answer.error.unwrap_or_default();
-                return Err(format!(
+                return Err(anyhow::anyhow!(
                     "{DASH_URL} refused the connection (HTTP {status} {reason})"
                 ));
             }
@@ -618,7 +622,7 @@ struct Dash {
 }
 
 impl Dash {
-    fn new() -> Result<Self, String> {
+    fn new() -> anyhow::Result<Self> {
         #[cfg(debug_assertions)]
         let local = std::env::var("ISOTOPE13_DASH_URL")
             .ok()
@@ -636,11 +640,11 @@ impl Dash {
             .timeout(std::time::Duration::from_secs(30))
             .user_agent(concat!("cleave/", env!("CARGO_PKG_VERSION")))
             .build()
-            .map_err(|e| format!("http client: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("http client: {e}"))?;
         Ok(Self { base, http })
     }
 
-    fn post(&self, path: &str, json: &str) -> Result<(u16, String), String> {
+    fn post(&self, path: &str, json: &str) -> anyhow::Result<(u16, String)> {
         let url = format!("{}{path}", self.base);
         let resp = self
             .http
@@ -648,9 +652,11 @@ impl Dash {
             .header("content-type", "application/json")
             .body(json.to_string())
             .send()
-            .map_err(|e| format!("POST {url}: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("POST {url}: {e}"))?;
         let status = resp.status().as_u16();
-        let text = resp.text().map_err(|e| format!("reading {url}: {e}"))?;
+        let text = resp
+            .text()
+            .map_err(|e| anyhow::anyhow!("reading {url}: {e}"))?;
         Ok((status, text))
     }
 }
@@ -771,12 +777,18 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         }
-        assert!(read_token_file(&path).unwrap_err().contains("parsing"));
+        assert!(
+            read_token_file(&path)
+                .unwrap_err()
+                .to_string()
+                .contains("parsing")
+        );
 
         std::fs::write(&path, r#"{"token":"  "}"#).unwrap();
         assert!(
             read_token_file(&path)
                 .unwrap_err()
+                .to_string()
                 .contains("no usable token")
         );
     }
@@ -791,7 +803,10 @@ mod tests {
         for mode in [0o644, 0o640, 0o604, 0o660] {
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
             let err = read_token_file(&path).unwrap_err();
-            assert!(err.contains("chmod 600"), "mode {mode:o}: {err}");
+            assert!(
+                err.to_string().contains("chmod 600"),
+                "mode {mode:o}: {err}"
+            );
         }
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         assert!(read_token_file(&path).unwrap().is_some());

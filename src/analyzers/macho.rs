@@ -1,7 +1,7 @@
 //! Mach-O binary analyzer for macOS executables.
 //!
 //! Every Mach-O helper takes a non-optional
-//! [`crate::analysis_context::AnalysisContext`]: structural data
+//! `AnalysisContext`: structural data
 //! (segments, dylibs, code signature, header bits) is read from
 //! `filefacts`'s typed views; this analyzer never parses the file itself.
 // Parses attacker-controlled bytes: index and offset arithmetic must be

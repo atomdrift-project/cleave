@@ -23,11 +23,11 @@ pub(crate) mod regex_store;
 pub(crate) mod section_map;
 pub(crate) mod trait_timing;
 pub(crate) mod traits;
-pub mod types;
+pub(crate) mod types;
 
 // Re-export public API
 #[allow(unused_imports)]
-pub use condition::StringValidator;
+pub(crate) use condition::StringValidator;
 pub(crate) use condition::{
     CommentQuery, Condition, EncodedQuery, HexQuery, KvQuery, LiteralQuery, MetricsQuery,
     PathInput, PathQuery, RawQuery, SectionQuery, SymbolQuery, TextQuery, TreeSitterQuery,
@@ -41,7 +41,7 @@ pub(crate) use types::Arch;
 pub(crate) use types::FileType;
 pub use types::Platform;
 pub(crate) use types::TypeMask;
-pub use types::platforms_intersect;
+pub(crate) use types::platforms_intersect;
 
 #[cfg(test)]
 mod tests;

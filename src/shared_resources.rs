@@ -8,7 +8,7 @@
 use crate::capabilities::CapabilityMapper;
 use crate::yara_engine::YaraEngine;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicI8, Ordering};
+use std::sync::atomic::{AtomicI8, Ordering};
 use std::sync::{Arc, OnceLock};
 
 /// Process-wide override for the trait-loading skip flag.
@@ -55,26 +55,6 @@ pub(crate) fn skip_traits_requested() -> bool {
         -1 => false,
         _ => crate::env::flag("CLEAVE_SKIP_TRAITS"),
     }
-}
-
-/// Process-wide member-retention mode, set once at startup by callers that
-/// consume only the compact projection of member nodes (scan's pipeline).
-/// When on, fields that exist solely for the full v3 schema are dropped as
-/// each member folds into its container: `kv` (except on files a loaded rule
-/// reaches via a `<filename>::` sibling path) and `filefacts.values`. On a
-/// member-heavy archive those two fields are pure ballast — retained across
-/// tens of thousands of members for an output shape that is never rendered.
-/// Default off: cleave's own CLI and every v3 consumer keep full output.
-static COMPACT_MEMBER_RETENTION: AtomicBool = AtomicBool::new(false);
-
-/// Enable or disable compact member retention for the rest of the process.
-/// Intended to be called once at startup, before any analysis.
-pub fn set_compact_member_retention(enabled: bool) {
-    COMPACT_MEMBER_RETENTION.store(enabled, Ordering::Relaxed);
-}
-
-pub(crate) fn compact_member_retention() -> bool {
-    COMPACT_MEMBER_RETENTION.load(Ordering::Relaxed)
 }
 
 /// Adopt `report`, evaluated under its own `target.path`, for `new_path`.
@@ -135,42 +115,29 @@ pub(crate) fn loaded_capability_mapper() -> Option<Arc<CapabilityMapper>> {
     CAPABILITY_MAPPER.read().clone()
 }
 
-/// The engine-level settings `options` ask for, and nothing else: what
-/// [`crate::Engine::for_options`] builds with.
-pub(crate) fn settings_from_options(options: &crate::AnalysisOptions) -> crate::engine::Settings {
+/// The engine-level settings `options` ask for: what every
+/// `AnalysisOptions` entry point and [`crate::Engine::for_options`] build with.
+pub(crate) fn settings_for_options(options: &crate::AnalysisOptions) -> crate::engine::Settings {
     crate::engine::Settings {
-        upx: !options.disable_upx,
-        rizin: !options.disable_radare2,
+        upx: options.upx,
+        rizin: options.rizin,
         rizin_timeout: options.rizin_timeout,
         rizin_retry_timeout: options.rizin_retry_timeout,
         rizin_max_bytes: options.rizin_max_bytes,
         rizin_native_arch_only: options.rizin_native_arch_only,
-        compact_members: false,
-        yara: !options.disable_yara,
-        third_party_yara: options.enable_third_party_yara,
+        compact_members: options.compact_members,
+        yara: options.yara,
+        third_party_yara: options.third_party_yara,
         platforms: options.platforms.clone(),
         min_hostile_precision: options.min_hostile_precision,
         min_suspicious_precision: options.min_suspicious_precision,
-        precision_scoring: options.enable_precision_scoring,
-        full_validation: options.enable_full_validation,
+        precision_scoring: options.precision_scoring,
+        full_validation: options.full_validation,
     }
 }
 
-/// The engine-level settings an `AnalysisOptions` free function analyzes
-/// under: [`settings_from_options`], plus the process-wide switches those
-/// entry points still honor ([`crate::disable_upx`],
-/// [`set_compact_member_retention`]).
-pub(crate) fn settings_for_options(options: &crate::AnalysisOptions) -> crate::engine::Settings {
-    let settings = settings_from_options(options);
-    crate::engine::Settings {
-        upx: settings.upx && !crate::upx::is_disabled(),
-        compact_members: compact_member_retention(),
-        ..settings
-    }
-}
-
-/// The engine the `AnalysisOptions` entry points analyze under: the shared
-/// rules and YARA engine for these options, with [`settings_for_options`].
+/// The shared rules and YARA engine for `options`, under the settings
+/// `options` describe.
 pub(crate) fn engine_for_options(
     options: &crate::AnalysisOptions,
 ) -> anyhow::Result<crate::Engine> {
@@ -178,46 +145,28 @@ pub(crate) fn engine_for_options(
     Ok(engine_with_rules(options, rules))
 }
 
-/// The shared rules and YARA engine for `options`, under exactly the
-/// settings `options` describe: [`crate::Engine::for_options`].
-pub(crate) fn explicit_engine_for_options(
-    options: &crate::AnalysisOptions,
-) -> anyhow::Result<crate::Engine> {
-    let rules = capability_mapper_with_options(options)?;
-    let yara = (!options.disable_yara).then(|| yara_engine(options.enable_third_party_yara));
-    Ok(crate::Engine::new(
-        rules,
-        yara,
-        settings_from_options(options),
-    ))
-}
-
 /// [`engine_for_options`] over rules the caller already holds.
 pub(crate) fn engine_with_rules(
     options: &crate::AnalysisOptions,
     rules: Arc<CapabilityMapper>,
 ) -> crate::Engine {
-    let yara = (!options.disable_yara).then(|| yara_engine(options.enable_third_party_yara));
+    let yara = options.yara.then(|| yara_engine(options.third_party_yara));
     crate::Engine::new(rules, yara, settings_for_options(options))
 }
 
-/// The engine for a report that carries none (one built by hand, or read
-/// back from the cache by an `AnalysisOptions` entry point): the loaded
-/// global rules, if any, under the process-wide settings. This is the one
-/// place a result still depends on what else the process loaded; reports
-/// from [`crate::Engine`]'s own entry points always carry their engine.
-pub(crate) fn fallback_engine() -> crate::Engine {
+/// An engine for rendering a report that is not being analyzed: the loaded
+/// global rules, if any, no YARA, and `settings`.
+pub(crate) fn rendering_engine(settings: crate::engine::Settings) -> crate::Engine {
     let rules =
         loaded_capability_mapper().unwrap_or_else(|| crate::Engine::empty().rules().clone());
-    crate::Engine::new(
-        rules,
-        None,
-        crate::engine::Settings {
-            upx: !crate::upx::is_disabled(),
-            compact_members: compact_member_retention(),
-            ..crate::engine::Settings::default()
-        },
-    )
+    crate::Engine::new(rules, None, settings)
+}
+
+/// The engine for a report that carries none (one built by hand): the loaded
+/// global rules under default settings. Reports from any analysis entry
+/// point, cache hits included, carry their own engine.
+pub(crate) fn fallback_engine() -> crate::Engine {
+    rendering_engine(crate::engine::Settings::default())
 }
 
 /// A slot holding a lazily built, hot-reloadable CapabilityMapper.
@@ -254,8 +203,8 @@ pub(crate) fn capability_mapper_with_options(
     let is_default = options.min_hostile_precision
         == CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION
         && options.min_suspicious_precision == CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION
-        && !options.enable_precision_scoring
-        && !options.enable_full_validation
+        && !options.precision_scoring
+        && !options.full_validation
         && options.platforms.len() == 1
         && options.platforms[0] == crate::composite_rules::Platform::All
         && options.slow_rule_ms == CapabilityMapper::DEFAULT_SLOW_RULE_MS;
@@ -272,8 +221,8 @@ pub(crate) fn capability_mapper_with_options(
         CapabilityMapper::try_new_with_load_options(
             options.min_hostile_precision,
             options.min_suspicious_precision,
-            options.enable_full_validation,
-            options.enable_precision_scoring,
+            options.full_validation,
+            options.precision_scoring,
         )
         .map_err(|e| anyhow::anyhow!("failed to initialize capability mapper: {e:#}"))?
         .with_platforms(options.platforms.clone())
@@ -342,7 +291,7 @@ fn shared_mapper(
 /// Loads new traits into a temporary mapper first. Only if loading succeeds
 /// does it swap the new mapper into the global slot. On failure the previous
 /// mapper remains active and an error is returned.
-pub fn reload_capability_mapper() -> Result<(usize, usize), String> {
+pub fn reload_capability_mapper() -> anyhow::Result<(usize, usize)> {
     tracing::info!("Reloading CapabilityMapper from disk");
 
     // A reload exists because the traits on disk changed. The cache keys carry a
@@ -364,7 +313,7 @@ pub fn reload_capability_mapper() -> Result<(usize, usize), String> {
 /// its previous mapper. The body of [`reload_capability_mapper`], over an
 /// explicit slot so tests never swap the process-wide mapper out from under
 /// analyses running on other test threads.
-fn reload_mapper_into(slot: &MapperSlot, source: Option<&Path>) -> Result<(usize, usize), String> {
+fn reload_mapper_into(slot: &MapperSlot, source: Option<&Path>) -> anyhow::Result<(usize, usize)> {
     let Some(resolved) = source else {
         *slot.write() = Some(Arc::new(CapabilityMapper::empty()));
         return Ok((0, 0));
@@ -379,7 +328,7 @@ fn reload_mapper_into(slot: &MapperSlot, source: Option<&Path>) -> Result<(usize
             false,
             false,
         )
-        .map_err(|e| format!("Failed to load traits from {}: {e:#}", resolved.display()))?
+        .map_err(|e| anyhow::anyhow!("Failed to load traits from {}: {e:#}", resolved.display()))?
     } else if path.is_file() {
         CapabilityMapper::from_yaml_with_options(
             path,
@@ -388,9 +337,9 @@ fn reload_mapper_into(slot: &MapperSlot, source: Option<&Path>) -> Result<(usize
             false,
             false,
         )
-        .map_err(|e| format!("Failed to load traits from {}: {e:#}", resolved.display()))?
+        .map_err(|e| anyhow::anyhow!("Failed to load traits from {}: {e:#}", resolved.display()))?
     } else {
-        return Err(format!(
+        return Err(anyhow::anyhow!(
             "Traits path does not exist: {}",
             resolved.display()
         ));
@@ -521,7 +470,7 @@ traits:
     #[test]
     fn test_reload_skip_traits_installs_empty_mapper() {
         let slot: MapperSlot = parking_lot::RwLock::new(None);
-        assert_eq!(reload_mapper_into(&slot, None), Ok((0, 0)));
+        assert_eq!(reload_mapper_into(&slot, None).ok(), Some((0, 0)));
         let mapper = slot.read().clone().expect("empty mapper installed");
         assert_eq!(mapper.trait_definitions_count(), 0);
     }

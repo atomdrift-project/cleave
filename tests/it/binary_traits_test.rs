@@ -20,7 +20,7 @@ fn env_lock() -> &'static Mutex<()> {
 
 fn options() -> cleave::AnalysisOptions {
     cleave::AnalysisOptions {
-        disable_yara: true,
+        yara: false,
         ..Default::default()
     }
 }

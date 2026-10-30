@@ -80,7 +80,7 @@ fn member<'a>(node: Node<'a>, source: &str) -> Option<(Node<'a>, String)> {
 
 /// Constant string-array reads are reduced only when every use is a fixed,
 /// read-only subscript. Passing the array, writes and shadowing all reject it.
-fn constant_tables(source: &str) -> Option<String> {
+pub(crate) fn constant_tables(source: &str) -> Option<String> {
     let tree = parse(source)?;
     let all = nodes(tree.root_node())?;
     let mut edits = Vec::<(usize, usize, String)>::new();

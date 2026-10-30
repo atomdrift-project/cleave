@@ -807,7 +807,8 @@ fn archive_finding(
     evidence: Vec<Evidence>,
     match_count: usize,
 ) -> Finding {
-    let crit = if id == "anti-analysis/archive/excessive-size"
+    let crit = if id.starts_with("metadata/archive/")
+        || id == "anti-analysis/archive/excessive-size"
         || id == "anti-analysis/archive/long-entry-name"
     {
         Criticality::Notable
@@ -818,7 +819,11 @@ fn archive_finding(
     Finding {
         precomputed_spans: None,
         src: None,
-        kind: FindingKind::Capability,
+        kind: if id.starts_with("metadata/archive/") {
+            FindingKind::Structural
+        } else {
+            FindingKind::Capability
+        },
         trait_refs: vec![],
         id: id.into(),
         desc: desc.into(),
@@ -908,7 +913,7 @@ fn drain_extraction_notes(report: &mut AnalysisReport, guard: &ExtractionGuard) 
 fn push_archive_hostile_findings(
     report: &mut AnalysisReport,
     hostile_reasons: Vec<HostileArchiveReason>,
-    archive_path: &Path,
+    _archive_path: &Path,
     source: &str,
     suppress_path_traversal: bool,
 ) {
@@ -962,21 +967,17 @@ fn push_archive_hostile_findings(
                 ));
             }
             HostileArchiveReason::ExcessiveFileCount(count) => {
-                let path = archive_path.to_string_lossy();
-                if path.contains("/pkg_freebsd/")
-                    && (path.contains("opensearch-dashboards-")
-                        || path.contains("flat-remix-icon-themes-"))
-                {
-                    continue;
-                }
+                // Reaching a configured analysis bound is structural telemetry,
+                // not anti-analysis intent. Keep the guard and visible count,
+                // without package-name exemptions or a malware severity.
                 report.findings.push(archive_finding(
-                    "anti-analysis/archive/excessive-files",
-                    "Archive contains excessive number of files".to_string(),
+                    "metadata/archive/layout::archive-member-limit-reached",
+                    "Archive analysis reached member-count limit".to_string(),
                     source,
                     vec![Evidence {
                         method: "archive_extraction".to_string(),
                         source: source.to_string(),
-                        value: format!("count:{} (LIMIT_DEBUG:{})", count, MAX_FILE_COUNT),
+                        value: format!("count:{} limit:{}", count, MAX_FILE_COUNT),
                         location: None,
                         ..Default::default()
                     }],
@@ -4321,6 +4322,30 @@ composite_rules:
         // Valid paths should work
         assert!(sanitize_entry_path("foo/bar.txt", Path::new("/tmp/test")).is_some());
         assert!(sanitize_entry_path("./foo/bar.txt", Path::new("/tmp/test")).is_some());
+    }
+
+    #[test]
+    fn member_limit_telemetry_does_not_downgrade_unsafe_entries() {
+        let mut report = AnalysisReport::new(TargetInfo::default());
+        push_archive_hostile_findings(
+            &mut report,
+            vec![
+                HostileArchiveReason::ExcessiveFileCount(MAX_FILE_COUNT + 1),
+                HostileArchiveReason::PathTraversal("../outside.txt".to_string()),
+            ],
+            Path::new("renamed.zip"),
+            "archive_analyzer",
+            false,
+        );
+        let limit = report
+            .findings
+            .iter()
+            .find(|f| f.id == "metadata/archive/layout::archive-member-limit-reached")
+            .unwrap();
+        assert_eq!(limit.crit, Criticality::Notable);
+        assert!(report.findings.iter().any(
+            |f| f.id.starts_with("anti-analysis/archive/") && f.crit >= Criticality::Suspicious
+        ));
     }
 
     #[test]

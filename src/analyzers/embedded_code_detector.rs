@@ -1599,7 +1599,8 @@ fn host_may_contain_script_obfuscation(content: &str) -> bool {
         "iex(",
         "IEX(",
     ];
-    NEEDLES.iter().any(|needle| content.contains(*needle))
+    (content.contains("5578712") && content.contains("charAt"))
+        || NEEDLES.iter().any(|needle| content.contains(*needle))
         || content
             .as_bytes()
             .windows(7)

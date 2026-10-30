@@ -84,7 +84,9 @@ use cli_bootstrap::{
 use cli_dispatch::{build_dispatch_context, dispatch_command, write_output};
 
 fn main() -> std::process::ExitCode {
-    match run() {
+    let result = run();
+    cleave::flush_analysis_cache();
+    match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
             let rendered = format!("Error: {error:#}\n");

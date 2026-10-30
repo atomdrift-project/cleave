@@ -6,8 +6,8 @@
 //! # Concurrency
 //!
 //! Each thread holds its own `Connection` to the database. WAL mode allows all reader
-//! threads to proceed concurrently without blocking each other. Writers briefly hold the
-//! WAL write lock during the insert — reads are never blocked by writes in WAL mode.
+//! threads to proceed concurrently without blocking each other. A bounded writer queues
+//! disk persistence and batches transactions; analysis threads never wait on write locks.
 //!
 //! # Cache Invalidation
 //!
@@ -27,6 +27,12 @@
 //! storing thread. A per-table guard keeps at most one eviction in flight, so
 //! the cache stays close to the ceiling on long-running scans (10M+ files over
 //! multiple days) without ever stalling the hot path.
+
+mod writer;
+
+pub(crate) fn flush_pending() {
+    writer::flush();
+}
 
 use crate::AnalysisOptions;
 use crate::cache::cache_dir;
@@ -575,8 +581,8 @@ fn open_connection(path: &Path) -> Result<Connection, rusqlite::Error> {
     let conn = Connection::open(path)?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
-    // Generous timeout: concurrent writers briefly hold the WAL write lock.
-    conn.pragma_update(None, "busy_timeout", 5000)?;
+    // Optional persistence must never park an analysis worker.
+    conn.busy_timeout(std::time::Duration::ZERO)?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS toplevel_report_cache (
             sha256 TEXT NOT NULL,
@@ -668,7 +674,7 @@ fn with_conn<T>(f: impl FnOnce(&Connection) -> T) -> Option<T> {
 fn table_sql(kind: memo::Kind) -> [&'static str; 3] {
     match kind {
         memo::Kind::Report => [
-            "SELECT report FROM toplevel_report_cache
+            "SELECT report, last_accessed FROM toplevel_report_cache
              WHERE sha256 = ?1 AND options_hash = ?2 AND traits_timestamp = ?3",
             "UPDATE toplevel_report_cache SET last_accessed = ?1
              WHERE sha256 = ?2 AND options_hash = ?3 AND traits_timestamp = ?4",
@@ -677,7 +683,7 @@ fn table_sql(kind: memo::Kind) -> [&'static str; 3] {
              VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
         ],
         memo::Kind::FileAnalysis => [
-            "SELECT file_analysis FROM file_analysis_cache
+            "SELECT file_analysis, last_accessed FROM file_analysis_cache
              WHERE sha256 = ?1 AND options_hash = ?2 AND traits_timestamp = ?3",
             "UPDATE file_analysis_cache SET last_accessed = ?1
              WHERE sha256 = ?2 AND options_hash = ?3 AND traits_timestamp = ?4",
@@ -698,22 +704,25 @@ fn cache_lookup_conn(
     traits_ts: i64,
 ) -> Option<Vec<u8>> {
     let [lookup, touch, _] = table_sql(kind);
-    let compressed: Vec<u8> = conn
+    let (compressed, last_accessed): (Vec<u8>, i64) = conn
         .prepare_cached(lookup)
         .ok()?
         .query_row(rusqlite::params![sha256, opts_hash, traits_ts], |row| {
-            row.get(0)
+            Ok((row.get(0)?, row.get(1)?))
         })
         .ok()?;
 
     // Update last_accessed best-effort; may lose the race with another writer, that's fine.
     let now = unix_timestamp();
-    let _ = conn.execute(touch, rusqlite::params![now, sha256, opts_hash, traits_ts]);
+    if now.saturating_sub(last_accessed) >= 600 {
+        let _ = conn.execute(touch, rusqlite::params![now, sha256, opts_hash, traits_ts]);
+    }
 
     crate::cache::decode_cached_zstd(compressed.as_slice()).ok()
 }
 
-/// Store serialized JSON in `conn`. Silently ignores errors.
+/// Store serialized JSON in `conn` for cache round-trip tests.
+#[cfg(test)]
 fn cache_store_conn(
     conn: &Connection,
     kind: memo::Kind,
@@ -1339,21 +1348,20 @@ pub(crate) fn report_cache_store(
         return;
     };
     let opts_hash = typed_options_hash(options, settings, file_type);
-    with_conn(|conn| {
-        cache_store_conn(
-            conn,
+    if let Some(path) = db_path() {
+        writer::store(
+            path,
             memo::Kind::Report,
             sha256,
             &opts_hash,
             traits_revision,
-            &json,
+            json.clone(),
         );
-        // Sample across all threads and evict in the background.
         let count = REPORT_STORE_COUNT.fetch_add(1, Ordering::Relaxed);
         if count.is_multiple_of(EVICTION_CHECK_INTERVAL) {
             spawn_eviction(&REPORT_EVICTING, evict_report_cache);
         }
-    });
+    }
     memo::put(
         memo::Kind::Report,
         memo_key(sha256, &opts_hash, traits_revision),
@@ -1439,20 +1447,20 @@ pub(crate) fn file_analysis_cache_store(
         return;
     };
     let opts_hash = typed_options_hash(options, settings, file_type);
-    with_conn(|conn| {
-        cache_store_conn(
-            conn,
+    if let Some(path) = db_path() {
+        writer::store(
+            path,
             memo::Kind::FileAnalysis,
             sha256,
             &opts_hash,
             traits_revision,
-            &json,
+            json.clone(),
         );
         let count = FILE_ANALYSIS_STORE_COUNT.fetch_add(1, Ordering::Relaxed);
         if count.is_multiple_of(EVICTION_CHECK_INTERVAL) {
             spawn_eviction(&FILE_ANALYSIS_EVICTING, evict_file_analysis_cache);
         }
-    });
+    }
     memo::put(
         memo::Kind::FileAnalysis,
         memo_key(sha256, &opts_hash, traits_revision),

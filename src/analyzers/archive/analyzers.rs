@@ -3505,9 +3505,37 @@ impl ArchiveAnalyzer {
             debug!("Main-Class: {}", mc);
         }
 
+        // JPHP .phb modules wrap JVM classes rather than naming them .class.
+        // Preserve the carrier and expose bounded, structurally parsed children.
+        let mut jphp_classes = Vec::new();
+        for member in members.iter().filter(|m| m.relative_path.ends_with(".phb")) {
+            let (frames, incomplete) = filefacts::jphp_class_frames(&member.data);
+            if incomplete {
+                report
+                    .analysis_gaps
+                    .record(crate::types::AnalysisGap::EmbeddedSourceIncomplete);
+            }
+            for (offset, len) in frames {
+                if jphp_classes.len() >= 1024 {
+                    report
+                        .analysis_gaps
+                        .record(crate::types::AnalysisGap::EmbeddedSourceIncomplete);
+                    break;
+                }
+                let data = member.data[offset..offset + len].to_vec();
+                jphp_classes.push(MemoryArchiveMember {
+                    relative_path: format!("{}.classes/{offset:08x}.class", member.relative_path),
+                    sha256: calculate_sha256(&data),
+                    data: data.into(),
+                    file_type: FileType::JavaClass,
+                    container_kind: Some("jphp-compiled-class".to_string()),
+                });
+            }
+        }
         let class_members: Vec<&MemoryArchiveMember> = members
             .iter()
             .filter(|m| m.relative_path.ends_with(".class"))
+            .chain(jphp_classes.iter())
             .collect();
         let total_class_files = class_members.len();
 
@@ -3544,6 +3572,7 @@ impl ArchiveAnalyzer {
                     .as_ref()
                     .is_some_and(|main| m.relative_path.ends_with(main))
                     || flagged_classes.contains(&m.relative_path)
+                    || m.container_kind.as_deref() == Some("jphp-compiled-class")
             })
             .collect();
 

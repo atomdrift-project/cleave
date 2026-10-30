@@ -21,7 +21,7 @@ pub enum AnalysisGap {
     FlowQueryIncomplete,
     /// Additional diagnostic-only member records were elided from compact output.
     ReportRetentionLimited,
-    /// A declared script has an unsupported shell or exceeded analysis limits.
+    /// An embedded script or compiled module exceeded analysis limits.
     EmbeddedSourceIncomplete,
     /// Rule evaluation ran past its wall-clock deadline. Conditions checked
     /// after it report no match, so findings may be missing, and how many

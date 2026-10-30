@@ -10,9 +10,9 @@ fn anton_overwriter_is_dispatched_as_dos_com_and_exposes_its_markers() -> anyhow
         &sample,
         "anton-97",
         &AnalysisOptions {
-            disable_yara: true,
-            disable_radare2: true,
-            disable_upx: true,
+            yara: false,
+            rizin: false,
+            upx: false,
             ..Default::default()
         },
     )?;

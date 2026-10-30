@@ -270,11 +270,11 @@ fn run() -> Result<()> {
     start_deadlock_detector();
 
     let disabled = args.disabled_components();
-    apply_runtime_overrides(args.traits_dir.as_deref(), &disabled);
+    apply_runtime_overrides(args.traits_dir.as_deref());
     // A held token means the Enriched rules; `--enriched` insists on them,
     // and is asked for a token here, once, rather than by whichever rules
     // download would otherwise be the first to need it.
-    cleave::enriched::resolve(args.enriched).map_err(anyhow::Error::msg)?;
+    cleave::enriched::resolve(args.enriched)?;
     if cleave::enriched::required() {
         cleave::rule_update::sign_in()?;
     }

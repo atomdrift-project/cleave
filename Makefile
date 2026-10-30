@@ -195,6 +195,8 @@ lint: ## Run code formatting and linting checks
 	@cargo clippy --workspace --all-targets --all-features -- -D warnings
 	@echo "Running clippy without the rule linter (library-only build)..."
 	@cargo clippy --lib --bins --no-default-features -- -D warnings
+	@echo "Checking rustdoc links..."
+	@RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --lib --quiet
 	@echo "✓ Clippy passed"
 	@echo ""
 	@echo "Checking for unused dependencies..."

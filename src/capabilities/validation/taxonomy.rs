@@ -294,7 +294,7 @@ const BANNED_SEGMENT_EXCEPTIONS: &[(&str, &str)] = &[
 
 /// Maximum atomic traits and composite rules combined in any directory.
 /// Every directory uses the same limit; there are no path-specific budgets.
-pub(crate) const MAX_TRAITS_PER_DIRECTORY: usize = 100;
+pub(crate) const MAX_TRAITS_PER_DIRECTORY: usize = 99;
 
 /// Baseline findings are too broad to represent a named entity. Components are
 /// still allowed when they are incomplete evidence for an identity.
@@ -3656,10 +3656,23 @@ fn is_low_tier_named_binary_fact(t: &TraitDefinition) -> bool {
                 .any(|v| v.is_some_and(|s| !s.is_empty()))
         }
         Condition::Text(q) => {
-            q.section.as_deref() == Some(".rsrc")
+            let resource_label = q.section.as_deref() == Some(".rsrc")
                 && [q.exact.as_deref(), q.substr.as_deref(), q.regex.as_deref()]
                     .iter()
-                    .any(|v| v.is_some_and(|s| !s.is_empty()))
+                    .any(|v| v.is_some_and(|s| !s.is_empty()));
+            // Reviewed program-specific preference-name observation. Its
+            // binary spelling can include accessor prefixes/suffixes and can
+            // occur outside PE resources. It reports the name's presence,
+            // not ownership or that the artifact is the Plex application.
+            // Keep this allowance matcher- and identity-scoped; an arbitrary
+            // binary signature still needs its normal relevance constraints.
+            let plex_preference_name = t.id
+                == "well-known/app/media/plex::plex-transcoder-h264-options-binary"
+                && q.substr.as_deref() == Some("TranscoderH264Options")
+                && q.exact.is_none()
+                && q.regex.is_none()
+                && q.word.is_none();
+            resource_label || plex_preference_name
         }
         _ => false,
     }

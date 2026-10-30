@@ -34,9 +34,9 @@ traits:
     .unwrap();
     cleave::traits_repo::set_override_dir(Some(traits));
     let opts = AnalysisOptions {
-        disable_yara: true,
-        disable_radare2: true,
-        disable_upx: true,
+        yara: false,
+        rizin: false,
+        upx: false,
         ..Default::default()
     };
     // Stored XOR-encoded with 0x42; see testdata/README.md.

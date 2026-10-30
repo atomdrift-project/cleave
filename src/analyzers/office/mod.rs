@@ -348,7 +348,7 @@ impl OfficeAnalyzer {
     /// vba_source_size, doc_type).
     ///
     /// The symbol surface flows entirely through
-    /// [`crate::analysis_context::AnalysisContext`] — filefacts already
+    /// `AnalysisContext` — filefacts already
     /// ran the regex extractor across every VBA module while building
     /// the typed `Imports`/`Functions` views. Per-module shape stats
     /// (logical lines, comments, random-name heuristic) stay

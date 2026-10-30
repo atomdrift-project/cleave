@@ -23,8 +23,8 @@ fn load(path: &str) -> Option<Vec<u8>> {
 /// Options with YARA and radare2 disabled for focused CPU profiling of the analysis core.
 fn fast_options() -> cleave::AnalysisOptions {
     cleave::AnalysisOptions {
-        disable_yara: true,
-        disable_radare2: true,
+        yara: false,
+        rizin: false,
         ..Default::default()
     }
 }
@@ -32,7 +32,7 @@ fn fast_options() -> cleave::AnalysisOptions {
 /// Options with radare2 disabled but YARA enabled.
 fn yara_options() -> cleave::AnalysisOptions {
     cleave::AnalysisOptions {
-        disable_radare2: true,
+        rizin: false,
         ..Default::default()
     }
 }

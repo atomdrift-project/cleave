@@ -9,9 +9,9 @@ fn shimmer_boot_sector_is_analyzed_as_data_and_exposes_embedded_strings() -> any
         &sample,
         "shimmer.d",
         &AnalysisOptions {
-            disable_yara: true,
-            disable_radare2: true,
-            disable_upx: true,
+            yara: false,
+            rizin: false,
+            upx: false,
             ..Default::default()
         },
     )?;

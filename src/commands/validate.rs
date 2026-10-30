@@ -151,7 +151,7 @@ pub fn run_with_options(
     validation_controls::set_disabled_validators_override(exclude)?;
     validation_controls::set_soft_validation_mode(soft);
     let targets = collect_targets()?;
-    let traits_dir = cleave::traits_repo::try_resolve().map_err(anyhow::Error::msg)?;
+    let traits_dir = cleave::traits_repo::try_resolve()?;
     report_retiring_condition_types(&traits_dir);
     let result_cache = result_cache::ResultCache::new(
         &traits_dir,
@@ -184,8 +184,7 @@ pub fn run_with_options(
     }
     // Fixtures are analyzed from outside the traits repo, so no path
     // exemption can match their location; see `NeutralStage`.
-    let stage =
-        NeutralStage::new(&cleave::traits_repo::try_resolve().map_err(anyhow::Error::msg)?)?;
+    let stage = NeutralStage::new(&cleave::traits_repo::try_resolve()?)?;
 
     // A verified full-validation cache hit above can reuse a measured pass.
     // Fresh performance validation bypasses analysis reports and shared AST
@@ -200,9 +199,9 @@ pub fn run_with_options(
         OutputFormat::Terminal => cleave::validation_controls::ValidationOutputFormat::Terminal,
     }));
     let options = cleave::AnalysisOptions {
-        disable_yara: false,
-        disable_radare2: true,
-        disable_upx: true,
+        yara: true,
+        rizin: false,
+        upx: false,
         all_files: true,
         slow_rule_ms,
         ..Default::default()
@@ -246,7 +245,7 @@ pub fn run_with_options(
     // so rule collection can use the whole pool, before any fixture waits on it.
     // The full-validation cache hit above still avoids engine loading entirely.
     let yara_started = Instant::now();
-    cleave::prefetch_yara_engine(options.enable_third_party_yara);
+    cleave::prefetch_yara_engine(options.third_party_yara);
     let yara_ms = yara_started.elapsed().as_millis();
     let performance = crate::validation_performance::Session::begin();
     let analysis_started = Instant::now();
@@ -478,7 +477,7 @@ fn format_validate_tiny(report: &ValidateOutput) -> String {
 /// This runs before cache lookup: an unrecognized file can never hide behind
 /// a previously passing validation result. Subdirectories carry no semantics.
 fn collect_targets() -> Result<Vec<Target>> {
-    let traits_dir = cleave::traits_repo::try_resolve().map_err(anyhow::Error::msg)?;
+    let traits_dir = cleave::traits_repo::try_resolve()?;
     discover_targets(&traits_dir.join("testdata"))
 }
 

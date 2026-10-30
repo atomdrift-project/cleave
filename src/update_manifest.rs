@@ -25,9 +25,7 @@ use serde::Deserialize;
 
 /// A hosted update manifest, one per tool.
 #[derive(Debug, Clone, Deserialize)]
-pub struct Manifest {
-    /// Schema version; bumped on incompatible layout changes.
-    pub schema: u32,
+pub(crate) struct Manifest {
     /// Newest released version, compared against the installed version for the
     /// update notice.
     pub latest: String,
@@ -41,21 +39,18 @@ pub struct Manifest {
 
 /// One ref-selection rule within a [`Manifest`].
 #[derive(Debug, Clone, Deserialize)]
-pub struct Rule {
+pub(crate) struct Rule {
     /// Regular expression tested against the installed version string.
     #[serde(rename = "match")]
     pub pattern: String,
     /// Git ref (branch or commit) the data repo should track for this line.
     #[serde(rename = "ref")]
     pub git_ref: String,
-    /// Marks this release line end-of-life (informational).
-    #[serde(default)]
-    pub eol: bool,
 }
 
 impl Manifest {
     /// Parse a manifest from TOML text.
-    pub fn parse(text: &str) -> Result<Self> {
+    pub(crate) fn parse(text: &str) -> Result<Self> {
         toml::from_str(text).context("parsing update manifest")
     }
 
@@ -64,7 +59,7 @@ impl Manifest {
     /// Rules with an invalid regex are skipped (and logged), so one malformed
     /// entry never breaks resolution of the others.
     #[must_use]
-    pub fn resolve(&self, installed: &str) -> Option<&Rule> {
+    pub(crate) fn resolve(&self, installed: &str) -> Option<&Rule> {
         self.rule.iter().find(|rule| match regex::Regex::new(&rule.pattern) {
             Ok(re) => re.is_match(installed),
             Err(e) => {
@@ -81,7 +76,7 @@ impl Manifest {
 /// string is not valid semver — a malformed manifest must never produce a
 /// spurious "update available" notice.
 #[must_use]
-pub fn is_newer(latest: &str, installed: &str) -> bool {
+pub(crate) fn is_newer(latest: &str, installed: &str) -> bool {
     match (Version::parse(latest), Version::parse(installed)) {
         (Ok(latest), Ok(installed)) => latest > installed,
         _ => false,
@@ -111,11 +106,9 @@ eol = true
     #[test]
     fn parses_all_fields() {
         let m = Manifest::parse(SAMPLE).unwrap();
-        assert_eq!(m.schema, 1);
         assert_eq!(m.latest, "2.0.1");
         assert_eq!(m.url.as_deref(), Some("https://atomdrift.org/cleave"));
         assert_eq!(m.rule.len(), 2);
-        assert!(m.rule[1].eol);
     }
 
     #[test]

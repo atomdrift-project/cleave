@@ -15,7 +15,7 @@ use tempfile::TempDir;
 /// structurally inspect the result.
 fn analyze_compact(path: &std::path::Path) -> (String, serde_json::Value) {
     let options = cleave::AnalysisOptions {
-        disable_yara: true,
+        yara: false,
         ..Default::default()
     };
     let mut report = cleave::analyze_file(path, &options).expect("analyze");

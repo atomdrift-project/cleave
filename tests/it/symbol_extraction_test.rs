@@ -29,7 +29,7 @@ fn analyze_file_for_traits(file_path: &str) -> serde_json::Value {
     cleave::set_skip_traits_override(Some(true));
 
     let options = cleave::AnalysisOptions {
-        disable_yara: true,
+        yara: false,
         ..Default::default()
     };
     let mut report = match cleave::analyze_file(file_path, &options) {

@@ -2342,7 +2342,10 @@ traits:
     fn deobfuscation_layers_are_known_encoded_layer_names() {
         use stng::script::detect::ScriptLanguage;
         for (language, chain) in [
-            (ScriptLanguage::PowerShell, "powershell:encodedcommand+utf16le"),
+            (
+                ScriptLanguage::PowerShell,
+                "powershell:encodedcommand+utf16le",
+            ),
             (ScriptLanguage::PowerShell, "powershell:iex"),
             (ScriptLanguage::Python, "python:base64+zlib"),
             (ScriptLanguage::Php, "php:gzinflate+base64_decode"),

@@ -14,9 +14,9 @@ use cleave::{AnalysisOptions, AnalysisReport, analyze_file};
 
 fn opts() -> AnalysisOptions {
     AnalysisOptions {
-        disable_yara: true,
-        disable_radare2: true,
-        disable_upx: true,
+        yara: false,
+        rizin: false,
+        upx: false,
         ..Default::default()
     }
 }

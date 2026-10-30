@@ -64,16 +64,9 @@ fn sanitized_field(
     }
 }
 
-pub(crate) fn apply_runtime_overrides(
-    traits_dir: Option<&str>,
-    disabled: &cli::DisabledComponents,
-) {
+pub(crate) fn apply_runtime_overrides(traits_dir: Option<&str>) {
     if let Some(traits_dir) = traits_dir {
         cleave::traits_repo::set_override_dir(Some(std::path::PathBuf::from(traits_dir)));
-    }
-
-    if disabled.upx {
-        cleave::disable_upx();
     }
 }
 

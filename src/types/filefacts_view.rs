@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 /// Report-side projection of `filefacts::ParsedFile`'s typed views.
 ///
-/// Built from an [`AnalysisContext`](crate::analysis_context::AnalysisContext)
+/// Built from an `AnalysisContext`
 /// via [`FilefactsView::from_ctx`]. Every field is `skip_serializing_if`-elided
 /// when empty so binary-only fields don't appear in source-file
 /// reports and vice versa.
@@ -65,7 +65,7 @@ pub struct FilefactsView {
 }
 
 impl FilefactsView {
-    /// Project an [`AnalysisContext`](crate::analysis_context::AnalysisContext)
+    /// Project an `AnalysisContext`
     /// into the report-side shape.
     ///
     /// Only the fields downstream actually consumes are retained: call/member

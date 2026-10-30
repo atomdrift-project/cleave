@@ -37,13 +37,13 @@ const START: usize = 0;
 const END: usize = 27;
 
 /// Shortest run of letters that carries enough transitions to judge.
-pub const MIN_LEN: usize = 6;
+pub(crate) const MIN_LEN: usize = 6;
 
 /// Mean log10 transition probability at or below which a string reads as
 /// generated. Chosen from the measured gap: the least-random DGA sample
 /// scores -2.01, the most-random ordinary name (excluding `Krzysztof`)
 /// scores -1.82.
-pub const RANDOM_THRESHOLD: f64 = -2.0;
+pub(crate) const RANDOM_THRESHOLD: f64 = -2.0;
 
 /// Established technical identifiers that are too domain-specific for the
 /// English bigram model. Keep this list narrow: a recognized non-random stem
@@ -194,7 +194,7 @@ fn longest_token(s: &str) -> &str {
 /// the bigram table is over letters, and a name's letters carry its shape
 /// whether or not digits were sprinkled through them.
 #[must_use]
-pub fn random_score(s: &str) -> Option<f64> {
+pub(crate) fn random_score(s: &str) -> Option<f64> {
     let run = longest_token(s);
     let idx: Vec<usize> = run.bytes().filter_map(index_of).collect();
     if idx.len() < MIN_LEN {
@@ -214,7 +214,7 @@ pub fn random_score(s: &str) -> Option<f64> {
 ///
 /// Conservative by construction: too short to judge is not random.
 #[must_use]
-pub fn is_random_like(s: &str) -> bool {
+pub(crate) fn is_random_like(s: &str) -> bool {
     let token = longest_token(s);
     if KNOWN_TECHNICAL_TERMS
         .iter()

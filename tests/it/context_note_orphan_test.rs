@@ -65,9 +65,9 @@ fn tarball(dir: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
 
 fn options() -> cleave::AnalysisOptions {
     cleave::AnalysisOptions {
-        disable_yara: true,
-        disable_radare2: true,
-        disable_upx: true,
+        yara: false,
+        rizin: false,
+        upx: false,
         ..Default::default()
     }
 }

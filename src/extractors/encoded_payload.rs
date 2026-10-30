@@ -256,7 +256,9 @@ pub(crate) fn decompress_and_nest(
 
 /// Extract all encoded payloads from stng-extracted strings
 /// stng_strings should be the result of calling stng::extract_strings_with_options() once
-pub fn extract_encoded_payloads(stng_strings: &[stng::ExtractedString]) -> Vec<ExtractedPayload> {
+pub(crate) fn extract_encoded_payloads(
+    stng_strings: &[stng::ExtractedString],
+) -> Vec<ExtractedPayload> {
     let mut payloads = Vec::new();
 
     // Filter for decoded strings from ANY encoding method

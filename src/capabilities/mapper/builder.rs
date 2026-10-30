@@ -232,9 +232,7 @@ impl super::CapabilityMapper {
             return Ok(Self::empty());
         }
 
-        let resolved = cleave::traits_repo::resolve_and_ensure()
-            .map_err(anyhow::Error::msg)
-            .context("resolve traits path")?;
+        let resolved = cleave::traits_repo::resolve_and_ensure().context("resolve traits path")?;
         let path = resolved.as_path();
 
         if path.is_dir() {

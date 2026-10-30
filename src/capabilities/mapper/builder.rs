@@ -7,8 +7,28 @@
 use crate::composite_rules::{Platform, platforms_intersect};
 use anyhow::Context;
 
-fn log_mapper_init_error(err: &anyhow::Error) {
-    tracing::error!(error = %err, "Failed to initialize CapabilityMapper; returning empty mapper");
+/// How [`super::CapabilityMapper::load`] loads rule definitions.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LoadOptions {
+    /// Downgrade hostile composites whose precision falls below this.
+    pub min_hostile_precision: f32,
+    /// Downgrade suspicious composites whose precision falls below this.
+    pub min_suspicious_precision: f32,
+    /// Run full validation of the rule definitions.
+    pub full_validation: bool,
+    /// Compute precision scores and warn on low-precision rules.
+    pub precision_scoring: bool,
+}
+
+impl Default for LoadOptions {
+    fn default() -> Self {
+        Self {
+            min_hostile_precision: super::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
+            min_suspicious_precision: super::CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
+            full_validation: false,
+            precision_scoring: false,
+        }
+    }
 }
 
 impl super::CapabilityMapper {
@@ -78,11 +98,10 @@ impl super::CapabilityMapper {
             return Self::empty();
         }
 
-        Self::new_with_precision_thresholds(
-            Self::DEFAULT_MIN_HOSTILE_PRECISION,
-            Self::DEFAULT_MIN_SUSPICIOUS_PRECISION,
-            false, // Disable validation for tests
-        )
+        Self::try_new().unwrap_or_else(|err| {
+            tracing::error!(error = %err, "test mapper failed to load; using an empty one");
+            Self::empty()
+        })
     }
 
     /// Set the platform filter(s) for rule evaluation.
@@ -132,102 +151,18 @@ impl super::CapabilityMapper {
         self
     }
 
-    /// Create a new mapper loading traits from the default capabilities directory or YAML file.
-    ///
-    /// This is a best-effort convenience constructor. If trait loading fails, it
-    /// logs the error and returns an empty mapper. Call [`Self::try_new`] if you
-    /// need failure to propagate.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::try_new_with_precision_thresholds(
-            Self::DEFAULT_MIN_HOSTILE_PRECISION,
-            Self::DEFAULT_MIN_SUSPICIOUS_PRECISION,
-            false, // Disable full validation by default to avoid blocking on warnings
-        )
-        .unwrap_or_else(|err| {
-            log_mapper_init_error(&err);
-            Self::empty()
-        })
-    }
-
-    /// Create a new mapper loading traits from the default capabilities directory or YAML file.
+    /// Load the traits from the configured traits directory (or YAML file)
+    /// with the default [`LoadOptions`].
     pub fn try_new() -> anyhow::Result<Self> {
-        Self::try_new_with_precision_thresholds(
-            Self::DEFAULT_MIN_HOSTILE_PRECISION,
-            Self::DEFAULT_MIN_SUSPICIOUS_PRECISION,
-            false,
-        )
+        Self::load(LoadOptions::default())
     }
 
-    /// Create a new mapper with custom precision thresholds
+    /// Load the traits from the configured traits directory (or YAML file).
     ///
-    /// Precision thresholds control which rules emit low-precision warnings when
-    /// precision scoring is enabled during loading.
-    ///
-    /// # Arguments
-    /// * `min_hostile_precision` - Minimum precision for HOSTILE rules (recommended: 1.6)
-    /// * `min_suspicious_precision` - Minimum precision for SUSPICIOUS rules (recommended: 0.0)
-    /// * `enable_full_validation` - If true, run all validation checks
-    ///
-    /// This is a best-effort convenience constructor. If trait loading fails, it
-    /// logs the error and returns an empty mapper. Call
-    /// [`Self::try_new_with_precision_thresholds`] if you need failure to
-    /// propagate.
-    #[must_use]
-    pub fn new_with_precision_thresholds(
-        min_hostile_precision: f32,
-        min_suspicious_precision: f32,
-        enable_full_validation: bool,
-    ) -> Self {
-        Self::new_with_load_options(
-            min_hostile_precision,
-            min_suspicious_precision,
-            enable_full_validation,
-            false,
-        )
-    }
-
-    /// Create a new mapper with custom load options.
-    #[must_use]
-    pub fn new_with_load_options(
-        min_hostile_precision: f32,
-        min_suspicious_precision: f32,
-        enable_full_validation: bool,
-        enable_precision_scoring: bool,
-    ) -> Self {
-        Self::try_new_with_load_options(
-            min_hostile_precision,
-            min_suspicious_precision,
-            enable_full_validation,
-            enable_precision_scoring,
-        )
-        .unwrap_or_else(|err| {
-            log_mapper_init_error(&err);
-            Self::empty()
-        })
-    }
-
-    /// Create a new mapper with custom precision thresholds.
-    pub fn try_new_with_precision_thresholds(
-        min_hostile_precision: f32,
-        min_suspicious_precision: f32,
-        enable_full_validation: bool,
-    ) -> anyhow::Result<Self> {
-        Self::try_new_with_load_options(
-            min_hostile_precision,
-            min_suspicious_precision,
-            enable_full_validation,
-            false,
-        )
-    }
-
-    /// Create a new mapper with custom load options.
-    pub fn try_new_with_load_options(
-        min_hostile_precision: f32,
-        min_suspicious_precision: f32,
-        enable_full_validation: bool,
-        enable_precision_scoring: bool,
-    ) -> anyhow::Result<Self> {
+    /// # Errors
+    /// When the traits cannot be resolved, read, or parsed. An empty rule set
+    /// is never substituted for a failed load.
+    pub fn load(options: LoadOptions) -> anyhow::Result<Self> {
         if Self::skip_traits_requested() {
             return Ok(Self::empty());
         }
@@ -237,24 +172,12 @@ impl super::CapabilityMapper {
 
         if path.is_dir() {
             // Load from directory (production mode)
-            Self::from_directory_with_options(
-                path,
-                min_hostile_precision,
-                min_suspicious_precision,
-                enable_full_validation,
-                enable_precision_scoring,
-            )
-            .with_context(|| format!("Failed to load traits from {}", resolved.display()))
+            Self::from_directory_with_options(path, options)
+                .with_context(|| format!("Failed to load traits from {}", resolved.display()))
         } else if path.is_file() {
             // Load from single YAML file (testing mode)
-            Self::from_yaml_with_options(
-                path,
-                min_hostile_precision,
-                min_suspicious_precision,
-                enable_full_validation,
-                enable_precision_scoring,
-            )
-            .context("Failed to load capabilities from YAML file")
+            Self::from_yaml_with_options(path, options)
+                .context("Failed to load capabilities from YAML file")
         } else {
             anyhow::bail!(
                 "Traits path does not exist: {}. Set CLEAVE_TRAITS_DIR to a valid traits directory or YAML file",

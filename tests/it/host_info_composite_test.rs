@@ -58,7 +58,7 @@ fn test_host_info_composite_fires_with_4_atomics() {
     ];
 
     // Load capability mapper with traits
-    let mapper = CapabilityMapper::new();
+    let mapper = CapabilityMapper::try_new().expect("load traits");
 
     // Evaluate all rules and merge findings
     let binary_data =

@@ -836,7 +836,7 @@ mod path_ref_tests {
             "downgrade:\n  any:\n    - type: path\n      substr: /vendor/\n",
             "downgrade:\n  all:\n    - type: path\n      substr: /vendor/\n",
         ] {
-            let mut mapper = CapabilityMapper::new();
+            let mut mapper = CapabilityMapper::empty();
             let yaml = format!("id: context\ndesc: Context\nconf: 1.0\n{condition}");
             let rule: CompositeTrait = crate::yaml::from_str(&yaml).expect("test composite");
             mapper.composite_rules.push(rule);
@@ -853,12 +853,6 @@ mod path_ref_tests {
                 "{condition}"
             );
         }
-    }
-}
-
-impl Default for CapabilityMapper {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -1112,6 +1106,7 @@ pub(super) fn fill_symbol_evidence_locations(
 
 // Extracted modules
 pub(crate) mod builder;
+pub use builder::LoadOptions;
 pub(crate) mod doomed_skip;
 pub(crate) mod evaluate_composites;
 pub(crate) mod evaluate_merged;

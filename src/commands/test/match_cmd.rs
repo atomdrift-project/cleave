@@ -195,7 +195,7 @@ pub fn run(
             platforms.to_owned(),
             min_hostile_precision,
             min_suspicious_precision,
-        ),
+        )?,
         disabled,
     );
     let capability_mapper = engine.rules();

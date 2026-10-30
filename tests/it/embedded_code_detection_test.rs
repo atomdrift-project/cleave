@@ -17,7 +17,7 @@ fn make_capability_mapper() -> Arc<CapabilityMapper> {
     let _guard = ENV_LOCK.lock().expect("lock env guard");
 
     cleave::set_skip_traits_override(Some(true));
-    let mapper = Arc::new(CapabilityMapper::new());
+    let mapper = Arc::new(CapabilityMapper::try_new().expect("load traits"));
     cleave::set_skip_traits_override(None);
     mapper
 }

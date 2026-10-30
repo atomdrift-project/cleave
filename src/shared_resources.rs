@@ -218,12 +218,12 @@ pub(crate) fn capability_mapper_with_options(
     }
 
     Ok(Arc::new(
-        CapabilityMapper::try_new_with_load_options(
-            options.min_hostile_precision,
-            options.min_suspicious_precision,
-            options.full_validation,
-            options.precision_scoring,
-        )
+        CapabilityMapper::load(crate::LoadOptions {
+            min_hostile_precision: options.min_hostile_precision,
+            min_suspicious_precision: options.min_suspicious_precision,
+            full_validation: options.full_validation,
+            precision_scoring: options.precision_scoring,
+        })
         .map_err(|e| anyhow::anyhow!("failed to initialize capability mapper: {e:#}"))?
         .with_platforms(options.platforms.clone())
         .with_slow_rule_ms(options.slow_rule_ms),
@@ -321,23 +321,13 @@ fn reload_mapper_into(slot: &MapperSlot, source: Option<&Path>) -> anyhow::Resul
     let path = resolved;
 
     let mapper = if path.is_dir() {
-        CapabilityMapper::from_directory_with_options(
-            path,
-            CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
-            CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
-            false,
-            false,
-        )
-        .map_err(|e| anyhow::anyhow!("Failed to load traits from {}: {e:#}", resolved.display()))?
+        CapabilityMapper::from_directory_with_options(path, crate::LoadOptions::default()).map_err(
+            |e| anyhow::anyhow!("Failed to load traits from {}: {e:#}", resolved.display()),
+        )?
     } else if path.is_file() {
-        CapabilityMapper::from_yaml_with_options(
-            path,
-            CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
-            CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
-            false,
-            false,
-        )
-        .map_err(|e| anyhow::anyhow!("Failed to load traits from {}: {e:#}", resolved.display()))?
+        CapabilityMapper::from_yaml_with_options(path, crate::LoadOptions::default()).map_err(
+            |e| anyhow::anyhow!("Failed to load traits from {}: {e:#}", resolved.display()),
+        )?
     } else {
         return Err(anyhow::anyhow!(
             "Traits path does not exist: {}",

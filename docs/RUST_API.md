@@ -43,6 +43,14 @@ Each `analyze_*` function returns `anyhow::Result<AnalysisReport>`.
 `Engine::with_compact_members(true)` returns a copy that folds archive
 members compactly. Engines with different settings can analyze side by side.
 
+### Rules
+
+`CapabilityMapper::try_new()` loads the configured traits with the defaults;
+`CapabilityMapper::load(LoadOptions { full_validation: true, ..Default::default() })`
+sets the precision thresholds, full validation and precision scoring. Both
+return an error rather than an empty rule set when the traits cannot be loaded.
+Pass the result to `Engine::from_rules` or `analyze_file_with_mapper`.
+
 ### Warming caches
 
 The first call pays for trait loading, YARA compilation, and capability

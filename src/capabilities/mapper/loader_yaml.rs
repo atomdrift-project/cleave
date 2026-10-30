@@ -20,40 +20,27 @@ impl super::CapabilityMapper {
     /// Load capability mappings from a single YAML file with default precision thresholds
     #[allow(dead_code)] // Used in tests
     pub(crate) fn from_yaml<P: AsRef<Path>>(path: P) -> Result<Self> {
+        // Always fully validated: this loader exists for tests.
         Self::from_yaml_with_options(
             path,
-            Self::DEFAULT_MIN_HOSTILE_PRECISION,
-            Self::DEFAULT_MIN_SUSPICIOUS_PRECISION,
-            true, // from_yaml always enables full validation (used in tests)
-            false,
-        )
-    }
-
-    /// Load capability mappings from a single YAML file with explicit precision thresholds
-    #[allow(dead_code)] // Compatibility wrapper used by tests and targeted call sites
-    pub(crate) fn from_yaml_with_precision_thresholds<P: AsRef<Path>>(
-        path: P,
-        min_hostile_precision: f32,
-        min_suspicious_precision: f32,
-        enable_full_validation: bool,
-    ) -> Result<Self> {
-        Self::from_yaml_with_options(
-            path,
-            min_hostile_precision,
-            min_suspicious_precision,
-            enable_full_validation,
-            false,
+            crate::LoadOptions {
+                full_validation: true,
+                ..crate::LoadOptions::default()
+            },
         )
     }
 
     /// Load capability mappings from a single YAML file with explicit load options.
     pub(crate) fn from_yaml_with_options<P: AsRef<Path>>(
         path: P,
-        min_hostile_precision: f32,
-        min_suspicious_precision: f32,
-        enable_full_validation: bool,
-        enable_precision_scoring: bool,
+        options: super::LoadOptions,
     ) -> Result<Self> {
+        let super::LoadOptions {
+            min_hostile_precision,
+            min_suspicious_precision,
+            full_validation: enable_full_validation,
+            precision_scoring: enable_precision_scoring,
+        } = options;
         let bytes = fs::read(path.as_ref()).context("Failed to read capabilities YAML file")?;
         let content = String::from_utf8_lossy(&bytes);
 

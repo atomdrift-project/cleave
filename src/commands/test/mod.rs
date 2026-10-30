@@ -99,19 +99,16 @@ pub(crate) fn build_test_capability_mapper(
     platforms: Vec<crate::composite_rules::Platform>,
     min_hostile_precision: f32,
     min_suspicious_precision: f32,
-) -> crate::capabilities::CapabilityMapper {
-    if std::env::var("CLEAVE_SKIP_TRAITS").is_ok() {
-        tracing::info!("Traits skipped (CLEAVE_SKIP_TRAITS set)");
-        crate::capabilities::CapabilityMapper::empty()
-    } else {
-        crate::capabilities::CapabilityMapper::new_with_load_options(
+) -> anyhow::Result<crate::capabilities::CapabilityMapper> {
+    // `load` honors CLEAVE_SKIP_TRAITS (an empty rule set) for focused runs.
+    Ok(
+        crate::capabilities::CapabilityMapper::load(crate::LoadOptions {
             min_hostile_precision,
             min_suspicious_precision,
-            false,
-            false,
-        )
-        .with_platforms(platforms)
-    }
+            ..crate::LoadOptions::default()
+        })?
+        .with_platforms(platforms),
+    )
 }
 
 pub(crate) fn prepare_test_target(

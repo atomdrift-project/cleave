@@ -100,7 +100,7 @@ cleave-macros = { path = "cleave-macros" }
 
 filefacts = { git = "https://github.com/atomdrift-project/filefacts.git" }
 
-cfb = "0.14"  # Microsoft OLE2/CFBF compound document parsing
+cfb = "0.15"  # Microsoft OLE2/CFBF compound document parsing
 
 # AppleScript parsing
 scpt = { path = "crates/scpt" }
@@ -130,8 +130,8 @@ bytes = "1"
 plist = "1.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["raw_value"] }
-serde-saphyr = "1.3"
-simd-json = "0.17"
+serde-saphyr = "2.0"
+simd-json = "0.18"
 toml = "1.1"
 bincode = { package = "cu-bincode", git = "https://github.com/copper-project/cu-bincode", rev = "3c3041a3278cafb1c73701eeecb7961b7ecf6814", features = ["serde", "alloc", "std"] }
 
@@ -169,7 +169,7 @@ lzx = { path = "crates/lzx" }
 # Pinned to 0.39 because rusqlite 0.40 pulls libsqlite3-sys 0.38, whose build
 # script uses the still-unstable cfg_select! macro (rust-lang/rust#115585) and
 # fails on stable rustc <= 1.94. Bump back to 0.40 once cfg_select is stable.
-rusqlite = { version = "0.39", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 
 # Parallelization
 rayon = "1.12"
@@ -181,14 +181,14 @@ stacker = "0.1"
 
 # Cryptography (for decrypting obfuscated payloads)
 aes = "0.9"
-aes-gcm = "0.10"
-scrypt = { version = "0.11", default-features = false }
+aes-gcm = "0.11"
+scrypt = { version = "0.12", default-features = false }
 cbc = { version = "0.2", features = ["alloc"] }
-des = "0.8"
-chacha20poly1305 = { version = "0.10.1", default-features = false, features = ["alloc"] }
+des = "0.9"
+chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["alloc"] }
 
 # Utilities
-md-5 = "0.10.6"
+md-5 = "0.11.0"
 sha2 = "0.11"  # ARM/x86 hardware SHA acceleration is automatic in 0.11 (no feature flag)
 regex = "1.13"
 # Trait-engine regexes are built on the meta engine directly (same engine the
@@ -205,24 +205,24 @@ regex-syntax = "0.8"  # For safe literal extraction from regex patterns (mandato
 memchr = "2.8"
 aho-corasick = "1.1"
 rustc-hash = "2.1"
-lru = "0.18"  # LRU cache for UTF-8 conversion results
+lru = "0.19"  # LRU cache for UTF-8 conversion results
 anyhow = "1.0"
 thiserror = "2.0"
 chrono = { version = "0.4", features = ["serde"] }
 hex = "0.4"
-base64 = "0.22"
+base64 = "0.23"
 data-encoding = "2.11"
 roxmltree = "0.21"
 tempfile = "3.27"
 filetime = "0.2"
 strsim = "0.11"
-dirs = "6.0"
+dirs = "7.0"
 semver = "1"  # Version comparison for the update notifier
 # HTTPS client for the zero-telemetry update notice (plain GET of a static
 # manifest; blocking so it stays off the async path). rustls-tls avoids a
 # system OpenSSL dependency.
 reqwest = { version = "0.13", features = ["blocking", "rustls", "webpki-roots"], default-features = false }
-parking_lot = "0.12"  # Efficient mutexes/RwLocks. NOTE: `deadlock_detection` is opt-in (see the `deadlock-detection` feature) — it adds per-lock global-registry bookkeeping that has no place in release builds.
+parking_lot = "0.13"  # Efficient mutexes/RwLocks. NOTE: `deadlock_detection` is opt-in (see the `deadlock-detection` feature) — it adds per-lock global-registry bookkeeping that has no place in release builds.
 libc = "0.2"          # For FreeBSD sysctl thread info and other OS APIs
 ctrlc = { version = "3", features = ["termination"] }
 memmap2 = "0.9"  # Memory-mapped file I/O for large files

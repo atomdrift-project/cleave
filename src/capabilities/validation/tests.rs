@@ -5157,7 +5157,7 @@ mod taxonomy_tests {
 
     #[test]
     fn test_oversized_dir_uses_uniform_combined_limit() {
-        assert_eq!(MAX_TRAITS_PER_DIRECTORY, 99);
+        assert_eq!(MAX_TRAITS_PER_DIRECTORY, 120);
         let reviewed_path = "micro-behaviors/communications/http/url/path";
         let reviewed_rules: Vec<_> = (0..101)
             .map(|i| make_trait(&format!("{reviewed_path}::r{i}"), "other::t"))

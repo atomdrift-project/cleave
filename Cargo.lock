@@ -1921,9 +1921,13 @@ checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 [[package]]
 name = "filefacts"
 version = "2.0.1"
+<<<<<<< HEAD
 source = "git+https://github.com/atomdrift-project/filefacts.git#6270180f2caf5c0798f15ea800bb5aa4774a4f27"
+=======
+>>>>>>> 524e26e2 (java: clarify keylogger)
 dependencies = [
  "aho-corasick",
+ "base64 0.22.1",
  "cab",
  "cfb",
  "cms",
@@ -5671,11 +5675,10 @@ dependencies = [
 [[package]]
 name = "tree-sitter"
 version = "0.28.0"
-source = "git+https://github.com/tstromberg/tree-sitter#b6a85b1062dac229f8008613d5017edeadbcfa97"
+source = "git+https://github.com/tstromberg/tree-sitter#10d5d1372be200e04480a6b1d6780229c5b1ee79"
 dependencies = [
  "cc",
  "regex",
- "serde_json",
  "streaming-iterator",
  "tree-sitter-language",
 ]
@@ -5722,7 +5725,10 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
+<<<<<<< HEAD
 source = "git+https://github.com/atomdrift-project/filefacts.git#6270180f2caf5c0798f15ea800bb5aa4774a4f27"
+=======
+>>>>>>> 524e26e2 (java: clarify keylogger)
 dependencies = [
  "cc",
  "tree-sitter",
@@ -5802,7 +5808,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-language"
 version = "0.1.8"
-source = "git+https://github.com/tstromberg/tree-sitter#b6a85b1062dac229f8008613d5017edeadbcfa97"
+source = "git+https://github.com/tstromberg/tree-sitter#10d5d1372be200e04480a6b1d6780229c5b1ee79"
 
 [[package]]
 name = "tree-sitter-lua"

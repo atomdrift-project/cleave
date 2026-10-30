@@ -23,6 +23,9 @@
 //! concurrent archives compete for the same rayon threads, so individual
 //! member analyses must be bounded to avoid stalling the entire pool.
 
+#[path = "pyarmor_members.rs"]
+mod pyarmor_members;
+
 use super::ArchiveAnalyzer;
 use super::guards::{
     CancellableReader, ExtractionGuard, HostileArchiveReason, LimitedReader, MAX_FILE_SIZE,
@@ -2777,6 +2780,7 @@ impl ArchiveAnalyzer {
         std::thread::scope(|scope| -> Result<bool> {
             let mut window = MemberWindow::new_in(scope, self, "filefacts ZIP index");
             let mut jar_members: Vec<MemoryArchiveMember> = Vec::new();
+            let mut pyarmor = pyarmor_members::Collector::default();
 
             for entry in indexed_entries {
                 if self.is_cancelled() {
@@ -2905,6 +2909,7 @@ impl ArchiveAnalyzer {
                     sha256,
                     container_kind: None,
                 };
+                pyarmor.observe(&member);
                 if is_jar {
                     jar_members.push(member);
                 } else {
@@ -2912,6 +2917,16 @@ impl ArchiveAnalyzer {
                 }
             }
 
+            for member in pyarmor.recover(
+                |message| guard.add_extraction_note(message),
+                || self.is_cancelled(),
+            ) {
+                if is_jar {
+                    jar_members.push(member);
+                } else {
+                    window.push(member);
+                }
+            }
             if is_jar {
                 self.analyze_jar_members_in_memory(&jar_members, archive_path, report, start);
             } else {
@@ -2976,6 +2991,7 @@ impl ArchiveAnalyzer {
         std::thread::scope(|scope| -> Result<()> {
             let mut window = MemberWindow::new_in(scope, self, "memory ZIP");
             let mut jar_members: Vec<MemoryArchiveMember> = Vec::new();
+            let mut pyarmor = pyarmor_members::Collector::default();
 
             for i in 0..archive.len() {
                 if self.is_cancelled() {
@@ -3161,6 +3177,7 @@ impl ArchiveAnalyzer {
                     sha256,
                     container_kind: None,
                 };
+                pyarmor.observe(&member);
                 if is_jar {
                     jar_members.push(member);
                 } else {
@@ -3168,6 +3185,16 @@ impl ArchiveAnalyzer {
                 }
             }
 
+            for member in pyarmor.recover(
+                |message| guard.add_extraction_note(message),
+                || self.is_cancelled(),
+            ) {
+                if is_jar {
+                    jar_members.push(member);
+                } else {
+                    window.push(member);
+                }
+            }
             if is_jar {
                 self.analyze_jar_members_in_memory(&jar_members, archive_path, report, start);
             } else {
@@ -3216,6 +3243,7 @@ impl ArchiveAnalyzer {
         // as there is at least one; with none, the error surfaces.
         std::thread::scope(|scope| -> Result<()> {
             let mut window = MemberWindow::new_in(scope, self, "memory TAR");
+            let mut pyarmor = pyarmor_members::Collector::default();
             let mut pushed = 0usize;
             let mut stop_reason: Option<anyhow::Error> = None;
             let mut entries = archive.entries()?;
@@ -3412,13 +3440,15 @@ impl ArchiveAnalyzer {
                 let file_type =
                     crate::analyzers::detect_file_type_from_data(logical_path, &file_data);
                 let sha256 = calculate_sha256(&file_data);
-                window.push(MemoryArchiveMember {
+                let member = MemoryArchiveMember {
                     relative_path: rel_path,
                     data: file_data,
                     file_type,
                     sha256,
                     container_kind: None,
-                });
+                };
+                pyarmor.observe(&member);
+                window.push(member);
                 pushed += 1;
                 if stop_reason.is_some() {
                     break;
@@ -3431,6 +3461,12 @@ impl ArchiveAnalyzer {
                 guard.add_extraction_note(format!(
                     "archive extraction stopped after {pushed} entries: {e}"
                 ));
+            }
+            for member in pyarmor.recover(
+                |message| guard.add_extraction_note(message),
+                || self.is_cancelled(),
+            ) {
+                window.push(member);
             }
             window.finalize(
                 report,
@@ -4183,33 +4219,20 @@ impl ArchiveAnalyzer {
             })
             .collect();
 
-        // Static PyArmor recovery requires its companion runtime. Preserve
-        // original members and attach decoded bytecode as a separate child;
-        // encrypted format identity itself supplies no hostile classification.
-        let mut decoded = Vec::new();
+        let mut pyarmor = pyarmor_members::Collector::default();
         for member in &members {
-            if !member.data.windows(8).any(|v| v == b"PY000000") {
-                continue;
-            }
-            for runtime in &members {
-                if !runtime.data.windows(12).any(|v| v == b"pyarmor-vax-") {
-                    continue;
-                }
-                if let Some(data) = crate::extractors::pyarmor::recover(&runtime.data, &member.data)
-                {
-                    decoded.push(MemoryArchiveMember {
-                        relative_path: format!("{}.pyarmor-decoded.pyc", member.relative_path),
-                        sha256: calculate_sha256(&data),
-                        data: data.into(),
-                        file_type: FileType::PythonBytecode,
-                        container_kind: Some("pyarmor-v8-decoded".to_string()),
-                    });
-                    break;
-                }
-            }
+            pyarmor.observe(member);
         }
         let mut members = members;
-        members.extend(decoded);
+        members.extend(pyarmor.recover(
+            |message| {
+                report
+                    .analysis_gaps
+                    .record(crate::types::AnalysisGap::EmbeddedSourceIncomplete);
+                report.metadata.errors.push(message);
+            },
+            || self.is_cancelled(),
+        ));
 
         // Find the SHA-256 of the bundled Python shared library, if present.
         // Identifies the exact CPython distribution (official, embeddable,

@@ -165,9 +165,9 @@ impl super::JavaClassAnalyzer {
                 self.add_capability(
                     report,
                     "credential/keylogger",
-                    "Keylogger indicator",
+                    "Keylogging-related JVM text",
                     s,
-                    Criticality::Hostile,
+                    Criticality::Notable,
                 );
             }
 

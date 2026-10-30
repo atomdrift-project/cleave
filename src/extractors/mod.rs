@@ -20,7 +20,6 @@ pub(crate) mod powershell_literals;
 pub(crate) mod powershell_payloads;
 mod primitives;
 pub(crate) mod ps_to_exe;
-pub(crate) mod pyarmor;
 pub(crate) mod rc4_pe_table;
 pub(crate) mod skc3_pe;
 

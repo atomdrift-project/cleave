@@ -5675,6 +5675,7 @@ source = "git+https://github.com/tstromberg/tree-sitter#b6a85b1062dac229f8008613
 dependencies = [
  "cc",
  "regex",
+ "serde_json",
  "streaming-iterator",
  "tree-sitter-language",
 ]

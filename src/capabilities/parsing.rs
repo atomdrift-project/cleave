@@ -296,8 +296,19 @@ pub(crate) fn apply_trait_defaults(
         warnings,
     );
 
-    // Stricter validation for HOSTILE traits: atomic traits cannot be HOSTILE
-    if criticality == Criticality::Hostile {
+    // Hostile describes attack intent, not rule form. TAXONOMY.md permits
+    // precise atomic observations in objectives/ and malware identities.
+    // A neutral capability or artifact property still cannot be hostile.
+    let intent_tier = path
+        .components()
+        .rev()
+        .find_map(|part| match part.as_os_str().to_str()? {
+            "objectives" | "well-known" => Some(true),
+            "micro-behaviors" | "metadata" => Some(false),
+            _ => None,
+        })
+        .unwrap_or(false);
+    if criticality == Criticality::Hostile && !intent_tier {
         warnings.push(format!(
             "Trait '{}' in {}: atomic trait marked 'crit: hostile'. Atomic (micro-behaviors/) traits cannot \
              be hostile — hostile criticality requires intent inference and belongs in objectives/. \
@@ -2892,6 +2903,37 @@ mod tests {
         assert_eq!(warnings.len(), 2);
         assert!(warnings.contains(&"Unknown file type: 'pyton'".to_string()));
         assert!(warnings.contains(&"Unknown file type: 'javascrpt'".to_string()));
+    }
+
+    #[test]
+    fn hostile_atomic_rule_criticality_respects_its_tier() {
+        for (path, expected) in [
+            ("objectives/impact/test.yaml", Criticality::Hostile),
+            ("well-known/malware/rat/test.yaml", Criticality::Hostile),
+            ("micro-behaviors/process/test.yaml", Criticality::Suspicious),
+            ("metadata/file/test.yaml", Criticality::Suspicious),
+            (
+                "/tmp/objectives/repo/metadata/file/test.yaml",
+                Criticality::Suspicious,
+            ),
+        ] {
+            let mut raw = make_raw_trait("example", Some(vec!["elf".to_string()]));
+            raw.crit = Some("hostile".to_string());
+            let mut warnings = Vec::new();
+            let rule = apply_trait_defaults(
+                raw,
+                &defaults_for(&["elf"]),
+                &mut warnings,
+                std::path::Path::new(path),
+                false,
+            );
+            assert_eq!(rule.crit, expected, "{path}: {warnings:?}");
+            assert_eq!(
+                warnings.iter().any(|w| w.contains("atomic trait marked")),
+                expected == Criticality::Suspicious,
+                "{path}: {warnings:?}"
+            );
+        }
     }
 
     // ==================== for: validation Tests ====================

@@ -42,7 +42,7 @@ impl super::JavaClassAnalyzer {
     /// `strings` are expected to have passed [`Self::is_interesting_string`].
     pub(super) fn detect_capabilities_from_facts(
         &self,
-        class_refs: &[String],
+        _class_refs: &[String],
         strings: &[String],
         report: &mut AnalysisReport,
     ) {

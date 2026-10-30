@@ -61,6 +61,7 @@ pub(crate) mod js_decimal_packer;
 pub(crate) mod js_edge_source;
 pub(crate) mod js_joined_module;
 pub(crate) mod js_literal_catalog;
+pub(crate) mod js_permutation;
 pub(crate) mod js_string_table;
 pub(crate) mod js_xor_command;
 pub(crate) mod literal_program;

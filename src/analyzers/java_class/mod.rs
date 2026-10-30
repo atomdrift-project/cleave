@@ -71,6 +71,12 @@ impl JavaClassAnalyzer {
 
         self.detect_capabilities(ctx, &mut report);
 
+        // Preserve declarations, including native methods without Code bodies.
+        // Constant-pool references and quoted names remain imports/text only.
+        if let Some(ctx) = ctx {
+            report.functions = ctx.functions_from_filefacts();
+        }
+
         // `class.*` kv comes from filefacts's dual emission in the
         // capability mapper — no synthesis here.
 

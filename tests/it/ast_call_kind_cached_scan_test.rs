@@ -22,7 +22,7 @@ fn cleave_bin() -> &'static str {
 }
 
 /// Build an isolated traits dir containing a single per-language trait
-/// and run a regular `cleave --format=tiny <fixture>` scan. Returns the
+/// and run a regular `cleave --format=json <fixture>` scan. Returns the
 /// captured stdout.
 fn scan_with_trait(fixture_name: &str, fixture: &str, traits_yaml: &str) -> (TempDir, String) {
     let dir = TempDir::new().unwrap();
@@ -44,7 +44,7 @@ fn scan_with_trait(fixture_name: &str, fixture: &str, traits_yaml: &str) -> (Tem
         .args([
             "--traits-dir",
             traits_root.to_str().unwrap(),
-            "--format=tiny",
+            "--format=json",
             file.to_str().unwrap(),
         ])
         .output()
@@ -59,29 +59,16 @@ fn scan_with_trait(fixture_name: &str, fixture: &str, traits_yaml: &str) -> (Tem
     (dir, stdout)
 }
 
-/// The context-centric tiny format announces a finding on a preceding
-/// comment-marker line shaped `{marker} {SEV} {LINE[:COL]|@OFFSET} {desc}`
-/// (e.g. `# N 2:1 bare spawn invocation`, `// H @0 …`); the marker is the
-/// sample language's line comment. Returns true if any line carries such an
-/// annotation with the given severity letter and description.
-fn finding_present(stdout: &str, sev: char, desc: &str) -> bool {
-    stdout.lines().any(|line| {
-        if !line.contains(desc) {
-            return false;
-        }
-        // Find the standalone severity token (`N`/`H`/…) after the marker, then
-        // require the following token to be a location (`LINE`, `LINE:COL`, or
-        // `@OFFSET`) — the shape that distinguishes an annotation from source.
-        let mut tokens = line.split_whitespace();
-        while let Some(tok) = tokens.next() {
-            if tok.len() == 1 && tok.starts_with(sev) {
-                return tokens.next().is_some_and(|loc| {
-                    loc.starts_with('@') || loc.starts_with(|c: char| c.is_ascii_digit())
-                });
-            }
-        }
-        false
-    })
+/// Whether the JSON report carries a trait with this description at this
+/// criticality level (3 = notable, 5 = hostile).
+fn finding_present(stdout: &str, crit: u64, desc: &str) -> bool {
+    let report: serde_json::Value = serde_json::from_str(stdout).expect("one JSON report");
+    report["files"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|file| file["traits"].as_array().into_iter().flatten())
+        .any(|t| t["desc"] == desc && t["crit"] == crit)
 }
 
 #[test]
@@ -109,7 +96,7 @@ traits:
 "#,
     );
     assert!(
-        finding_present(&stdout, 'N', "pty.spawn invocation"),
+        finding_present(&stdout, 3, "pty.spawn invocation"),
         "exact: pty.spawn must surface as a finding from the cached scan path.\n\
          Verified via test-rules; the cached path in CapabilityMapper has \
          historically dropped this match.\n\nGot:\n{stdout}"
@@ -140,7 +127,7 @@ traits:
 "#,
     );
     assert!(
-        finding_present(&stdout, 'N', "bare spawn invocation"),
+        finding_present(&stdout, 3, "bare spawn invocation"),
         "exact: spawn must surface as a finding from the cached scan path.\n\nGot:\n{stdout}"
     );
 }
@@ -166,7 +153,7 @@ traits:
 "#,
     );
     assert!(
-        finding_present(&stdout, 'N', "os.hostname invocation"),
+        finding_present(&stdout, 3, "os.hostname invocation"),
         "exact: os.hostname must surface as a finding from the cached scan path.\n\nGot:\n{stdout}"
     );
 }

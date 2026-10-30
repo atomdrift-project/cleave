@@ -88,9 +88,13 @@ ordinary source trees.
 cleave suspect.bin
 cleave ./unpacked-release
 
-# Emit one JSON object for a complete report, or stream files as JSONL.
-cleave --format json suspect.bin
-cleave --format jsonl ./samples
+# Annotated source context (default), or a table of contents of findings.
+# --annotate, --toc, and --json are shorthand for --format.
+cleave --toc suspect.bin
+
+# JSON: one object per line, one line per file target.
+cleave --json suspect.bin
+cleave --json ./samples
 
 # Show only suspicious and hostile findings.
 cleave --min-crit suspicious suspect.bin

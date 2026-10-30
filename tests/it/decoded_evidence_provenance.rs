@@ -30,7 +30,7 @@ fn analyze(root: &Path, path: &Path) -> Value {
             "--disable",
             "yara,radare2,upx",
             "--format",
-            "snapshot",
+            "json",
             "analyze",
             path.to_str().unwrap(),
         ])
@@ -87,21 +87,20 @@ composite_rules:
 
 fn assert_provenance(report: &Value) {
     let files = report["files"].as_array().unwrap();
+    let traits = |file: &Value| file["traits"].as_array().unwrap().clone();
     let member = files
         .iter()
-        .find(|f| f["file_type"] == "pe")
+        .find(|f| f["type"] == "pe")
         .expect("decoded PE analyzed");
-    let atom = member["findings"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|f| f["id"] == ATOM)
+    let atom = traits(member)
+        .into_iter()
+        .find(|t| t["id"] == ATOM)
         .expect("marker found in decoded bytes");
-    let offsets = atom["evidence"][0]["offsets"]
+    let spans = atom["spans"]
         .as_array()
         .expect("decoded member retains concrete offsets");
-    assert!(offsets.iter().any(|n| n.as_u64() == Some(OFFSET as u64)));
-    let contexts: Vec<cleave::types::ContextLine> = member["context"]
+    assert!(spans.iter().any(|s| s[0].as_u64() == Some(OFFSET as u64)));
+    let contexts: Vec<cleave::types::ContextLine> = member["ctx"]
         .as_array()
         .expect("decoded member retains byte context")
         .iter()
@@ -118,19 +117,22 @@ fn assert_provenance(report: &Value) {
     );
     let wrapper = files
         .iter()
-        .find(|f| f["file_type"] == "powershell")
+        .find(|f| f["type"] == "powershell")
         .expect("wrapper analyzed");
-    let composite = wrapper["findings"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|f| f["id"] == COMPOSITE)
+    let composite = traits(wrapper)
+        .into_iter()
+        .find(|t| t["id"] == COMPOSITE)
         .expect("wrapper composite matched decoded member");
-    assert!(composite["evidence"].as_array().unwrap().iter().all(|e| {
-        e["location"]
-            .as_str()
-            .is_some_and(|loc| loc.starts_with("archive:") && loc.contains("##"))
-    }));
+    // Member-scoped: the composite names the decoded member it fired on, not
+    // offsets into the wrapper's own bytes.
+    let from = composite["from"]
+        .as_array()
+        .expect("composite names its member");
+    assert!(
+        from.iter().all(|s| s["file"] == member["id"]),
+        "{composite}"
+    );
+    assert!(member["path"].as_str().unwrap().contains("##"));
 }
 
 #[test]
@@ -205,19 +207,17 @@ composite_rules:
         files
             .iter()
             .skip(1)
-            .any(
-                |file| file["findings"].as_array().is_some_and(|findings| findings
-                    .iter()
-                    .any(|f| f["id"] == "metadata/test/layers::payload-marker"))
-            ),
+            .any(|file| file["traits"].as_array().is_some_and(|traits| traits
+                .iter()
+                .any(|t| t["id"] == "metadata/test/layers::payload-marker"))),
         "literal program must be reconstructed"
     );
     assert!(
-        files[0]["findings"]
+        files[0]["traits"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|f| f["id"] == "metadata/test/layers::joined-marker" && f["crit"] == "suspicious"),
+            .any(|t| t["id"] == "metadata/test/layers::joined-marker" && t["crit"] == 4),
         "host and decoded stage must retain file-scope pooling"
     );
 }

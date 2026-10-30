@@ -121,10 +121,8 @@ fn format_sections_output(
 
     // Format output
     match format {
-        cli::OutputFormat::Json | cli::OutputFormat::Jsonl | cli::OutputFormat::Snapshot => {
-            Ok(serde_json::to_string_pretty(&sections)?)
-        }
-        cli::OutputFormat::Terminal | cli::OutputFormat::Tiny => {
+        cli::OutputFormat::Json => Ok(serde_json::to_string_pretty(&sections)?),
+        cli::OutputFormat::Annotate | cli::OutputFormat::Toc => {
             let mut output = String::new();
             output.push_str(&format!(
                 "Extracted {} sections from {}\n\n",

@@ -724,9 +724,6 @@ fn report_validation(
     if enable_full_validation && !warnings.is_empty() {
         use crate::validation_controls::ValidationOutputFormat;
         let rendered = match crate::validation_controls::validation_output_format() {
-            Some(ValidationOutputFormat::Tiny) => {
-                crate::validation_controls::format_validation_issues_tiny(warnings.as_slice())
-            }
             Some(ValidationOutputFormat::Json) => {
                 crate::validation_controls::format_validation_issues_json(warnings.as_slice())
             }
@@ -1739,7 +1736,12 @@ traits:
             .map(|(_, m)| m)
             .collect();
         assert_eq!(empty.len(), 3, "{issues:?}");
-        assert!(empty.iter().any(|m| m.contains("composite rule 'c'")));
+        // Composites are named by their canonical id: they are qualified
+        // before parsing so policy checks see it.
+        assert!(
+            empty.iter().any(|m| m.contains("composite rule 'x::c'")),
+            "{empty:?}"
+        );
         assert_eq!(
             crate::validation_controls::validator_severity("empty-file-type"),
             crate::validation_controls::Severity::Hard

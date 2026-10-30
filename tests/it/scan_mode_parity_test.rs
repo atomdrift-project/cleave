@@ -16,7 +16,7 @@ fn analyze(target: &Path) -> Records {
         .env("CLEAVE_SKIP_YARA", "1")
         .env("CLEAVE_SKIP_CACHE", "1")
         .env_remove("CLEAVE_SKIP_TRAITS")
-        .args(["--format", "jsonl", "analyze", target.to_str().unwrap()])
+        .args(["--format", "json", "analyze", target.to_str().unwrap()])
         .assert()
         .success();
     let stdout = String::from_utf8_lossy(&output.get_output().stdout).to_string();

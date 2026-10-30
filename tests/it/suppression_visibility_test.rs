@@ -1,4 +1,4 @@
-//! Regression guard: `--format tiny` (the payload `scan --format interpret`
+//! Regression guard: the tiny view (the payload `scan --format interpret`
 //! prints verbatim) must show what the analysis decided *not* to report.
 //!
 //! A reader that only sees the findings cannot tell a clean file from a

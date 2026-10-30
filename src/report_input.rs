@@ -87,7 +87,7 @@ pub fn decode(bytes: &[u8]) -> Result<LoadedReport> {
             if !report.target.path.is_empty() {
                 report.finalize();
                 report.strip_unmatched_traits();
-                warnings.push("raw analysis-cache report required finalization; use --format snapshot for an exact baseline".into());
+                warnings.push("raw analysis-cache report required finalization; render a --format json report for an exact baseline".into());
             }
             LoadedReport {
                 report,

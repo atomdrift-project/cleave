@@ -204,28 +204,42 @@ fn synthetic_chm_has_no_dropper_findings() {
 /// testdata/README.md).
 const SOFTPEAK_SAMPLE: &str = "tests/fixtures/malware/payment instruction.987976.pdf.chm";
 
+/// The real SoftpeakLive dropper is caught by host-independent behavior, not
+/// its domain: the hidden Help-launch of a scripted download-and-run and the
+/// foreign-locale dropper container are hostile; the install URL itself is
+/// kept only as a notable endpoint observation.
 #[test]
-fn softpeak_live_real_sample_fires_campaign_composite() {
+fn softpeak_live_real_sample_is_hostile_by_behavior() {
+    const HOSTILE: i64 = 5;
     let (_dir, path) = crate::support::sample_file(SOFTPEAK_SAMPLE);
     let out = run_cleave_json(&path);
     let f = first_file(&out);
-    let trait_ids: Vec<String> = trait_ids(f);
+    let crit = |id: &str| {
+        f["traits"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|t| t["id"] == id)
+            .and_then(|t| t["crit"].as_i64())
+    };
 
-    let must_fire = [
-        // The HTML-Help ShortCut auto-fire composite should hit at
-        // file-level (CHM container) and bubble up.
-        "objectives/command-and-control/dropper/delivery/chm::htmlhelp-shortcut-process-dropper",
-        // The SoftpeakLive C2 host atom.
-        "well-known/malware/dropper/softpeak-live::softpeak-live-host",
-        // The full campaign composite.
-        "well-known/malware/dropper/softpeak-live::softpeak-live-chm-dropper",
-    ];
-    for needle in must_fire {
-        assert!(
-            trait_ids.iter().any(|id| id == needle),
-            "expected SoftpeakLive sample to fire {needle}; got {trait_ids:?}"
+    for hostile in [
+        "objectives/execution/trigger/document::htmlhelp-hidden-bypass-scripted-execution",
+        "objectives/command-and-control/dropper/delivery/chm::chm-foreign-lcid-dropper",
+    ] {
+        assert_eq!(
+            crit(hostile),
+            Some(HOSTILE),
+            "expected the SoftpeakLive sample to fire {hostile} as hostile; got {:?}",
+            trait_ids(f)
         );
     }
+    assert!(
+        crit("micro-behaviors/communications/url/host/name::softpeak-install-url-reference")
+            .is_some_and(|c| c < HOSTILE),
+        "the install URL stays a non-hostile endpoint observation: {:?}",
+        trait_ids(f)
+    );
 }
 
 // ────────────────────────────────────────────────────────────────────

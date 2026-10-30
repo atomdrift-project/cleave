@@ -15,12 +15,12 @@ Render a saved report without reading its original files, loading rules, or
 running analysis:
 
 ```sh
-cleave render report.json --format tiny
-cleave render - --format terminal < report.json
+cleave render report.json --format toc
+cleave render - --format annotate < report.json
 ```
 
-The command reads one JSON document: compact v9 or v8, a raw v3 snapshot, or a
-scan envelope containing either under `raw`. Unknown schema versions fail.
+The command reads one JSON document: compact v9 or v8 (`--format json`), a raw
+v3 report, or a scan envelope containing either under `raw`. Unknown schema versions fail.
 Rendered output goes to stdout; warnings go to stderr.
 
 Reports store no context annotations. The renderer labels each context window
@@ -30,14 +30,15 @@ with `diff`:
 
 ```sh
 cleave --format json /path/to/sample -o before.json
-cleave render before.json --format tiny > before.txt
-cleave render after.json --format tiny > after.txt
+cleave render before.json > before.txt
+cleave render after.json > after.txt
 diff -u before.txt after.txt
 ```
 
-`snapshot` writes the in-memory report with every field, for debugging. The
-render command does not re-finalize a finalized snapshot; an intermediate
-analysis-cache report is finalized first, and says so on stderr.
+`atomscan render` reads the same documents. A compact report keeps finding
+spans, not evidence values, so `--format toc` shows the context bytes a span
+covers and leaves evidence outside every context window blank. An
+intermediate analysis-cache report is finalized first, and says so on stderr.
 
 
 ## Schema versioning
@@ -143,7 +144,7 @@ because the most common suppressors are `crit: exception` composites, stripped
 from the report before anything could resolve them; the span is enough to pull
 the bytes from the file.
 
-`cleave --format tiny` (the payload `scan --format interpret` prints verbatim)
+cleave's LLM view (the payload `atomscan --format interpret` prints verbatim)
 renders each as a `withheld`/`downgraded` line naming the trait, the legs, and
 their spans. A file is never skipped from that output for having nothing but
 withheld traits to report, and a per-file cap on how many are listed still ends

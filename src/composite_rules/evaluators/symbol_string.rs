@@ -2460,6 +2460,11 @@ pub(crate) fn eval_raw<'a>(
             if let Some(ref lean) = lean {
                 let mut idx = 0usize;
                 let mut visit = |abs_start: usize, abs_end: usize| -> bool {
+                    // Short or long candidates cannot satisfy this condition;
+                    // they must not exhaust the qualifying-match budget.
+                    if !span_length_ok(abs_end - abs_start, length_bounds) {
+                        return true;
+                    }
                     if idx >= MAX_MATCHES_TO_PROCESS {
                         if let Some(trait_id_val) = trait_id {
                             tracing::info!(
@@ -2478,9 +2483,6 @@ pub(crate) fn eval_raw<'a>(
                         return false;
                     }
                     idx += 1;
-                    if !span_length_ok(abs_end - abs_start, length_bounds) {
-                        return true;
-                    }
                     let match_bytes = &ctx.binary_data[abs_start..abs_end];
                     let match_str = String::from_utf8_lossy(match_bytes);
                     if !validate_match(&match_str, is_check) {
@@ -2545,6 +2547,10 @@ pub(crate) fn eval_raw<'a>(
                     };
                 let mut idx = 0usize;
                 re.for_each_find(&content, |mat_start, match_str| {
+                    // Apply length bounds before the qualifying-match budget.
+                    if !span_length_ok(match_str.len(), length_bounds) {
+                        return true;
+                    }
                     // Limit match processing to prevent DoS on pattern-dense files
                     if idx >= MAX_MATCHES_TO_PROCESS {
                         if let Some(trait_id_val) = trait_id {
@@ -2564,9 +2570,6 @@ pub(crate) fn eval_raw<'a>(
                         return false;
                     }
                     idx += 1;
-                    if !span_length_ok(match_str.len(), length_bounds) {
-                        return true;
-                    }
                     // Skip matches that don't pass validation
                     if !validate_match(match_str, is_check) {
                         return true;

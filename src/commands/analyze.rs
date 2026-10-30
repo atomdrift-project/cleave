@@ -165,12 +165,6 @@ pub fn run_targets(config: &AnalyzeConfig<'_>, targets: &[String]) -> Result<Str
     if let ([], [file]) = (dirs.as_slice(), files.as_slice()) {
         return analyze_and_format(file, &options, &out);
     }
-    if out.format == cli::OutputFormat::Json {
-        anyhow::bail!(
-            "--format json writes one report; use --format jsonl for a directory or several targets"
-        );
-    }
-
     let sink = Sink::open(config)?;
     let emit = |event: cleave::ScanEvent| emit_event(event, &out, &sink);
     if !files.is_empty() {
@@ -310,24 +304,15 @@ fn format_report_output(report: &mut types::AnalysisReport, out: &Output) -> Res
     }
 
     match out.format {
-        cli::OutputFormat::Snapshot => {
-            let mut snapshot = serde_json::to_string(report)?;
-            snapshot.push('\n');
-            Ok(snapshot)
-        }
-        cli::OutputFormat::Json => {
-            let compact = types::compact_from_files(&report.files, out.facts);
-            Ok(serde_json::to_string(&compact)?)
-        }
         // One record per line: a directory scan streams these back to back.
-        cli::OutputFormat::Jsonl => {
+        cli::OutputFormat::Json => {
             let compact = types::compact_from_files(&report.files, out.facts);
             let mut line = serde_json::to_string(&compact)?;
             line.push('\n');
             Ok(line)
         }
-        cli::OutputFormat::Terminal => Ok(output::format_terminal_ctx(report)),
-        cli::OutputFormat::Tiny => Ok(output::format_tiny(report)),
+        cli::OutputFormat::Annotate => Ok(output::format_terminal_ctx(report)),
+        cli::OutputFormat::Toc => Ok(output::format_toc(report)),
     }
 }
 
@@ -503,10 +488,10 @@ mod tests {
     }
 
     /// A directory scan concatenates one formatted record per file, so each
-    /// JSONL record must end its own line for the stream to parse line by line.
+    /// JSON record must end its own line for the stream to parse line by line.
     #[test]
     #[allow(clippy::expect_used)]
-    fn jsonl_records_are_newline_terminated() {
+    fn json_records_are_newline_terminated() {
         let mut out = String::new();
         for path in ["/bin/a", "/bin/b"] {
             let mut report = make_report(vec![make_file(
@@ -514,23 +499,16 @@ mod tests {
                 vec![make_finding("x", Criticality::Notable)],
             )]);
             out.push_str(
-                &format_report_output(&mut report, &output(cli::OutputFormat::Jsonl))
+                &format_report_output(&mut report, &output(cli::OutputFormat::Json))
                     .expect("format"),
             );
         }
+        assert!(out.ends_with('\n'));
         let lines: Vec<&str> = out.lines().collect();
         assert_eq!(lines.len(), 2, "{out}");
         for line in lines {
             serde_json::from_str::<serde_json::Value>(line).expect("each line is one JSON record");
         }
-
-        let mut report = make_report(vec![make_file("/bin/a", vec![])]);
-        let json =
-            format_report_output(&mut report, &output(cli::OutputFormat::Json)).expect("format");
-        assert!(
-            !json.ends_with('\n'),
-            "--format json stays a single bare object"
-        );
     }
 
     #[test]

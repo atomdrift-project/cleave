@@ -1,15 +1,14 @@
 //! Output formatting and reporting.
 //!
-//! This module handles formatting analysis results for different output modes:
-//! - Human-readable terminal output with colors
-//! - JSON output for machine consumption
-//! - Summary classification for quick triage
-//!
-//! # Output Modes
-//!
-//! - Default: Human-readable with colored output
-//! - `--json`: Full JSON report
-//! - `--summary`: Quick classification only
+//! - `--format annotate` (default): source context around each finding
+//!   ([`format_context`] with [`TinyOpts::terminal`])
+//! - `--format toc`: a table of contents of findings per file ([`format_toc`])
+//! - [`TinyOpts::tiny`]: the plain LLM view an embedding host prints
+//!   (atomscan's `--format interpret`)
+
+mod toc;
+
+pub use toc::format_toc;
 
 #[allow(unused_imports)] // Used by binary target via format_human_single
 use crate::types::{
@@ -201,8 +200,8 @@ pub enum HeaderStyle {
     Minimal,
 }
 
-/// Options for the context view, shared by cleave's terminal output and
-/// an embedding host's `--format tiny`. Both render the same way; only the knobs differ.
+/// Options for the context view, shared by cleave's `--format annotate` and
+/// an embedding host's LLM view. Both render the same way; only the knobs differ.
 #[derive(Clone, Copy, Debug)]
 pub struct TinyOpts {
     /// Max findings shown per file, ranked by `crit × conf` (highest first).
@@ -296,8 +295,8 @@ pub struct TinyOpts {
     /// left out — composites included — as a location-less
     /// `{marker} SEV desc (id)` line at the top of the file's block.
     ///
-    /// Off in every built-in preset. The LLM/tiny view (`--format tiny`, and
-    /// scan's `--format interpret`, which renders with [`Self::tiny`]) shows
+    /// Off in every built-in preset. The LLM view (scan's `--format interpret`,
+    /// which renders with [`Self::tiny`]) shows
     /// evidence, never conclusions: a composite's id, description and grade
     /// are cleave's own verdict, and a grader shown them agrees with them —
     /// including when the composite is wrong. What keeps that view complete
@@ -339,7 +338,7 @@ impl TinyOpts {
         }
     }
 
-    /// cleave's `--format tiny` (LLM) view: minimal header, never colored, paths
+    /// The plain LLM view embedding hosts print (atomscan's `--format interpret`): minimal header, never colored, paths
     /// reduced to basename. Unlike the terminal view it casts a *wide* net —
     /// top 250 findings down to Component — so the model sees the whole picture,
     /// including the low-severity context that keeps it from over-calling
@@ -989,7 +988,7 @@ fn mentions_id(text: &str, id: &str) -> bool {
     })
 }
 
-/// The LLM `--format tiny` view.
+/// The plain LLM view ([`TinyOpts::tiny`]).
 #[must_use]
 pub fn format_tiny(report: &AnalysisReport) -> String {
     format_context(report, &TinyOpts::tiny())
@@ -3753,7 +3752,7 @@ fn tiny_field(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// cleave's default terminal view: colored, top-20, notable+, 3-line windows.
+/// `--format annotate`, cleave's default: colored, top-20, notable+, 3-line windows.
 pub(crate) fn format_terminal_ctx(report: &AnalysisReport) -> String {
     format_context(report, &TinyOpts::terminal())
 }
@@ -3857,19 +3856,7 @@ fn rich_header(
     // type after a `·`, no formula or legend. cleave's own header keeps both.
     let badged = badge.badge.is_some();
     let file_type_display = display_file_type(&file.file_type);
-    let display_path = if file.depth > 0 {
-        file.path
-            .rsplit(crate::types::file_analysis::ARCHIVE_DELIMITER)
-            .next()
-            .or_else(|| {
-                file.path
-                    .rsplit(crate::types::file_analysis::ENCODING_DELIMITER)
-                    .next()
-            })
-            .unwrap_or(&file.path)
-    } else {
-        &file.path
-    };
+    let display_path = display_path(file);
     // Embedded binaries carry a synthetic `embedded:<kind>@0x<off>` segment; turn
     // it into a self-describing headline so the sub-view reads as a distinct
     // payload of the parent, not a cryptic stray entry.
@@ -4042,6 +4029,17 @@ fn truncate_with_ellipsis(s: &str, max_width: usize) -> String {
         end -= 1;
     }
     format!("{}…", &s[..end])
+}
+
+/// A nested file's own name (its last archive segment); a top-level file's full path.
+fn display_path(file: &FileAnalysis) -> &str {
+    if file.depth == 0 {
+        return &file.path;
+    }
+    file.path
+        .rsplit(crate::types::file_analysis::ARCHIVE_DELIMITER)
+        .next()
+        .unwrap_or(&file.path)
 }
 
 fn display_file_type(file_type: &str) -> String {
@@ -4251,7 +4249,7 @@ mod tests {
             "title": {"value": "Q3 Vendor Invoice", "source": "docprops.core.title"},
             "authors": [
                 {"name": "Aleksandr Petrov", "email": "a.petrov@example.invalid",
-                 "role": "creator", "source": "docprops.core.creator"},
+                 "role": "author", "source": "office.creator"},
                 {"name": "Finance Bot", "role": "last_modified_by",
                  "source": "docprops.core.lastModifiedBy"},
             ],
@@ -4985,7 +4983,7 @@ mod tests {
         );
     }
 
-    fn strip_ansi(s: &str) -> String {
+    pub(super) fn strip_ansi(s: &str) -> String {
         let mut out = String::with_capacity(s.len());
         let mut chars = s.chars();
         while let Some(c) = chars.next() {

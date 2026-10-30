@@ -48,12 +48,7 @@ typedef unsigned char uint8_t;
         .env("CLEAVE_SKIP_CACHE", "1")
         .env_remove("CLEAVE_SKIP_TRAITS")
         .env_remove("CLEAVE_SKIP_TRAITS")
-        .args([
-            "--format",
-            "jsonl",
-            "analyze",
-            header_path.to_str().unwrap(),
-        ])
+        .args(["--format", "json", "analyze", header_path.to_str().unwrap()])
         .assert()
         .success();
 
@@ -97,7 +92,7 @@ int main() {
         .env("CLEAVE_SKIP_CACHE", "1")
         .env_remove("CLEAVE_SKIP_TRAITS")
         .env_remove("CLEAVE_SKIP_TRAITS")
-        .args(["--format", "jsonl", "analyze", c_path.to_str().unwrap()])
+        .args(["--format", "json", "analyze", c_path.to_str().unwrap()])
         .assert()
         .success();
 
@@ -156,7 +151,7 @@ echo "This script is safe"
         .env_remove("CLEAVE_SKIP_TRAITS")
         .args([
             "--format",
-            "jsonl",
+            "json",
             "--traits-dir",
             traits_dir.to_str().unwrap(),
             "analyze",
@@ -246,7 +241,7 @@ traits:
         .env_remove("CLEAVE_SKIP_TRAITS")
         .args([
             "--format",
-            "jsonl",
+            "json",
             "--traits-dir",
             traits_dir.to_str().unwrap(),
             "analyze",

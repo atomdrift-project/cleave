@@ -11,7 +11,7 @@ fn test_keylogger_detection() {
         "/home/t.linux/data/known-bad/cleave/malware/js/2025.tailwind-magic/3.3.1/keylogger.js";
     let output = Command::new("./target/release/cleave")
         .arg("--format")
-        .arg("jsonl")
+        .arg("json")
         .arg(file_path)
         .output()
         .expect("Failed to execute cleave");

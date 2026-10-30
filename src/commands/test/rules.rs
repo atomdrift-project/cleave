@@ -68,7 +68,7 @@ pub fn run(
             platforms.clone(),
             min_hostile_precision,
             min_suspicious_precision,
-        ),
+        )?,
         disabled,
     );
     let capability_mapper = engine.rules();

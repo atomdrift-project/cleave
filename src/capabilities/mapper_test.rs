@@ -679,8 +679,15 @@ traits:
       exact: "malloc"
 "#;
     let (_dir, path) = create_test_yaml(yaml);
-    let mapper =
-        CapabilityMapper::from_yaml_with_precision_thresholds(&path, 5.0, 3.0, false).unwrap();
+    let mapper = CapabilityMapper::from_yaml_with_options(
+        &path,
+        crate::LoadOptions {
+            min_hostile_precision: 5.0,
+            min_suspicious_precision: 3.0,
+            ..crate::LoadOptions::default()
+        },
+    )
+    .unwrap();
 
     assert_eq!(mapper.trait_definitions_count(), 1);
 }
@@ -2351,14 +2358,9 @@ fn toggle_main_production_traits_before_and_after_strip() {
         );
         return;
     }
-    let mapper = CapabilityMapper::from_directory_with_options(
-        &traits_dir,
-        CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
-        CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
-        false,
-        false,
-    )
-    .expect("load production traits");
+    let mapper =
+        CapabilityMapper::from_directory_with_options(&traits_dir, crate::LoadOptions::default())
+            .expect("load production traits");
     let mut report =
         create_test_source_report("toggle-main.js", "javascript", TOGGLE_MAIN_JS.len() as u64);
     mapper.evaluate_and_merge_findings(&mut report, TOGGLE_MAIN_JS.as_bytes(), None, None);
@@ -2406,14 +2408,9 @@ fn toggle_main_source_analyzer_production_before_strip() {
         );
         return;
     }
-    let mapper = CapabilityMapper::from_directory_with_options(
-        &traits_dir,
-        CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
-        CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
-        false,
-        false,
-    )
-    .expect("load production traits");
+    let mapper =
+        CapabilityMapper::from_directory_with_options(&traits_dir, crate::LoadOptions::default())
+            .expect("load production traits");
     let analyzer = crate::analyzers::unified::UnifiedSourceAnalyzer::for_file_type(
         &crate::analyzers::FileType::JavaScript,
     )

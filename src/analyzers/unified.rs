@@ -2475,11 +2475,9 @@ traits:
 
         let mut file = NamedTempFile::new().expect("create temp yaml");
         std::io::Write::write_all(&mut file, yaml.as_bytes()).expect("write temp yaml");
-        crate::capabilities::CapabilityMapper::from_yaml_with_precision_thresholds(
+        crate::capabilities::CapabilityMapper::from_yaml_with_options(
             file.path(),
-            crate::capabilities::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
-            crate::capabilities::CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
-            false,
+            crate::LoadOptions::default(),
         )
         .expect("load test-local go mapper")
     }

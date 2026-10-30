@@ -1168,37 +1168,32 @@ impl super::CapabilityMapper {
     pub(crate) fn from_directory<P: AsRef<Path>>(dir_path: P) -> Result<Self> {
         Self::from_directory_with_options(
             dir_path,
-            Self::DEFAULT_MIN_HOSTILE_PRECISION,
-            Self::DEFAULT_MIN_SUSPICIOUS_PRECISION,
-            true,
-            false,
+            crate::LoadOptions {
+                full_validation: true,
+                ..crate::LoadOptions::default()
+            },
         )
     }
 
     /// Load capability mappings from a directory of YAML files with explicit load options.
     ///
-    /// `CLEAVE_VALIDATE` overrides `enable_full_validation` in either direction.
+    /// `CLEAVE_VALIDATE=1` turns full validation on; it never turns off
+    /// validation a caller asked for.
     pub(crate) fn from_directory_with_options<P: AsRef<Path>>(
         dir_path: P,
-        min_hostile_precision: f32,
-        min_suspicious_precision: f32,
-        enable_full_validation: bool,
-        enable_precision_scoring: bool,
+        options: super::LoadOptions,
     ) -> Result<Self> {
-        // `CLEAVE_VALIDATE=1` turns full validation on for a scan; it never
-        // turns off validation a caller asked for.
-        let enable_full_validation = enable_full_validation || crate::env::flag("CLEAVE_VALIDATE");
         Self::from_directory_exact(
             dir_path,
-            min_hostile_precision,
-            min_suspicious_precision,
-            enable_full_validation,
-            enable_precision_scoring,
+            super::LoadOptions {
+                full_validation: options.full_validation || crate::env::flag("CLEAVE_VALIDATE"),
+                ..options
+            },
         )
     }
 
-    /// [`Self::from_directory_with_options`] with `enable_full_validation`
-    /// taken exactly as given: `CLEAVE_VALIDATE` is not consulted.
+    /// [`Self::from_directory_with_options`] with `full_validation` taken
+    /// exactly as given: `CLEAVE_VALIDATE` is not consulted.
     ///
     /// Tests that need validation on or off call this rather than setting the
     /// env var. The environment is process-wide, so a test that set
@@ -1207,11 +1202,14 @@ impl super::CapabilityMapper {
     /// then failed on the very soft issue it asserts is not fatal.
     pub(crate) fn from_directory_exact<P: AsRef<Path>>(
         dir_path: P,
-        min_hostile_precision: f32,
-        min_suspicious_precision: f32,
-        enable_full_validation: bool,
-        enable_precision_scoring: bool,
+        options: super::LoadOptions,
     ) -> Result<Self> {
+        let super::LoadOptions {
+            min_hostile_precision,
+            min_suspicious_precision,
+            full_validation: enable_full_validation,
+            precision_scoring: enable_precision_scoring,
+        } = options;
         let _span = tracing::info_span!("load_capabilities").entered();
         let dir_path = dir_path.as_ref();
         let sources = crate::rule_sources::shared(dir_path)?;
@@ -1547,10 +1545,10 @@ traits:
 
         let error = super::super::CapabilityMapper::from_directory_exact(
             dir.path(),
-            super::super::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
-            super::super::CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
-            true,
-            false,
+            crate::LoadOptions {
+                full_validation: true,
+                ..crate::LoadOptions::default()
+            },
         )
         .expect_err("new metadata/file/string definitions must fail validation");
         let message = format!("{error:#}");
@@ -1583,10 +1581,10 @@ traits:
 
         let error = super::super::CapabilityMapper::from_directory_exact(
             dir.path(),
-            super::super::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
-            super::super::CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
-            true,
-            false,
+            crate::LoadOptions {
+                full_validation: true,
+                ..crate::LoadOptions::default()
+            },
         )
         .expect_err("new metadata/file/literal definitions must fail validation");
         let message = format!("{error:#}");

@@ -3141,9 +3141,15 @@ traits:
 "#,
         )
         .unwrap();
-        let mapper =
-            CapabilityMapper::from_directory_with_options(dir.path(), 0.0, 0.0, false, false)
-                .unwrap();
+        let mapper = CapabilityMapper::from_directory_with_options(
+            dir.path(),
+            crate::LoadOptions {
+                min_hostile_precision: 0.0,
+                min_suspicious_precision: 0.0,
+                ..crate::LoadOptions::default()
+            },
+        )
+        .unwrap();
         let mut yara = YaraEngine::new_for_test();
         load_test_bucket(
             &mut yara,
@@ -3247,9 +3253,15 @@ composite_rules:
             ),
         )
         .unwrap();
-        let mapper =
-            CapabilityMapper::from_directory_with_options(dir.path(), 0.0, 0.0, false, false)
-                .unwrap();
+        let mapper = CapabilityMapper::from_directory_with_options(
+            dir.path(),
+            crate::LoadOptions {
+                min_hostile_precision: 0.0,
+                min_suspicious_precision: 0.0,
+                ..crate::LoadOptions::default()
+            },
+        )
+        .unwrap();
         let mut compiler = yara_x::Compiler::new();
         let ns = "inline.test/pe::marker";
         compiler.new_namespace(ns);
@@ -3348,8 +3360,15 @@ composite_rules:
             ),
         )
         .unwrap();
-        let mapper =
-            CapabilityMapper::from_directory_with_options(dir, 0.0, 0.0, false, false).unwrap();
+        let mapper = CapabilityMapper::from_directory_with_options(
+            dir,
+            crate::LoadOptions {
+                min_hostile_precision: 0.0,
+                min_suspicious_precision: 0.0,
+                ..crate::LoadOptions::default()
+            },
+        )
+        .unwrap();
         let mut compiler = yara_x::Compiler::new();
         let ns = "inline.test/native::marker";
         compiler.new_namespace(ns);
@@ -3644,9 +3663,15 @@ composite_rules:
             ),
         )
         .unwrap();
-        let mapper =
-            CapabilityMapper::from_directory_with_options(dir.path(), 0.0, 0.0, false, false)
-                .unwrap();
+        let mapper = CapabilityMapper::from_directory_with_options(
+            dir.path(),
+            crate::LoadOptions {
+                min_hostile_precision: 0.0,
+                min_suspicious_precision: 0.0,
+                ..crate::LoadOptions::default()
+            },
+        )
+        .unwrap();
         let ns = "inline.test/data::marker";
         let mut compiler = yara_x::Compiler::new();
         compiler.new_namespace(ns);
@@ -3739,9 +3764,15 @@ composite_rules:
             ),
         )
         .unwrap();
-        let mapper =
-            CapabilityMapper::from_directory_with_options(dir.path(), 0.0, 0.0, false, false)
-                .unwrap();
+        let mapper = CapabilityMapper::from_directory_with_options(
+            dir.path(),
+            crate::LoadOptions {
+                min_hostile_precision: 0.0,
+                min_suspicious_precision: 0.0,
+                ..crate::LoadOptions::default()
+            },
+        )
+        .unwrap();
         let ns = "inline.test/data::marker";
         let mut compiler = yara_x::Compiler::new();
         compiler.new_namespace(ns);

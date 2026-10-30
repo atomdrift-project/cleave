@@ -2482,7 +2482,7 @@ traits:
         );
 
         let engine = crate::Engine::from_rules(std::sync::Arc::new(
-            crate::capabilities::CapabilityMapper::default(),
+            crate::capabilities::CapabilityMapper::new_without_validation(),
         ));
         let (encoded_layers, plain_findings) = process_all_strings(
             "Component.svelte",
@@ -2593,7 +2593,7 @@ composite_rules:
             make_string_info_at_offset(&payload, 0x231),
         ];
         let engine = crate::Engine::from_rules(std::sync::Arc::new(
-            crate::capabilities::CapabilityMapper::default(),
+            crate::capabilities::CapabilityMapper::new_without_validation(),
         ));
 
         let (encoded_layers, plain_findings) =
@@ -2650,7 +2650,7 @@ composite_rules:
         ];
 
         let engine = crate::Engine::from_rules(std::sync::Arc::new(
-            crate::capabilities::CapabilityMapper::default(),
+            crate::capabilities::CapabilityMapper::new_without_validation(),
         ));
         let (_encoded, plain_findings) =
             process_all_strings("Dockerfile", &strings, &engine, 0, None, None);

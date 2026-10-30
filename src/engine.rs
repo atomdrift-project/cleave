@@ -381,10 +381,7 @@ traits:
         .unwrap();
         let rules = CapabilityMapper::from_directory_with_options(
             dir.path(),
-            CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
-            CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
-            false,
-            false,
+            crate::LoadOptions::default(),
         )
         .unwrap();
         assert!(rules.kv_sibling_basenames().contains("config.json"));

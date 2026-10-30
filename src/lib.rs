@@ -166,7 +166,7 @@ pub const JEMALLOC_CONF: &std::ffi::CStr =
 // Re-export commonly used types at crate root
 use analyzers::FileTypeExt;
 pub use analyzers::{AnalysisInput, Analyzer, FileType, detect_file_type};
-pub use capabilities::CapabilityMapper;
+pub use capabilities::{CapabilityMapper, LoadOptions};
 pub use composite_rules::Platform;
 pub use engine::Engine;
 pub use rayon_nest::{mark_thread_background, set_parallel_owner_caps};
@@ -3686,10 +3686,10 @@ pub fn validate_traits() -> Result<()> {
     let resolved = traits_repo::resolve_and_ensure()?;
     capabilities::CapabilityMapper::from_directory_with_options(
         resolved.as_path(),
-        capabilities::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
-        capabilities::CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
-        true,
-        false,
+        crate::LoadOptions {
+            full_validation: true,
+            ..crate::LoadOptions::default()
+        },
     )?;
     Ok(())
 }

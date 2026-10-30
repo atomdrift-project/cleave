@@ -34,7 +34,7 @@ fn empty_mapper() -> CapabilityMapper {
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _guard = ENV_LOCK.lock().unwrap();
     cleave::set_skip_traits_override(Some(true));
-    let m = CapabilityMapper::new();
+    let m = CapabilityMapper::try_new().expect("load traits");
     cleave::set_skip_traits_override(None);
     m
 }

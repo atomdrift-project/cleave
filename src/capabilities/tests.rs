@@ -2999,13 +2999,8 @@ traits:
     // validation on and fail the load on exactly the soft issue under test.
     // The mapper cache needs no bypass: its key is the traits dir's content
     // tag, so this temp tree can only ever hit its own snapshot.
-    let result = CapabilityMapper::from_directory_exact(
-        temp_dir.path(),
-        CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
-        CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
-        false,
-        false,
-    );
+    let result =
+        CapabilityMapper::from_directory_exact(temp_dir.path(), crate::LoadOptions::default());
 
     let mapper =
         result.expect("for: [all] is a Soft authoring issue and must not fail analysis load");
@@ -4152,10 +4147,10 @@ composite_rules:
     // writes the mapper cache, so that needs no env override either.
     let result = CapabilityMapper::from_directory_exact(
         temp_dir.path(),
-        CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
-        CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
-        true,
-        false,
+        crate::LoadOptions {
+            full_validation: true,
+            ..crate::LoadOptions::default()
+        },
     );
 
     let err = format!(

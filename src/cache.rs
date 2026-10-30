@@ -1495,10 +1495,10 @@ mod tests {
     fn load_probe_desc(dir: &Path, full_validation: bool) -> Option<String> {
         let mapper = crate::capabilities::CapabilityMapper::from_directory_with_options(
             dir,
-            crate::capabilities::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
-            crate::capabilities::CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
-            full_validation,
-            false,
+            crate::LoadOptions {
+                full_validation,
+                ..crate::LoadOptions::default()
+            },
         )
         .unwrap();
         mapper

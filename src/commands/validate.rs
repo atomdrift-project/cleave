@@ -214,12 +214,10 @@ pub fn run_with_options(
     let setup_ms = started.elapsed().as_millis();
     let mapper_started = Instant::now();
     let mapper = Arc::new(
-        CapabilityMapper::try_new_with_load_options(
-            CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
-            CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
-            true,
-            false,
-        )?
+        CapabilityMapper::load(cleave::LoadOptions {
+            full_validation: true,
+            ..cleave::LoadOptions::default()
+        })?
         .with_slow_rule_ms(slow_rule_ms),
     );
     let mapper_and_lint_ms = mapper_started.elapsed().as_millis();

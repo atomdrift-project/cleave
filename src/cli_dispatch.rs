@@ -22,9 +22,7 @@ struct AnalyzeDispatchContext<'a> {
     max_memory_file_size: u64,
     max_scan_file_size: u64,
     min_crit: Option<cleave::Criticality>,
-    max_crit: Option<cleave::Criticality>,
     min_file_crit: Option<cleave::Criticality>,
-    max_file_crit: Option<cleave::Criticality>,
     facts: cleave::types::Facts,
     all_files: bool,
 }
@@ -53,10 +51,12 @@ fn analyze_config<'a>(ctx: &'a AnalyzeDispatchContext<'a>, target: &'a str) -> A
         output_to_file: ctx.output_to_file,
         output_path: ctx.output_path,
         max_scan_file_size: ctx.max_scan_file_size,
+        // Only a floor is selectable (`--min-crit`, `--min-file-crit`): nobody
+        // asks to hide the hostile findings.
         min_crit: ctx.min_crit,
-        max_crit: ctx.max_crit,
+        max_crit: None,
         min_file_crit: ctx.min_file_crit,
-        max_file_crit: ctx.max_file_crit,
+        max_file_crit: None,
         facts: ctx.facts,
     }
 }
@@ -80,19 +80,6 @@ fn run_analyze_paths(
     }
 
     analyze_targets(&expanded, ctx)
-}
-
-fn run_update_rules(force: bool, check: bool, pin: Option<String>) -> Result<()> {
-    let dir = cleave::traits_repo::install_target();
-    if let Some(commit) = pin {
-        cleave::rule_update::pin(&dir, &commit)?;
-    } else if check {
-        cleave::rule_update::check(&dir)?;
-    } else {
-        cleave::rule_update::refresh(force, false)?;
-    }
-
-    Ok(())
 }
 
 #[cfg(feature = "lint")]
@@ -138,9 +125,7 @@ pub(crate) struct DispatchOptions<'a> {
     pub max_memory_file_size: u64,
     pub max_scan_file_size: u64,
     pub min_crit: Option<cleave::Criticality>,
-    pub max_crit: Option<cleave::Criticality>,
     pub min_file_crit: Option<cleave::Criticality>,
-    pub max_file_crit: Option<cleave::Criticality>,
     pub facts: cleave::types::Facts,
     pub all_files: bool,
 }
@@ -161,9 +146,7 @@ pub(crate) fn build_dispatch_context<'a>(opts: &DispatchOptions<'a>) -> Dispatch
             max_memory_file_size: opts.max_memory_file_size,
             max_scan_file_size: opts.max_scan_file_size,
             min_crit: opts.min_crit,
-            max_crit: opts.max_crit,
             min_file_crit: opts.min_file_crit,
-            max_file_crit: opts.max_file_crit,
             facts: opts.facts,
             all_files: opts.all_files,
         },
@@ -379,8 +362,8 @@ pub(crate) fn dispatch_command(
         ) => anyhow::bail!(
             "this cleave was built without the `lint` feature, which provides the rule linter"
         ),
-        Some(cli::Command::UpdateRules { force, check, pin }) => {
-            run_update_rules(force, check, pin)?;
+        Some(cli::Command::UpdateRules { force }) => {
+            cleave::rule_update::refresh(force, false)?;
             return Ok(None);
         }
         None => run_analyze_paths(

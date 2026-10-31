@@ -410,9 +410,13 @@ fn stable_versioned_name(name: &str) -> Option<String> {
     }
     let token = best?;
     let start = name.find(token)?;
+    let rest = &name[start + token.len()..];
+    // `pkg-1.4.0.dev34` and `pkg-1.4.1` are one package: a pre- or
+    // post-release qualifier ending the name belongs to the version.
+    let rest = if is_release_qualifier(rest) { "" } else { rest };
     let mut stable = String::with_capacity(name.len().saturating_sub(token.len()));
     stable.push_str(&name[..start]);
-    stable.push_str(&name[start + token.len()..]);
+    stable.push_str(rest);
     while stable.contains("--") {
         stable = stable.replace("--", "-");
     }
@@ -421,6 +425,24 @@ fn stable_versioned_name(name: &str) -> Option<String> {
     }
     let stable = stable.trim_matches(['-', '.', '_', ' ']);
     (!stable.is_empty()).then(|| stable.to_string())
+}
+
+/// A PEP 440 or semver release qualifier: `.dev34`, `rc1`, `a2`, `.post1`,
+/// `-beta.1`. Single-letter `a`/`b` need a number, so a trailing word such
+/// as `-b` stays part of the name.
+fn is_release_qualifier(rest: &str) -> bool {
+    let rest = rest
+        .trim_start_matches(['.', '-', '_'])
+        .to_ascii_lowercase();
+    let label = rest.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+    let number = &rest[label.len()..];
+    let has_number = number.bytes().any(|b| b.is_ascii_digit());
+    let label = label.trim_end_matches(['-', '_']);
+    match label {
+        "dev" | "post" | "rc" | "pre" | "alpha" | "beta" | "preview" => true,
+        "a" | "b" => has_number,
+        _ => false,
+    }
 }
 
 /// Walk an input path and return one [`DiffUnit`] per analyzable file
@@ -882,6 +904,27 @@ mod tests {
         assert_eq!(
             stable_versioned_name("node-ipc-12.0.1").as_deref(),
             Some("node-ipc")
+        );
+        // durabletask's sdists: a development release beside a final one.
+        for root in [
+            "durabletask-1.4.0.dev34",
+            "durabletask-1.4.1",
+            "durabletask-2.0.0rc1",
+            "durabletask-2.0.0b2",
+            "durabletask-2.0.0.post1",
+            "durabletask-2.0.0-beta.1",
+        ] {
+            assert_eq!(
+                stable_versioned_name(root).as_deref(),
+                Some("durabletask"),
+                "{root}"
+            );
+        }
+        // A trailing word is part of the name, not a qualifier.
+        assert_eq!(stable_versioned_name("sdk-1.0-b").as_deref(), Some("sdk-b"));
+        assert_eq!(
+            stable_versioned_name("sdk-1.0-src").as_deref(),
+            Some("sdk-src")
         );
         assert_eq!(stable_versioned_name("index.js"), None);
         // A leading pure version has no package identity to pair safely.

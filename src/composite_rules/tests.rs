@@ -5266,3 +5266,86 @@ fn guarded_context_controls_downgrade_without_hiding_finding() {
         );
     }
 }
+
+#[test]
+fn path_suppressions_can_exclude_and_downgrade_traits() {
+    let (mut report, data) = create_test_context();
+    report.target.path = "/samples/testdata/payload.js".into();
+    let path = Condition::Path(PathQuery {
+        substr: Some("testdata".into()),
+        ..Default::default()
+    });
+    let rule = TraitDefinition {
+        id: "test/path-guard".into(),
+        desc: "Behavior".into(),
+        crit: Criticality::Suspicious,
+        r#if: Condition::Text(TextQuery {
+            substr: Some("/bin/sh".into()),
+            ..Default::default()
+        }),
+        unless: Some(vec![path.clone()]),
+        downgrade: Some(DowngradeConditions {
+            any: Some(vec![path]),
+            all: None,
+            needs: None,
+            scope: None,
+        }),
+        ..Default::default()
+    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
+    assert!(
+        rule.evaluate(&ctx).is_none(),
+        "a matching path can exclude the finding"
+    );
+    let rule = TraitDefinition {
+        unless: None,
+        ..rule
+    };
+    let finding = rule.evaluate(&ctx).expect("downgrade retains the finding");
+    assert_eq!(finding.crit, Criticality::Notable);
+}
+
+#[test]
+fn directory_suppression_can_use_path_evidence() {
+    let (mut report, data) = create_test_context();
+    let mut context = Finding::new(
+        "metadata/test::is-test",
+        FindingKind::default(),
+        "test context",
+        1.0,
+    );
+    context.evidence.push(crate::types::Evidence {
+        method: "path".into(),
+        value: "/testdata/sample".into(),
+        ..Default::default()
+    });
+    report.findings.push(context);
+    let rule = TraitDefinition {
+        id: "test/guard".into(),
+        desc: "Behavior".into(),
+        crit: Criticality::Suspicious,
+        r#if: Condition::Text(TextQuery {
+            substr: Some("/bin/sh".into()),
+            ..Default::default()
+        }),
+        unless: Some(vec![Condition::Trait {
+            id: "metadata/test/".into(),
+        }]),
+        ..Default::default()
+    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
+    assert!(
+        rule.evaluate(&ctx).is_none(),
+        "a matching path-only finding can suppress through a directory"
+    );
+    report.findings[0].evidence.push(crate::types::Evidence {
+        method: "text".into(),
+        value: "actual test context".into(),
+        ..Default::default()
+    });
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
+    assert!(
+        rule.evaluate(&ctx).is_none(),
+        "content-backed context may suppress"
+    );
+}

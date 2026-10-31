@@ -83,6 +83,14 @@ use cli_bootstrap::{
 };
 use cli_dispatch::{build_dispatch_context, dispatch_command, write_output};
 
+/// Largest archive member kept in memory during archive analysis; larger
+/// members are written to temp files.
+const MAX_MEMORY_FILE_SIZE: u64 = 100 * 1024 * 1024;
+
+/// Largest file a directory scan analyzes; larger files are skipped. Sized to
+/// admit full OS images (ISO/UDF, DMG) from the os-image feed.
+const MAX_SCAN_FILE_SIZE: u64 = 20480 * 1024 * 1024;
+
 fn main() -> std::process::ExitCode {
     let result = run();
     cleave::flush_analysis_cache();
@@ -245,20 +253,13 @@ fn run() -> Result<()> {
     } else {
         args.format()
     };
-    let effective_log_file = args.log_file.clone();
-
     // `cleave validate` is meant to print a single summary line on success, so
     // suppress the global `warn` tracing floor (e.g. goblin's benign fat-Mach-O
     // offset warnings on testdata fixtures) unless `--verbose` is requested.
     let is_validate_command = matches!(args.command, Some(cli::Command::Validate { .. }));
 
-    init_logging(
-        args.verbose,
-        is_validate_command,
-        format,
-        effective_log_file.as_deref(),
-    )?;
-    log_startup(effective_log_file.as_deref(), args.verbose);
+    init_logging(args.verbose, is_validate_command);
+    log_startup(args.verbose);
 
     // Limit concurrency to reduce peak RSS (especially during archive analysis).
     // Configured via rayon::ThreadPoolBuilder in cli_bootstrap.
@@ -269,10 +270,10 @@ fn run() -> Result<()> {
 
     let disabled = args.disabled_components();
     apply_runtime_overrides(args.traits_dir.as_deref());
-    // A held token means the Enriched rules; `--enriched` insists on them,
+    // A held token means the Uplink rules; `--uplink` insists on them,
     // and is asked for a token here, once, rather than by whichever rules
     // download would otherwise be the first to need it.
-    cleave::enriched::resolve(args.enriched)?;
+    cleave::enriched::resolve(args.uplink)?;
     if cleave::enriched::required() {
         cleave::rule_update::sign_in()?;
     }
@@ -294,13 +295,10 @@ fn run() -> Result<()> {
     }
 
     // Interactive runs get a once-a-day, zero-telemetry update notice.
-    cleave::update_check::maybe_notify(args.no_update_check);
+    cleave::update_check::maybe_notify();
 
     let zip_passwords = args.archive_passwords();
-    let platforms = args.platforms();
-    let max_memory_file_size = args.max_file_mem * 1024 * 1024;
-    let max_scan_file_size = args.max_file_size * 1024 * 1024;
-    let _memory_logger = start_memory_logger(args.verbose, effective_log_file.as_deref());
+    let _memory_logger = start_memory_logger(args.verbose);
     cleave::memory_tracker::log_startup_diagnostics();
 
     let output_path = args.output.clone();
@@ -308,16 +306,14 @@ fn run() -> Result<()> {
         format: &format,
         disabled: &disabled,
         zip_passwords: &zip_passwords,
-        platforms: &platforms,
+        platforms: &[cleave::Platform::All],
         slow_rule_ms: args.slow_rule_ms,
         output_to_file: args.output.is_some(),
         output_path: output_path.as_deref(),
-        max_memory_file_size,
-        max_scan_file_size,
+        max_memory_file_size: MAX_MEMORY_FILE_SIZE,
+        max_scan_file_size: MAX_SCAN_FILE_SIZE,
         min_crit: args.min_crit,
-        max_crit: args.max_crit,
         min_file_crit: args.min_file_crit,
-        max_file_crit: args.max_file_crit,
         facts: cleave::types::Facts::Model,
         all_files: args.all_files,
     });

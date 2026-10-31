@@ -4971,6 +4971,7 @@ mod taxonomy_tests {
         fact.r#for = vec![FileType::Pe];
         for yaml in [
             "type: value\npath: pe.version.product_name\nexact: Example\n",
+            "type: value\npath: pe.manifest.assembly_identity.name\nexact: Example.Tool\n",
             "type: value\npath: pe.signatures[0].subject\nexact: CN=Example\n",
             "type: text\nsection: .rsrc\nexact: Example\n",
         ] {
@@ -4979,6 +4980,14 @@ mod taxonomy_tests {
                 find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty()
             );
         }
+        fact.r#if = crate::yaml::from_str(
+            "type: value\npath: pe.manifest.assembly_identity.name\nexists: true\n",
+        )
+        .unwrap();
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+            1
+        );
         fact.r#if =
             crate::yaml::from_str("type: value\npath: pe.version.product_name\nexact: Example\n")
                 .unwrap();
@@ -4997,6 +5006,36 @@ mod taxonomy_tests {
         fact.r#if =
             crate::yaml::from_str("type: value\npath: pe.version.product_name\nexists: true\n")
                 .unwrap();
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[fact], &HashMap::new()).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn reviewed_schneider_reference_size_allowance_is_specific() {
+        let id = "well-known/app/infrastructure/industrial-control/schneider-electric::industrial-product-reference";
+        let mut fact = leaf(id, Criticality::Notable);
+        fact.r#for = vec![FileType::Pe];
+        fact.r#if = crate::yaml::from_str(
+            "type: text\nregex: '(?i)Schneider\\s*Electric.{0,30}(Desal|Unity|SoMachine|EcoStruxure)'\n",
+        )
+        .unwrap();
+        assert!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty());
+
+        fact.crit = Criticality::Suspicious;
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+            1
+        );
+        fact.crit = Criticality::Notable;
+        fact.id = "well-known/app/infrastructure/other::industrial-product-reference".into();
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+            1
+        );
+        fact.id = id.into();
+        fact.r#if = crate::yaml::from_str("type: text\nregex: Schneider\n").unwrap();
         assert_eq!(
             find_wellknown_missing_size_filter(&[fact], &HashMap::new()).len(),
             1

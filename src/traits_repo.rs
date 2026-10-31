@@ -146,9 +146,9 @@ pub fn resolve_and_ensure() -> anyhow::Result<PathBuf> {
 /// The installed tree for this run's rules edition, installing it on first
 /// use.
 ///
-/// When a held token alone chose the Enriched tree and it cannot be installed
+/// When a held token alone chose the Uplink tree and it cannot be installed
 /// — refused, or offline — the run falls back to the open-source tree rather
-/// than scan with no rules at all. Under `--enriched` the failure stands.
+/// than scan with no rules at all. Under `--uplink` the failure stands.
 fn ensure_data_dir() -> anyhow::Result<PathBuf> {
     let data_dir = default_traits_dir();
     if has_traits(&data_dir) {
@@ -202,7 +202,7 @@ pub fn install_target() -> PathBuf {
 }
 
 /// Where the update bucket's traits are installed for this process: the
-/// enriched tree under `--enriched`, the open-source one otherwise.
+/// uplink tree under `--uplink`, the open-source one otherwise.
 pub(crate) fn default_traits_dir() -> PathBuf {
     installed_dir(crate::enriched::enabled())
 }
@@ -223,11 +223,11 @@ pub fn installed_dir(enriched: bool) -> PathBuf {
 }
 
 /// Which rules a process is using, read from the tree it resolved rather than
-/// from the flag it was given: `--enriched` with no Enriched tree installed
+/// from the flag it was given: `--uplink` with no Uplink tree installed
 /// still scans with the open-source one, and `version` should say so.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Edition {
-    /// `traits-enriched`: isotope13's rules, the moment they clear QA.
+    /// `traits-enriched`: Atomdrift Uplink rules, the moment they clear QA.
     Enriched,
     /// `traits-oss`: the open-source rules.
     OpenSource,
@@ -274,7 +274,7 @@ impl Edition {
 impl std::fmt::Display for Edition {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::Enriched => "isotope13 Enriched",
+            Self::Enriched => "Atomdrift Uplink",
             Self::OpenSource => "open source",
             Self::Checkout(_) => "checkout",
         })
@@ -527,6 +527,7 @@ mod tests {
         let checkout = PathBuf::from("/src/traits");
         assert_eq!(Edition::of(checkout.clone()), Edition::Checkout(checkout));
         assert_eq!(Edition::Enriched.as_str(), "enriched");
+        assert_eq!(Edition::Enriched.to_string(), "Atomdrift Uplink");
         assert_eq!(Edition::OpenSource.to_string(), "open source");
     }
 

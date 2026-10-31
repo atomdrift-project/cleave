@@ -66,12 +66,8 @@ composite_rules:
             .env("CLEAVE_ANALYSIS_MEMO_MB", memo)
             .env("FILEFACTS_CACHE", "0")
             .env("STNG_STRING_CACHE", "0")
-            .args([
-                "--disable",
-                "yara,radare2,upx",
-                "--no-update-check",
-                "--json",
-            ])
+            .env("CLEAVE_NO_UPDATE_CHECK", "1")
+            .args(["--disable", "yara,radare2,upx", "--json"])
             .args([
                 dir.path().join("separate/action.yml"),
                 dir.path().join("together/action.yml"),

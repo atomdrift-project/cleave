@@ -1,5 +1,8 @@
 //! Bounded optional persistence. Contended cache writes never park analysis.
-use super::*;
+use super::{
+    Arc, Connection, OnceLock, Ordering, Path, PathBuf, memo, open_connection, table_sql,
+    unix_timestamp,
+};
 use std::sync::atomic::AtomicUsize;
 use std::sync::mpsc::{self, SyncSender};
 
@@ -143,6 +146,8 @@ pub(super) fn store(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis_cache::{cache_lookup_conn, cache_store_conn};
+
     #[test]
     fn cache_writer_never_blocks_analysis_and_persists_both_tables() {
         let dir = tempfile::tempdir().unwrap();

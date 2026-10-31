@@ -13,8 +13,8 @@
 //! query, so the server can tell an update from a notice check; nothing else
 //! is sent.
 //!
-//! The opt-out is honored everywhere: pass `--no-update-check` or set
-//! `CLEAVE_NO_UPDATE_CHECK` to disable the notice. The base URL is overridable
+//! The opt-out is honored everywhere: set `CLEAVE_NO_UPDATE_CHECK` to disable
+//! the notice. The base URL is overridable
 //! via `CLEAVE_UPDATE_URL` (primarily for testing against a local server).
 
 use crate::update_manifest::{self, Manifest};
@@ -131,12 +131,9 @@ fn notify(latest: &str, url: Option<&str>, installed: &str) {
 /// than a day, a background thread refreshes it (bounded by `FETCH_TIMEOUT`)
 /// and the next run shows the result, so the check never delays a command. Any
 /// network or parse failure is logged at debug level and otherwise ignored.
-pub fn maybe_notify(disabled_by_flag: bool) {
+pub fn maybe_notify() {
     use std::io::IsTerminal;
-    if disabled_by_flag
-        || crate::env::flag("CLEAVE_NO_UPDATE_CHECK")
-        || !std::io::stderr().is_terminal()
-    {
+    if crate::env::flag("CLEAVE_NO_UPDATE_CHECK") || !std::io::stderr().is_terminal() {
         return;
     }
     let installed = env!("CARGO_PKG_VERSION");

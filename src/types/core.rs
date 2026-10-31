@@ -997,13 +997,24 @@ impl AnalysisReport {
     where
         F: Fn(&Finding) -> bool + Sync,
     {
+        self.filter_findings_by_file(|_| &predicate)
+    }
+
+    /// [`Self::filter_findings`] with a predicate made for each list: `make`
+    /// receives the file's path, or `None` for the top-level findings, so a
+    /// filter can judge a finding by what is visible from where it sits.
+    pub(crate) fn filter_findings_by_file<M, P>(&mut self, make: M) -> usize
+    where
+        M: Fn(Option<&str>) -> P + Sync,
+        P: Fn(&Finding) -> bool,
+    {
         use rayon::prelude::*;
 
         let initial_count =
             self.findings.len() + self.files.iter().map(|f| f.findings.len()).sum::<usize>();
 
         // Filter top-level findings
-        self.findings.retain(&predicate);
+        self.findings.retain(make(None));
 
         // Filter findings in files array (v2 schema). Each file's findings and
         // its derived formula/summary depend only on that file, so both passes
@@ -1017,10 +1028,10 @@ impl AnalysisReport {
         if parallel {
             self.files
                 .par_iter_mut()
-                .for_each(|file| file.findings.retain(&predicate));
+                .for_each(|file| file.findings.retain(make(Some(file.path.as_str()))));
         } else {
             for file in &mut self.files {
-                file.findings.retain(&predicate);
+                file.findings.retain(make(Some(file.path.as_str())));
             }
         }
 
@@ -1069,8 +1080,6 @@ impl AnalysisReport {
     ///
     /// Returns `(components_removed, baselines_removed)`.
     pub fn strip_unmatched_traits(&mut self) -> (usize, usize) {
-        use std::collections::HashSet;
-
         // `crit: exception` composites are assembly-only: they drive `unless:` /
         // `downgrade:` suppression while composites are evaluated, and by the time
         // we finalize a report that work is already baked into the surviving
@@ -1083,17 +1092,19 @@ impl AnalysisReport {
             file.findings.retain(|f| f.crit != Criticality::Exception);
         }
 
-        // Ids referenced by a fired composite, unioned across every file: a trait
-        // is kept regardless of its own criticality if any composite uses it.
-        let mut referenced: HashSet<crate::types::Istr> = HashSet::new();
-        for finding in &self.findings {
-            referenced.extend(finding.trait_refs.iter().cloned());
-        }
-        for file in &self.files {
-            for finding in &file.findings {
-                referenced.extend(finding.trait_refs.iter().cloned());
+        // A trait is kept regardless of its own criticality when a fired
+        // composite that had it in scope cites it — never one that fired in a
+        // sibling member (see `Citations`). The scopes are the rules': the
+        // report's own engine, or the global one `finalize` also falls back to.
+        let fallback;
+        let rules = match &self.engine {
+            Some(engine) => engine.rules(),
+            None => {
+                fallback = crate::shared_resources::fallback_engine();
+                fallback.rules()
             }
-        }
+        };
+        let citations = crate::capabilities::Citations::of(rules, self);
 
         // A component/baseline finding is strippable unless a fired composite
         // references it — or unless it *arrived* at that tier via its own
@@ -1102,13 +1113,15 @@ impl AnalysisReport {
         // report and from `--format=json` whenever nothing happened to
         // reference it, while an identical referenced trait survived at the
         // lower tier. Honour the tier the downgrade asked for.
-        let strippable = |f: &Finding| {
+        let low_tier = |f: &Finding| {
             matches!(f.crit, Criticality::Component | Criticality::Baseline)
                 && !f.downgraded
                 // Import identity remains useful to ML/diffs even at baseline.
                 && !crate::capabilities::is_dynamic_import_ref(&f.id)
-                && !referenced.contains(f.id.as_str())
         };
+        let top = citations.for_path(None);
+        let strippable =
+            |f: &Finding| low_tier(f) && !top.iter().any(|c| c.contains(f.id.as_str()));
 
         use rayon::prelude::*;
         let tally = |f: &Finding, c: &mut usize, b: &mut usize| match f.crit {
@@ -1130,11 +1143,14 @@ impl AnalysisReport {
         });
 
         // Per file: rescue the best low-tier traits when nothing else survives.
-        // A file's strip reads only that file plus the shared `referenced` set,
+        // A file's strip reads only that file plus the citations in its scope,
         // so archives fan out and each worker tallies locally — the counts are
         // summed after, rather than funnelled through one shared closure. Same
         // split (and threshold) as `filter_findings`.
         let strip_file = |file: &mut FileAnalysis| -> (usize, usize) {
+            let cited = citations.for_path(Some(file.path.as_str()));
+            let strippable =
+                |f: &Finding| low_tier(f) && !cited.iter().any(|c| c.contains(f.id.as_str()));
             let rescued = Self::rescue_low_tier(&file.findings, &strippable);
             let (mut c, mut b) = (0usize, 0usize);
             file.findings.retain(|f| {

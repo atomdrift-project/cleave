@@ -223,7 +223,7 @@ pub(crate) fn eval_symbol<'a>(
 ) -> ConditionResult {
     let _mp = crate::mem_profile::phase(crate::mem_profile::Phase::EvalSymbol);
     // Check platform constraint
-    // Match if: trait allows All platforms, OR context includes All (no --platforms filter),
+    // Match if: trait allows All platforms, OR context includes All (no platform filter),
     // OR trait's platforms intersect with context's platforms
     if let Some(plats) = platforms {
         let platform_match = crate::composite_rules::platforms_intersect(plats, ctx.platforms);

@@ -15,18 +15,20 @@ pub(crate) fn parent_pid() -> u32 {
     }
 }
 
-fn file_log_level() -> &'static str {
-    if let Ok(level) = std::env::var("CLEAVE_LOG_LEVEL") {
-        match level.to_lowercase().as_str() {
-            "trace" => return "trace",
-            "debug" => return "debug",
-            "info" => return "info",
-            "warn" | "warning" => return "warn",
-            "error" => return "error",
-            _ => {}
-        }
+/// The log level `CLEAVE_LOG_LEVEL` names, when it names one.
+fn env_log_level() -> Option<&'static str> {
+    match std::env::var("CLEAVE_LOG_LEVEL")
+        .ok()?
+        .to_lowercase()
+        .as_str()
+    {
+        "trace" => Some("trace"),
+        "debug" => Some("debug"),
+        "info" => Some("info"),
+        "warn" | "warning" => Some("warn"),
+        "error" => Some("error"),
+        _ => None,
     }
-    "warn"
 }
 
 fn scoped_filter(level: &str) -> String {
@@ -70,131 +72,36 @@ pub(crate) fn apply_runtime_overrides(traits_dir: Option<&str>) {
     }
 }
 
-pub(crate) fn init_logging(
-    verbose: bool,
-    is_validate: bool,
-    format: cli::OutputFormat,
-    effective_log_file: Option<&str>,
-) -> anyhow::Result<()> {
-    if let Some(log_file) = effective_log_file {
-        use std::fs::OpenOptions;
-        use std::sync::{Arc, Mutex};
-        use tracing_subscriber::Layer;
-        use tracing_subscriber::layer::SubscriberExt;
-        use tracing_subscriber::util::SubscriberInitExt;
-
-        let (stderr_filter, file_filter) = if std::env::var("RUST_LOG").is_ok() {
-            (EnvFilter::from_default_env(), EnvFilter::from_default_env())
-        } else if verbose {
-            (
-                EnvFilter::new(scoped_filter("debug")),
-                EnvFilter::new(scoped_filter("debug")),
-            )
-        } else if is_validate {
-            // `validate` stays quiet on stderr (single summary line) but keeps
-            // the persistent log at its usual level.
-            (
-                EnvFilter::new("error"),
-                EnvFilter::new(scoped_filter(file_log_level())),
-            )
-        } else {
-            // Global `warn` floor rather than a cleave-scoped one: a
-            // target-scoped `cleave=warn` directive was swallowing
-            // `cleave::context` errors (and any other crate's warnings) on
-            // stderr, so genuine problems went unseen at the default verbosity.
-            // The file layer stays scoped to keep the persistent log focused.
-            (
-                EnvFilter::new("warn"),
-                EnvFilter::new(scoped_filter(file_log_level())),
-            )
-        };
-
-        let file = Arc::new(Mutex::new(anyhow::Context::with_context(
-            OpenOptions::new().create(true).append(true).open(log_file),
-            || format!("Failed to open log file {log_file}"),
-        )?));
-
-        if format != cli::OutputFormat::Json {
-            eprintln!("Logging to: {}", log_file);
-        }
-
-        use tracing_subscriber::fmt::MakeWriter;
-        struct LogFile(Arc<Mutex<std::fs::File>>);
-        impl<'a> MakeWriter<'a> for LogFile {
-            type Writer = LogFileWriter;
-            fn make_writer(&'a self) -> Self::Writer {
-                LogFileWriter(self.0.clone())
-            }
-        }
-        struct LogFileWriter(Arc<Mutex<std::fs::File>>);
-        impl std::io::Write for LogFileWriter {
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                let mut file = self
-                    .0
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let result = file.write(buf);
-                let _ = file.flush();
-                result
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                self.0
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .flush()
-            }
-        }
-
-        use tracing_subscriber::field::MakeExt;
-        let fields = tracing_subscriber::fmt::format::debug_fn(sanitized_field).delimited(" ");
-
-        let stderr_layer = tracing_subscriber::fmt::layer()
-            .with_target(true)
-            .with_line_number(true)
-            .with_writer(std::io::stderr)
-            .fmt_fields(fields.clone())
-            .with_filter(stderr_filter);
-
-        let file_layer = tracing_subscriber::fmt::layer()
-            .with_target(true)
-            .with_line_number(true)
-            .with_ansi(false)
-            .with_writer(LogFile(file))
-            .fmt_fields(fields)
-            .with_filter(file_filter);
-
-        tracing_subscriber::registry()
-            .with(stderr_layer)
-            .with(file_layer)
-            .init();
+pub(crate) fn init_logging(verbose: bool, is_validate: bool) {
+    let env_filter = if std::env::var("RUST_LOG").is_ok() {
+        EnvFilter::from_default_env()
+    } else if verbose {
+        EnvFilter::new(scoped_filter("trace"))
+    } else if let Some(level) = env_log_level() {
+        EnvFilter::new(scoped_filter(level))
+    } else if is_validate {
+        // `validate` prints a single summary line on success; drop the
+        // global `warn` floor so benign third-party warnings (e.g. goblin's
+        // fat-Mach-O offset warnings on testdata fixtures) stay silent.
+        EnvFilter::new("error")
     } else {
-        let env_filter = if std::env::var("RUST_LOG").is_ok() {
-            EnvFilter::from_default_env()
-        } else if verbose {
-            EnvFilter::new(scoped_filter("trace"))
-        } else if is_validate {
-            // `validate` prints a single summary line on success; drop the
-            // global `warn` floor so benign third-party warnings (e.g. goblin's
-            // fat-Mach-O offset warnings on testdata fixtures) stay silent.
-            EnvFilter::new("error")
-        } else {
-            // Global `warn` floor — see the stderr-filter note above; surfaces
-            // warnings/errors from every crate when there's no log file.
-            EnvFilter::new("warn")
-        };
-        tracing_subscriber::fmt()
-            .with_env_filter(env_filter)
-            .with_target(true)
-            .with_thread_ids(false)
-            .with_line_number(true)
-            .with_writer(std::io::stderr)
-            .fmt_fields({
-                use tracing_subscriber::field::MakeExt;
-                tracing_subscriber::fmt::format::debug_fn(sanitized_field).delimited(" ")
-            })
-            .init();
-    }
-    Ok(())
+        // Global `warn` floor rather than a cleave-scoped one: a target-scoped
+        // `cleave=warn` directive was swallowing `cleave::context` errors (and
+        // any other crate's warnings) on stderr, so genuine problems went
+        // unseen at the default verbosity.
+        EnvFilter::new("warn")
+    };
+    tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .with_target(true)
+        .with_thread_ids(false)
+        .with_line_number(true)
+        .with_writer(std::io::stderr)
+        .fmt_fields({
+            use tracing_subscriber::field::MakeExt;
+            tracing_subscriber::fmt::format::debug_fn(sanitized_field).delimited(" ")
+        })
+        .init();
 }
 
 /// Flip the library's cancellation flag on SIGINT/SIGTERM so long scans drain
@@ -215,7 +122,7 @@ pub(crate) fn install_signal_handlers() {
     }
 }
 
-pub(crate) fn log_startup(effective_log_file: Option<&str>, verbose: bool) {
+pub(crate) fn log_startup(verbose: bool) {
     #[cfg(debug_assertions)]
     tracing::warn!(
         "DEBUG binary — cleave will be very slow; use `make release` for production builds"
@@ -226,7 +133,6 @@ pub(crate) fn log_startup(effective_log_file: Option<&str>, verbose: bool) {
     tracing::info!(
         pid = pid,
         ppid = ppid,
-        log_file = effective_log_file.unwrap_or("none"),
         "cleave started: {}",
         std::env::args().collect::<Vec<_>>().join(" ")
     );
@@ -364,9 +270,8 @@ pub(crate) fn print_version_banner(format: cli::OutputFormat) {
 
 pub(crate) fn start_memory_logger(
     verbose: bool,
-    effective_log_file: Option<&str>,
 ) -> Option<cleave::memory_tracker::MemoryLoggerHandle> {
-    if verbose || effective_log_file.is_some() {
+    if verbose {
         use cleave::memory_tracker;
         Some(memory_tracker::start_periodic_logging(
             std::time::Duration::from_secs(10),

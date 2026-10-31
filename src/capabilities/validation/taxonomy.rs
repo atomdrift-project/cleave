@@ -2297,7 +2297,13 @@ pub(crate) fn find_sibling_name_restatement(
                 let distinct_cross_cutting_profile = parent == "metadata/file/profile"
                     && short == "network"
                     && long == "network-process";
-                if restates && !distinct_cross_cutting_profile {
+                // Request-driven execution and captured command output are
+                // distinct evidence groups; both need leaf YAML directories.
+                let distinct_webshell_output = parent
+                    == "objectives/command-and-control/backdoor/webshell/request"
+                    && short == "command"
+                    && long == "command-output";
+                if restates && !distinct_cross_cutting_profile && !distinct_webshell_output {
                     out.push((parent.to_string(), short.to_string(), long.to_string()));
                 }
             }
@@ -2316,17 +2322,37 @@ fn network_process_profile_is_a_specific_sibling_exception() {
         "metadata/file/profile/network-other",
         "other/profile/network",
         "other/profile/network-process",
+        "objectives/command-and-control/backdoor/webshell/request/command",
+        "objectives/command-and-control/backdoor/webshell/request/command-output",
+        "other/request/command",
+        "other/request/command-output",
     ]
     .map(str::to_string);
     let findings = find_sibling_name_restatement(&dirs);
     assert!(!findings.contains(&(
-        "metadata/file/profile".into(), "network".into(), "network-process".into()
+        "metadata/file/profile".into(),
+        "network".into(),
+        "network-process".into()
     )));
     assert!(findings.contains(&(
-        "metadata/file/profile".into(), "network".into(), "network-other".into()
+        "metadata/file/profile".into(),
+        "network".into(),
+        "network-other".into()
     )));
     assert!(findings.contains(&(
-        "other/profile".into(), "network".into(), "network-process".into()
+        "other/profile".into(),
+        "network".into(),
+        "network-process".into()
+    )));
+    assert!(!findings.contains(&(
+        "objectives/command-and-control/backdoor/webshell/request".into(),
+        "command".into(),
+        "command-output".into()
+    )));
+    assert!(findings.contains(&(
+        "other/request".into(),
+        "command".into(),
+        "command-output".into()
     )));
 }
 
@@ -3033,6 +3059,9 @@ fn broad_filetype_category(cond: &Condition) -> &'static str {
 /// `text` matcher in an allowlisted `text:` directory passes; the same directory
 /// does **not** license a broad `value`/`symbol`/etc. matcher.
 pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
+    // Directory-shaped references occur across source, script, and binary
+    // carriers. Preserve the scope of this single neutral path observation.
+    "text:metadata/path/directory/storage-default-reference.yaml",
     // Scanner identifier and rule names are also quoted in security documentation.
     "text:metadata/lang/source/naming/security/query-review-scanner-types-detection-security-scanner-traits.yaml",
     // Shared XOR AST productions are portable across the explicitly scoped
@@ -3173,7 +3202,6 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     "text:objectives/evasion/indicator-removal/keywords/",
     "text:objectives/evasion/security-bypass/edr/",
     "text:objectives/evasion/security-bypass/llm/",
-    "text:objectives/impact/crypto-manipulation/keywords/",
     "text:objectives/impact/destroy/keywords/",
     // Natural-language destructive tasking can be embedded in any source or
     // script language; objective composites require an unattended agent with
@@ -3688,6 +3716,7 @@ fn is_low_tier_named_binary_fact(t: &TraitDefinition) -> bool {
                     | "pe.version.product_name"
                     | "pe.version.original_filename"
                     | "pe.version.description"
+                    | "pe.manifest.assembly_identity.name"
                     | "pe.signatures[0].subject"
                     | "pe.signatures[*].subject"
             ) && [q.exact.as_deref(), q.substr.as_deref(), q.regex.as_deref()]
@@ -3711,7 +3740,17 @@ fn is_low_tier_named_binary_fact(t: &TraitDefinition) -> bool {
                 && q.exact.is_none()
                 && q.regex.is_none()
                 && q.word.is_none();
-            resource_label || plex_preference_name
+            // A named Schneider Electric product reference is an observed
+            // string co-occurrence, not verified ownership of the binary.
+            // Its meaning does not change with the containing file's size.
+            let schneider_product_reference = t.id
+                == "well-known/app/infrastructure/industrial-control/schneider-electric::industrial-product-reference"
+                && q.regex.as_deref()
+                    == Some(r"(?i)Schneider\s*Electric.{0,30}(Desal|Unity|SoMachine|EcoStruxure)")
+                && q.exact.is_none()
+                && q.substr.is_none()
+                && q.word.is_none();
+            resource_label || plex_preference_name || schneider_product_reference
         }
         _ => false,
     }

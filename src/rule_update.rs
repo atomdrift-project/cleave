@@ -76,7 +76,7 @@ const MAX_BUNDLE_ENTRIES: usize = 500_000;
 /// else.
 #[derive(Debug)]
 pub enum Error {
-    /// `--enriched` cannot be honoured: no token, or one the rules Worker
+    /// `--uplink` cannot be honoured: no token, or one the rules Worker
     /// refused.
     Enriched(String),
     /// Anything else: the network, the bucket, the manifest, the disk.
@@ -397,10 +397,10 @@ fn fetch_manifest(connect: Option<Duration>) -> Result<(Manifest, Channel), Erro
 
 /// Install or refresh the rules this run uses, in the tree it chose.
 ///
-/// A held token opens the Enriched channel. When the rules Worker refuses it
-/// and `--enriched` did not insist, the run falls back to the open-source
+/// A held token opens the Uplink channel. When the rules Worker refuses it
+/// and `--uplink` did not insist, the run falls back to the open-source
 /// rules — says so once, through [`crate::enriched::fall_back`] — and
-/// refreshes those instead. With `--enriched`, the refusal is the error. A
+/// refreshes those instead. With `--uplink`, the refusal is the error. A
 /// network failure is neither: it is returned, and the rules on disk serve.
 pub fn refresh(force: bool, quiet: bool) -> Result<(), Error> {
     match update(&crate::traits_repo::install_target(), force, quiet) {
@@ -413,7 +413,7 @@ pub fn refresh(force: bool, quiet: bool) -> Result<(), Error> {
     }
 }
 
-/// The token `--enriched` needs, asked for now if this host holds none.
+/// The token `--uplink` needs, asked for now if this host holds none.
 ///
 /// Called once, before anything fetches rules, so the asking happens at the
 /// start of a run rather than inside whichever download happens first — and
@@ -429,9 +429,9 @@ pub fn sign_in() -> Result<(), Error> {
     }
 }
 
-/// Connect this computer to isotope13 Enriched, check the token it is issued
-/// against the enriched channel, and save it. What `hood enrich` runs, and
-/// what `--enriched` runs when it finds no token.
+/// Connect this computer to Atomdrift Uplink, check the token it is issued
+/// against the uplink channel, and save it. What `hood uplink` runs, and
+/// what `--uplink` runs when it finds no token.
 ///
 /// # Errors
 ///
@@ -446,7 +446,7 @@ pub fn enrich() -> Result<(), Error> {
 
 fn needs_a_token() -> Error {
     Error::Enriched(format!(
-        "isotope13 Enriched needs a token: {}",
+        "Atomdrift Uplink needs a token: {}",
         crate::enriched::how_to_get_one()
     ))
 }
@@ -552,12 +552,12 @@ fn save_issued(token: &crate::enriched::Token) -> String {
 ///
 /// The rules Worker answers a token it will not honour (revoked, Community
 /// tier, a typo) with the *public* manifest and a 200, so that old clients keep
-/// running. Asked for enriched, that is a refusal: the channel header must say
-/// `fresh`. Under `--enriched`, a saved token the Worker no longer recognises
+/// running. Asked for uplink, that is a refusal: the channel header must say
+/// `fresh`. Under `--uplink`, a saved token the Worker no longer recognises
 /// — revoked, or this computer disconnected — is replaced by connecting
 /// again, on a terminal; any other refusal is an error that says what was
 /// wrong and where the token came from, and [`refresh`] turns it into a fall
-/// back when `--enriched` did not insist. No token at all is the same error —
+/// back when `--uplink` did not insist. No token at all is the same error —
 /// the CLIs ask through [`sign_in`] before they get here.
 fn enriched_manifest(
     held: Option<(crate::enriched::Token, crate::enriched::Source)>,

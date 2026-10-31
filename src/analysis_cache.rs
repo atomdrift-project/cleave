@@ -883,7 +883,7 @@ fn options_hash_with(
     use sha2::{Digest, Sha256};
 
     // Sort so the key is independent of the order platforms were supplied on the
-    // command line: `--platforms linux,macos` and `macos,linux` share cache entries.
+    // command line: platform filters `linux,macos` and `macos,linux` share cache entries.
     let mut platform_names: Vec<String> = settings
         .platforms
         .iter()

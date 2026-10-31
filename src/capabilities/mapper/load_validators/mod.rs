@@ -9,6 +9,8 @@
 
 mod clauses;
 mod composites;
+mod exclusion_width;
+mod path_suppressions;
 mod patterns;
 mod references;
 mod scope;
@@ -304,6 +306,8 @@ const VALIDATORS: &[(&str, Check)] = &[
     // How composites assemble evidence.
     ("bare-or-crit-escalations", composites::bare_or_crit_escalations),
     ("excessive-suppressions", composites::excessive_suppressions),
+    ("path-only-suppressions", path_suppressions::path_only_suppressions),
+    ("exclusion-directory-width", exclusion_width::exclusion_directory_width),
     ("excessive-file-types", composites::excessive_file_types),
     ("pure-alias-traits", composites::pure_alias_traits),
     ("orphaned-components", composites::orphaned_components),

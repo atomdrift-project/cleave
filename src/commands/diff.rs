@@ -17,7 +17,7 @@ use crate::cli;
 /// comma-separated list parsed by [`cleave::diff::ScopeMask::parse`];
 /// `limit_changes` caps the per-scope item lists for legibility
 /// (`0` disables the cap). `options` carries the global analysis flags
-/// (`--disable`, `--zip-password`, `--platforms`, size limits, Ctrl-C).
+/// (`--disable`, `--zip-password`, size limits, Ctrl-C).
 pub fn run(
     old: &str,
     new: &str,

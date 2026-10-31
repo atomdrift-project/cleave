@@ -71,6 +71,7 @@ pub(crate) mod office;
 pub(crate) mod package_json;
 pub mod pdf;
 pub mod pe;
+pub(crate) mod php_blocks;
 pub(crate) mod pickle;
 mod png;
 pub(crate) mod python_encoded_command;

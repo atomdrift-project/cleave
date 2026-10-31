@@ -1,16 +1,17 @@
-//! isotope13 Enriched: the subscription token, and the switch it throws.
+//! Atomdrift Uplink: the subscription token, and the switch it throws.
 //!
 //! A token — `ISOTOPE13_TOKEN`, else the one saved in
-//! `<config>/atomdrift/isotope13-api.json` — selects the fresh ruleset in
-//! `traits-enriched/`, and in scan, remote verdicts. Once a computer is
-//! connected it stays connected: the token is used for every refresh until
-//! the rules Worker refuses it, and only then does a run fall back to the
-//! open-source rules, saying so. `--enriched` (or `ATOMDRIFT_ENRICHED=1`)
-//! adds insistence: with no token it connects this computer — on a terminal,
-//! through [`crate::rule_update::sign_in`], with a code approved at
-//! <https://dash.isotope13.io/device> — and a refusal is an error rather than
-//! a fall back. `ATOMDRIFT_ENRICHED=0` keeps the open-source rules whatever
-//! the host holds.
+//! `<config>/atomdrift/isotope13-api.json` — selects the zero-hour ruleset in
+//! `traits-enriched/`, and in scan, remote verdicts and the hosted LLM. Once a
+//! computer is connected it stays connected: the token is used for every
+//! refresh until the rules Worker refuses it, and only then does a run fall
+//! back to the open-source rules, saying so. `--uplink` (or
+//! `ATOMDRIFT_UPLINK=1`) adds insistence: with no token it connects this
+//! computer — on a terminal, through [`crate::rule_update::sign_in`], with a
+//! code approved at <https://dash.isotope13.io/device> — and a refusal is an
+//! error rather than a fall back. `ATOMDRIFT_UPLINK=0` keeps the open-source
+//! rules whatever the host holds (`ATOMDRIFT_ENRICHED` is accepted as a legacy
+//! alias).
 //!
 //! The token is opaque here. Whether it is valid, and what it is entitled to,
 //! is the server's to say, so the saved file holds the token and nothing that
@@ -29,8 +30,10 @@ use sha2::{Digest, Sha256};
 /// Environment variable holding a token. Checked before the saved file; how CI
 /// supplies one with no file and no prompt.
 pub const TOKEN_ENV: &str = "ISOTOPE13_TOKEN";
-/// Environment equivalent of `--enriched`.
-pub const ENABLE_ENV: &str = "ATOMDRIFT_ENRICHED";
+/// Environment equivalent of `--uplink`.
+pub const ENABLE_ENV: &str = "ATOMDRIFT_UPLINK";
+/// Legacy spelling of [`ENABLE_ENV`], honoured when [`ENABLE_ENV`] is unset.
+const LEGACY_ENABLE_ENV: &str = "ATOMDRIFT_ENRICHED";
 /// Where a customer mints a token.
 pub const DASH_URL: &str = "https://dash.isotope13.io/";
 /// The saved token, under `<config>/atomdrift/`. Shared by every atomdrift tool.
@@ -55,14 +58,14 @@ pub fn set_enabled(on: bool) {
     }
 }
 
-/// Whether this run uses the Enriched rules: decided by [`resolve`], and
+/// Whether this run uses the Uplink rules: decided by [`resolve`], and
 /// withdrawn by [`fall_back`].
 #[must_use]
 pub fn enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
 }
 
-/// Whether `--enriched` insisted: no token connects this computer, and a
+/// Whether `--uplink` insisted: no token connects this computer, and a
 /// refusal is an error rather than a fall back to the open-source rules.
 #[must_use]
 pub fn required() -> bool {
@@ -72,17 +75,22 @@ pub fn required() -> bool {
 /// Decide this run's rules from what the host holds. Called once, before
 /// anything resolves a traits directory.
 ///
-/// A held token means Enriched. `required` — `--enriched`, or
-/// [`ENABLE_ENV`] set to `1` — means Enriched too, with the token asked for
-/// by [`crate::rule_update::sign_in`] when there is none. [`ENABLE_ENV`] set
-/// to `0` means the open-source rules, whatever is held.
+/// A held token means Uplink. `required` — `--uplink`, or [`ENABLE_ENV`] set
+/// to `1` — means Uplink too, with the token asked for by
+/// [`crate::rule_update::sign_in`] when there is none. [`ENABLE_ENV`] set to
+/// `0` means the open-source rules, whatever is held.
 ///
 /// # Errors
 ///
 /// A saved token file that others can read, or that cannot be read or
 /// parsed: a fault to fix rather than a token to quietly do without.
 pub fn resolve(required: bool) -> anyhow::Result<()> {
-    let switch = env_switch(std::env::var(ENABLE_ENV).ok().as_deref());
+    let switch = env_switch(
+        std::env::var(ENABLE_ENV)
+            .or_else(|_| std::env::var(LEGACY_ENABLE_ENV))
+            .ok()
+            .as_deref(),
+    );
     let required = required || switch == Some(true);
     REQUIRED.store(required, Ordering::Relaxed);
     // Opted out, and the flag did not overrule it: whatever is held stays unused.
@@ -99,18 +107,18 @@ pub fn resolve(required: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Leave the Enriched channel for the rest of this run, because it could not
-/// be had and `--enriched` did not insist: the open-source rules are used
+/// Leave the Uplink channel for the rest of this run, because it could not
+/// be had and `--uplink` did not insist: the open-source rules are used
 /// from here on, and the one warning says why.
 ///
-/// A traits override pinned to the Enriched tree (scan pins the installed
+/// A traits override pinned to the Uplink tree (scan pins the installed
 /// tree so a checkout in the working directory cannot supply the rules)
 /// follows, or the open-source rules would never be resolved.
 pub fn fall_back(why: &str) {
     tracing::warn!(
         event = "enriched.fallback",
         reason = %why,
-        "isotope13 Enriched unavailable; using the open-source rules"
+        "Atomdrift Uplink unavailable; using the open-source rules"
     );
     set_enabled(false);
     if crate::traits_repo::override_dir()
@@ -321,27 +329,27 @@ pub fn interactive() -> bool {
 #[must_use]
 pub fn how_to_get_one() -> String {
     format!(
-        "set {TOKEN_ENV}, or run with --enriched on a terminal to connect this computer (hood: `hood enrich`). Plans are at {DASH_URL}"
+        "set {TOKEN_ENV}, or run with --uplink on a terminal to connect this computer (hood: `hood uplink`). Plans are at {DASH_URL}"
     )
 }
 
-/// "isotope¹³ Enriched" in its colours: the one way the product is named on
+/// "Atomdrift Uplink" in its colours: the one way the subscription is named on
 /// a terminal, from the welcome to every tool's `version`.
 #[must_use]
 pub fn brand() -> String {
     use colored::Colorize;
     format!(
         "{} {}",
-        "isotope¹³".truecolor(255, 0, 204).bold(),
-        "Enriched".truecolor(0, 158, 142).bold()
+        "Atomdrift".truecolor(255, 0, 204).bold(),
+        "Uplink".truecolor(0, 158, 142).bold()
     )
 }
 
-/// The welcome: one line on what Enriched is, and the link to approve.
+/// The welcome: one line on what Uplink is, and the link to approve.
 fn welcome(link: &str) {
     use colored::Colorize;
     eprintln!(
-        "\n⚛️  {} — the latest atomdrift rules, the moment they clear QA.\n\n   \
+        "\n⚛️  {} — zero-hour rules, remote dependency verdicts, and hosted LLM grading.\n\n   \
          Approve this computer in your browser:  {}\n",
         brand(),
         link.bold(),
@@ -505,7 +513,7 @@ pub fn connect(label: &str) -> anyhow::Result<Connected> {
     use std::time::{Duration, Instant};
     if !interactive() {
         return Err(anyhow::anyhow!(
-            "isotope13 Enriched needs a token: {}",
+            "Atomdrift Uplink needs a token: {}",
             how_to_get_one()
         ));
     }
@@ -674,6 +682,21 @@ mod tests {
         assert!(!is_dash_link("https://evil.example/device"));
         assert!(!is_dash_link("https://dash.isotope13.io/x\x1b[2J"));
         assert!(!is_dash_link("https://dash.isotope13.io/ calc.exe"));
+    }
+
+    #[test]
+    fn uplink_help_and_brand_name_atomdrift_uplink() {
+        assert_eq!(ENABLE_ENV, "ATOMDRIFT_UPLINK");
+        assert_eq!(LEGACY_ENABLE_ENV, "ATOMDRIFT_ENRICHED");
+        let hint = how_to_get_one();
+        assert!(hint.contains("--uplink"), "{hint}");
+        assert!(hint.contains("hood uplink"), "{hint}");
+        assert!(!hint.contains("enrich"), "{hint}");
+        let shown = brand();
+        assert!(
+            shown.contains("Atomdrift") && shown.contains("Uplink"),
+            "{shown}"
+        );
     }
 
     #[test]

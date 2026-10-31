@@ -3269,7 +3269,7 @@ fn analyze_one_path<F>(
                 path = %file_path.display(),
                 size_mb = meta.len() / (1024 * 1024),
                 limit_mb = max_scan_size / (1024 * 1024),
-                "skipping file exceeding --max-file-size limit"
+                "skipping file exceeding the directory-scan size limit"
             );
             skipped.fetch_add(1, Ordering::Relaxed);
             return;
@@ -3741,7 +3741,7 @@ pub fn version_info() -> VersionInfo {
 
 /// The `version` text every atomdrift tool prints: the tool, the cleave it
 /// embeds, and the rules it is using — edition before revision, because
-/// "Enriched or open source?" is the first thing a support thread asks.
+/// "Uplink or open source?" is the first thing a support thread asks.
 ///
 /// Loads the rule engines to count them, like [`version_info`].
 #[must_use]

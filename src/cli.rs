@@ -18,61 +18,6 @@
 
 use clap::{Parser, Subcommand};
 
-/// Parse comma-separated platforms string into a vector of Platform values
-/// Returns vec![Platform::All] if input is empty or "all"
-#[must_use]
-pub fn parse_platforms(s: &str) -> Vec<crate::composite_rules::Platform> {
-    use crate::composite_rules::Platform;
-
-    if s.is_empty() {
-        return vec![Platform::All];
-    }
-
-    let platforms: Vec<Platform> = s
-        .split(',')
-        .map(|p| p.trim().to_lowercase())
-        .filter(|p| !p.is_empty())
-        .filter_map(|p| match p.as_str() {
-            "all" => Some(Platform::All),
-            "linux" => Some(Platform::Linux),
-            "macos" | "darwin" => Some(Platform::MacOS),
-            "windows" | "win" => Some(Platform::Windows),
-            "unix" => Some(Platform::Unix),
-            "android" => Some(Platform::Android),
-            "ios" => Some(Platform::Ios),
-            "aix" => Some(Platform::Aix),
-            "solaris" => Some(Platform::Solaris),
-            "freebsd" => Some(Platform::FreeBsd),
-            "openbsd" => Some(Platform::OpenBsd),
-            "netbsd" => Some(Platform::NetBsd),
-            "dragonflybsd" | "dragonfly" => Some(Platform::DragonFlyBsd),
-            "openwrt" => Some(Platform::OpenWrt),
-            "qnx" => Some(Platform::Qnx),
-            "esxi" => Some(Platform::Esxi),
-            "zos" | "z/os" => Some(Platform::Zos),
-            "appliance" | "network-appliance" => Some(Platform::Appliance),
-            "routeros" => Some(Platform::RouterOs),
-            "fortios" => Some(Platform::FortiOs),
-            "panos" | "pan-os" => Some(Platform::PanOs),
-            "iosxe" | "ios-xe" => Some(Platform::IosXe),
-            "junos" => Some(Platform::Junos),
-            "netscaler" => Some(Platform::Netscaler),
-            "ivanti" => Some(Platform::Ivanti),
-            "vxworks" => Some(Platform::VxWorks),
-            unknown => {
-                eprintln!("⚠️  Unknown platform '{}', ignoring", unknown);
-                None
-            }
-        })
-        .collect();
-
-    if platforms.is_empty() || platforms.contains(&Platform::All) {
-        vec![Platform::All]
-    } else {
-        platforms
-    }
-}
-
 /// Default passwords to try for encrypted zip files (common malware sample passwords)
 pub const DEFAULT_ZIP_PASSWORDS: &[&str] = &[
     "infected",
@@ -164,14 +109,6 @@ pub struct Args {
     #[arg(short, long)]
     pub verbose: bool,
 
-    /// Disable the periodic update notice (also: CLEAVE_NO_UPDATE_CHECK=1)
-    #[arg(long)]
-    pub no_update_check: bool,
-
-    /// Write logs to file (in addition to stderr)
-    #[arg(long, value_name = "FILE")]
-    pub log_file: Option<String>,
-
     /// Disable specific components (comma-separated)
     #[arg(long, value_name = "COMPONENTS", value_enum, value_delimiter = ',')]
     pub disable: Vec<Component>,
@@ -187,36 +124,19 @@ pub struct Args {
     #[arg(long = "zip-password", value_name = "PASSWORD", global = true)]
     pub zip_passwords: Vec<String>,
 
-    /// Filter rules by target platform(s) (comma-separated, default: all)
-    /// Examples: --platforms linux,macos or --platforms windows
-    /// Valid values: all, linux, macos, windows, unix, android, ios, appliance, routeros, fortios, freebsd, openbsd, netbsd, aix, solaris
-    #[arg(long, value_name = "PLATFORMS", default_value = "all")]
-    pub platforms: String,
-
     /// Traits directory to load rules from (overrides CLEAVE_TRAITS_DIR and the installed rules)
     #[arg(long, value_name = "DIR")]
     pub traits_dir: Option<String>,
 
-    /// Insist on isotope13 Enriched: the latest rules, the moment they clear
-    /// QA. A computer that holds a token (ISOTOPE13_TOKEN, or the one saved
-    /// when it was connected) uses them without this flag. With it, a
-    /// computer that holds none is connected — a terminal shows a code to
-    /// approve at dash.isotope13.io — and a refused token stops the run
-    /// instead of falling back to the open-source rules. Env:
-    /// ATOMDRIFT_ENRICHED=1; =0 keeps the open-source rules.
+    /// Insist on Atomdrift Uplink: zero-hour rules, the moment they clear QA.
+    /// A computer that holds a token (ISOTOPE13_TOKEN, or the one saved when
+    /// it was connected) uses them without this flag. With it, a computer that
+    /// holds none is connected — a terminal shows a code to approve at
+    /// dash.isotope13.io — and a refused token stops the run instead of
+    /// falling back to the open-source rules. Env: ATOMDRIFT_UPLINK=1; =0
+    /// keeps the open-source rules.
     #[arg(long)]
-    pub enriched: bool,
-
-    /// Maximum file size (in MB) to keep in memory during archive analysis.
-    /// Files larger than this are written to temp files. Default: 100 MB.
-    #[arg(long, value_name = "MB", default_value_t = 100)]
-    pub max_file_mem: u64,
-
-    /// Maximum file size (in MB) to scan during directory analysis.
-    /// Files larger than this are skipped. Default: 20480 MB / 20 GB (0 = no limit).
-    /// Sized to admit full OS images (ISO/UDF, DMG) from the os-image feed.
-    #[arg(long, value_name = "MB", default_value_t = 20480)]
-    pub max_file_size: u64,
+    pub uplink: bool,
 
     /// Warn when a single rule takes longer than this many milliseconds to evaluate.
     /// During validation this is a soft rule-performance failure (CPU time where available).
@@ -230,20 +150,10 @@ pub struct Args {
     #[arg(long, value_name = "LEVEL", value_parser = parse_criticality)]
     pub min_crit: Option<crate::types::Criticality>,
 
-    /// Maximum criticality level to include in output
-    /// (filtered, component, baseline, notable, suspicious, hostile)
-    #[arg(long, value_name = "LEVEL", value_parser = parse_criticality)]
-    pub max_crit: Option<crate::types::Criticality>,
-
     /// Minimum file criticality (based on highest trait) to include in output.
     /// Files whose highest-criticality trait is below this level are excluded entirely.
     #[arg(long, value_name = "LEVEL", value_parser = parse_criticality)]
     pub min_file_crit: Option<crate::types::Criticality>,
-
-    /// Maximum file criticality (based on highest trait) to include in output.
-    /// Files whose highest-criticality trait is above this level are excluded entirely.
-    #[arg(long, value_name = "LEVEL", value_parser = parse_criticality)]
-    pub max_file_crit: Option<crate::types::Criticality>,
 }
 
 impl Args {
@@ -277,12 +187,6 @@ impl Args {
             }
         }
         OutputFormat::Annotate
-    }
-
-    /// Parse --platforms flag into a vector of Platform values
-    #[must_use]
-    pub fn platforms(&self) -> Vec<crate::composite_rules::Platform> {
-        parse_platforms(&self.platforms)
     }
 
     /// Return the built-in archive passwords followed by unique CLI additions.
@@ -339,7 +243,7 @@ pub enum Command {
     /// `{"path":"...","type":"elf","sz":12345}`. No hashing, no analysis —
     /// the caller (e.g. a report store) does its own hashing via its own cache.
     /// Files whose magic bytes do not match a recognized program type are
-    /// silently skipped. Honors `--max-file-size` for the size ceiling.
+    /// silently skipped. Honors the directory-scan size ceiling.
     #[command(name = "iter-files")]
     IterFiles {
         /// Target files or directories to enumerate
@@ -668,14 +572,6 @@ pub enum Command {
         /// Force update (fetch + hard reset, discarding local changes)
         #[arg(long)]
         force: bool,
-
-        /// Check for updates without applying them
-        #[arg(long)]
-        check: bool,
-
-        /// Pin traits to a specific git commit
-        #[arg(long, value_name = "COMMIT")]
-        pin: Option<String>,
     },
 }
 
@@ -1384,92 +1280,6 @@ mod tests {
         assert!(!disabled.third_party);
     }
 
-    // Platform parsing tests
-    #[test]
-    fn test_parse_platforms_default() {
-        use crate::composite_rules::Platform;
-        let platforms = parse_platforms("all");
-        assert_eq!(platforms, vec![Platform::All]);
-    }
-
-    #[test]
-    fn test_parse_platforms_empty() {
-        use crate::composite_rules::Platform;
-        let platforms = parse_platforms("");
-        assert_eq!(platforms, vec![Platform::All]);
-    }
-
-    #[test]
-    fn test_parse_platforms_single() {
-        use crate::composite_rules::Platform;
-        assert_eq!(parse_platforms("linux"), vec![Platform::Linux]);
-        assert_eq!(parse_platforms("macos"), vec![Platform::MacOS]);
-        assert_eq!(parse_platforms("darwin"), vec![Platform::MacOS]);
-        assert_eq!(parse_platforms("windows"), vec![Platform::Windows]);
-        assert_eq!(parse_platforms("win"), vec![Platform::Windows]);
-        assert_eq!(parse_platforms("unix"), vec![Platform::Unix]);
-        assert_eq!(parse_platforms("android"), vec![Platform::Android]);
-        assert_eq!(parse_platforms("ios"), vec![Platform::Ios]);
-    }
-
-    #[test]
-    fn test_parse_platforms_multiple() {
-        use crate::composite_rules::Platform;
-        let platforms = parse_platforms("linux,macos");
-        assert_eq!(platforms.len(), 2);
-        assert!(platforms.contains(&Platform::Linux));
-        assert!(platforms.contains(&Platform::MacOS));
-    }
-
-    #[test]
-    fn test_parse_platforms_with_spaces() {
-        use crate::composite_rules::Platform;
-        let platforms = parse_platforms(" linux , macos , windows ");
-        assert_eq!(platforms.len(), 3);
-        assert!(platforms.contains(&Platform::Linux));
-        assert!(platforms.contains(&Platform::MacOS));
-        assert!(platforms.contains(&Platform::Windows));
-    }
-
-    #[test]
-    fn test_parse_platforms_case_insensitive() {
-        use crate::composite_rules::Platform;
-        assert_eq!(parse_platforms("LINUX"), vec![Platform::Linux]);
-        assert_eq!(parse_platforms("MacOS"), vec![Platform::MacOS]);
-        assert_eq!(parse_platforms("Windows"), vec![Platform::Windows]);
-    }
-
-    #[test]
-    fn test_parse_platforms_all_overrides() {
-        use crate::composite_rules::Platform;
-        // If "all" is in the list, it should return just [All]
-        let platforms = parse_platforms("linux,all,macos");
-        assert_eq!(platforms, vec![Platform::All]);
-    }
-
-    #[test]
-    fn test_parse_platforms_unknown_ignored() {
-        use crate::composite_rules::Platform;
-        let platforms = parse_platforms("linux,unknown,macos");
-        // unknown should be ignored, only linux and macos
-        assert_eq!(platforms.len(), 2);
-        assert!(platforms.contains(&Platform::Linux));
-        assert!(platforms.contains(&Platform::MacOS));
-    }
-
-    #[test]
-    fn test_platforms_cli_flag() {
-        let args =
-            Args::try_parse_from(["cleave", "--platforms", "linux,macos", "file.bin"]).unwrap();
-        assert_eq!(args.platforms, "linux,macos");
-    }
-
-    #[test]
-    fn test_platforms_default_value() {
-        let args = Args::try_parse_from(["cleave", "file.bin"]).unwrap();
-        assert_eq!(args.platforms, "all");
-    }
-
     #[test]
     fn test_parse_metrics_command() {
         let args = Args::try_parse_from(["cleave", "metrics", "file.bin"]).unwrap();
@@ -1591,28 +1401,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_max_crit() {
-        let args =
-            Args::try_parse_from(["cleave", "--max-crit", "suspicious", "file.bin"]).unwrap();
-        assert_eq!(args.max_crit, Some(crate::types::Criticality::Suspicious));
-    }
-
-    #[test]
-    fn test_parse_min_and_max_crit() {
-        let args = Args::try_parse_from([
-            "cleave",
-            "--min-crit",
-            "notable",
-            "--max-crit",
-            "suspicious",
-            "file.bin",
-        ])
-        .unwrap();
-        assert_eq!(args.min_crit, Some(crate::types::Criticality::Notable));
-        assert_eq!(args.max_crit, Some(crate::types::Criticality::Suspicious));
-    }
-
-    #[test]
     fn test_parse_crit_case_insensitive() {
         let args = Args::try_parse_from(["cleave", "--min-crit", "HOSTILE", "file.bin"]).unwrap();
         assert_eq!(args.min_crit, Some(crate::types::Criticality::Hostile));
@@ -1643,7 +1431,6 @@ mod tests {
     fn test_parse_no_crit_flags() {
         let args = Args::try_parse_from(["cleave", "file.bin"]).unwrap();
         assert!(args.min_crit.is_none());
-        assert!(args.max_crit.is_none());
     }
 
     #[test]

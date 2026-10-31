@@ -678,4 +678,131 @@ mod tests {
             assert!(ids(&carrier).contains(&id), "{id} lost in the merge");
         }
     }
+
+    /// The OpenX 2.8.10 archive, reduced: a backdoor carved from a bundled
+    /// player as a PHP view fires a webshell composite naming the bare-OR
+    /// `request-access`, which also fires in an unrelated, byte-identical
+    /// member. The member's wrapper restates its leg; only a composite with the
+    /// member in scope can make it worth keeping.
+    mod scope {
+        use super::*;
+        use crate::composite_rules::FileType;
+        use crate::types::{AnalysisReport, FileAnalysis, TargetInfo};
+
+        const VIEW: &str = "pkg.zip!!player.js##embedded-php@1686";
+        const HOST: &str = "pkg.zip!!player.js";
+        const MEMBER: &str = "pkg.zip!!init.php";
+
+        fn rule(id: &str, legs: &[&str], r#for: FileType) -> CompositeTrait {
+            let mut rule = create_any_rule(id, legs.iter().map(|l| trait_ref(l)).collect(), None);
+            rule.r#for = vec![r#for];
+            rule
+        }
+
+        fn mapper() -> CapabilityMapper {
+            let mut cluster =
+                create_all_rule("webshell-cluster", vec![trait_ref("request-access")]);
+            cluster.r#for = vec![FileType::Php];
+            let mut proximity =
+                create_all_rule("container-proximity", vec![trait_ref("request-access")]);
+            proximity.r#for = vec![FileType::All];
+            proximity.scope = Some(crate::composite_rules::Scope::Archive);
+            let mut host = create_all_rule("host-loader", vec![trait_ref("request-access")]);
+            host.r#for = vec![FileType::JavaScript];
+            create_test_mapper_with_rules(vec![
+                rule("request-access", &["request-dup"], FileType::Php),
+                cluster,
+                proximity,
+                host,
+            ])
+        }
+
+        fn file(path: &str, findings: Vec<Finding>) -> FileAnalysis {
+            let mut file =
+                FileAnalysis::new(0, path.to_string(), "php".to_string(), String::new(), 0);
+            file.findings = findings;
+            file
+        }
+
+        /// A file's own `request-access` over its `request-dup` leg.
+        fn wrapped() -> Vec<Finding> {
+            vec![
+                fired("request-access", Criticality::Notable, &["request-dup"]),
+                fired("request-dup", Criticality::Notable, &[]),
+            ]
+        }
+
+        /// The archive: the view's composite, also copied to the top level as
+        /// the archive aggregate does, plus `top` and the member.
+        fn archive(top: Vec<Finding>) -> AnalysisReport {
+            let cluster = fired(
+                "webshell-cluster",
+                Criticality::Hostile,
+                &["request-access"],
+            );
+            let mut report = AnalysisReport::new(TargetInfo {
+                path: "pkg.zip".to_string(),
+                file_type: "zip".to_string(),
+                size_bytes: 0,
+                sha256: String::new(),
+                architectures: None,
+            });
+            report.findings = [vec![cluster.clone()], top].concat();
+            report.files = vec![
+                file(VIEW, [vec![cluster], wrapped()].concat()),
+                file(MEMBER, wrapped()),
+            ];
+            report
+        }
+
+        fn kept(report: &AnalysisReport, path: &str) -> bool {
+            report
+                .files
+                .iter()
+                .find(|f| f.path == path)
+                .is_some_and(|f| f.findings.iter().any(|x| x.id.as_str() == "request-access"))
+        }
+
+        #[test]
+        fn a_sibling_composite_does_not_keep_a_members_wrapper() {
+            let mut report = archive(vec![]);
+            mapper().filter_low_value(&mut report);
+            assert!(kept(&report, VIEW), "cited where it fired");
+            assert!(
+                !kept(&report, MEMBER),
+                "the view's composite never read init.php"
+            );
+        }
+
+        #[test]
+        fn an_archive_scope_composite_keeps_its_members_wrappers() {
+            let proximity = fired(
+                "container-proximity",
+                Criticality::Suspicious,
+                &["request-access"],
+            );
+            let mut report = archive(vec![proximity]);
+            mapper().filter_low_value(&mut report);
+            assert!(kept(&report, MEMBER));
+        }
+
+        #[test]
+        fn a_decoded_views_host_keeps_its_wrappers() {
+            let mut report = archive(vec![]);
+            report.files[0]
+                .findings
+                .retain(|f| f.id.as_str() != "webshell-cluster");
+            report.files.push(file(
+                HOST,
+                vec![fired(
+                    "host-loader",
+                    Criticality::Suspicious,
+                    &["request-access"],
+                )],
+            ));
+            mapper().filter_low_value(&mut report);
+            assert!(kept(&report, VIEW), "the host's composite read its layer");
+            assert!(!kept(&report, MEMBER));
+        }
+    }
 }

@@ -19,6 +19,7 @@ mod binary_metrics_collection_test;
 mod binary_traits_test;
 mod cache_path_context;
 mod chm_integration_test;
+mod citation_scope;
 mod cli_integration_test;
 mod cli_kv_office_test;
 mod cli_kv_source_test;

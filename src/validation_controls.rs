@@ -1086,6 +1086,20 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Name at least one supported file type or group that survives exclusions and platforms.",
     },
     ValidatorSpec {
+        id: "path-only-suppression",
+        category: ValidatorCategory::Policy,
+        display_id: "path-suppression",
+        description: "An exclusion uses more than one path-only trait or a downgrade uses more than eight.",
+        fix: "Reduce path-only traits or add independent content evidence.",
+    },
+    ValidatorSpec {
+        id: "exclusion-directory-width",
+        category: ValidatorCategory::Policy,
+        display_id: "exclusion-width",
+        description: "An expanded suppression exceeds 64 rules for an exclusion or 256 for a downgrade.",
+        fix: "Narrow the suppressor to the specific evidence that justifies it.",
+    },
+    ValidatorSpec {
         id: "excessive-suppression",
         category: ValidatorCategory::Policy,
         display_id: "suppress",

@@ -152,12 +152,8 @@ fn run(root: &std::path::Path, threshold: &str, extra: &[&str]) -> Output {
         .env("CLEAVE_RAYON_THREADS", "4")
         .env("CLEAVE_VALIDATE_SOFT", "0")
         .env("RUST_LOG", "error")
-        .args([
-            "--no-update-check",
-            "--slow-rule-ms",
-            threshold,
-            "--traits-dir",
-        ])
+        .env("CLEAVE_NO_UPDATE_CHECK", "1")
+        .args(["--slow-rule-ms", threshold, "--traits-dir"])
         .arg(root.join("rules"))
         .arg("validate")
         .args(extra)

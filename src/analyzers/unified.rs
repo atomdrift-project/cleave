@@ -1024,24 +1024,43 @@ impl UnifiedSourceAnalyzer {
                     }
                 }
             }
-            if matches!(self.config.name, "javascript" | "typescript")
-                && let Some(ast) =
+            if matches!(self.config.name, "javascript" | "typescript") {
+                // Plaintext views in another language, not concealment: each
+                // is analyzed as that language beside its host.
+                let mut view = |path: String, file_type: FileType, embedded: &str| {
+                    let Some(analyzer) = Self::for_file_type(&file_type) else {
+                        return;
+                    };
+                    let view_report = analyzer
+                        .with_engine(self.engine.clone())
+                        .without_embedded_detection()
+                        .analyze_source_as_configured(Path::new(&path), embedded);
+                    let (mut entry, _, _) = view_report.into_file_analysis(0, &self.engine);
+                    entry.path = path;
+                    entry.depth = 1;
+                    entry.encoding = None;
+                    entry.compute_summary();
+                    report.files.push(entry);
+                };
+                if let Some(ast) =
                     source_ctx.and_then(crate::analysis_context::AnalysisContext::source_ast)
-            {
-                for (offset, embedded) in crate::analyzers::js_edge_source::extract(ast) {
-                    let path = format!("{parent}##edge-csharp@{offset}");
-                    if let Some(analyzer) = Self::for_file_type(&FileType::CSharp) {
-                        let bridge_report = analyzer
-                            .with_engine(self.engine.clone())
-                            .without_embedded_detection()
-                            .analyze_source_as_configured(Path::new(&path), &embedded);
-                        let (mut entry, _, _) = bridge_report.into_file_analysis(0, &self.engine);
-                        entry.path = path;
-                        entry.depth = 1;
-                        entry.encoding = None;
-                        entry.compute_summary();
-                        report.files.push(entry);
+                {
+                    for (offset, embedded) in crate::analyzers::js_edge_source::extract(ast) {
+                        view(
+                            format!("{parent}##edge-csharp@{offset}"),
+                            FileType::CSharp,
+                            &embedded,
+                        );
                     }
+                }
+                // A PHP include runs these whatever JavaScript makes of them.
+                for (offset, embedded) in crate::analyzers::php_blocks::extract(content) {
+                    tracing::debug!(path = %parent, offset, "carved PHP block from JavaScript");
+                    view(
+                        format!("{parent}##embedded-php@{offset}"),
+                        FileType::Php,
+                        embedded,
+                    );
                 }
             }
             // Borrow the host haystack instead of copying `content` and

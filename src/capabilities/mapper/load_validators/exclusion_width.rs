@@ -253,10 +253,10 @@ mod tests {
         let reference = Condition::Trait {
             id: "metadata/wide/".into(),
         };
-        let duplicate = vec![reference.clone(), reference];
+        let duplicate = [reference.clone(), reference];
         let audit = Audit::new(&traits, &composites);
         assert_eq!(audit.count(duplicate.iter(), false), 257);
-        let exact = vec![Condition::Trait {
+        let exact = [Condition::Trait {
             id: "metadata/wrapper::context".into(),
         }];
         assert_eq!(audit.count(exact.iter(), false), 258);
@@ -282,7 +282,7 @@ mod tests {
             ..Default::default()
         }];
         let audit = Audit::new(&traits, &composites);
-        let reference = vec![Condition::Trait {
+        let reference = [Condition::Trait {
             id: "metadata/example/".into(),
         }];
         assert_eq!(audit.count(reference.iter(), false), 1);

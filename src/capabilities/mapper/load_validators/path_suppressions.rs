@@ -297,7 +297,7 @@ mod tests {
         paths.insert(&second.id, second.crit);
         paths.composites.insert(&wrapper.id, &wrapper);
         paths.insert(&wrapper.id, wrapper.crit);
-        let inputs = vec![
+        let inputs = [
             Condition::Trait {
                 id: wrapper.id.clone(),
             },

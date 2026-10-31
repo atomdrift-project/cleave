@@ -144,6 +144,7 @@ pub(super) fn store(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::analysis_cache::{cache_lookup_conn, cache_store_conn};

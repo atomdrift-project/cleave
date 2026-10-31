@@ -98,7 +98,8 @@ missing_panics_doc = "allow"  # Too strict for internal functions
 # Procedural macros
 cleave-macros = { path = "cleave-macros" }
 
-filefacts = { git = "https://github.com/atomdrift-project/filefacts.git" }
+# Library only; the defaults enable filefacts' CLI plumbing and allocator.
+filefacts = { git = "https://github.com/atomdrift-project/filefacts.git", default-features = false }
 
 cfb = "0.14"  # Microsoft OLE2/CFBF compound document parsing
 
@@ -233,7 +234,8 @@ encoding_rs = "0.8"  # Character encoding detection and conversion
 # public API, and Cargo treats `git = URL` and `git = URL, rev = R` as
 # different sources even at the same commit — two copies of the crate, whose
 # types do not unify.
-stng = { git = "https://github.com/atomdrift-project/stng.git" }
+# Library only; cleave provides its own CLI and allocator.
+stng = { git = "https://github.com/atomdrift-project/stng.git", default-features = false }
 
 # Logging (tracing is the modern standard, more powerful than log+env_logger)
 tracing = "0.1"
@@ -338,9 +340,15 @@ debug = true
 [profile.test]
 opt-level = 1  # Faster test execution
 
+# Keep CLI integration tests optimized without slowing everyday dev rebuilds.
+[profile.test.package.cleave]
+opt-level = 3
+
 [profile.dev]
 opt-level = 0
 debug = "line-tables-only"  # Faster builds, still debuggable
+# `false` still permits local Thin LTO in optimized crates.
+lto = "off"
 
 # Optimize heavy dependencies in debug builds for faster test execution
 [profile.dev.package.yara-x]
@@ -361,11 +369,10 @@ opt-level = 2
 [profile.dev.package.regalloc2]
 opt-level = 3
 
-# Optimize the cleave crate itself in debug builds so integration tests
-# (which spawn `target/debug/cleave` as a subprocess) don't pay 30s+ of
-# unoptimized trait/capability init on every invocation.
+# Basic optimization keeps trait/capability init usable while favoring fast
+# rebuilds after source edits. CLI integration tests use the test override above.
 [profile.dev.package.cleave]
-opt-level = 3
+opt-level = 1
 
 # Trait/capability init parses every trait YAML file and compiles its regexes
 # on every cleave invocation; yaml + regex compile dominate subprocess startup.

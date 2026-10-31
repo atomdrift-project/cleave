@@ -28,6 +28,7 @@ pub(crate) mod derivation_memo;
 mod error_formatting;
 pub(crate) mod indexes;
 mod mapper;
+pub(crate) use mapper::change_scope::scope_key;
 mod models;
 mod parsing;
 pub(crate) mod precision;

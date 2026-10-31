@@ -615,6 +615,41 @@ impl super::CapabilityMapper {
         // until no further suppressions occur (handles chained unless: dependencies).
         self.apply_retroactive_unless_suppression(report, &sink);
 
+        // Validation measured each of this file's AST queries once above.
+        // Confirm the outliers while the file can still run them, on a
+        // context shaped like the trait pass's so the second measurement is
+        // of the same work.
+        if crate::validation_performance::active() {
+            let mut ctx = crate::composite_rules::context::EvaluationContext::new(
+                report,
+                binary_data,
+                file_type,
+                &self.platforms,
+                None,
+                cached_ast,
+            )
+            .with_section_map(&section_map)
+            .with_deadline(std::time::Instant::now() + std::time::Duration::from_secs(180))
+            .with_slow_rule_ms(self.slow_rule_ms);
+            if let Some(kind_cache) = ast_kind_cache {
+                ctx = ctx.with_ast_kind_cache(kind_cache);
+            }
+            ctx.ast_node_text = analysis.ast_node_text;
+            if let Some(flag) = cancellation {
+                ctx = ctx.with_cancellation(flag);
+            }
+            crate::validation_performance::confirm_outliers(
+                &report.target.path,
+                |query, full_count| {
+                    let _mode =
+                        crate::composite_rules::evaluators::symbol_string::MatchCountGuard::set(
+                            full_count,
+                        );
+                    crate::composite_rules::evaluators::ast::remeasure_ast_query(query, &ctx)
+                },
+            );
+        }
+
         // The suppressions this file's evaluation withheld, so the report can
         // state what it decided not to say. Ordered strongest-first and
         // deduplicated by trait id — a trait re-evaluated across dependent

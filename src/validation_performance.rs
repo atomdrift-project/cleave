@@ -13,8 +13,33 @@ pub(crate) const VALIDATOR: &str = "rule-performance";
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 static ISSUES: Mutex<BTreeMap<(String, String), ValidationIssue>> = Mutex::new(BTreeMap::new());
 
-static QUERY_COSTS: Mutex<BTreeMap<(String, bool), BTreeMap<String, Duration>>> =
+/// Per fixture and count mode, each rule's costliest AST query: the query
+/// text, so the fixture's outliers can be run again (see
+/// [`confirm_outliers`]), and what it cost.
+static QUERY_COSTS: Mutex<BTreeMap<(String, bool), BTreeMap<String, QueryCost>>> =
     Mutex::new(BTreeMap::new());
+
+struct QueryCost {
+    cost: Duration,
+    query: String,
+    /// Run again under [`confirm_outliers`]; `cost` is the lowest seen.
+    confirmed: bool,
+}
+
+/// What the outlier fence reads from a recorded cost.
+trait MeasuredCost {
+    fn cost(&self) -> Duration;
+}
+impl MeasuredCost for QueryCost {
+    fn cost(&self) -> Duration {
+        self.cost
+    }
+}
+impl MeasuredCost for Duration {
+    fn cost(&self) -> Duration {
+        *self
+    }
+}
 thread_local! {
     static QUERY_RUNS: Cell<u64> = const { Cell::new(0) };
     static QUERY_EXECUTION_COST: Cell<Duration> = const { Cell::new(Duration::ZERO) };
@@ -57,31 +82,6 @@ impl Drop for ExecutionTimer {
     }
 }
 
-/// Relative timing uses confirmed execution cost. One cold allocation or
-/// contended cache lookup must not turn an otherwise identical query into an
-/// outlier. Confirmation never replaces the original detection result.
-pub(crate) fn ast_cost_snapshot() -> Option<Duration> {
-    (active() && !PROBING_AST.with(Cell::get)).then(|| QUERY_EXECUTION_COST.with(Cell::get))
-}
-
-pub(crate) fn ast_confirmation_fence(path: &str) -> Option<Duration> {
-    let mode = crate::composite_rules::evaluators::symbol_string::match_count_needed();
-    QUERY_COSTS
-        .lock()
-        .get(&(path.to_owned(), mode))
-        .and_then(outlier_fence)
-        .map(|(_, fence)| fence)
-}
-
-pub(crate) fn confirm_ast_cost(original: Duration, confirmed: Duration) {
-    QUERY_EXECUTION_COST.with(|cost| {
-        cost.set(
-            cost.get()
-                .saturating_sub(original.saturating_sub(confirmed)),
-        )
-    });
-}
-
 pub(crate) struct AstProbe {
     cpu: Duration,
     wall: Instant,
@@ -114,15 +114,21 @@ impl Drop for AstProbe {
 
 pub(crate) struct QueryTimer<'a> {
     id: &'a str,
+    query: &'a str,
     path: &'a str,
     runs: u64,
     full_count: bool,
     execution_cost: Duration,
 }
 impl<'a> QueryTimer<'a> {
-    pub(crate) fn start(id: &'a str, ctx: &'a EvaluationContext<'_>) -> Option<Self> {
+    pub(crate) fn start(
+        id: &'a str,
+        query: &'a str,
+        ctx: &'a EvaluationContext<'_>,
+    ) -> Option<Self> {
         active().then(|| Self {
             id,
+            query,
             path: &ctx.report.target.path,
             runs: QUERY_RUNS.with(Cell::get),
             full_count: crate::composite_rules::evaluators::symbol_string::match_count_needed(),
@@ -139,13 +145,96 @@ impl Drop for QueryTimer<'_> {
             .with(Cell::get)
             .saturating_sub(self.execution_cost);
         let mut costs = QUERY_COSTS.lock();
-        let cost = costs
+        let rules = costs
             .entry((self.path.to_owned(), self.full_count))
-            .or_default()
-            .entry(self.id.to_owned())
             .or_default();
-        *cost = (*cost).max(elapsed);
+        match rules.get_mut(self.id) {
+            Some(cost) if cost.cost >= elapsed => {}
+            Some(cost) => {
+                cost.cost = elapsed;
+                cost.query = self.query.to_owned();
+                cost.confirmed = false;
+            }
+            None => {
+                rules.insert(
+                    self.id.to_owned(),
+                    QueryCost {
+                        cost: elapsed,
+                        query: self.query.to_owned(),
+                        confirmed: false,
+                    },
+                );
+            }
+        }
         drop(costs);
+    }
+}
+
+/// How many times an outlier is run again before its cost stands.
+const CONFIRMATION_RUNS: usize = 3;
+/// Confirming an outlier can lower the median and expose another; the pass
+/// repeats, but a fixture that keeps producing new ones stops here.
+const CONFIRMATION_ROUNDS: usize = 4;
+
+/// Confirm a fixture's AST cost outliers while its evaluation context can
+/// still run them.
+///
+/// Every query ran once as the fixture was evaluated. A cost over the peer
+/// fence may be the query's, or may be whatever happened to run cold under
+/// it: the comment-stripped reparse the next query reuses, a page fault.
+/// `remeasure(query, full_count)` runs the query again on the same fixture
+/// in the same count mode and returns its cost, or `None` when the run was
+/// cut short; the lowest cost seen stands. Running only the outliers again,
+/// rather than every query three times as the fixture is evaluated, is what
+/// keeps a bundle-sized source from costing minutes in validation.
+pub(crate) fn confirm_outliers(
+    path: &str,
+    mut remeasure: impl FnMut(&str, bool) -> Option<Duration>,
+) {
+    if !active() {
+        return;
+    }
+    for _ in 0..CONFIRMATION_ROUNDS {
+        // Snapshot the candidates: the lock is not held while queries run.
+        let candidates: Vec<(bool, String, String, Duration)> = [false, true]
+            .into_iter()
+            .flat_map(|full_count| {
+                let costs = QUERY_COSTS.lock();
+                let over_fence: Option<Vec<_>> =
+                    costs.get(&(path.to_owned(), full_count)).and_then(|rules| {
+                        let (_, fence) = outlier_fence(rules)?;
+                        Some(
+                            rules
+                                .iter()
+                                .filter(|(_, c)| c.cost > fence && !c.confirmed)
+                                .map(|(id, c)| (full_count, id.clone(), c.query.clone(), c.cost))
+                                .collect(),
+                        )
+                    });
+                drop(costs);
+                over_fence.unwrap_or_default()
+            })
+            .collect();
+        if candidates.is_empty() {
+            return;
+        }
+        for (full_count, id, query, original) in candidates {
+            let mut best = original;
+            for _ in 0..CONFIRMATION_RUNS {
+                match remeasure(&query, full_count) {
+                    Some(cost) => best = best.min(cost),
+                    None => break,
+                }
+            }
+            let mut costs = QUERY_COSTS.lock();
+            if let Some(cost) = costs
+                .get_mut(&(path.to_owned(), full_count))
+                .and_then(|rules| rules.get_mut(&id))
+            {
+                cost.cost = cost.cost.min(best);
+                cost.confirmed = true;
+            }
+        }
     }
 }
 
@@ -160,11 +249,11 @@ const AST_OUTLIER_MULTIPLIER: u128 = 40;
 /// 40 times the peer median and the median plus 40 median absolute deviations.
 /// The absolute allowance prevents tiny overruns of the relative boundary
 /// from failing validation.
-fn outlier_fence(costs: &BTreeMap<String, Duration>) -> Option<(Duration, Duration)> {
+fn outlier_fence<C: MeasuredCost>(costs: &BTreeMap<String, C>) -> Option<(Duration, Duration)> {
     if costs.len() < 8 {
         return None;
     }
-    let mut ns: Vec<_> = costs.values().map(Duration::as_nanos).collect();
+    let mut ns: Vec<_> = costs.values().map(|c| c.cost().as_nanos()).collect();
     ns.sort_unstable();
     let median = ns[ns.len() / 2];
     let mut deviations: Vec<_> = ns.iter().map(|n| n.abs_diff(median)).collect();
@@ -202,7 +291,8 @@ impl Session {
             let Some((median, fence)) = outlier_fence(costs) else {
                 continue;
             };
-            for (id, &cost) in costs {
+            for (id, QueryCost { cost, .. }) in costs {
+                let cost = *cost;
                 if cost > fence {
                     issues.entry((id.clone(), path.clone())).or_insert_with(|| issue(id, path,
                         &format!("AST query cost is an extreme outlier: {}us; peer median {}us, effective fence {}us (1ms excess allowance, 40x peer margin; {} executed queries)",
@@ -325,7 +415,7 @@ mod tests {
 
     #[test]
     fn outliers_require_comparable_peers() {
-        assert!(outlier_fence(&BTreeMap::new()).is_none());
+        assert!(outlier_fence(&BTreeMap::<String, Duration>::new()).is_none());
         let mut few = measured_costs(10, Duration::from_millis(5));
         few.remove("0");
         few.remove("1");

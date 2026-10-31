@@ -74,6 +74,7 @@ mod utf16_pe_text_search_test;
 mod utf16_support_test;
 mod utf16_text_normalization_test;
 mod utf16_trait_regression_test;
+mod validation_incremental;
 mod validation_performance;
 mod validation_severity;
 mod xor_macho_payload;

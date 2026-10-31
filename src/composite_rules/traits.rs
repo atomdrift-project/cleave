@@ -158,7 +158,7 @@ fn eval_condition(
     let arch_clamp = ctx.arch_clamp_range(rule.arch);
     let _query_performance = condition
         .ast_query_text()
-        .and_then(|_| crate::validation_performance::QueryTimer::start(rule.id, ctx));
+        .and_then(|query| crate::validation_performance::QueryTimer::start(rule.id, query, ctx));
 
     let result = match condition {
         Condition::Symbol(SymbolQuery {

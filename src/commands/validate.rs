@@ -24,6 +24,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
+#[path = "validate_state.rs"]
+mod fixture_state;
 #[path = "validate_cache.rs"]
 mod result_cache;
 
@@ -31,6 +33,9 @@ mod result_cache;
 struct Target {
     path: PathBuf,
     expected: Criticality,
+    /// What the discovery walk read about the file, for the result cache's
+    /// walk stamp; `None` only for targets built outside discovery (tests).
+    metadata: Option<std::fs::Metadata>,
 }
 
 impl Target {
@@ -150,24 +155,40 @@ pub fn run_with_options(
     // Hard problems (won't load / won't fire) fatal.
     validation_controls::set_disabled_validators_override(exclude)?;
     validation_controls::set_soft_validation_mode(soft);
-    let targets = collect_targets()?;
-    let traits_dir = cleave::traits_repo::try_resolve()?;
-    report_retiring_condition_types(&traits_dir);
+    let traits_dir = std::fs::canonicalize(cleave::traits_repo::try_resolve()?)?;
+    // The two walks that decide a cache hit, side by side.
+    let discovery_started = Instant::now();
+    let (targets, rule_tree) = rayon::join(collect_targets, || {
+        result_cache::stamp_rule_tree(&traits_dir)
+    });
+    let targets = targets?;
+    tracing::info!(
+        fixtures = targets.len(),
+        elapsed_ms = discovery_started.elapsed().as_millis(),
+        "fixtures discovered and rule tree digested"
+    );
     let result_cache = result_cache::ResultCache::new(
         &traits_dir,
+        rule_tree,
         &targets,
         "severity-directories-v1",
         soft,
         verbose,
         slow_rule_ms,
     );
-    if let Some(outcome) = result_cache
+    // Everything before this point must get by without reading a rule file:
+    // a cache hit on an unchanged tree is decided from the directory walk
+    // alone, and the first source read costs more than the whole hit.
+    if let Some(hit) = result_cache
         .as_ref()
         .and_then(result_cache::ResultCache::load)
     {
-        match outcome {
+        match hit.outcome {
             result_cache::Outcome::Passed(fixtures) => {
-                return Ok(format_validate_output(&validation_output(fixtures), format));
+                return Ok(format_validate_output(
+                    &validation_output(fixtures, hit.traits_version),
+                    format,
+                ));
             }
             result_cache::Outcome::PerformanceRejected(issues) => {
                 let issues: Vec<_> = issues
@@ -182,9 +203,10 @@ pub fn run_with_options(
             }
         }
     }
+    report_retiring_condition_types(&traits_dir);
     // Fixtures are analyzed from outside the traits repo, so no path
     // exemption can match their location; see `NeutralStage`.
-    let stage = NeutralStage::new(&cleave::traits_repo::try_resolve()?)?;
+    let stage = NeutralStage::new(&traits_dir)?;
 
     // A verified full-validation cache hit above can reuse a measured pass.
     // Fresh performance validation bypasses analysis reports and shared AST
@@ -244,8 +266,92 @@ pub fn run_with_options(
     let yara_started = Instant::now();
     cleave::prefetch_yara_engine(options.third_party_yara);
     let yara_ms = yara_started.elapsed().as_millis();
+
+    // Which fixtures this edit can have changed. The last run's per-fixture
+    // state is kept under the same gate as the result cache; without it,
+    // every fixture is analyzed.
+    let plan_started = Instant::now();
+    const EXPECTATIONS: &str = "severity-directories-v1";
+    let engine = cleave::traits_fingerprint::binary_identity();
+    let state_path = result_cache
+        .as_ref()
+        .and_then(|_| fixture_state::FixtureState::path(&traits_dir));
+    let settings: Vec<u8> = result_cache
+        .as_ref()
+        .map(|cache| cache.settings().to_vec())
+        .unwrap_or_default();
+    let digests = fixture_state::fixture_digests(&targets);
+    let incremental = match (&state_path, crate::rule_sources::shared(&traits_dir)) {
+        (Some(path), Ok(sources)) => {
+            let previous = fixture_state::FixtureState::load(path, engine, &settings, EXPECTATIONS);
+            let scopes = mapper.rule_file_scopes();
+            let current = fixture_state::CurrentRules::of(&sources);
+            Some((previous, scopes, current))
+        }
+        _ => None,
+    };
+    let plan = match &incremental {
+        Some((previous, scopes, current)) => fixture_state::FixtureState::plan(
+            previous.as_ref(),
+            &traits_dir,
+            &targets,
+            &digests,
+            current,
+            scopes,
+        ),
+        None => fixture_state::Plan::full(targets.len()),
+    };
+    let plan_ms = plan_started.elapsed().as_millis();
+
     let performance = crate::validation_performance::Session::begin();
     let analysis_started = Instant::now();
+    let selected: Vec<usize> = (0..targets.len()).filter(|&i| plan.run[i]).collect();
+
+    // A fixture whose last analysis alone outlasted this run's balanced
+    // share of the pool is analyzed first, by itself, with the whole pool
+    // fanned out inside it: in a lane it would finish long after every other
+    // lane ran dry. In a full run nothing qualifies, since the balanced share
+    // is the run itself.
+    let threads = rayon::current_num_threads().max(1) as u64;
+    let known_work: u64 = selected
+        .iter()
+        .filter_map(|&i| plan.previous_elapsed_ms(i))
+        .sum();
+    let balanced_ms = known_work / threads;
+    let mut whales: Vec<usize> = selected
+        .iter()
+        .copied()
+        .filter(|&i| {
+            plan.previous_elapsed_ms(i)
+                .is_some_and(|ms| ms > 5_000 && ms > balanced_ms.saturating_mul(3) / 2)
+        })
+        .collect();
+    whales.sort_by_key(|&i| std::cmp::Reverse(plan.previous_elapsed_ms(i)));
+    let mut reports: Vec<OnceLock<Result<AnalysisReport>>> =
+        targets.iter().map(|_| OnceLock::new()).collect();
+    let elapsed: Vec<std::sync::atomic::AtomicU64> = targets
+        .iter()
+        .map(|_| std::sync::atomic::AtomicU64::new(0))
+        .collect();
+    let analyze_one = |i: usize| {
+        let t = &targets[i];
+        let fixture_started = Instant::now();
+        let report = stage.analyze(t.path(), |p| {
+            cleave::analyze_file_with_mapper(p, &options, &mapper)
+        });
+        let elapsed_ms = fixture_started.elapsed().as_millis();
+        if elapsed_ms >= 500 {
+            tracing::info!(path = %t.path().display(), elapsed_ms, "slow validation fixture");
+        }
+        elapsed[i].store(elapsed_ms as u64, Ordering::Relaxed);
+        let _ = reports[i].set(report);
+    };
+    for &i in &whales {
+        tracing::info!(path = %targets[i].path().display(),
+            previous_ms = plan.previous_elapsed_ms(i).unwrap_or(0),
+            "analyzing an oversized fixture ahead of the lanes");
+        analyze_one(i);
+    }
 
     // One lane per pool thread, each pulling the next fixture, so that every
     // fixture analysis begins on an idle worker stack. As `into_par_iter`
@@ -258,29 +364,38 @@ pub fn run_with_options(
     // Start large fixtures early so a bundled source file does not begin near
     // the end of the queue and leave every other lane idle. Keep report slots
     // in original order so diagnostics and expectation checks stay stable.
-    let mut work: Vec<_> = targets
+    let mut work: Vec<_> = selected
         .iter()
-        .enumerate()
-        .map(|(i, t)| (i, std::fs::metadata(t.path()).map_or(0, |m| m.len())))
+        .filter(|i| !whales.contains(i))
+        .map(|&i| {
+            (
+                i,
+                targets[i]
+                    .metadata
+                    .as_ref()
+                    .map_or(0, std::fs::Metadata::len),
+            )
+        })
         .collect();
     work.sort_unstable_by_key(|&(i, size)| (std::cmp::Reverse(size), i));
     let next = AtomicUsize::new(0);
-    let reports: Vec<OnceLock<Result<AnalysisReport>>> =
-        targets.iter().map(|_| OnceLock::new()).collect();
-    rayon::broadcast(|_| {
+    rayon::broadcast(|lane| {
+        let mut analyzed = 0usize;
         loop {
             let job = next.fetch_add(1, Ordering::Relaxed);
-            let Some(&(i, _)) = work.get(job) else { break };
-            let t = &targets[i];
-            let fixture_started = Instant::now();
-            let report = stage.analyze(t.path(), |p| {
-                cleave::analyze_file_with_mapper(p, &options, &mapper)
-            });
-            let elapsed_ms = fixture_started.elapsed().as_millis();
-            if elapsed_ms >= 500 {
-                tracing::info!(path = %t.path().display(), elapsed_ms, "slow validation fixture");
-            }
-            let _ = reports[i].set(report);
+            let Some(&(i, _)) = work.get(job) else {
+                // When each lane ran dry says how long the pool idled behind
+                // the last fixtures: the tail no fixture ordering can hide.
+                tracing::info!(
+                    lane = lane.index(),
+                    analyzed,
+                    at_ms = analysis_started.elapsed().as_millis(),
+                    "validation lane finished"
+                );
+                break;
+            };
+            analyzed += 1;
+            analyze_one(i);
         }
     });
     tracing::info!(
@@ -288,28 +403,31 @@ pub fn run_with_options(
         mapper_and_lint_ms,
         index_ms,
         yara_ms,
+        plan_ms,
         analysis_ms = analysis_started.elapsed().as_millis(),
         fixtures = targets.len(),
+        analyzed = selected.len(),
+        reused = plan.reused(),
+        whales = whales.len(),
         "validation phase timings"
     );
     // Include aggregate trait costs (CLEAVE_TRAIT_TIMING=1) on validation runs,
     // including runs whose fixture expectations fail below.
     cleave::log_scan_stats();
-    let results: Vec<(Target, Result<AnalysisReport>)> = targets
-        .into_iter()
-        .zip(reports)
-        .map(|(t, report)| {
-            let report = report
-                .into_inner()
+    let results: Vec<(usize, Result<AnalysisReport>)> = selected
+        .iter()
+        .map(|&i| {
+            let report = reports[i]
+                .take()
                 .unwrap_or_else(|| Err(anyhow::anyhow!("fixture was not analyzed")));
-            (t, report)
+            (i, report)
         })
         .collect();
 
     // Check for overlapping traits in the analyzed findings. This is a
     // diagnostic, not a pass/fail signal, so only compute it when verbose.
     let overlap_findings = if verbose {
-        collect_overlap_findings(&results)
+        collect_overlap_findings(&targets, &results)
     } else {
         Vec::new()
     };
@@ -322,7 +440,44 @@ pub fn run_with_options(
     let mut performance_issues = performance.issues();
     stage.relabel_issues(&mut performance_issues);
     print_performance_issues(&performance_issues, format);
-    let fixtures = evaluate(results)?;
+    let judged = judge(&targets, &results, &plan);
+
+    // Record what this run learned about each fixture before judging the
+    // run: a failing edit loop still narrows the next run to what changed.
+    if let (Some(path), Some((_, scopes, current))) = (&state_path, incremental)
+        && performance_issues.is_empty()
+        && crate::yara_engine::yara_degradation().is_none()
+    {
+        let mut outcomes: Vec<Option<fixture_state::FixtureOutcome>> =
+            targets.iter().map(|_| None).collect();
+        for (i, result) in &results {
+            if let Ok(report) = result {
+                outcomes[*i] = Some(fixture_state::FixtureOutcome {
+                    types: fixture_state::report_types(report),
+                    passed: judged.passed[*i]
+                        && !crate::analysis_cache::evaluation_incomplete(report),
+                    elapsed_ms: elapsed[*i].load(Ordering::Relaxed),
+                });
+            }
+        }
+        fixture_state::FixtureState::record(
+            &traits_dir,
+            engine,
+            &settings,
+            EXPECTATIONS,
+            current,
+            &scopes,
+            &targets,
+            &digests,
+            &plan,
+            &outcomes,
+        )
+        .store(path);
+    }
+    if judged.failures > 0 {
+        anyhow::bail!("{} validation fixture check(s) failed", judged.failures);
+    }
+    let fixtures = judged.summary;
     if performance_issues
         .iter()
         .any(|p| p.severity >= validation_controls::fatal_severity_threshold())
@@ -346,7 +501,7 @@ pub fn run_with_options(
         );
     }
 
-    let report = validation_output(fixtures);
+    let report = validation_output(fixtures, cleave::traits_repo::version());
     if cacheable
         && performance_issues.is_empty()
         && let Some(cache) = result_cache
@@ -373,10 +528,10 @@ fn print_performance_issues(
     eprintln!("{rendered}");
 }
 
-fn validation_output(fixtures: FixtureSummary) -> ValidateOutput {
+fn validation_output(fixtures: FixtureSummary, traits_version: Option<String>) -> ValidateOutput {
     ValidateOutput {
         ok: true,
-        traits_version: cleave::traits_repo::version(),
+        traits_version,
         traits_dir: cleave::traits_repo::try_resolve()
             .ok()
             .map(|p| p.display().to_string()),
@@ -466,61 +621,14 @@ fn discover_targets(root: &Path) -> Result<Vec<Target>> {
     if !root.is_dir() {
         anyhow::bail!("missing validation fixture directory: {}", safe_path(root));
     }
+    // Each directory is read once and its subdirectories are read on the
+    // pool: one `readdir` at a time over fourteen thousand fixtures is a
+    // tenth of a second the no-change path cannot spare. Entries come back
+    // in name order at every level, so the result is deterministic.
     let mut targets = Vec::new();
     let mut unused = Vec::new();
-    for entry in walkdir::WalkDir::new(root).min_depth(1).follow_links(false) {
-        let entry = entry.with_context(|| format!("walking {}", safe_path(root)))?;
-        if entry.file_type().is_dir() {
-            continue;
-        }
-        let relative = entry.path().strip_prefix(root)?;
-        let expected = match relative
-            .components()
-            .next()
-            .and_then(|c| c.as_os_str().to_str())
-        {
-            Some("hostile") => Some(Criticality::Hostile),
-            Some("suspicious") => Some(Criticality::Suspicious),
-            Some("notable") => Some(Criticality::Notable),
-            Some("baseline") => Some(Criticality::Baseline),
-            _ => None,
-        };
-        // Symlinks (including directory links) are rejected rather than silently
-        // skipped or followed outside the fixture tree.
-        if let Some(expected) = expected.filter(|_| {
-            entry.file_type().is_file()
-                && relative
-                    .parent()
-                    .is_some_and(|parent| !parent.as_os_str().is_empty())
-        }) {
-            let exempt = relative.components().nth(2).is_some()
-                && relative
-                    .components()
-                    .nth(1)
-                    .is_some_and(|c| c.as_os_str() == "does-nothing");
-            let size = entry.metadata()?.len();
-            if !exempt && size > 500 * 1024 {
-                unused.push(format!(
-                    "{}: {size} bytes exceeds the 500 KiB fixture limit",
-                    safe_path(relative)
-                ));
-                continue;
-            }
-            if !exempt && size > 20 * 1024 && entry.path().extension().is_none_or(|ext| ext != "xz")
-            {
-                unused.push(format!(
-                    "{}: {size} bytes; fixtures above 20 KiB must use xz storage compression",
-                    safe_path(relative)
-                ));
-                continue;
-            }
-            targets.push(Target {
-                path: entry.into_path(),
-                expected,
-            });
-        } else {
-            unused.push(safe_path(relative));
-        }
+    for entry in walk_fixture_dir(root, root, 0)? {
+        classify_fixture(root, entry, &mut targets, &mut unused)?;
     }
     if !unused.is_empty() {
         unused.sort_unstable();
@@ -529,13 +637,18 @@ fn discover_targets(root: &Path) -> Result<Vec<Target>> {
             .take(20)
             .map(|p| format!("  {p}"))
             .collect::<Vec<_>>()
-            .join("\n");
+            .join(
+                "
+",
+            );
         anyhow::bail!(
-            "{} unused or unsupported testdata file(s); every file must be a regular fixture under hostile/, suspicious/, notable/, or baseline/:\n{}{}",
+            "{} unused or unsupported testdata file(s); every file must be a regular fixture under hostile/, suspicious/, notable/, or baseline/:
+{}{}",
             unused.len(),
             shown,
             if unused.len() > 20 {
-                format!("\n  ... {} more", unused.len() - 20)
+                format!("
+  ... {} more", unused.len() - 20)
             } else {
                 String::new()
             }
@@ -546,6 +659,113 @@ fn discover_targets(root: &Path) -> Result<Vec<Target>> {
     }
     targets.sort_unstable_by(|a, b| a.path.cmp(&b.path));
     Ok(targets)
+}
+
+/// One non-directory entry of the fixture tree, as its directory listed it.
+struct FixtureEntry {
+    path: PathBuf,
+    is_file: bool,
+    metadata: std::fs::Metadata,
+}
+
+/// Every non-directory entry below `dir`, links not followed.
+fn walk_fixture_dir(root: &Path, dir: &Path, depth: usize) -> Result<Vec<FixtureEntry>> {
+    use rayon::prelude::*;
+    let mut entries: Vec<(std::ffi::OsString, std::fs::DirEntry)> = std::fs::read_dir(dir)
+        .and_then(|entries| {
+            entries
+                .map(|entry| entry.map(|entry| (entry.file_name(), entry)))
+                .collect()
+        })
+        .with_context(|| format!("walking {}", safe_path(root)))?;
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut found = Vec::new();
+    let mut subdirs = Vec::new();
+    for (_, entry) in entries {
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("walking {}", safe_path(root)))?;
+        if file_type.is_dir() {
+            if depth < 64 {
+                subdirs.push(entry.path());
+            }
+            continue;
+        }
+        let metadata = entry
+            .metadata()
+            .with_context(|| format!("walking {}", safe_path(root)))?;
+        found.push(FixtureEntry {
+            path: entry.path(),
+            is_file: file_type.is_file(),
+            metadata,
+        });
+    }
+    let below: Vec<Result<Vec<FixtureEntry>>> = subdirs
+        .par_iter()
+        .map(|subdir| walk_fixture_dir(root, subdir, depth + 1))
+        .collect();
+    for entries in below {
+        found.extend(entries?);
+    }
+    Ok(found)
+}
+
+/// File `entry` of the fixture tree is a fixture, or is listed as unused.
+fn classify_fixture(
+    root: &Path,
+    entry: FixtureEntry,
+    targets: &mut Vec<Target>,
+    unused: &mut Vec<String>,
+) -> Result<()> {
+    let relative = entry.path.strip_prefix(root)?;
+    let expected = match relative
+        .components()
+        .next()
+        .and_then(|c| c.as_os_str().to_str())
+    {
+        Some("hostile") => Some(Criticality::Hostile),
+        Some("suspicious") => Some(Criticality::Suspicious),
+        Some("notable") => Some(Criticality::Notable),
+        Some("baseline") => Some(Criticality::Baseline),
+        _ => None,
+    };
+    // Symlinks (including directory links) are rejected rather than silently
+    // skipped or followed outside the fixture tree.
+    if let Some(expected) = expected.filter(|_| {
+        entry.is_file
+            && relative
+                .parent()
+                .is_some_and(|parent| !parent.as_os_str().is_empty())
+    }) {
+        let exempt = relative.components().nth(2).is_some()
+            && relative
+                .components()
+                .nth(1)
+                .is_some_and(|c| c.as_os_str() == "does-nothing");
+        let size = entry.metadata.len();
+        if !exempt && size > 500 * 1024 {
+            unused.push(format!(
+                "{}: {size} bytes exceeds the 500 KiB fixture limit",
+                safe_path(relative)
+            ));
+            return Ok(());
+        }
+        if !exempt && size > 20 * 1024 && entry.path.extension().is_none_or(|ext| ext != "xz") {
+            unused.push(format!(
+                "{}: {size} bytes; fixtures above 20 KiB must use xz storage compression",
+                safe_path(relative)
+            ));
+            return Ok(());
+        }
+        targets.push(Target {
+            path: entry.path,
+            expected,
+            metadata: Some(entry.metadata),
+        });
+    } else {
+        unused.push(safe_path(relative));
+    }
+    Ok(())
 }
 
 fn report_severity(report: &AnalysisReport) -> Result<Criticality> {
@@ -562,15 +782,47 @@ fn report_severity(report: &AnalysisReport) -> Result<Criticality> {
         .max(Criticality::Baseline))
 }
 
-fn evaluate(results: Vec<(Target, Result<AnalysisReport>)>) -> Result<FixtureSummary> {
+/// Every fixture's verdict against its expectation.
+struct Judged {
+    summary: FixtureSummary,
+    /// Per target, whether it passed: analyzed fixtures by their report,
+    /// reused ones by their recorded pass.
+    passed: Vec<bool>,
+    failures: usize,
+}
+
+/// Judge the analyzed fixtures and count the reused ones as the passes they
+/// were recorded as. Failures are printed here; the caller decides when to
+/// stop.
+fn judge(
+    targets: &[Target],
+    results: &[(usize, Result<AnalysisReport>)],
+    plan: &fixture_state::Plan,
+) -> Judged {
     let mut summary = FixtureSummary::default();
+    let mut passed = vec![false; targets.len()];
     let mut failures = 0;
-    for (target, result) in results {
+    for (i, target) in targets.iter().enumerate() {
+        if !plan.run[i] {
+            let count = summary.count_mut(target.expected);
+            count.total += 1;
+            count.passed += 1;
+            passed[i] = true;
+        }
+    }
+    for (i, result) in results {
+        let target = &targets[*i];
         let count = summary.count_mut(target.expected);
         count.total += 1;
-        match result.and_then(|report| report_severity(&report).map(|severity| (report, severity)))
+        match result
+            .as_ref()
+            .map_err(|e| anyhow::anyhow!("{e:#}"))
+            .and_then(|report| report_severity(report).map(|severity| (report, severity)))
         {
-            Ok((_, actual)) if actual == target.expected => count.passed += 1,
+            Ok((_, actual)) if actual == target.expected => {
+                count.passed += 1;
+                passed[*i] = true;
+            }
             Ok((report, actual)) => {
                 eprintln!(
                     "❌ {}: expected {}, found {}",
@@ -595,10 +847,27 @@ fn evaluate(results: Vec<(Target, Result<AnalysisReport>)>) -> Result<FixtureSum
             }
         }
     }
-    if failures > 0 {
-        anyhow::bail!("{failures} validation fixture check(s) failed");
+    Judged {
+        summary,
+        passed,
+        failures,
     }
-    Ok(summary)
+}
+
+#[cfg(test)]
+fn evaluate(results: Vec<(Target, Result<AnalysisReport>)>) -> Result<FixtureSummary> {
+    let (targets, reports): (Vec<Target>, Vec<Result<AnalysisReport>>) =
+        results.into_iter().unzip();
+    let results: Vec<(usize, Result<AnalysisReport>)> = reports.into_iter().enumerate().collect();
+    let judged = judge(
+        &targets,
+        &results,
+        &fixture_state::Plan::full(targets.len()),
+    );
+    if judged.failures > 0 {
+        anyhow::bail!("{} validation fixture check(s) failed", judged.failures);
+    }
+    Ok(judged.summary)
 }
 
 #[cfg(test)]
@@ -740,6 +1009,7 @@ mod severity_fixture_tests {
         let target = Target {
             path: "sample".into(),
             expected: Criticality::Suspicious,
+            metadata: None,
         };
         assert!(evaluate(vec![(target, Ok(report))]).is_err());
     }
@@ -1023,7 +1293,8 @@ fn relabel_paths(report: &mut AnalysisReport, neutral: &str, original: &str) {
 
 /// Collect findings from all analyzed test files and check for overlapping traits
 fn collect_overlap_findings(
-    results: &[(Target, Result<AnalysisReport>)],
+    _targets: &[Target],
+    results: &[(usize, Result<AnalysisReport>)],
 ) -> Vec<validate_testdata::OverlapFinding> {
     use std::collections::{BTreeMap, BTreeSet};
 

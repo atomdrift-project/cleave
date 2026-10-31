@@ -63,12 +63,12 @@ fn capture_satisfies_early_predicates(
 ///
 /// Design: **unbounded** (eviction was the original drift trigger — a bounded LRU
 /// thrashed under multi-language archives and recompiled queries concurrently) +
-/// **serialized compile** (a compiler mutex and double-checked cache ensure
-/// no two individual `Query::new` calls overlap). Cache hits remain readable
-/// while another query compiles. Per-key concurrent
-/// compilation was tried and measured *wall-neutral* (the one-time compile
-/// warmup is small and amortized), so it's not worth the extra concurrency on
-/// this correctness-sensitive path.
+/// **once-per-key compile** (a sharded compiler mutex and double-checked
+/// cache ensure no two `Query::new` calls for the same key overlap). Cache
+/// hits remain readable while another query compiles. Compiles of different
+/// keys proceed in parallel: under one global compiler lock, `cleave
+/// validate`'s sixteen lanes met the cold cache together and fifteen waited
+/// while one compiled, a tenth of the run's samples.
 /// `None` records a query that failed to compile for this language: traits are
 /// written against several grammars, so a JS file sees a handful of foreign
 /// `query:` strings whose compile always errors. Without the negative entry
@@ -79,9 +79,20 @@ static QUERY_CACHE: LazyLock<RwLock<FxHashMap<(String, String), Option<Arc<Compi
     LazyLock::new(|| RwLock::new(FxHashMap::default()));
 
 // Separate compiler ownership from cache publication so hits never wait for
-// an unrelated compilation. Keep the individual/bank compiler domains used
-// by the original two cache locks; compilation within each stays serialized.
-static QUERY_COMPILER: Mutex<()> = Mutex::new(());
+// an unrelated compilation. Individual queries compile under a shard chosen
+// by key, so one key compiles once while unrelated keys compile alongside;
+// the combined bank keeps its single compiler domain.
+const QUERY_COMPILER_SHARDS: usize = 64;
+static QUERY_COMPILERS: [Mutex<()>; QUERY_COMPILER_SHARDS] =
+    [const { Mutex::new(()) }; QUERY_COMPILER_SHARDS];
+
+/// The compiler lock for `key`.
+fn query_compiler(key: &(String, String)) -> &'static Mutex<()> {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = rustc_hash::FxHasher::default();
+    key.hash(&mut hasher);
+    &QUERY_COMPILERS[(hasher.finish() as usize) % QUERY_COMPILER_SHARDS]
+}
 static COMBINED_QUERY_COMPILER: Mutex<()> = Mutex::new(());
 
 /// A compiled `query:` and the literals its matches require of the source.
@@ -499,60 +510,35 @@ pub(super) fn eval_ast_query_with_budget<'a>(
     ctx: &EvaluationContext<'a>,
     cpu_budget: std::time::Duration,
 ) -> ConditionResult {
-    let before = crate::validation_performance::ast_cost_snapshot();
-    let result = eval_ast_query_once(query_str, ctx, cpu_budget);
-    if let (Some(before), Some(after)) =
-        (before, crate::validation_performance::ast_cost_snapshot())
-    {
-        let original = after.saturating_sub(before);
-        let bounded = |r: &ConditionResult| {
-            r.warnings.iter().any(|warning| {
-                matches!(
-                    warning,
-                    AnalysisWarning::AstTooDeep { max_depth: 0 }
-                        | AnalysisWarning::AstQueryLimited { .. }
-                )
-            })
-        };
-        let fence = crate::validation_performance::ast_confirmation_fence(&ctx.report.target.path);
-        if !original.is_zero() && !bounded(&result) && !ctx.is_cancelled() {
-            let mut best = original;
-            // Every peer needs confirmed execution cost: the final median can
-            // fall as later queries arrive, making an unconfirmed observation
-            // below the current fence look like an outlier at session end.
-            // Keep three observations for all queries and allow extra probes
-            // for candidates already above the running fence. Normal scans
-            // never enter this validation-only path.
-            let attempts = if fence.is_some_and(|fence| original > fence) {
-                4
-            } else {
-                2
-            };
-            for attempt in 0..attempts {
-                let probe = crate::validation_performance::AstProbe::begin();
-                let repeated = eval_ast_query_once(query_str, ctx, cpu_budget);
-                let measured = probe.cost();
-                drop(probe);
-                if bounded(&repeated)
-                    || repeated.matched != result.matched
-                    || repeated.match_count != result.match_count
-                    || ctx.is_cancelled()
-                {
-                    // Incomplete or inconsistent probes cannot certify a pass.
-                    best = original;
-                    break;
-                }
-                if let Some(cost) = measured {
-                    best = best.min(cost);
-                }
-                if attempt >= 1 && fence.is_some_and(|fence| best <= fence) {
-                    break;
-                }
-            }
-            crate::validation_performance::confirm_ast_cost(original, best);
-        }
+    eval_ast_query_once(query_str, ctx, cpu_budget)
+}
+
+/// Run `query_str` on `ctx` again for its cost alone: validation confirms a
+/// fixture's cost outliers this way once the fixture is evaluated (see
+/// [`crate::validation_performance::confirm_outliers`]). `None` when the
+/// run was cut short, so a bounded run never certifies a cost.
+pub(crate) fn remeasure_ast_query(
+    query_str: &str,
+    ctx: &EvaluationContext<'_>,
+) -> Option<std::time::Duration> {
+    let probe = crate::validation_performance::AstProbe::begin();
+    let result = eval_ast_query_once(
+        query_str,
+        ctx,
+        ast_query_cpu_budget(query_str, ctx.deadline),
+    );
+    let cost = probe.cost();
+    drop(probe);
+    let bounded = result.warnings.iter().any(|warning| {
+        matches!(
+            warning,
+            AnalysisWarning::AstTooDeep { max_depth: 0 } | AnalysisWarning::AstQueryLimited { .. }
+        )
+    });
+    if bounded || ctx.is_cancelled() {
+        return None;
     }
-    result
+    cost
 }
 
 fn eval_ast_query_once<'a>(
@@ -849,7 +835,7 @@ fn cached_ast_query(
     }
     let diagnostic = tracing::enabled!(tracing::Level::DEBUG);
     let wait_started = diagnostic.then(Instant::now);
-    let _compiler = QUERY_COMPILER.lock();
+    let _compiler = query_compiler(&key).lock();
     if let Some(started) = wait_started
         && started.elapsed().as_millis() >= 10
     {
@@ -1413,7 +1399,7 @@ mod cache_lock_tests {
             ast_query_language_key(&language, FileType::JavaScript),
             pattern.to_string(),
         );
-        let compiler = QUERY_COMPILER.lock();
+        let compiler = query_compiler(&key).lock();
         let query = tree_sitter::Query::new(&language, pattern).unwrap();
         let compiled = Arc::new(CompiledAstQuery {
             literals: RequiredLiterals::of(&query, pattern),

@@ -21,7 +21,7 @@ use std::process::Command;
 use std::sync::{OnceLock, RwLock};
 
 /// Known top-level directories in a traits checkout.
-const RULE_SOURCE_DIRS: &[&str] = &[
+pub(crate) const RULE_SOURCE_DIRS: &[&str] = &[
     "metadata",
     "micro-behaviors",
     "objectives",
@@ -321,7 +321,7 @@ fn migrate_legacy_dir(legacy: &Path, oss: &Path) {
 }
 
 /// Check if a directory looks like a valid traits checkout.
-fn has_traits(path: &Path) -> bool {
+pub(crate) fn has_traits(path: &Path) -> bool {
     // Must exist and contain at least one of the expected subdirectories
     path.is_dir() && RULE_SOURCE_DIRS.iter().any(|name| path.join(name).is_dir())
 }

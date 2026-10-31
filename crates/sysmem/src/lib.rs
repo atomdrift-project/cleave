@@ -771,7 +771,7 @@ struct MemoryStatusEx {
 /// readers so both see the same snapshot semantics.
 #[cfg(target_os = "windows")]
 fn global_memory_status() -> Option<MemoryStatusEx> {
-    extern "system" {
+    unsafe extern "system" {
         fn GlobalMemoryStatusEx(buffer: *mut MemoryStatusEx) -> i32;
     }
 
@@ -815,7 +815,7 @@ fn current_rss_impl() -> Option<u64> {
         peak_pagefile_usage: usize,
     }
 
-    extern "system" {
+    unsafe extern "system" {
         fn GetCurrentProcess() -> isize;
         fn K32GetProcessMemoryInfo(process: isize, pmc: *mut ProcessMemoryCounters, cb: u32)
         -> i32;
@@ -1152,7 +1152,7 @@ fn physical_cpu_count_impl() -> Option<usize> {
     const RELATION_PROCESSOR_CORE: u32 = 0;
     const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
 
-    extern "system" {
+    unsafe extern "system" {
         fn GetLogicalProcessorInformation(
             buffer: *mut SystemLogicalProcessorInformation,
             returned_length: *mut u32,

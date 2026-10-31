@@ -347,6 +347,17 @@ impl TypeMask {
     pub(crate) fn intersects(self, other: Self) -> bool {
         self.0.iter().zip(other.0).any(|(a, b)| a & b != 0)
     }
+
+    /// The mask's words, for storing it; [`Self::from_words`] reads them back.
+    #[must_use]
+    pub(crate) const fn words(self) -> [u64; Self::WORDS] {
+        self.0
+    }
+
+    #[must_use]
+    pub(crate) const fn from_words(words: [u64; Self::WORDS]) -> Self {
+        Self(words)
+    }
 }
 
 impl std::ops::BitOr for TypeMask {

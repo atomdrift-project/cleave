@@ -77,12 +77,12 @@ fn unchanged_validation_is_ten_times_faster_after_a_yaml_addition() {
         rules.join("metadata/lang/source/shape/added.yaml"),
         r#"
 defaults:
-  for: [python]
+  for: [javascript]
   platforms: [unix, windows]
   crit: baseline
 traits:
   - id: added-marker
-    desc: Added Python marker
+    desc: Added JavaScript marker
     if: {type: text, substr: added_validation_marker}
 "#,
     )

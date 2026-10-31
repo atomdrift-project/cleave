@@ -1342,7 +1342,10 @@ pub(crate) fn report_cache_store(
     report: &AnalysisReport,
     traits_revision: i64,
 ) {
-    if yara_degraded() || evaluation_incomplete(report) {
+    // Validation never reads the cache (see `report_cache_lookup`), and its
+    // fixtures are read back by nothing else: storing them only serialized
+    // every report and kept the writer busy to the end of the run.
+    if yara_degraded() || evaluation_incomplete(report) || crate::validation_performance::active() {
         return;
     }
     let Ok(json) = serde_json::to_vec(report) else {
@@ -1441,6 +1444,7 @@ pub(crate) fn file_analysis_cache_store(
         || !complete_leaf_report(report)
         || yara_degraded()
         || evaluation_incomplete(report)
+        || crate::validation_performance::active()
     {
         return;
     }

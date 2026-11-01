@@ -3134,9 +3134,131 @@ const MAX_SORT_FILES: usize = 50_000;
 /// end of the scan. A no-op above [`MAX_SORT_FILES`] (see its rationale).
 fn sort_largest_first(paths: &mut [std::path::PathBuf]) {
     if paths.len() <= MAX_SORT_FILES {
-        paths.sort_by_cached_key(|p| {
-            std::cmp::Reverse(std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
-        });
+        paths.sort_by_cached_key(|p| std::cmp::Reverse(scheduling_size(p)));
+    }
+}
+
+/// The size that predicts a path's analysis cost: its length on disk, or
+/// for a compressed container the larger of that and what it inflates to.
+/// A 100 KB `.tgz` holding a 5 MB single-expression JavaScript bundle is
+/// the most expensive path in a QA corpus by far, yet its compressed size
+/// queued it behind 400 smaller files, so it started at t=50 s of a 100 s
+/// scan and was the last to finish; an 18 KB zip around a 2.2 MB script did
+/// the same at t=39 s of 52 s. gzip reports its uncompressed size in the
+/// trailer (`ISIZE`, modulo 2^32); zip in each central-directory entry.
+/// Only paths small enough to be worth the question are opened: a file this
+/// size is cheap to inflate-probe, and above the cap the on-disk length
+/// already ranks it near the front.
+fn scheduling_size(path: &std::path::Path) -> u64 {
+    const PROBE_MAX_BYTES: u64 = 16 << 20;
+    let on_disk = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    if !(22..=PROBE_MAX_BYTES).contains(&on_disk) {
+        return on_disk;
+    }
+    let inflated = (|| {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut file = std::fs::File::open(path).ok()?;
+        let mut magic = [0u8; 4];
+        file.read_exact(&mut magic).ok()?;
+        match magic {
+            [0x1f, 0x8b, _, _] => {
+                file.seek(SeekFrom::End(-4)).ok()?;
+                let mut trailer = [0u8; 4];
+                file.read_exact(&mut trailer).ok()?;
+                Some(u64::from(u32::from_le_bytes(trailer)))
+            }
+            [b'P', b'K', 3, 4] => zip_inflated_size(&mut file, on_disk),
+            _ => None,
+        }
+    })();
+    inflated.map_or(on_disk, |n| n.max(on_disk))
+}
+
+/// Sum of the uncompressed sizes a zip's central directory records. `None`
+/// for a zip64 directory, a truncated one, or one with more entries than
+/// are worth walking for a scheduling hint; the on-disk size then stands.
+fn zip_inflated_size(file: &mut std::fs::File, on_disk: u64) -> Option<u64> {
+    use std::io::{Read, Seek, SeekFrom};
+    const EOCD_MIN: u64 = 22;
+    const EOCD_SEARCH_MAX: u64 = EOCD_MIN + 0xFFFF;
+    const MAX_ENTRIES: usize = 20_000;
+    let tail_len = on_disk.min(EOCD_SEARCH_MAX);
+    file.seek(SeekFrom::End(-(tail_len as i64))).ok()?;
+    let mut tail = vec![0u8; tail_len as usize];
+    file.read_exact(&mut tail).ok()?;
+    let eocd = tail
+        .windows(4)
+        .rposition(|w| w == [b'P', b'K', 5, 6])
+        .filter(|&at| at + 22 <= tail.len())?;
+    let u16_at = |at: usize| u16::from_le_bytes([tail[at], tail[at + 1]]);
+    let u32_at =
+        |at: usize| u32::from_le_bytes([tail[at], tail[at + 1], tail[at + 2], tail[at + 3]]);
+    let entries = usize::from(u16_at(eocd + 10));
+    let dir_len = u64::from(u32_at(eocd + 12));
+    let dir_offset = u64::from(u32_at(eocd + 16));
+    if entries == 0 || entries > MAX_ENTRIES || entries == 0xFFFF || dir_offset == 0xFFFF_FFFF {
+        return None;
+    }
+    if dir_offset.checked_add(dir_len)? > on_disk {
+        return None;
+    }
+    file.seek(SeekFrom::Start(dir_offset)).ok()?;
+    let mut dir = vec![0u8; usize::try_from(dir_len).ok()?];
+    file.read_exact(&mut dir).ok()?;
+    let mut at = 0usize;
+    let mut total = 0u64;
+    for _ in 0..entries {
+        if at + 46 > dir.len() || dir[at..at + 4] != [b'P', b'K', 1, 2] {
+            return None;
+        }
+        let field32 = |o: usize| {
+            u32::from_le_bytes([
+                dir[at + o],
+                dir[at + o + 1],
+                dir[at + o + 2],
+                dir[at + o + 3],
+            ])
+        };
+        let field16 = |o: usize| u16::from_le_bytes([dir[at + o], dir[at + o + 1]]);
+        let uncompressed = field32(24);
+        if uncompressed == 0xFFFF_FFFF {
+            return None;
+        }
+        total = total.saturating_add(u64::from(uncompressed));
+        at += 46 + usize::from(field16(28)) + usize::from(field16(30)) + usize::from(field16(32));
+    }
+    Some(total)
+}
+
+#[cfg(test)]
+mod scheduling_size_tests {
+    #![allow(clippy::unwrap_used)]
+    use super::scheduling_size;
+    use std::io::Write;
+
+    #[test]
+    fn zip_ranks_by_inflated_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tiny.crx");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("a.js", opts).unwrap();
+        zip.write_all(&vec![b'x'; 1 << 20]).unwrap();
+        zip.start_file("b.js", opts).unwrap();
+        zip.write_all(&vec![b'y'; 1 << 20]).unwrap();
+        zip.finish().unwrap();
+        let on_disk = std::fs::metadata(&path).unwrap().len();
+        assert!(on_disk < 1 << 16);
+        assert_eq!(scheduling_size(&path), 2 << 20);
+    }
+
+    #[test]
+    fn plain_file_is_its_length() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plain.bin");
+        std::fs::write(&path, vec![7u8; 4096]).unwrap();
+        assert_eq!(scheduling_size(&path), 4096);
     }
 }
 

@@ -47,11 +47,51 @@ pub(crate) fn thread_cpu_time() -> Duration {
     }
 }
 
-/// Fallback for targets without a usable `CLOCK_THREAD_CPUTIME_ID` (non-unix, plus
-/// the solarish family): report zero, which disables the CPU budget. Acceptable
-/// because the starvation bug only manifests under heavily oversubscribed hosts
+/// Windows: kernel + user time of the calling thread from `GetThreadTimes`,
+/// in 100 ns `FILETIME` units but advanced only at clock interrupts (1 to
+/// 15.6 ms), so a budget trips within one tick of its value; fine for the
+/// 100 ms and 5 s budgets, and why budget checks compare with `>=` (a zero
+/// budget must trip on the first check). Without this the fallback below
+/// returned zero here, which silently disabled every CPU budget on Windows:
+/// a tree-sitter query on a 5 MB JSFuck bundle ran to the 180 s wall-clock
+/// deadline instead of the 5 s budget it gets on Linux (cyclotron-qa,
+/// 2026-10-31).
+#[cfg(windows)]
+pub(crate) fn thread_cpu_time() -> Duration {
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::{GetCurrentThread, GetThreadTimes};
+    let zero = FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let (mut creation, mut exit, mut kernel, mut user) = (zero, zero, zero, zero);
+    // SAFETY: `GetCurrentThread` returns a pseudo-handle that is always valid
+    // for the calling thread, and the four out-pointers are valid, writable
+    // `FILETIME`s that live for the duration of the call.
+    let ok = unsafe {
+        GetThreadTimes(
+            GetCurrentThread(),
+            &mut creation,
+            &mut exit,
+            &mut kernel,
+            &mut user,
+        )
+    };
+    if ok == 0 {
+        return Duration::ZERO;
+    }
+    let ticks = |t: FILETIME| (u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime);
+    Duration::from_nanos((ticks(kernel) + ticks(user)).saturating_mul(100))
+}
+
+/// Fallback for targets without a usable thread CPU clock (the solarish
+/// family): report zero, which disables the CPU budget. Acceptable because
+/// the starvation bug only manifests under heavily oversubscribed hosts
 /// (Linux/macOS); these hosts aren't oversubscribed that way.
-#[cfg(not(all(unix, not(target_os = "illumos"), not(target_os = "solaris"))))]
+#[cfg(not(any(
+    windows,
+    all(unix, not(target_os = "illumos"), not(target_os = "solaris"))
+)))]
 pub(crate) fn thread_cpu_time() -> Duration {
     Duration::ZERO
 }
@@ -102,7 +142,7 @@ where
         node_count += 1;
         if node_count & 0xFFF == 0
             && let Some(budget) = cpu_budget
-            && thread_cpu_time().saturating_sub(cpu_start) > budget
+            && thread_cpu_time().saturating_sub(cpu_start) >= budget
         {
             stats.deadline_exceeded = true;
             return stats;

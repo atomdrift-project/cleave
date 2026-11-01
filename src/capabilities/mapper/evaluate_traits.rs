@@ -146,6 +146,10 @@ fn gate_stats_enabled() -> bool {
 /// Traits evaluated serially per Rayon job before that job's mutable context
 /// is dropped.
 const PARALLEL_TRAIT_CHUNK: usize = 64;
+/// Source size from which AST queries without a batch result are evaluated
+/// one trait per job ahead of the chunked loop. Below it a standalone query
+/// is cheap and the per-job context clone would dominate.
+const HEAVY_AST_TAIL_MIN_BYTES: usize = 512 * 1024;
 
 /// Log the raw-content gate counters at `info`.
 pub(crate) fn log_raw_gate_stats() {
@@ -197,8 +201,24 @@ pub(crate) fn record_ast_kind_node(
     if !required_node_types.contains(kind) {
         return;
     }
-    let Ok(text) = node.utf8_text(source) else {
-        return;
+    // Only the first `EVIDENCE_CHARS` chars of the node's text are kept, so
+    // validate and count a bounded prefix instead of the node's whole span:
+    // on a deeply nested tree (a 5 MB single-expression JSFuck bundle) every
+    // ancestor node spans megabytes, and `utf8_text` plus a full char count
+    // per node was 48% of that file's main-thread time. `source` is the
+    // UTF-8 view the AST was parsed from, so a prefix that is cut inside a
+    // multi-byte char is the only way the bounded validation can fail.
+    const EVIDENCE_CHARS: usize = 100;
+    const PREFIX_BYTES: usize = EVIDENCE_CHARS * 4 + 4;
+    let span = &source[node.start_byte()..node.end_byte()];
+    let prefix = &span[..span.len().min(PREFIX_BYTES)];
+    let text = match std::str::from_utf8(prefix) {
+        Ok(text) => text,
+        Err(err) if err.error_len().is_none() && prefix.len() < span.len() => {
+            // Cut mid-char at the prefix boundary: keep the complete chars.
+            std::str::from_utf8(&prefix[..err.valid_up_to()]).unwrap_or_default()
+        }
+        Err(_) => return,
     };
     let alt_value = if call_node_types.contains(kind) {
         crate::analyzers::symbol_extraction::extract_function_name(node, source)
@@ -208,7 +228,7 @@ pub(crate) fn record_ast_kind_node(
     cache.entry(kind.to_string()).or_default().push(Evidence {
         method: "ast".to_string(),
         source: "tree-sitter".to_string(),
-        value: crate::composite_rules::evaluators::truncate_evidence(text, 100),
+        value: crate::composite_rules::evaluators::truncate_evidence(text, EVIDENCE_CHARS),
         location: Some(format!(
             "{}:{}",
             node.start_position().row + 1,
@@ -1086,49 +1106,125 @@ impl super::CapabilityMapper {
             ctx = ctx.with_decoded_skip(Some(map));
         }
 
-        let eval_indices = |indices: &[usize]| -> Vec<Finding> {
-            if crate::rayon_nest::inner_work_parallel() {
-                indices
-                    .par_chunks(trait_chunk)
-                    .flat_map_iter(|chunk| {
-                        let mut trait_ctx = ctx.clone();
-                        chunk
-                            .iter()
-                            .filter_map(|&idx| {
-                                self.eval_one_trait(
-                                    &mut trait_ctx,
-                                    idx,
-                                    cache,
-                                    eval_flags,
-                                    dependent_only,
-                                    use_string_prefilters,
-                                    is_raw_text,
-                                    raw_regex_prefilter_enabled,
-                                    base_cached_evidence,
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .collect()
-            } else {
-                let mut trait_ctx = ctx.clone();
-                indices
+        // Queries the shared batch walk abandoned (state-limited by the
+        // per-group cap, or cut off by the batch's CPU budget) re-run on the
+        // per-trait path under the full per-query budget: up to 5 CPU-seconds
+        // each on a pathological bundle. Grouped by trait id, several of them
+        // share one 64-trait chunk and serialize on one worker, and a member
+        // holding no inner-parallel owner slot runs every one of them on its
+        // own thread: a 5 MB JSFuck bundle spent 58 s that way inside a
+        // package corpus, 33 s alone. Evaluate those traits first, one per
+        // job. Each still runs its own query with its own limits and guard,
+        // and its finding is spliced back at its original position, so the
+        // output is byte-identical to the chunked order.
+        //
+        // Guarded traits (`unless:`) stay off the batch so a suppressor hit
+        // can skip their query; on a large source their standalone queries
+        // are the same multi-second tail, so they join the pre-pass too, and
+        // `eval_one_trait` still runs their suppressors first.
+        let unsettled_ast_traits: Vec<usize> = match cache.ast_query_cache {
+            Some(qcache)
+                if rest_indices.len() > 1 && binary_data.len() >= HEAVY_AST_TAIL_MIN_BYTES =>
+            {
+                rest_indices
                     .iter()
-                    .filter_map(|&idx| {
-                        self.eval_one_trait(
-                            &mut trait_ctx,
-                            idx,
-                            cache,
-                            eval_flags,
-                            dependent_only,
-                            use_string_prefilters,
-                            is_raw_text,
-                            raw_regex_prefilter_enabled,
-                            base_cached_evidence,
-                        )
+                    .copied()
+                    .filter(|&idx| {
+                        self.trait_definitions[idx]
+                            .r#if
+                            .ast_query_text()
+                            .is_some_and(|q| {
+                                !qcache.contains_key(q)
+                                    && !crate::composite_rules::evaluators::batch_leaves_out_by_design(q)
+                            })
                     })
                     .collect()
             }
+            _ => Vec::new(),
+        };
+        let precomputed: FxHashMap<usize, Option<Finding>> =
+            if unsettled_ast_traits.len() >= 2 && crate::rayon_nest::heavy_tail_parallel() {
+                tracing::debug!(
+                    traits = unsettled_ast_traits.len(),
+                    "evaluating batch-abandoned AST traits in parallel"
+                );
+                unsettled_ast_traits
+                    .par_iter()
+                    .map(|&idx| {
+                        let mut trait_ctx = ctx.clone();
+                        (
+                            idx,
+                            self.eval_one_trait(
+                                &mut trait_ctx,
+                                idx,
+                                cache,
+                                eval_flags,
+                                dependent_only,
+                                use_string_prefilters,
+                                is_raw_text,
+                                raw_regex_prefilter_enabled,
+                                base_cached_evidence,
+                            ),
+                        )
+                    })
+                    .collect()
+            } else {
+                FxHashMap::default()
+            };
+
+        let eval_chunk = |trait_ctx: &mut _, chunk: &[usize]| -> Vec<Finding> {
+            chunk
+                .iter()
+                .filter_map(|&idx| {
+                    if let Some(found) = precomputed.get(&idx) {
+                        return found.clone();
+                    }
+                    self.eval_one_trait(
+                        trait_ctx,
+                        idx,
+                        cache,
+                        eval_flags,
+                        dependent_only,
+                        use_string_prefilters,
+                        is_raw_text,
+                        raw_regex_prefilter_enabled,
+                        base_cached_evidence,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let eval_parallel = |indices: &[usize]| -> Vec<Finding> {
+            indices
+                .par_chunks(trait_chunk)
+                .flat_map_iter(|chunk| {
+                    let mut trait_ctx = ctx.clone();
+                    eval_chunk(&mut trait_ctx, chunk)
+                })
+                .collect()
+        };
+        let eval_indices = |indices: &[usize]| -> Vec<Finding> {
+            if crate::rayon_nest::inner_work_parallel() {
+                return eval_parallel(indices);
+            }
+            // Serial because other analyses hold the pool. Re-ask at every
+            // chunk boundary: an 8 MB bundle that started serial among 400
+            // packages kept walking its 15k traits on one thread for 40 s
+            // after the rest of the corpus had finished and every other
+            // worker sat idle. Chunk results append in index order either
+            // way, so the output does not depend on where the switch lands.
+            let mut trait_ctx = ctx.clone();
+            let mut findings = Vec::new();
+            let mut remaining = indices;
+            while !remaining.is_empty() {
+                let (chunk, rest) = remaining.split_at(remaining.len().min(trait_chunk));
+                findings.extend(eval_chunk(&mut trait_ctx, chunk));
+                remaining = rest;
+                if !remaining.is_empty() && crate::rayon_nest::inner_work_parallel() {
+                    findings.extend(eval_parallel(remaining));
+                    break;
+                }
+            }
+            findings
         };
 
         let mut all_findings = eval_indices(&rest_indices);

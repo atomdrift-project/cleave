@@ -451,6 +451,16 @@ fn serial_traits_forced() -> bool {
     *FLAG.get_or_init(|| crate::env::flag("CLEAVE_SERIAL_TRAITS"))
 }
 
+/// Parallelism for a short list of known-heavy jobs: AST queries the shared
+/// batch abandoned, each worth up to a full per-query CPU budget. Unlike
+/// [`inner_work_parallel`], this ignores the owner-slot cap. A handful of
+/// multi-second jobs is exactly what idle workers should take, and a pool
+/// with no idle worker runs them on the caller's thread as before. Only
+/// `CLEAVE_SERIAL_TRAITS` keeps them serial.
+pub(crate) fn heavy_tail_parallel() -> bool {
+    !serial_traits_forced()
+}
+
 fn max_inner_parallel_owners() -> usize {
     static MAX: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *MAX.get_or_init(|| {

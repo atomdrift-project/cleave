@@ -179,6 +179,15 @@ pub(super) fn ast_query_cpu_budget(query: &str, _deadline: Option<Instant>) -> s
     }
 }
 
+/// `true` when a shared batch leaves `query` to the per-trait path for a
+/// reason other than cost: a comment-stripped view needs its own tree, and
+/// a multi-wildcard shape runs alone under its 100 ms budget. Both are
+/// ordinary standalone work, not the abandoned-query tail that
+/// `evaluate_traits` spreads across workers.
+pub(crate) fn batch_leaves_out_by_design(query: &str) -> bool {
+    count_unbounded_any_wildcards(query) >= 2 || query.contains("cleave.ignore-comments")
+}
+
 fn count_unbounded_any_wildcards(query: &str) -> usize {
     let bytes = query.as_bytes();
     let mut count = 0;
@@ -746,7 +755,7 @@ fn eval_ast_query_once<'a>(
         {
             return ControlFlow::Break(());
         }
-        if thread_cpu_time().saturating_sub(cpu_start) > cpu_budget {
+        if thread_cpu_time().saturating_sub(cpu_start) >= cpu_budget {
             timed_out.set(true);
             return ControlFlow::Break(());
         }
@@ -779,7 +788,7 @@ fn eval_ast_query_once<'a>(
         if ctx.is_cancelled() || deadline.is_some_and(|dl| Instant::now() > dl) {
             break;
         }
-        if thread_cpu_time().saturating_sub(cpu_start) > cpu_budget {
+        if thread_cpu_time().saturating_sub(cpu_start) >= cpu_budget {
             timed_out.set(true);
             break;
         }
@@ -1217,7 +1226,7 @@ pub(crate) fn batch_ast_queries_with_index(
         {
             return ControlFlow::Break(());
         }
-        if thread_cpu_time().saturating_sub(cpu_start) > cpu_budget {
+        if thread_cpu_time().saturating_sub(cpu_start) >= cpu_budget {
             timed_out.set(true);
             return ControlFlow::Break(());
         }
@@ -1247,7 +1256,7 @@ pub(crate) fn batch_ast_queries_with_index(
         if cancelled() || deadline.is_some_and(|dl| Instant::now() > dl) {
             return None;
         }
-        if thread_cpu_time().saturating_sub(cpu_start) > cpu_budget {
+        if thread_cpu_time().saturating_sub(cpu_start) >= cpu_budget {
             timed_out.set(true);
             break;
         }
@@ -1425,6 +1434,24 @@ pub(super) fn combined_bank_cached_for_test(
         .read()
         .get(&(ast_query_language_key(lang, file_type), queries.join("\n")))
         .is_some_and(Option::is_some)
+}
+
+#[cfg(test)]
+mod batch_design_exclusion_tests {
+    use super::batch_leaves_out_by_design;
+
+    #[test]
+    fn multi_wildcard_and_comment_view_queries_stay_off_the_heavy_tail() {
+        assert!(batch_leaves_out_by_design(
+            "(call_expression arguments: (arguments (_)* @a (_)* @b))"
+        ));
+        assert!(batch_leaves_out_by_design(
+            "((call_expression) @c (#set! cleave.ignore-comments \"true\"))"
+        ));
+        assert!(!batch_leaves_out_by_design(
+            "(binary_expression left: (_) @l operator: \"-\")"
+        ));
+    }
 }
 
 #[cfg(test)]

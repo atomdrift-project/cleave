@@ -19,7 +19,7 @@ use rustc_hash::FxHashMap;
 use std::cell::Cell;
 use std::ops::ControlFlow;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::Instant;
 use streaming_iterator::StreamingIterator;
 
@@ -103,6 +103,10 @@ struct CompiledAstQuery {
     subqueries: RequiredSubqueries,
     deferred: DeferredPredicates,
     ignore_comments: bool,
+    /// Node kinds the patterns are rooted at, when every pattern is one
+    /// node (see [`super::ast_gate::pattern_root_kinds`]): the query can then
+    /// run per node of those kinds. Sorted for binary search.
+    root_kinds: Option<Box<[u16]>>,
 }
 
 impl CompiledAstQuery {
@@ -566,7 +570,30 @@ pub(super) fn eval_ast_query_with_budget<'a>(
     ctx: &EvaluationContext<'a>,
     cpu_budget: std::time::Duration,
 ) -> ConditionResult {
-    eval_ast_query_once(query_str, ctx, cpu_budget)
+    eval_ast_query_once(query_str, ctx, cpu_budget, per_root_enabled())
+}
+
+/// `eval_ast_query` with the per-root walk forced on or off, for tests that
+/// compare the two walks.
+#[cfg(test)]
+pub(super) fn eval_ast_query_with_mode<'a>(
+    query_str: &str,
+    ctx: &EvaluationContext<'a>,
+    per_root: bool,
+) -> ConditionResult {
+    eval_ast_query_once(
+        query_str,
+        ctx,
+        ast_query_cpu_budget(query_str, ctx.deadline),
+        per_root,
+    )
+}
+
+/// Whether a rooted query walks per root node (`CLEAVE_AST_PER_ROOT`, on by
+/// default) rather than once over the whole tree.
+fn per_root_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| crate::env::bool_var("CLEAVE_AST_PER_ROOT").unwrap_or(true))
 }
 
 /// Run `query_str` on `ctx` again for its cost alone: validation confirms a
@@ -582,6 +609,7 @@ pub(crate) fn remeasure_ast_query(
         query_str,
         ctx,
         ast_query_cpu_budget(query_str, ctx.deadline),
+        per_root_enabled(),
     );
     let cost = probe.cost();
     drop(probe);
@@ -601,6 +629,7 @@ fn eval_ast_query_once<'a>(
     query_str: &str,
     ctx: &EvaluationContext<'a>,
     cpu_budget: std::time::Duration,
+    per_root: bool,
 ) -> ConditionResult {
     if let Some(cache) = ctx.ast_query_cache
         && let Some(cached) = cache.get(query_str)
@@ -727,20 +756,16 @@ fn eval_ast_query_once<'a>(
     // Set limits to prevent runaway queries on pathological inputs.
     query_cursor.set_match_limit(AST_QUERY_MATCH_LIMIT);
     query_cursor.set_max_states_per_group(AST_QUERY_GROUP_STATE_LIMIT);
-    query_cursor.set_byte_range(0..source.len().min(AST_QUERY_BYTE_LIMIT));
-
-    let mut evidence = Vec::new();
+    let byte_limit = source.len().min(AST_QUERY_BYTE_LIMIT);
+    query_cursor.set_byte_range(0..byte_limit);
 
     // Bound the query by CPU time (not wall-clock) via the progress callback.
     // Without a bound, pathological inputs can burn minutes of CPU; with a
     // wall-clock bound, a thread descheduled under oversubscription gets cut off
     // spuriously and silently drops detections. CPU time avoids both.
-    let mut match_count: usize = 0;
-    let mut capture_count: usize = 0;
     let cpu_start = thread_cpu_time();
     let deadline = ctx.deadline;
     let timed_out = Cell::new(false);
-    let mut capture_limited = false;
     // Break out of a runaway query on any of three signals: the per-rule CPU
     // budget, the wall-clock deadline, or cooperative cancellation (SIGTERM).
     // The progress callback fires mid-query, so a single pathological pattern
@@ -776,53 +801,190 @@ fn eval_ast_query_once<'a>(
                 source.as_bytes(),
             )
         };
-    let options = tree_sitter::QueryCursorOptions::default()
-        .progress_callback(&mut progress_cb)
-        .capture_match_predicate(&mut capture_predicate);
-    let mut matches =
-        query_cursor.matches_with_options(query, tree.root_node(), source.as_bytes(), options);
-    'matches: while let Some(m) = matches.next() {
-        // Mirror the progress-callback guards between matches: cancellation and
-        // the wall-clock deadline stop work promptly; the CPU budget marks a
-        // genuine analysis-bomb timeout.
+    let mut sink = MatchSink {
+        evidence_capture,
+        source: source.as_bytes(),
+        evidence: Vec::new(),
+        match_count: 0,
+        capture_count: 0,
+        capture_limited: false,
+    };
+    // Mirror the progress-callback guards between matches: cancellation and
+    // the wall-clock deadline stop work promptly; the CPU budget marks a
+    // genuine analysis-bomb timeout.
+    let stop = || -> bool {
         if ctx.is_cancelled() || deadline.is_some_and(|dl| Instant::now() > dl) {
-            break;
+            return true;
         }
         if thread_cpu_time().saturating_sub(cpu_start) >= cpu_budget {
             timed_out.set(true);
-            break;
+            return true;
         }
+        false
+    };
+    let mut exceeded_match_limit = false;
+    match compiled.root_kinds.as_deref().filter(|_| per_root) {
+        // One cursor run per node the patterns can be rooted at, each
+        // confined to starting there (`max_start_depth` 0), so the cursor
+        // only descends as far as that node's own match needs. A whole-tree
+        // walk keeps one in-progress state per open candidate root, and on
+        // a deeply nested tree -- a 5 MB JSFuck expression nests calls and
+        // subscripts thousands of levels -- a self-nesting pattern such as
+        // `(call_expression function: (subscript_expression))` holds
+        // thousands of states at once: the shared batch drops it at its
+        // state cap, and the walk alone then spends its whole CPU budget on
+        // a partial result (87 s to finish). Per root, each run holds one
+        // state and the file costs the walk. The matches are the same set:
+        // a rooted pattern matches at exactly the nodes of its root kind.
+        // Only their order differs (an enclosing root now comes before the
+        // roots inside it), which matters to nothing but which of more
+        // than MAX_EVIDENCE_PER_TRAIT matches are kept as evidence.
+        Some(root_kinds) => {
+            query_cursor.set_max_start_depth(Some(0));
+            let mut walk = tree.walk();
+            let mut visited: usize = 0;
+            'roots: loop {
+                let node = walk.node();
+                // Nodes starting past the byte limit cannot intersect it.
+                if node.start_byte() < byte_limit {
+                    if root_kinds.binary_search(&node.kind_id()).is_ok() {
+                        let options = tree_sitter::QueryCursorOptions::default()
+                            .progress_callback(&mut progress_cb)
+                            .capture_match_predicate(&mut capture_predicate);
+                        let mut matches = query_cursor.matches_with_options(
+                            query,
+                            node,
+                            source.as_bytes(),
+                            options,
+                        );
+                        while let Some(m) = matches.next() {
+                            if stop() || sink.accept(m).is_break() {
+                                break 'roots;
+                            }
+                        }
+                        drop(matches);
+                        exceeded_match_limit |= query_cursor.did_exceed_match_limit();
+                        if timed_out.get() || ctx.is_cancelled() {
+                            break 'roots;
+                        }
+                    }
+                    visited += 1;
+                    if visited.is_multiple_of(4096) && stop() {
+                        break 'roots;
+                    }
+                    if walk.goto_first_child() {
+                        continue;
+                    }
+                }
+                loop {
+                    if walk.goto_next_sibling() {
+                        continue 'roots;
+                    }
+                    if !walk.goto_parent() {
+                        break 'roots;
+                    }
+                }
+            }
+        }
+        None => {
+            let options = tree_sitter::QueryCursorOptions::default()
+                .progress_callback(&mut progress_cb)
+                .capture_match_predicate(&mut capture_predicate);
+            let mut matches = query_cursor.matches_with_options(
+                query,
+                tree.root_node(),
+                source.as_bytes(),
+                options,
+            );
+            while let Some(m) = matches.next() {
+                if stop() || sink.accept(m).is_break() {
+                    break;
+                }
+            }
+            drop(matches);
+            exceeded_match_limit = query_cursor.did_exceed_match_limit();
+        }
+    }
+    let MatchSink {
+        evidence,
+        match_count,
+        capture_limited,
+        ..
+    } = sink;
+    let mut warnings = Vec::new();
+    if has_parse_errors {
+        warnings.push(AnalysisWarning::AstParseError);
+    }
+    if timed_out.get() {
+        warnings.push(AnalysisWarning::AstTooDeep { max_depth: 0 });
+    }
+    if exceeded_match_limit || capture_limited {
+        warnings.push(AnalysisWarning::AstQueryLimited {
+            limit: if capture_limited {
+                AST_QUERY_CAPTURE_LIMIT
+            } else {
+                AST_QUERY_MATCH_LIMIT as usize
+            },
+        });
+    }
+    ConditionResult {
+        matched: match_count > 0,
+        evidence,
+        match_count,
+        warnings,
+        precision: 2.0, // Tree-sitter queries are complex and specific
+        matched_trait_ids: Vec::new(),
+    }
+}
+
+/// Collects one standalone query's matches into evidence and counts, the
+/// same way whether the cursor ran once over the tree or once per root.
+struct MatchSink<'s> {
+    evidence_capture: Option<u32>,
+    source: &'s [u8],
+    evidence: Vec<Evidence>,
+    match_count: usize,
+    capture_count: usize,
+    capture_limited: bool,
+}
+
+impl MatchSink<'_> {
+    /// `Break` once no further match can change the result.
+    fn accept(&mut self, m: &tree_sitter::QueryMatch<'_, '_>) -> ControlFlow<()> {
         // Standalone predicate patterns can yield empty-capture matches.
         // They are not an observed source occurrence and must not satisfy a trait.
         if m.captures().is_empty()
-            || evidence_capture.is_some_and(|selected| {
+            || self.evidence_capture.is_some_and(|selected| {
                 !m.captures().iter().any(|capture| capture.index == selected)
             })
         {
-            continue;
+            return ControlFlow::Continue(());
         }
         // QueryMatches already checks the built-in text predicates.
 
         // Count complete query matches once; captures provide evidence and
         // have their own work bound. A four-capture query is one occurrence.
-        if capture_count >= AST_QUERY_CAPTURE_LIMIT {
-            capture_limited = true;
-            break 'matches;
+        if self.capture_count >= AST_QUERY_CAPTURE_LIMIT {
+            self.capture_limited = true;
+            return ControlFlow::Break(());
         }
-        match_count += 1;
+        self.match_count += 1;
         for capture in m.captures() {
-            if capture_count >= AST_QUERY_CAPTURE_LIMIT {
-                capture_limited = true;
-                break 'matches;
+            if self.capture_count >= AST_QUERY_CAPTURE_LIMIT {
+                self.capture_limited = true;
+                return ControlFlow::Break(());
             }
-            capture_count += 1;
-            if evidence_capture.is_some_and(|selected| capture.index != selected) {
+            self.capture_count += 1;
+            if self
+                .evidence_capture
+                .is_some_and(|selected| capture.index != selected)
+            {
                 continue;
             }
-            if let Ok(text) = capture.node.utf8_text(source.as_bytes())
-                && evidence.len() < MAX_EVIDENCE_PER_TRAIT
+            if let Ok(text) = capture.node.utf8_text(self.source)
+                && self.evidence.len() < MAX_EVIDENCE_PER_TRAIT
             {
-                evidence.push(Evidence {
+                self.evidence.push(Evidence {
                     method: "ast_query".to_string(),
                     source: "tree-sitter".to_string(),
                     value: truncate_evidence(text, 100),
@@ -841,40 +1003,40 @@ fn eval_ast_query_once<'a>(
         // continuing to enumerate every valid alignment can burn the whole
         // per-query CPU budget after the trait has already matched.
         if !super::symbol_string::match_count_needed() {
-            break 'matches;
+            return ControlFlow::Break(());
         }
         // Floor-only count filters already satisfied and the evidence list
         // full: later matches change neither verdict nor output.
-        if match_count >= super::symbol_string::match_count_bound()
-            && evidence.len() >= MAX_EVIDENCE_PER_TRAIT
+        if self.match_count >= super::symbol_string::match_count_bound()
+            && self.evidence.len() >= MAX_EVIDENCE_PER_TRAIT
         {
-            break 'matches;
+            return ControlFlow::Break(());
         }
+        ControlFlow::Continue(())
     }
-    let mut warnings = Vec::new();
-    if has_parse_errors {
-        warnings.push(AnalysisWarning::AstParseError);
+}
+
+/// The node kinds `query` can be rooted at, as sorted grammar ids, when every
+/// pattern is one named node (see `pattern_root_kinds`). Supertypes and
+/// unknown kinds disqualify: no node carries a supertype's id.
+fn per_root_kinds(
+    lang: &tree_sitter::Language,
+    query: &tree_sitter::Query,
+    source: &str,
+) -> Option<Box<[u16]>> {
+    if (0..query.pattern_count()).any(|pattern| !query.is_pattern_rooted(pattern)) {
+        return None;
     }
-    if timed_out.get() {
-        warnings.push(AnalysisWarning::AstTooDeep { max_depth: 0 });
-    }
-    if query_cursor.did_exceed_match_limit() || capture_limited {
-        warnings.push(AnalysisWarning::AstQueryLimited {
-            limit: if capture_limited {
-                AST_QUERY_CAPTURE_LIMIT
-            } else {
-                AST_QUERY_MATCH_LIMIT as usize
-            },
-        });
-    }
-    ConditionResult {
-        matched: match_count > 0,
-        evidence,
-        match_count,
-        warnings,
-        precision: 2.0, // Tree-sitter queries are complex and specific
-        matched_trait_ids: Vec::new(),
-    }
+    let mut ids = super::ast_gate::pattern_root_kinds(source)?
+        .into_iter()
+        .map(|kind| {
+            let id = lang.id_for_node_kind(kind, true);
+            (id != 0 && !lang.node_kind_is_supertype(id)).then_some(id)
+        })
+        .collect::<Option<Vec<u16>>>()?;
+    ids.sort_unstable();
+    ids.dedup();
+    Some(ids.into_boxed_slice())
 }
 
 fn cached_ast_query(
@@ -920,6 +1082,7 @@ fn cached_ast_query(
         };
         let deferred = DeferredPredicates::of(&query, query_str);
         let ignore_comments = super::ast_comment_view::requested(&query);
+        let root_kinds = per_root_kinds(lang, &query, query_str);
         Arc::new(CompiledAstQuery {
             query,
             deferred,
@@ -927,6 +1090,7 @@ fn cached_ast_query(
             nodes,
             subqueries,
             ignore_comments,
+            root_kinds,
         })
     });
     if let Some(started) = compile_started {
@@ -948,6 +1112,32 @@ const COMBINED_AST_QUERY_GROUP_STATE_LIMIT: u32 = 64;
 /// The shared batch walk's CPU budget is the per-query budget times the
 /// active queries it stands in for, up to this many (12 x 5 s = 60 s).
 const BATCH_CPU_BUDGET_MAX_QUERIES: usize = 12;
+/// Trees nested at least this deep run the shared batch per root node
+/// (`CLEAVE_AST_BATCH_PER_ROOT_DEPTH`). One whole-tree cursor keeps up to
+/// `COMBINED_AST_QUERY_GROUP_STATE_LIMIT` live states per pattern for every
+/// level of nesting of its root kind, and visits each node against all of
+/// them: a 5 MB JSFuck expression nested past 1,000 levels burned the whole
+/// 60 s budget without settling any of its 27 active queries. Per root, each
+/// run holds one state per pattern and only descends as far as that root's
+/// own match needs.
+const BATCH_PER_ROOT_DEPTH: u32 = 512;
+
+fn batch_per_root_depth() -> u32 {
+    #[cfg(test)]
+    if let Some(depth) = BATCH_PER_ROOT_DEPTH_OVERRIDE.with(Cell::get) {
+        return depth;
+    }
+    static DEPTH: OnceLock<u32> = OnceLock::new();
+    *DEPTH.get_or_init(|| {
+        crate::env::parse::<u32>("CLEAVE_AST_BATCH_PER_ROOT_DEPTH").unwrap_or(BATCH_PER_ROOT_DEPTH)
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test override for [`batch_per_root_depth`] on this thread.
+    pub(super) static BATCH_PER_ROOT_DEPTH_OVERRIDE: Cell<Option<u32>> = const { Cell::new(None) };
+}
 
 /// Run every applicable `query:` in one `QueryCursor` walk. `None` means
 /// "do not use a batch" — caller keeps the per-trait `eval_ast_query` path
@@ -1150,7 +1340,7 @@ pub(crate) fn batch_ast_queries_with_index(
     // literal gates only disable patterns on a private copy; they must not
     // create another expensive ts_query_new for each surviving subset, or
     // mutate the shared query observed by concurrent archive workers.
-    let narrowed = pattern_active.iter().any(|&enabled| !enabled).then(|| {
+    let mut narrowed = pattern_active.iter().any(|&enabled| !enabled).then(|| {
         let mut query = combined.query.deep_clone();
         for (pattern, &enabled) in pattern_active.iter().enumerate() {
             if !enabled {
@@ -1158,6 +1348,36 @@ pub(crate) fn batch_ast_queries_with_index(
             }
         }
         query
+    });
+    // On a deep tree the shared walk runs once per node of the kinds the
+    // queries are rooted at. A query not rooted at one kind (sibling
+    // patterns, alternation or wildcard roots) cannot be served that way
+    // and walks alone like a query the gates left out.
+    let per_root_kinds = (node_text.max_depth() >= batch_per_root_depth()).then(|| {
+        let mut query = narrowed
+            .take()
+            .unwrap_or_else(|| combined.query.deep_clone());
+        let mut kinds = Vec::new();
+        for (qi, (_, compiled)) in compiling.iter().enumerate() {
+            if !active[qi] {
+                continue;
+            }
+            match compiled.root_kinds.as_deref() {
+                Some(root_kinds) => kinds.extend_from_slice(root_kinds),
+                None => {
+                    active[qi] = false;
+                    for (pattern, &owner) in combined.pattern_to_query.iter().enumerate() {
+                        if owner == qi {
+                            query.disable_pattern(pattern);
+                        }
+                    }
+                }
+            }
+        }
+        kinds.sort_unstable();
+        kinds.dedup();
+        narrowed = Some(query);
+        kinds
     });
     let query = narrowed.as_ref().unwrap_or(&combined.query);
     let shared_evidence_capture = query
@@ -1223,8 +1443,9 @@ pub(crate) fn batch_ast_queries_with_index(
         .min()
         .unwrap_or(AST_QUERY_CPU_BUDGET);
     let active_queries = active.iter().filter(|&&enabled| enabled).count();
-    let default_cpu_budget = per_query_budget
-        .saturating_mul(u32::try_from(active_queries.clamp(1, BATCH_CPU_BUDGET_MAX_QUERIES)).unwrap_or(1));
+    let default_cpu_budget = per_query_budget.saturating_mul(
+        u32::try_from(active_queries.clamp(1, BATCH_CPU_BUDGET_MAX_QUERIES)).unwrap_or(1),
+    );
     // Diagnostic override for measuring the cost of repeated standalone
     // walks after the shared batch reaches its CPU budget. An unfinished
     // query still falls back to its ordinary per-query budget below.
@@ -1267,48 +1488,36 @@ pub(crate) fn batch_ast_queries_with_index(
                 source.as_bytes(),
             )
         };
-    let options = tree_sitter::QueryCursorOptions::default()
-        .progress_callback(&mut progress_cb)
-        .capture_match_predicate(&mut capture_predicate);
-    let mut matches =
-        query_cursor.matches_with_options(query, tree.root_node(), source.as_bytes(), options);
-    while let Some(m) = matches.next() {
-        if cancelled() || deadline.is_some_and(|dl| Instant::now() > dl) {
-            return None;
-        }
-        if thread_cpu_time().saturating_sub(cpu_start) >= cpu_budget {
-            timed_out.set(true);
-            break;
-        }
+    // One match's bookkeeping, shared by both walks. Patterns to switch off
+    // on the cursor come back in `disable`: the match borrows the cursor's
+    // iterator, so they are applied after it is released.
+    let mut accept = |m: &tree_sitter::QueryMatch<'_, '_>, disable: &mut Vec<usize>| {
         if m.captures().is_empty() {
-            continue;
+            return;
         }
         let Some(&qi) = combined.pattern_to_query.get(m.pattern_index) else {
-            continue;
+            return;
         };
         let evidence_capture = evidence_captures[qi];
         if evidence_capture
             .is_some_and(|selected| !m.captures().iter().any(|capture| capture.index == selected))
         {
-            continue;
+            return;
         }
         let bucket = &mut buckets[qi];
         if bucket.complete || bucket.capture_limited || bucket.match_limited {
-            let pattern = m.pattern_index;
-            matches.disable_pattern(pattern);
-            continue;
+            disable.push(m.pattern_index);
+            return;
         }
         if bucket.query_matches >= AST_QUERY_MATCH_LIMIT as usize {
             bucket.match_limited = true;
-            let pattern = m.pattern_index;
-            matches.disable_pattern(pattern);
-            continue;
+            disable.push(m.pattern_index);
+            return;
         }
         if bucket.capture_count >= AST_QUERY_CAPTURE_LIMIT {
             bucket.capture_limited = true;
-            let pattern = m.pattern_index;
-            matches.disable_pattern(pattern);
-            continue;
+            disable.push(m.pattern_index);
+            return;
         }
         bucket.query_matches += 1;
         bucket.match_count += 1;
@@ -1344,7 +1553,113 @@ pub(crate) fn batch_ast_queries_with_index(
             // mutating the shared compiled Query or the other queries' states.
             for (pattern, &owner) in combined.pattern_to_query.iter().enumerate() {
                 if owner == qi {
+                    disable.push(pattern);
+                }
+            }
+        }
+    };
+    let over_budget = || thread_cpu_time().saturating_sub(cpu_start) >= cpu_budget;
+    let mut disable = Vec::new();
+    // Patterns whose states were abandoned (the per-group state cap or the
+    // shared capture-list pool): their queries have partial results.
+    let mut exceeded = vec![false; n];
+    let note_exceeded = |query_cursor: &tree_sitter::QueryCursor, exceeded: &mut [bool]| {
+        if query_cursor.did_exceed_match_limit() {
+            for (pattern, &qi) in combined.pattern_to_query.iter().enumerate() {
+                if query_cursor.pattern_exceeded(pattern) {
+                    exceeded[qi] = true;
+                }
+            }
+        }
+    };
+    match per_root_kinds.as_deref() {
+        None => {
+            let options = tree_sitter::QueryCursorOptions::default()
+                .progress_callback(&mut progress_cb)
+                .capture_match_predicate(&mut capture_predicate);
+            let mut matches = query_cursor.matches_with_options(
+                query,
+                tree.root_node(),
+                source.as_bytes(),
+                options,
+            );
+            while let Some(m) = matches.next() {
+                if cancelled() || deadline.is_some_and(|dl| Instant::now() > dl) {
+                    return None;
+                }
+                if over_budget() {
+                    timed_out.set(true);
+                    break;
+                }
+                accept(m, &mut disable);
+                for pattern in disable.drain(..) {
                     matches.disable_pattern(pattern);
+                }
+            }
+            drop(matches);
+            note_exceeded(&query_cursor, &mut exceeded);
+        }
+        Some(root_kinds) => {
+            // As in `eval_ast_query_once`: each run may only start a match at
+            // the node it is given, and the walk is iterative so the depth
+            // that made the tree pathological costs no stack.
+            query_cursor.set_max_start_depth(Some(0));
+            let byte_limit = source.len().min(AST_QUERY_BYTE_LIMIT);
+            let mut walk = tree.walk();
+            let mut visited: usize = 0;
+            'roots: loop {
+                let node = walk.node();
+                if node.start_byte() < byte_limit {
+                    if root_kinds.binary_search(&node.kind_id()).is_ok() {
+                        let options = tree_sitter::QueryCursorOptions::default()
+                            .progress_callback(&mut progress_cb)
+                            .capture_match_predicate(&mut capture_predicate);
+                        let mut matches = query_cursor.matches_with_options(
+                            query,
+                            node,
+                            source.as_bytes(),
+                            options,
+                        );
+                        while let Some(m) = matches.next() {
+                            if cancelled() || deadline.is_some_and(|dl| Instant::now() > dl) {
+                                return None;
+                            }
+                            if over_budget() {
+                                timed_out.set(true);
+                                break 'roots;
+                            }
+                            accept(m, &mut disable);
+                            for pattern in disable.drain(..) {
+                                matches.disable_pattern(pattern);
+                            }
+                        }
+                        drop(matches);
+                        note_exceeded(&query_cursor, &mut exceeded);
+                        if timed_out.get() {
+                            break 'roots;
+                        }
+                    }
+                    visited += 1;
+                    if visited.is_multiple_of(4096) {
+                        if cancelled() || deadline.is_some_and(|dl| Instant::now() > dl) {
+                            return None;
+                        }
+                        if over_budget() {
+                            timed_out.set(true);
+                            break 'roots;
+                        }
+                    }
+                    if walk.goto_first_child() {
+                        continue;
+                    }
+                }
+                loop {
+                    if walk.goto_next_sibling() {
+                        continue 'roots;
+                    }
+                    if !walk.goto_parent() {
+                        break 'roots;
+                    }
                 }
             }
         }
@@ -1365,23 +1680,16 @@ pub(crate) fn batch_ast_queries_with_index(
         // Keep them so fallback does not re-run queries known to be impossible.
         return (!out.is_empty()).then_some(out);
     }
-    // A pattern whose states were abandoned (the per-group state cap or the
-    // shared capture-list pool) has partial results. Leave its query out of
-    // the map so `eval_ast_query` walks it alone with its own limits, and keep
-    // every other query's complete result rather than re-walking the tree
-    // once per query for all of them.
-    let mut exceeded = vec![false; n];
-    if query_cursor.did_exceed_match_limit() {
-        for (pattern, &qi) in combined.pattern_to_query.iter().enumerate() {
-            if query_cursor.pattern_exceeded(pattern) {
-                exceeded[qi] = true;
-            }
-        }
-    }
+    // A query with partial results (see `exceeded`) is left out of the map
+    // so `eval_ast_query` walks it alone with its own limits, and every other
+    // query keeps its complete result rather than re-walking the tree once
+    // per query for all of them.
 
     tracing::debug!(
         queries = n,
         active_queries = active.iter().filter(|&&enabled| enabled).count(),
+        per_root = per_root_kinds.is_some(),
+        tree_depth = node_text.max_depth(),
         limited_queries = exceeded.iter().filter(|&&limited| limited).count(),
         settled_queries = buckets.iter().filter(|b| b.complete).count(),
         source_bytes = source.len(),
@@ -1502,6 +1810,7 @@ mod cache_lock_tests {
             subqueries: RequiredSubqueries::default(),
             ignore_comments: false,
             deferred: DeferredPredicates::of(&query, pattern),
+            root_kinds: per_root_kinds(&language, &query, pattern),
             query,
         });
         QUERY_CACHE.write().insert(key, Some(compiled.clone()));

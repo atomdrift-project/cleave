@@ -359,6 +359,8 @@ pub(crate) struct NodeTextIndex(
     rustc_hash::FxHashSet<Box<str>>,
     Vec<std::ops::Range<usize>>,
     bool,
+    /// Deepest nesting the walk that filled this index saw (root = 0).
+    u32,
 );
 
 fn indexed_kind(kind: &str) -> bool {
@@ -383,6 +385,14 @@ fn indexed_kind(kind: &str) -> bool {
 impl NodeTextIndex {
     pub(crate) fn finish(&mut self) {
         self.3 = true;
+    }
+    /// Note a node at `depth` below the root; the deepest is kept.
+    pub(crate) fn note_depth(&mut self, depth: u32) {
+        self.4 = self.4.max(depth);
+    }
+    /// Deepest nesting of the tree this index was built from (root = 0).
+    pub(crate) fn max_depth(&self) -> u32 {
+        self.4
     }
     pub(super) fn for_statement_ranges(&self) -> Option<&[std::ops::Range<usize>]> {
         self.3.then_some(&self.2)
@@ -430,10 +440,13 @@ impl NodeTextIndex {
     pub(super) fn new(tree: &tree_sitter::Tree, source: &str) -> Self {
         let mut values = Self::default();
         let mut cursor = tree.walk();
+        let mut depth: u32 = 0;
         loop {
             let node = cursor.node();
             values.record_node(&node, source.as_bytes());
             if cursor.goto_first_child() {
+                depth += 1;
+                values.note_depth(depth);
                 continue;
             }
             loop {
@@ -444,6 +457,7 @@ impl NodeTextIndex {
                     values.finish();
                     return values;
                 }
+                depth -= 1;
             }
         }
     }
@@ -567,7 +581,7 @@ impl RequiredNodes {
 /// If the same capture occurs in an alternative shape, abandon its restriction. Predicates, comments and
 /// quoted node names are not capture declarations. Unknown syntax means less
 /// pruning, never a stronger claim about what the query can match.
-fn query_tokens(source: &str) -> Vec<&str> {
+pub(super) fn query_tokens(source: &str) -> Vec<&str> {
     query_token_spans(source)
         .into_iter()
         .map(|(token, _, _)| token)
@@ -607,6 +621,102 @@ fn query_token_spans(source: &str) -> Vec<(&str, usize, usize)> {
         }
     }
     tokens
+}
+
+/// The named node kind each pattern of `source` is rooted at, when every
+/// pattern is one node pattern, optionally captured and optionally grouped
+/// with predicates, as in `(call_expression ...) @call` or
+/// `((identifier) @id (#match? @id "x"))`. Such a query can run once per node
+/// of those kinds instead of once over the whole tree (see
+/// `eval_ast_query_once`). `None` for anything else -- sibling patterns,
+/// alternation or wildcard roots, anonymous roots, quantified roots -- and
+/// for syntax this reader does not understand: unknown shapes get the whole
+/// tree walk, never a root set that could miss a match.
+pub(super) fn pattern_root_kinds(source: &str) -> Option<Vec<&str>> {
+    let tokens = query_tokens(source);
+    if tokens.is_empty() {
+        return None;
+    }
+    let mut closes = vec![usize::MAX; tokens.len()];
+    let mut stack = Vec::new();
+    for (i, &token) in tokens.iter().enumerate() {
+        match token {
+            "(" | "[" => stack.push(i),
+            ")" | "]" => closes[stack.pop()?] = i,
+            _ => {}
+        }
+    }
+    if !stack.is_empty() {
+        return None;
+    }
+    // A pattern's optional captures, then a quantifier that would make it
+    // a sibling sequence rather than one node.
+    let after_captures = |mut i: usize| {
+        while tokens.get(i).is_some_and(|t| t.starts_with('@')) {
+            i += 1;
+        }
+        i
+    };
+    let quantified = |i: usize| matches!(tokens.get(i), Some(&"?" | &"*" | &"+"));
+    fn root_of_list<'a>(
+        tokens: &[&'a str],
+        closes: &[usize],
+        open: usize,
+        after_captures: &dyn Fn(usize) -> usize,
+        quantified: &dyn Fn(usize) -> bool,
+    ) -> Option<&'a str> {
+        let head = *tokens.get(open + 1)?;
+        if head != "(" {
+            return (head != "_"
+                && !head.is_empty()
+                && head.chars().all(|c| c.is_alphanumeric() || c == '_'))
+            .then_some(head);
+        }
+        // A group: exactly one node pattern beside its predicates.
+        let close = closes[open];
+        let mut root = None;
+        let mut i = open + 1;
+        while i < close {
+            let token = tokens[i];
+            if token == "(" {
+                let inner_close = closes[i];
+                if tokens.get(i + 1).is_some_and(|t| t.starts_with('#')) {
+                    i = inner_close + 1;
+                    continue;
+                }
+                if root.is_some() {
+                    return None;
+                }
+                root = Some(root_of_list(tokens, closes, i, after_captures, quantified)?);
+                i = after_captures(inner_close + 1);
+                if quantified(i) {
+                    return None;
+                }
+                continue;
+            }
+            return None;
+        }
+        root
+    }
+    let mut kinds = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        if tokens[i] != "(" {
+            return None;
+        }
+        kinds.push(root_of_list(
+            &tokens,
+            &closes,
+            i,
+            &after_captures,
+            &quantified,
+        )?);
+        i = after_captures(closes[i] + 1);
+        if quantified(i) {
+            return None;
+        }
+    }
+    Some(kinds)
 }
 
 /// Necessary named node kinds, even when the query does not capture them.

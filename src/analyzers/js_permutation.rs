@@ -5,6 +5,7 @@
 //! dictionary decoder have values. Unknown calls/writes end reconstruction.
 use std::collections::HashMap;
 use tree_sitter::Node;
+mod inner;
 
 const MAX_SOURCE: usize = 4 * 1024 * 1024;
 const MAX_OUTPUT: usize = 1024 * 1024;
@@ -121,6 +122,21 @@ fn signature_with_globals(
             return None;
         }
         if matches!(n.kind(), "comment" | "empty_statement") {
+            return Some(());
+        }
+        if n.kind() == "parenthesized_expression" && Some(n.id()) != seed {
+            return visit(
+                *children(n).first()?,
+                source,
+                locals,
+                seed,
+                output,
+                depth + 1,
+                globals,
+            );
+        }
+        if Some(n.id()) == seed {
+            output.push_str("(SEED)");
             return Some(());
         }
         output.push('(');
@@ -635,7 +651,8 @@ fn reduce_literal_table(source: &str) -> Option<String> {
     if root.has_error() {
         return None;
     }
-    literal_table(source, root, &nodes(root)?)
+    let literal = literal_table(source, root, &nodes(root)?)?;
+    Some(inner::reduce(&literal).unwrap_or(literal))
 }
 
 pub(crate) fn decode(source: &str) -> Vec<(usize, String)> {
@@ -664,6 +681,7 @@ pub(crate) fn decode(source: &str) -> Vec<(usize, String)> {
     let mut output = Vec::new();
     let mut budget = MAX_OUTPUT;
     if let Some(table) = literal_table(source, ast.tree.root_node(), &all) {
+        let table = inner::reduce(&table).unwrap_or(table);
         budget = budget.saturating_sub(table.len());
         output.push((0, table));
     }

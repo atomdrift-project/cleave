@@ -4166,12 +4166,13 @@ pub(crate) fn find_string_content_collisions(
 #[must_use]
 pub(crate) fn find_for_only_duplicates(
     trait_definitions: &[TraitDefinition],
+    rule_source_files: &HashMap<String, String>,
 ) -> Vec<(Vec<String>, String)> {
     let mut duplicates = Vec::new();
 
     // Create signature excluding `for:` field but including everything else
     // Key: (if, crit, conf, platforms, size_min, size_max, not, unless) -> Vec<(trait_id, for)>
-    let mut groups: HashMap<String, Vec<(String, Vec<RuleFileType>, Vec<Platform>)>> =
+    let mut groups: HashMap<String, Vec<(&TraitDefinition, Vec<RuleFileType>, Vec<Platform>)>> =
         HashMap::new();
 
     for t in trait_definitions {
@@ -4186,11 +4187,10 @@ pub(crate) fn find_for_only_duplicates(
             t.crit,
             t.conf.to_bits(),
         );
-        groups.entry(signature).or_default().push((
-            t.id.clone(),
-            t.r#for.clone(),
-            t.platforms.clone(),
-        ));
+        groups
+            .entry(signature)
+            .or_default()
+            .push((t, t.r#for.clone(), t.platforms.clone()));
     }
 
     // Report a group when its members differ in `for:`, in `platforms:`, or both.
@@ -4208,7 +4208,7 @@ pub(crate) fn find_for_only_duplicates(
             // actually available: this tree separately caps a trait at four
             // platforms, so a union that would breach that cap is not a
             // duplicate to collapse but a deliberate per-platform split. A
-            // `for:` difference has no such cap and is always reportable.
+            // File-type scopes are also subject to matcher-specific caps.
             let union_platforms: HashSet<String> = traits
                 .iter()
                 .flat_map(|(_, _, p)| p.iter().map(|x| format!("{x:?}")))
@@ -4218,8 +4218,40 @@ pub(crate) fn find_for_only_duplicates(
             // union would breach the cap is a deliberate per-platform split --
             // reporting it would ask the author to trade one validation error
             // for another.
-            if mergeable_platforms && (unique_fors.len() > 1 || unique_platforms.len() > 1) {
-                let trait_ids: Vec<String> = traits.into_iter().map(|(id, _, _)| id).collect();
+            let disjoint_fors = traits.iter().enumerate().all(|(i, (_, a, _))| {
+                !a.is_empty()
+                    && !a.contains(&RuleFileType::All)
+                    && traits.iter().skip(i + 1).all(|(_, b, _)| {
+                        !b.is_empty()
+                            && !b.contains(&RuleFileType::All)
+                            && !a.iter().any(|f| b.contains(f))
+                    })
+            });
+            let mut merged = traits[0].0.clone();
+            merged.r#for.clear();
+            for (_, types, _) in &traits {
+                for ty in types {
+                    if !merged.r#for.contains(ty) {
+                        merged.r#for.push(*ty);
+                    }
+                }
+            }
+            // A merge can be placed in any of the source files. Reuse the actual
+            // file-type validator, including its source-specific exceptions.
+            let mergeable_filetypes = traits.iter().any(|(t, _, _)| {
+                merged.id.clone_from(&t.id);
+                super::taxonomy::find_broad_filetype_traits(
+                    std::slice::from_ref(&merged),
+                    rule_source_files,
+                )
+                .is_empty()
+            });
+            if mergeable_platforms
+                && (unique_fors.len() > 1 || unique_platforms.len() > 1)
+                && (!disjoint_fors || mergeable_filetypes)
+            {
+                let trait_ids: Vec<String> =
+                    traits.into_iter().map(|(t, _, _)| t.id.clone()).collect();
 
                 // Extract a brief pattern description from the signature
                 let pattern_desc = if sig.len() > 100 {
@@ -5742,11 +5774,32 @@ mod canonical_atomic_duplicate_tests {
     }
 
     #[test]
+    fn scope_duplicates_respect_filetype_caps() {
+        let (mut a, mut b) = dos_pair();
+        b.conf = a.conf;
+        a.r#for = vec![RuleFileType::DosCom, RuleFileType::StaticLib];
+        b.r#for = vec![RuleFileType::Data, RuleFileType::Shell];
+        let sources = HashMap::new();
+        assert!(find_for_only_duplicates(&[a.clone(), b.clone()], &sources).is_empty());
+        b.r#for.pop();
+        assert_eq!(
+            find_for_only_duplicates(&[a.clone(), b.clone()], &sources).len(),
+            1
+        );
+        b.r#for = vec![
+            RuleFileType::DosCom,
+            RuleFileType::Data,
+            RuleFileType::Shell,
+        ];
+        assert_eq!(find_for_only_duplicates(&[a, b], &sources).len(), 1);
+    }
+
+    #[test]
     fn confidence_is_not_rounded_away() {
         let (a, mut b) = dos_pair();
         b.conf = 0.881;
         // Scope-only cannot assume these verdict confidences are identical.
-        assert!(find_for_only_duplicates(&[a.clone(), b.clone()]).is_empty());
+        assert!(find_for_only_duplicates(&[a.clone(), b.clone()], &HashMap::new()).is_empty());
         assert_eq!(find_atomic_logic_duplicates(&[a, b]).len(), 1);
     }
 
@@ -5767,7 +5820,7 @@ mod canonical_atomic_duplicate_tests {
         arm.arch = vec![Arch::Arm];
         assert!(find_atomic_logic_duplicates(&[x86.clone(), arm.clone()]).is_empty());
         arm.conf = x86.conf;
-        assert!(find_for_only_duplicates(&[x86.clone(), arm.clone()]).is_empty());
+        assert!(find_for_only_duplicates(&[x86.clone(), arm.clone()], &HashMap::new()).is_empty());
         arm.r#for = x86.r#for.clone();
         let mut exact = Vec::new();
         find_duplicate_atomic_traits(&[x86, arm], &mut exact);
@@ -5846,7 +5899,7 @@ mod canonical_atomic_duplicate_tests {
         let mut exact = Vec::new();
         find_duplicate_atomic_traits(&[a.clone(), b.clone()], &mut exact);
         assert!(exact.is_empty());
-        assert!(find_for_only_duplicates(&[a.clone(), b.clone()]).is_empty());
+        assert!(find_for_only_duplicates(&[a.clone(), b.clone()], &HashMap::new()).is_empty());
         assert!(find_atomic_logic_duplicates(&[a, b]).is_empty());
     }
 
@@ -5864,7 +5917,7 @@ mod canonical_atomic_duplicate_tests {
         let mut exact = Vec::new();
         find_duplicate_atomic_traits(&[a.clone(), b.clone()], &mut exact);
         assert!(exact.is_empty());
-        assert!(find_for_only_duplicates(&[a.clone(), b.clone()]).is_empty());
+        assert!(find_for_only_duplicates(&[a.clone(), b.clone()], &HashMap::new()).is_empty());
         let issues = find_atomic_logic_duplicates(&[a, b]);
         assert_eq!(issues.len(), 1);
         assert!(issues[0].2.contains("downgrade: differs"));

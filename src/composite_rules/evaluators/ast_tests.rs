@@ -323,6 +323,46 @@ fn test_eval_ast_unsupported_file_type() {
     assert!(!result.matched);
 }
 
+/// Simple mode answers "no match" without a walk when the file lacks a
+/// literal the pattern requires, but a callee name assembled from identifiers
+/// across whitespace (`web3 .eth` + newline + `.accounts.sign`) is not a
+/// verbatim slice of the source: only its `.`-free pieces are, and only those
+/// gate.
+#[test]
+fn simple_mode_gates_on_required_literals_without_losing_assembled_names() {
+    let report = create_test_report("/test/sign.js");
+    let eval = |source: &str, substr: Option<&str>, regex: Option<&str>, ci: bool| {
+        let parsed = parsed_for_test("sign.js", source.as_bytes());
+        let ctx =
+            create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::JavaScript);
+        eval_ast(Some("call"), None, None, substr, regex, None, ci, &ctx).matched
+    };
+    let sign = Some(r"^web3\.eth\.accounts\.sign$");
+    assert!(eval(
+        "web3.eth.accounts.sign(message, key);",
+        None,
+        sign,
+        false
+    ));
+    assert!(eval(
+        "web3 .eth\n  .accounts.sign(message, key);",
+        None,
+        sign,
+        false
+    ));
+    assert!(!eval(
+        "web3.eth.personal.sign(message, key);",
+        None,
+        sign,
+        false
+    ));
+
+    assert!(eval("runCommand(x);", Some("Command"), None, false));
+    assert!(!eval("runTask(x);", Some("Command"), None, false));
+    // Unicode lowercasing folds the Kelvin sign to `k`: never gated.
+    assert!(eval("\u{212A}ill(x);", Some("kill"), None, true));
+}
+
 #[test]
 fn test_eval_ast_python_function_call() {
     let report = create_test_report("/test/script.py");
@@ -1421,7 +1461,7 @@ fn js_query_admits(query: &str, text: &str) -> bool {
     let tree = parsed.source_ast().expect("JavaScript parses").tree;
     let compiled = tree_sitter::Query::new(&tree.language(), query).expect("query compiles");
     super::ast_gate::RequiredLiterals::of(&compiled, query)
-        .may_match(|literal| memchr::memmem::find(text.as_bytes(), literal).is_some())
+        .may_match(|literal, ci| super::ast_gate::source_contains(text.as_bytes(), literal, ci))
 }
 
 #[test]
@@ -1452,9 +1492,10 @@ fn ast_gate_never_requires_what_a_match_may_lack() {
         r#"((identifier) @f (#not-eq? @f "eval"))"#,
         r#"((identifier) @f (#any-eq? @f "eval"))"#,
         r#"((identifier) @f (#not-match? @f "eval"))"#,
-        // No case-sensitive literal, or one too short to extract.
-        r#"((identifier) @f (#match? @f "(?i)eval"))"#,
+        // A literal too short to extract, or a case-insensitive one whose
+        // folding reaches beyond ASCII (`k` also matches the Kelvin sign, `s` the long s).
         r#"((identifier) @f (#match? @f "^ev"))"#,
+        r#"((identifier) @f (#match? @f "(?i)skks"))"#,
         // A capture-to-capture comparison names no literal.
         r#"((call_expression function: (identifier) @f arguments: (arguments (identifier) @a)) (#eq? @f @a))"#,
         // Commented out: not a predicate tree-sitter applies.
@@ -1462,6 +1503,25 @@ fn ast_gate_never_requires_what_a_match_may_lack() {
     ] {
         assert!(js_query_admits(query, ""), "must not gate: {query}");
     }
+}
+
+/// `#match?` regexes gate on the literals every match contains anywhere, not
+/// just on a literal prefix: through optional groups and alternations, and
+/// ASCII-case-insensitively under `(?i)`.
+#[test]
+fn ast_gate_requires_mandatory_regex_atoms_anywhere() {
+    let optional_prefix = r#"((string_fragment) @s (#match? @s "^(node:)?dns$"))"#;
+    assert!(js_query_admits(optional_prefix, r#"require("dns")"#));
+    assert!(js_query_admits(optional_prefix, r#"require("node:dns")"#));
+    assert!(!js_query_admits(optional_prefix, r#"require("net")"#));
+
+    let alternation = r#"((identifier) @f (#match? @f "^(execSync|spawnSync)$"))"#;
+    assert!(js_query_admits(alternation, "spawnSync(cmd)"));
+    assert!(!js_query_admits(alternation, "exec(cmd)"));
+
+    let folded = r#"((comment) @c (#match? @c "(?i)hide (the |this )?secret"))"#;
+    assert!(js_query_admits(folded, "// HIDE the SECRET"));
+    assert!(!js_query_admits(folded, "// show it"));
 }
 
 #[test]

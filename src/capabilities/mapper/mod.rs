@@ -1107,6 +1107,7 @@ pub(super) fn fill_symbol_evidence_locations(
 // Extracted modules
 pub(crate) mod builder;
 pub(crate) mod change_scope;
+pub(crate) mod rule_shape;
 pub use builder::LoadOptions;
 pub(crate) mod doomed_skip;
 pub(crate) mod evaluate_composites;

@@ -127,7 +127,7 @@ impl CompiledAstQuery {
     /// proves the query cannot match, so the walk can be skipped.
     fn may_match(&self, source: &[u8]) -> bool {
         self.literals
-            .may_match(|literal| memchr::memmem::find(source, literal).is_some())
+            .may_match(|literal, ci| super::ast_gate::source_contains(source, literal, ci))
     }
 }
 
@@ -275,6 +275,13 @@ pub(crate) fn eval_ast<'a>(
         return ConditionResult::no_match();
     }
 
+    // A literal the pattern requires that the file lacks: no node can match.
+    if let Some(source) = ctx.ast_source()
+        && !simple_pattern_may_match(source.as_bytes(), pattern, match_mode, case_insensitive)
+    {
+        return ConditionResult::no_match();
+    }
+
     // Idea 9: Use batch AST cache if available
     if let Some(cache) = ctx.ast_kind_cache {
         let mut evidence = Vec::new();
@@ -363,6 +370,46 @@ pub(crate) fn eval_ast<'a>(
         case_insensitive,
         ctx.deadline,
     )
+}
+
+/// Whether a simple-mode pattern could match some node of `source`.
+///
+/// Every string a node is tested against comes from the source: its text,
+/// possibly truncated with a `...` suffix, or, for a call, a callee name
+/// assembled from source identifiers joined by `.`. So each `.`-free piece of
+/// a literal the pattern requires occurs in the source verbatim. Pieces under
+/// 3 bytes are not looked for. `false` proves no match; anything this cannot
+/// reason about answers `true`.
+fn simple_pattern_may_match(
+    source: &[u8],
+    pattern: &str,
+    match_mode: MatchMode,
+    case_insensitive: bool,
+) -> bool {
+    let requirement: Option<Vec<(Box<[u8]>, bool)>> = match match_mode {
+        // The condition's flag compiles the regex case-insensitively; the
+        // atoms of the `(?i)` form follow the regex crate's own case folding.
+        MatchMode::Regex => super::ast_gate::regex_requirement(&if case_insensitive {
+            format!("(?i){pattern}")
+        } else {
+            pattern.to_owned()
+        }),
+        // Exact matching folds ASCII case only.
+        MatchMode::Exact => Some(vec![(pattern.as_bytes().into(), case_insensitive)]),
+        // Case-insensitive substrings compare Unicode lowercase forms, under
+        // which non-ASCII text can lowercase to ASCII (`K` Kelvin to `k`).
+        MatchMode::Substr if case_insensitive => None,
+        MatchMode::Substr => Some(vec![(pattern.as_bytes().into(), false)]),
+    };
+    let Some(any_of) = requirement else {
+        return true;
+    };
+    any_of.iter().any(|(literal, ci)| {
+        literal
+            .split(|&b| b == b'.')
+            .filter(|piece| piece.len() >= 3)
+            .all(|piece| super::ast_gate::source_contains(source, piece, *ci))
+    })
 }
 
 /// Evaluate AST pattern matching against multiple node types
@@ -962,13 +1009,14 @@ pub(crate) fn batch_ast_queries_with_index(
     // without joining the walk. Queries share literals (`require`, `exec`),
     // so each is searched for once.
     let mut out: FxHashMap<String, ConditionResult> = FxHashMap::default();
-    let mut presence: FxHashMap<Vec<u8>, bool> = FxHashMap::default();
-    let mut contains = |literal: &[u8]| {
-        if let Some(&found) = presence.get(literal) {
+    let mut presence: FxHashMap<(Vec<u8>, bool), bool> = FxHashMap::default();
+    let mut contains = |literal: &[u8], ci: bool| {
+        let key = (literal.to_vec(), ci);
+        if let Some(&found) = presence.get(&key) {
             return found;
         }
-        let found = memchr::memmem::find(source.as_bytes(), literal).is_some();
-        presence.insert(literal.to_vec(), found);
+        let found = super::ast_gate::source_contains(source.as_bytes(), literal, ci);
+        presence.insert(key, found);
         found
     };
     // Keep this set independent of source text: filtering before building the

@@ -104,9 +104,58 @@ impl DeferredPredicates {
     }
 }
 
-/// Per pattern, the literals every match of that pattern contains.
+/// One requirement of a pattern: at least one of these literals occurs in
+/// every match, each flagged when it is to be found ASCII-case-insensitively.
+type AnyOf = Vec<(Box<[u8]>, bool)>;
+
+/// Per pattern, the literal requirements every match of that pattern meets.
 #[derive(Debug, Default)]
-pub(crate) struct RequiredLiterals(Vec<Vec<Box<[u8]>>>);
+pub(crate) struct RequiredLiterals(Vec<Vec<AnyOf>>);
+
+/// Whether `source` holds `literal`, ASCII-case-insensitively when `ci`.
+pub(crate) fn source_contains(source: &[u8], literal: &[u8], ci: bool) -> bool {
+    if !ci {
+        return memchr::memmem::find(source, literal).is_some();
+    }
+    aho_corasick::AhoCorasick::builder()
+        .ascii_case_insensitive(true)
+        .build([literal])
+        // An automaton that cannot be built cannot prove absence.
+        .map_or(true, |ac| ac.is_match(source))
+}
+
+/// The literals every match of `regex` contains, any one of which suffices:
+/// its mandatory atoms (anywhere in a match, through alternations and
+/// `(?i)`), or else its guaranteed prefix (>= 3 bytes).
+///
+/// The atoms are derived for `type: text`'s engine, which folds the case of
+/// an ASCII pattern within ASCII. Tree-sitter's `#match?` and simple mode
+/// compile with Unicode folding, where `k` also matches the Kelvin sign and
+/// `s` the long s, so a case-insensitive atom is cut down to its longest run
+/// free of either letter.
+pub(crate) fn regex_requirement(regex: &str) -> Option<AnyOf> {
+    let unicode_folded = |atom: String, ci: bool| -> Option<(Box<[u8]>, bool)> {
+        if !ci {
+            return Some((atom.into_bytes().into_boxed_slice(), false));
+        }
+        atom.as_bytes()
+            .split(|b| matches!(b, b'k' | b'K' | b's' | b'S'))
+            .filter(|piece| piece.len() >= 3)
+            .max_by_key(|piece| piece.len())
+            .map(|piece| (Box::from(piece), true))
+    };
+    if let Some(atoms) = crate::capabilities::derivation_memo::mandatory_atom_set(regex)
+        && let Some(any_of) = atoms
+            .into_iter()
+            .map(|(atom, ci)| unicode_folded(atom, ci))
+            .collect::<Option<AnyOf>>()
+    {
+        return Some(any_of);
+    }
+    StringMatchIndex::extract_regex_literal(regex)
+        .filter(|literal| !literal.is_empty())
+        .map(|literal| vec![(literal.into_bytes().into_boxed_slice(), false)])
+}
 
 impl RequiredLiterals {
     /// The literals `query`, compiled from `source`, requires of its input.
@@ -117,7 +166,7 @@ impl RequiredLiterals {
                     .get(query.start_byte_for_pattern(i)..query.end_byte_for_pattern(i))
                     .unwrap_or_default();
                 let quantifiers = query.capture_quantifiers(i);
-                let mut literals: Vec<Box<[u8]>> = Vec::new();
+                let mut requirements: Vec<AnyOf> = Vec::new();
                 for (op, capture, arg) in positive_text_predicates(text) {
                     // A capture a match may leave unbound passes its predicate
                     // vacuously, so only always-bound captures carry a literal.
@@ -130,42 +179,44 @@ impl RequiredLiterals {
                     if !bound {
                         continue;
                     }
-                    let literal = match op {
-                        Op::Eq => Some(arg),
-                        // A guaranteed prefix of every regex match (>= 3 bytes).
-                        Op::Match => StringMatchIndex::extract_regex_literal(&arg),
+                    let requirement = match op {
+                        Op::Eq => (!arg.is_empty())
+                            .then(|| vec![(arg.into_bytes().into_boxed_slice(), false)]),
+                        Op::Match => regex_requirement(&arg),
                     };
-                    if let Some(literal) = literal
-                        && !literal.is_empty()
-                        && !literals.iter().any(|l| **l == *literal.as_bytes())
+                    if let Some(requirement) = requirement
+                        && !requirements.contains(&requirement)
                     {
-                        literals.push(literal.into_bytes().into_boxed_slice());
+                        requirements.push(requirement);
                     }
                 }
-                literals
+                requirements
             })
             .collect();
         Self(patterns)
     }
 
     /// Whether some pattern could match input in which `present` reports which
-    /// literals occur.
+    /// literals occur (the flag asks for an ASCII-case-insensitive search).
     pub(super) fn pattern_may_match(
         &self,
         pattern: usize,
-        mut present: impl FnMut(&[u8]) -> bool,
+        mut present: impl FnMut(&[u8], bool) -> bool,
     ) -> bool {
-        self.0
-            .get(pattern)
-            .is_none_or(|literals| literals.iter().all(|l| present(l)))
+        self.0.get(pattern).is_none_or(|requirements| {
+            requirements
+                .iter()
+                .all(|any| any.iter().any(|(l, ci)| present(l, *ci)))
+        })
     }
 
-    pub(crate) fn may_match(&self, mut present: impl FnMut(&[u8]) -> bool) -> bool {
+    pub(crate) fn may_match(&self, mut present: impl FnMut(&[u8], bool) -> bool) -> bool {
         self.0.is_empty()
-            || self
-                .0
-                .iter()
-                .any(|literals| literals.iter().all(|l| present(l)))
+            || self.0.iter().any(|requirements| {
+                requirements
+                    .iter()
+                    .all(|any| any.iter().any(|(l, ci)| present(l, *ci)))
+            })
     }
 }
 

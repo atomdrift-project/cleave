@@ -1683,17 +1683,29 @@ impl TraitDefinition {
         let _performance =
             crate::validation_performance::RuleTimer::start(&self.id, &self.defined_in, ctx);
 
+        // The positive condition runs before `unless:`, which is consulted only
+        // when it matched: a trait whose condition fails produces nothing
+        // whatever its exceptions say. Exceptions are rarely cheaper than the
+        // condition they guard: a tree-sitter `unless:` has to walk the whole
+        // tree, often with no literal to gate on, while the condition's own
+        // literal gate answers "no" without a walk on most files (a 2.3 MB
+        // bundle without `execFile` walked three exception queries for a rule
+        // keyed on it). Under an explain collector the old order is kept, so
+        // `test-rules` still names a matching exception on a non-matching rule.
+        let early = (self.unless.is_some() && ctx.debug_collector.is_none())
+            .then(|| self.eval_condition(&self.r#if, ctx));
+        let unless_needed = early.as_ref().is_none_or(|result| result.matched);
+
         // Check unless conditions (file-level skip).
         //
-        // Normally a cheap early-out: a matched `unless:` ends the evaluation
-        // before the positive condition ever runs. With a suppression sink
+        // A matched `unless:` ends the evaluation. With a suppression sink
         // attached and the trait worth reporting, the early-out is deferred —
         // "withheld" is only true of a trait that would otherwise have matched,
         // and the overwhelming majority of `unless:` hits are on rules whose
         // positive side never comes close. Recording those would fill the report
         // with detections that were never in prospect.
         let mut withheld_by: Option<(&Condition, ConditionResult)> = None;
-        if let Some(unless_conds) = &self.unless {
+        if let Some(unless_conds) = self.unless.as_ref().filter(|_| unless_needed) {
             // Default 'any' semantics: skip if ANY condition matches
             for condition in unless_conds {
                 let result = self.eval_condition(condition, ctx);
@@ -1722,7 +1734,7 @@ impl TraitDefinition {
         }
 
         // Evaluate the condition (traits only have one atomic condition)
-        let result = self.eval_condition(&self.r#if, ctx);
+        let result = early.unwrap_or_else(|| self.eval_condition(&self.r#if, ctx));
         let duration = start.elapsed();
 
         // A timeout is incomplete analysis, not an analysis-evasion finding.
@@ -2962,6 +2974,8 @@ impl CompositeTrait {
 
         // Start timing for timeout detection (covers all evaluation phases)
         let start = crate::composite_rules::trait_timing::EvalTimer::start();
+        // Every exit counts toward the aggregate, not just a match.
+        let _timing = crate::composite_rules::trait_timing::Recorder::start(&self.id);
         let _performance =
             crate::validation_performance::RuleTimer::start(&self.id, &self.defined_in, ctx);
 

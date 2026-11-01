@@ -286,6 +286,16 @@ pub enum Command {
         /// bundle that won't load or silently loses detections.
         #[arg(long)]
         soft: bool,
+
+        /// Audit the slowest rules: analyze every fixture without any cache
+        /// and list the N rules with the highest total evaluation time.
+        ///
+        /// Each row gives the rule's total and slowest single evaluation,
+        /// how many times it ran, its share of all rule time, its `for:` list
+        /// and the shape of its conditions (`text/regex`, `tree-sitter/query`,
+        /// ...), so a cheaper equivalent can be chosen. N defaults to 25.
+        #[arg(long, value_name = "N", num_args = 0..=1, default_missing_value = "25")]
+        slow_rules: Option<usize>,
     },
 
     /// Compare two versions for supply-chain attack detection.

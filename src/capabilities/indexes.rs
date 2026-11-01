@@ -3812,7 +3812,7 @@ mod tests {
         }
         assert_eq!(lists.get(&0).map(Vec::as_slice), Some(&[1u32, 3][..]));
         assert!(
-            lists.get(&1).is_none(),
+            !lists.contains_key(&1),
             "atom-less trait keeps the full sweep"
         );
         assert_eq!(
@@ -3846,7 +3846,7 @@ mod tests {
         let refs: Vec<&StringInfo> = many.iter().collect();
         let (cands, lists) = index.find_regex_candidate_strings(&refs, many.len());
         assert!(cands.contains(&0));
-        assert!(lists.get(&0).is_none());
+        assert!(!lists.contains_key(&0));
     }
 
     /// A regex trait with NO extractable atom must always be a candidate

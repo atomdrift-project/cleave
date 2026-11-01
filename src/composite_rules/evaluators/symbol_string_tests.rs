@@ -4016,3 +4016,37 @@ fn raw_regex_length_bound_survives_many_short_candidates() {
         "short candidates must not hide a later long match"
     );
 }
+
+/// regex-automata 0.4.18's meta engine misses matches when its fully compiled
+/// DFA is paired with an auto prefilter in byte mode: `\w\[[^\[\]]*\]\s?\(`
+/// finds nothing in `o[0](`, while the lazy DFA, the PikeVM and Unicode mode
+/// all find it. Both engines here build with `dfa(false)` for that reason;
+/// this pins the behaviour so a config change cannot bring the miss back.
+#[test]
+fn byte_regex_with_negated_bracket_class_before_optional_space_matches() {
+    let hay = b"var o = {}; o[f(1)](2); o[g(\"x\")](3); o[0](); o[1](); o[2]();
+";
+    for pat in [
+        r"\w\[[^\[\]]*\]\s?\(",
+        r"\w\[[^\[\]]*\]\s*\(",
+        r"[\w$)\]]\s*\[[^\[\]
+]*(?:\[[^\[\]
+]*\][^\[\]
+]*)*\]\s*\(",
+    ] {
+        let lean = crate::composite_rules::evaluators::compile_bytes_regex(pat, false)
+            .expect("pattern compiles");
+        let mut n = 0;
+        lean.for_each_match(hay, |_, _| {
+            n += 1;
+            true
+        });
+        assert_eq!(n, 5, "lean engine on {pat:?}");
+        let trait_re = crate::composite_rules::condition::cached_regex(pat).expect("compiles");
+        assert_eq!(
+            trait_re.find_str(std::str::from_utf8(hay).unwrap()),
+            Some("o[f(1)]("),
+            "trait engine on {pat:?}"
+        );
+    }
+}

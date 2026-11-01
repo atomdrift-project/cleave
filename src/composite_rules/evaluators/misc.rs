@@ -32,10 +32,11 @@ pub(crate) fn eval_trait<'a>(id: &str, ctx: &EvaluationContext<'a>) -> Condition
     // from a file type the composite declared, so a rule about a vsix manifest
     // and its bundled script is not satisfied by a README three members over.
     if ctx.has_finding_exact(id) && ctx.origin_allows(id) {
+        // Indexed by id: only the findings carrying `id` are visited, not
+        // every finding in scope (a hot leaf on member-heavy archives).
         let evidence: Vec<_> = ctx
             .findings
-            .iter()
-            .filter(|f| f.id == id)
+            .exact(id)
             .flat_map(|f| f.evidence.iter().cloned())
             .take(MAX_EVIDENCE_PER_TRAIT)
             .collect();

@@ -436,6 +436,7 @@ impl super::CapabilityMapper {
         let string_matched_traits = string_prefilter.matched;
         let cached_evidence = string_prefilter.evidence;
         let regex_candidates = string_prefilter.regex_candidates;
+        let regex_candidate_strings = string_prefilter.regex_candidate_strings;
         let source_text_prefiltered = string_prefilter.source_text_prefiltered;
 
         // Run symbol matching ONCE. The haystack spans import/export symbol
@@ -478,6 +479,7 @@ impl super::CapabilityMapper {
             symbol_matched_traits: &symbol_matched_traits,
             cached_evidence: &cached_evidence,
             regex_candidates: &regex_candidates,
+            regex_candidate_strings: Some(&regex_candidate_strings),
             arch_ranges,
             ast_kind_cache,
             source_text_prefiltered,

@@ -3073,23 +3073,55 @@ fn scheduling_size(path: &std::path::Path) -> u64 {
     if !(22..=PROBE_MAX_BYTES).contains(&on_disk) {
         return on_disk;
     }
-    let inflated = (|| {
-        use std::io::{Read, Seek, SeekFrom};
-        let mut file = std::fs::File::open(path).ok()?;
-        let mut magic = [0u8; 4];
-        file.read_exact(&mut magic).ok()?;
-        match magic {
-            [0x1f, 0x8b, _, _] => {
-                file.seek(SeekFrom::End(-4)).ok()?;
-                let mut trailer = [0u8; 4];
-                file.read_exact(&mut trailer).ok()?;
-                Some(u64::from(u32::from_le_bytes(trailer)))
-            }
-            [b'P', b'K', 3, 4] => zip_inflated_size(&mut file, on_disk),
-            _ => None,
+    inflated_size(path, on_disk).map_or(on_disk, |n| n.max(on_disk))
+}
+
+/// What a gzip or zip at `path` inflates to, read from the gzip trailer
+/// (`ISIZE`, modulo 2^32) or summed over the zip central directory; `None`
+/// for any other container, an unreadable one, or one the directory walk
+/// declines (see `zip_inflated_size`). Costs one open plus a tail read.
+fn inflated_size(path: &std::path::Path, on_disk: u64) -> Option<u64> {
+    use std::io::{Read, Seek, SeekFrom};
+    if on_disk < 22 {
+        return None;
+    }
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut magic = [0u8; 4];
+    file.read_exact(&mut magic).ok()?;
+    match magic {
+        [0x1f, 0x8b, _, _] => {
+            file.seek(SeekFrom::End(-4)).ok()?;
+            let mut trailer = [0u8; 4];
+            file.read_exact(&mut trailer).ok()?;
+            Some(u64::from(u32::from_le_bytes(trailer)))
         }
-    })();
-    inflated.map_or(on_disk, |n| n.max(on_disk))
+        [b'P', b'K', 3, 4] => zip_inflated_size(&mut file, on_disk),
+        _ => None,
+    }
+}
+
+/// What the memory gate can learn about `path` from its magic alone: that
+/// it is a flat image — an executable (PE, ELF, Mach-O) or an OLE compound
+/// file (MSI) — whose footprint tracks its own size rather than an unknown
+/// container expansion. Anything else, an unreadable file included, stays
+/// `Unknown`.
+fn footprint_hint(path: &std::path::Path) -> scan_mem_gate::FootprintHint {
+    use scan_mem_gate::FootprintHint;
+    use std::io::Read;
+    let mut magic = [0u8; 8];
+    let read = std::fs::File::open(path).and_then(|mut f| f.read_exact(&mut magic));
+    if read.is_err() {
+        return FootprintHint::Unknown;
+    }
+    match magic {
+        [b'M', b'Z', ..]
+        | [0x7f, b'E', b'L', b'F', ..]
+        | [0xfe, 0xed, 0xfa, 0xce | 0xcf, ..]
+        | [0xce | 0xcf, 0xfa, 0xed, 0xfe, ..]
+        | [0xca, 0xfe, 0xba, 0xbe, ..]
+        | [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1] => FootprintHint::Flat,
+        _ => FootprintHint::Unknown,
+    }
 }
 
 /// Sum of the uncompressed sizes a zip's central directory records. `None`
@@ -3293,7 +3325,7 @@ fn analyze_one_path<F>(
     // co-residing and OOM-killing the host. Held until this file is done.
     let file_len = std::fs::metadata(file_path).map(|m| m.len()).unwrap_or(0);
     let gate_wait = std::time::Instant::now();
-    let _mem_permit = mem_gate.acquire(file_len);
+    let _mem_permit = mem_gate.acquire_hinted(file_len, footprint_hint(file_path));
     let gate_wait_ms = gate_wait.elapsed().as_millis() as u64;
     let started = std::time::Instant::now();
 

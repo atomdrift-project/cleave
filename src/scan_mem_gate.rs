@@ -45,6 +45,37 @@ fn expansion() -> u64 {
             .unwrap_or(64)
     })
 }
+/// Footprint multiplier for a flat image at top level — an executable (PE,
+/// ELF, Mach-O) or an OLE compound file (MSI): the bytes, their extracted
+/// strings and findings, YARA and disassembly transients, with room for an
+/// embedded installer payload. The 64x above was calibrated on member-heavy
+/// archives, whose retained per-member state really does reach 70-85x the
+/// compressed size; a flat image has no such multiplier, and under 64x a
+/// 192 MB MSI or a 112 MB Mach-O reserved most of a 32 GB box's budget for
+/// its whole analysis while using about 1 GB, parking every archive behind
+/// it for up to a minute. Measured solo peaks over the rule-loading floor:
+/// 192 MB MSI 1.1 GB (6x), 112 MB Mach-O 0.9 GB (8x), 90 MB Go ELF 0.7 GB
+/// (8x), 69 MB PE DLL 0.4 GB (6x). 16 keeps a 2x margin; the live
+/// available-memory floor still vetoes under real pressure. Overridable via
+/// `CLEAVE_MEMGATE_FLAT_EXPANSION`.
+fn flat_expansion() -> u64 {
+    static V: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        crate::env::parse("CLEAVE_MEMGATE_FLAT_EXPANSION")
+            .filter(|&n| n > 0)
+            .unwrap_or(16)
+    })
+}
+
+/// What the caller learned about a file's likely footprint before analysis
+/// (see `footprint_hint` in the scanner).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FootprintHint {
+    /// Nothing beyond the on-disk size: reserve `size × EXPANSION`.
+    Unknown,
+    /// A flat image (executable or OLE compound file): `size × flat_expansion()`.
+    Flat,
+}
 /// Floor so thousands of tiny files still register aggregate pressure.
 const MIN_ESTIMATE_BYTES: usize = 8 * 1024 * 1024;
 /// Headroom kept free when admitting a lone file against live available memory.
@@ -113,7 +144,23 @@ impl ScanMemGate {
     /// Block until `size`'s estimated footprint fits, then reserve it. The guard
     /// releases the reservation on drop.
     pub(crate) fn acquire(&self, size: u64) -> ScanMemPermit<'_> {
-        let est = self.estimate(size);
+        self.acquire_hinted(size, FootprintHint::Unknown)
+    }
+
+    /// Estimate for a flat image: `size × flat_expansion()`, never above
+    /// the plain estimate.
+    fn estimate_flat(&self, size: u64) -> usize {
+        let raw = usize::try_from(size.saturating_mul(flat_expansion())).unwrap_or(usize::MAX);
+        raw.max(MIN_ESTIMATE_BYTES).min(self.estimate(size))
+    }
+
+    /// [`acquire`](Self::acquire) with what the caller learned about the
+    /// file's footprint (see `FootprintHint`).
+    pub(crate) fn acquire_hinted(&self, size: u64, hint: FootprintHint) -> ScanMemPermit<'_> {
+        let est = match hint {
+            FootprintHint::Flat => self.estimate_flat(size),
+            FootprintHint::Unknown => self.estimate(size),
+        };
         let started = Instant::now();
         let mut reserved = self
             .reserved
@@ -273,6 +320,16 @@ mod tests {
         // Non-lone: budget ceiling applies.
         assert!(g.fits(50 * MB as usize, 40 * MB as usize, false)); // 90 ≤ 100
         assert!(!g.fits(80 * MB as usize, 40 * MB as usize, false)); // 120 > 100
+    }
+
+    #[test]
+    fn flat_estimate_stays_under_the_plain_one() {
+        let g = gate(64 * 1024 * 1024 * 1024, 0, avail_200mb);
+        let size = 100 * MB;
+        assert_eq!(g.estimate_flat(size), (size * flat_expansion()) as usize);
+        assert!(g.estimate_flat(size) < g.estimate(size));
+        // Tiny executables still register the aggregate floor.
+        assert_eq!(g.estimate_flat(1024), MIN_ESTIMATE_BYTES);
     }
 
     #[test]

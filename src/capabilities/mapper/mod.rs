@@ -909,7 +909,19 @@ pub(super) struct StringPrefilter {
     pub matched: rustc_hash::FxHashSet<usize>,
     pub evidence: rustc_hash::FxHashMap<usize, Vec<crate::types::Evidence>>,
     pub regex_candidates: rustc_hash::FxHashSet<usize>,
+    /// Per regex trait, the `report.strings` indices holding its prefix
+    /// literal (see `StringMatchIndex::find_regex_candidate_strings`).
+    /// Empty on the raw-source path.
+    pub regex_candidate_strings: RegexCandidateStrings,
     pub source_text_prefiltered: bool,
+}
+
+/// Candidate string lists for literal-bearing regex `type: text` traits,
+/// valid for a `report.strings` of exactly `native_len` entries.
+#[derive(Default)]
+pub(crate) struct RegexCandidateStrings {
+    pub lists: rustc_hash::FxHashMap<usize, Vec<u32>>,
+    pub native_len: usize,
 }
 
 pub(super) fn build_string_prefilter(
@@ -934,6 +946,7 @@ pub(super) fn build_string_prefilter(
                 matched,
                 evidence: rustc_hash::FxHashMap::default(),
                 regex_candidates,
+                regex_candidate_strings: RegexCandidateStrings::default(),
                 source_text_prefiltered: true,
             };
         }
@@ -941,6 +954,7 @@ pub(super) fn build_string_prefilter(
             matched: rustc_hash::FxHashSet::default(),
             evidence: rustc_hash::FxHashMap::default(),
             regex_candidates: rustc_hash::FxHashSet::default(),
+            regex_candidate_strings: RegexCandidateStrings::default(),
             source_text_prefiltered: false,
         };
     }
@@ -950,10 +964,13 @@ pub(super) fn build_string_prefilter(
             matched: rustc_hash::FxHashSet::default(),
             evidence: rustc_hash::FxHashMap::default(),
             regex_candidates: rustc_hash::FxHashSet::default(),
+            regex_candidate_strings: RegexCandidateStrings::default(),
             source_text_prefiltered: false,
         };
     }
 
+    let _mp = crate::mem_profile::phase(crate::mem_profile::Phase::Prefilter);
+    let t_prefilter = std::time::Instant::now();
     let pseudo_strings = build_string_pseudo_entries(report);
     let all_strings: Vec<&crate::types::StringInfo> =
         report.strings.iter().chain(pseudo_strings.iter()).collect();
@@ -965,11 +982,29 @@ pub(super) fn build_string_prefilter(
             rustc_hash::FxHashMap::default(),
         )
     };
-    let regex_candidates = index.find_regex_candidates(&all_strings);
+    let t_lists = std::time::Instant::now();
+    let (regex_candidates, lists) =
+        index.find_regex_candidate_strings(&all_strings, report.strings.len());
+    let total_ms = t_prefilter.elapsed().as_millis();
+    if total_ms >= 100 {
+        tracing::info!(
+            strings = all_strings.len(),
+            bytes = all_strings.iter().map(|s| s.value.len()).sum::<usize>(),
+            lists = lists.len(),
+            list_entries = lists.values().map(Vec::len).sum::<usize>(),
+            lists_ms = t_lists.elapsed().as_millis() as u64,
+            total_ms = total_ms as u64,
+            "slow string prefilter"
+        );
+    }
     StringPrefilter {
         matched,
         evidence,
         regex_candidates,
+        regex_candidate_strings: RegexCandidateStrings {
+            lists,
+            native_len: report.strings.len(),
+        },
         source_text_prefiltered: false,
     }
 }

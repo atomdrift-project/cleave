@@ -1520,6 +1520,30 @@ impl TraitDefinition {
             || self.per_kb_max.is_some()
     }
 
+    /// The match count past which this trait's filters cannot change their
+    /// answer on a file of `file_size` bytes (see
+    /// `symbol_string::match_count_bound`): exact when a ceiling filter
+    /// exists, otherwise the largest floor. The density floor is converted
+    /// with the same arithmetic the filter applies, so the bound is the
+    /// smallest count that passes it.
+    pub(crate) fn match_count_bound(&self, file_size: usize) -> usize {
+        if self.count_max.is_some() || self.per_kb_max.is_some() {
+            return usize::MAX;
+        }
+        let mut bound = self.count_min.unwrap_or(0);
+        if let Some(min_density) = self.per_kb_min {
+            let file_kb = (file_size as f64) / 1024.0;
+            if file_kb > 0.0 {
+                let mut needed = (min_density * file_kb).ceil().max(0.0) as usize;
+                while (needed as f64) / file_kb < min_density {
+                    needed += 1;
+                }
+                bound = bound.max(needed);
+            }
+        }
+        bound
+    }
+
     /// Whether this trait says anything about the file as a whole, on top of
     /// whatever its `if:` matches.
     ///
@@ -1557,6 +1581,9 @@ impl TraitDefinition {
         // the exact `match_count` (count/density filter). Restored on drop so
         // nested `Condition::Trait` evaluations don't clobber it.
         let _mcg = MatchCountGuard::set(self.needs_match_count());
+        let _mcb = super::evaluators::MatchCountBoundGuard::set(
+            self.match_count_bound(ctx.report.target.size_bytes as usize),
+        );
 
         // Check platform match (skipped when the caller's work list proved it)
         if !static_gates_prechecked
@@ -5274,6 +5301,39 @@ mod scope_tests {
         ];
 
         assert!(rule.apply_scope_filter(evidence, tags, &[], "").is_none());
+    }
+}
+
+#[cfg(test)]
+mod match_count_bound_tests {
+    use super::TraitDefinition;
+
+    #[test]
+    fn ceiling_filters_need_every_match() {
+        let mut t = TraitDefinition::default();
+        t.count_min = Some(3);
+        t.count_max = Some(10);
+        assert_eq!(t.match_count_bound(4096), usize::MAX);
+        let mut t = TraitDefinition::default();
+        t.per_kb_max = Some(1.0);
+        assert_eq!(t.match_count_bound(4096), usize::MAX);
+    }
+
+    #[test]
+    fn floor_filters_bound_at_the_largest_floor() {
+        let t = TraitDefinition::default();
+        assert_eq!(t.match_count_bound(4096), 0);
+        let mut t = TraitDefinition::default();
+        t.count_min = Some(3);
+        assert_eq!(t.match_count_bound(4096), 3);
+        // 2.5 per KB over 4 KB needs 10; the density check must pass at the bound.
+        t.per_kb_min = Some(2.5);
+        let bound = t.match_count_bound(4096);
+        assert_eq!(bound, 10);
+        assert!((bound as f64) / 4.0 >= 2.5);
+        assert!(((bound - 1) as f64) / 4.0 < 2.5);
+        // A zero-byte file skips the density filter.
+        assert_eq!(t.match_count_bound(0), 3);
     }
 }
 

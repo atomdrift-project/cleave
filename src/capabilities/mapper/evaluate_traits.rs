@@ -28,6 +28,8 @@ pub(crate) struct TraitEvalCache<'a> {
     pub symbol_matched_traits: &'a FxHashSet<usize>,
     pub cached_evidence: &'a FxHashMap<usize, Vec<Evidence>>,
     pub regex_candidates: &'a FxHashSet<usize>,
+    /// Per regex trait, which `report.strings` hold its prefix literal.
+    pub regex_candidate_strings: Option<&'a super::RegexCandidateStrings>,
     pub arch_ranges: Option<&'a [(Arch, std::ops::Range<usize>)]>,
     pub ast_node_text: Option<&'a crate::composite_rules::evaluators::NodeTextIndex>,
     pub ast_kind_cache: Option<&'a FxHashMap<String, Vec<Evidence>>>,
@@ -372,9 +374,15 @@ impl super::CapabilityMapper {
     }
 
     fn collect_ast_query_strings<'a>(&'a self, indices: &[usize]) -> Vec<&'a str> {
+        // Guarded positive queries ride the batch too: one shared cursor
+        // walk is cheaper than the standalone evaluations an `unless` hit
+        // would have spared (a 3,300-member Python wheel: 301 -> 266 CPU-s,
+        // -4-5 % over two corpora, identical findings). The batch is only a
+        // result cache, so `unless` still suppresses exactly as before.
+        // `CLEAVE_AST_BATCH_UNGUARDED=1` restores the standalone path.
         static BATCH_GUARDED: OnceLock<bool> = OnceLock::new();
         let batch_guarded =
-            *BATCH_GUARDED.get_or_init(|| crate::env::flag("CLEAVE_AST_BATCH_GUARDED"));
+            *BATCH_GUARDED.get_or_init(|| !crate::env::flag("CLEAVE_AST_BATCH_UNGUARDED"));
         let mut seen = FxHashSet::default();
         let mut out = Vec::new();
         let mut push = |c: &'a Condition| {
@@ -386,10 +394,9 @@ impl super::CapabilityMapper {
         };
         for &idx in indices {
             let t = &self.trait_definitions[idx];
-            // A batch runs before the trait's cheap suppressors. Leave guarded
-            // positive queries on the standalone path, so an `unless` hit can
-            // avoid their work (and suppression reporting can still evaluate
-            // them when it explicitly needs the positive evidence).
+            // A batch runs before the trait's cheap suppressors; with the
+            // opt-out above, guarded positive queries stay standalone so an
+            // `unless` hit can avoid their work.
             if batch_guarded || t.unless.as_ref().is_none_or(Vec::is_empty) {
                 push(&t.r#if);
             }
@@ -588,7 +595,11 @@ impl super::CapabilityMapper {
         // On small sources, preparing a private copy of the combined query
         // costs more than the short individual walks, whose compiled queries
         // are already shared. Reserve batching for larger files.
-        if !file_type.supports_ast_queries() || binary_data.len() < 4 * 1024 {
+        static BATCH_MIN_BYTES: OnceLock<usize> = OnceLock::new();
+        let min_bytes = *BATCH_MIN_BYTES.get_or_init(|| {
+            crate::env::parse::<usize>("CLEAVE_AST_BATCH_MIN_BYTES").unwrap_or(4 * 1024)
+        });
+        if !file_type.supports_ast_queries() || binary_data.len() < min_bytes {
             return None;
         }
         let source = filefacts::source_text_for_ast(binary_data);
@@ -663,6 +674,7 @@ impl super::CapabilityMapper {
         let string_matched_traits = string_prefilter.matched;
         let mut cached_evidence = string_prefilter.evidence;
         let regex_candidates = string_prefilter.regex_candidates;
+        let regex_candidate_strings = string_prefilter.regex_candidate_strings;
         let source_text_prefiltered = string_prefilter.source_text_prefiltered;
 
         // Run symbol matching ONCE across exact, substr, and regex patterns.
@@ -706,6 +718,7 @@ impl super::CapabilityMapper {
             symbol_matched_traits: &symbol_matched_traits,
             cached_evidence: &cached_evidence,
             regex_candidates: &regex_candidates,
+            regex_candidate_strings: Some(&regex_candidate_strings),
             arch_ranges: None,
             ast_kind_cache: ast_kind_cache.as_ref(),
             source_text_prefiltered,
@@ -843,6 +856,7 @@ impl super::CapabilityMapper {
         let string_matched_traits = string_prefilter.matched;
         let mut cached_evidence = string_prefilter.evidence;
         let regex_candidates = string_prefilter.regex_candidates;
+        let regex_candidate_strings = string_prefilter.regex_candidate_strings;
         let source_text_prefiltered = string_prefilter.source_text_prefiltered;
         // Run symbol matching ONCE across exact, substr, and regex patterns.
         // Haystack spans imports/exports plus filefacts call/member/bind/
@@ -885,6 +899,7 @@ impl super::CapabilityMapper {
                 symbol_matched_traits: &symbol_matched_traits,
                 cached_evidence: &cached_evidence,
                 regex_candidates: &regex_candidates,
+                regex_candidate_strings: Some(&regex_candidate_strings),
                 arch_ranges: None,
                 ast_kind_cache: None,
                 source_text_prefiltered,
@@ -1104,6 +1119,49 @@ impl super::CapabilityMapper {
         };
         if let Some(map) = decoded_skip.as_ref() {
             ctx = ctx.with_decoded_skip(Some(map));
+        }
+
+        // Candidate string lists for `eval_text` on extracted strings: an
+        // atom-bearing regex or `word:` `if:` runs only over the strings
+        // holding one of its atoms. Keyed by trait index with the `if:`
+        // pattern text so an `unless:` sharing the index still sweeps
+        // everything; keyed the way `StringMatcher::resolve` picks the
+        // pattern (word ahead of regex, never under exact/substr), and only
+        // for a string table of the size the lists were built against.
+        let regex_candidate_strings: Option<FxHashMap<usize, (&str, &[u32])>> =
+            match cache.regex_candidate_strings {
+                Some(cands)
+                    if !is_raw_text
+                        && !cands.lists.is_empty()
+                        && cands.native_len == report.strings.len() =>
+                {
+                    use crate::composite_rules::{Condition, TextQuery};
+                    let map: FxHashMap<usize, (&str, &[u32])> = cands
+                        .lists
+                        .iter()
+                        .filter_map(|(&idx, list)| match &self.trait_definitions[idx].r#if {
+                            Condition::Text(TextQuery {
+                                word: Some(w),
+                                exact: None,
+                                substr: None,
+                                ..
+                            }) => Some((idx, (w.as_str(), list.as_slice()))),
+                            Condition::Text(TextQuery {
+                                regex: Some(r),
+                                exact: None,
+                                substr: None,
+                                word: None,
+                                ..
+                            }) => Some((idx, (r.as_str(), list.as_slice()))),
+                            _ => None,
+                        })
+                        .collect();
+                    Some(map)
+                }
+                _ => None,
+            };
+        if let Some(map) = regex_candidate_strings.as_ref() {
+            ctx = ctx.with_regex_candidate_strings(Some(map));
         }
 
         // Queries the shared batch walk abandoned (state-limited by the

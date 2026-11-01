@@ -698,18 +698,19 @@ pub(crate) struct StringMatchIndex {
     /// AC pattern index → trait indices for `ci_exact_automaton`.
     ci_exact_ac_to_traits: Vec<Vec<usize>>,
 
-    // ===== Kept for regex literal pre-filtering (unchanged) =====
-    /// Aho-Corasick automaton for regex literal prefixes (for pre-filtering)
-    regex_literal_automaton: Option<AhoCorasick>,
-    /// Maps regex literal index -> trait indices
-    regex_literal_to_traits: Vec<Vec<usize>>,
     /// Set of all trait indices with regex patterns (for lookup)
     regex_trait_indices: FxHashSet<usize>,
-    /// Regex traits with no extractable literal prefix, so they can't be
-    /// pre-filtered and are always candidates. Precomputed once at build time
-    /// — this set depends only on the index, not the input strings, and the
-    /// `find_regex_candidates` hot path runs once per analyzed file.
-    regex_traits_without_literals: Vec<usize>,
+    /// Mandatory any-of atoms (see `mandatory_atom_set`) of the regex and
+    /// `word:` `type: text` traits that `eval_text` sweeps over extracted
+    /// strings: one case-sensitive and one ASCII-case-insensitive automaton,
+    /// each pattern mapped to the traits it belongs to. A string can only
+    /// match such a trait if it holds one of the trait's atoms.
+    atom_cs_automaton: Option<AhoCorasick>,
+    atom_cs_to_traits: Vec<Vec<usize>>,
+    atom_ci_automaton: Option<AhoCorasick>,
+    atom_ci_to_traits: Vec<Vec<usize>>,
+    /// Regex traits with no atom set: always candidates, full sweep.
+    regex_traits_without_atoms: Vec<usize>,
     /// Total number of traits with exact string patterns
     pub(crate) total_patterns: usize,
 }
@@ -806,20 +807,18 @@ impl StringMatchIndex {
             Vec::with_capacity(estimated_patterns);
         let mut substr_trait_indices: FxHashSet<usize> = FxHashSet::default();
 
-        let mut regex_literals: Vec<String> = Vec::with_capacity(estimated_patterns);
-        let mut regex_literal_to_traits: Vec<Vec<usize>> = Vec::with_capacity(estimated_patterns);
-        let mut regex_literal_map: FxHashMap<String, usize> = FxHashMap::default();
         let mut regex_trait_indices: FxHashSet<usize> = FxHashSet::default();
         let mut exact_trait_indices: FxHashSet<usize> = FxHashSet::default();
 
-        // Regex-literal extraction parses each pattern into regex_syntax HIR — the
-        // dominant serial cost of this build (profiled: ~330ms of a ~370ms build).
-        // It is a pure function of the pattern string, so compute every regex
-        // trait's literal across all cores up front; the order-dependent dedup
-        // loop below just looks the result up. Behavior-identical to calling
-        // extract_regex_literal inline, only parallelized off the serial path.
+        // Atom extraction parses each pattern into regex_syntax HIR — the
+        // dominant serial cost of this build (profiled: ~330ms of a ~370ms
+        // build for the prefix-literal predecessor). It is a pure (memoized)
+        // function of the pattern string, so compute every regex trait's
+        // atoms across all cores up front; the order-dependent dedup loop
+        // below just looks the result up.
         let t_extract = std::time::Instant::now();
-        let regex_literal_by_trait: FxHashMap<usize, Option<String>> = traits
+        type Atoms = Option<Vec<(String, bool)>>;
+        let atoms_by_trait: FxHashMap<usize, Atoms> = traits
             .par_iter()
             .enumerate()
             .filter_map(|(trait_idx, trait_def)| {
@@ -829,12 +828,62 @@ impl StringMatchIndex {
                 match &trait_def.r#if {
                     Condition::Text(TextQuery {
                         regex: Some(regex_str),
+                        exact,
+                        substr,
+                        word,
+                        case_insensitive,
                         ..
-                    }) => Some((trait_idx, super::derivation_memo::prefix_literal(regex_str))),
+                    }) => {
+                        // Atoms describe the regex `StringMatcher::resolve`
+                        // compiles: only when no exact/substr/word takes
+                        // precedence, and on the `(?i)`-prefixed text a
+                        // `case_insensitive:` condition really runs, so the
+                        // extractor's own Unicode-folding rules apply.
+                        let atoms = if exact.is_none() && substr.is_none() && word.is_none() {
+                            if *case_insensitive {
+                                super::derivation_memo::mandatory_atom_set(&format!(
+                                    "(?i){regex_str}"
+                                ))
+                            } else {
+                                super::derivation_memo::mandatory_atom_set(regex_str)
+                            }
+                        } else {
+                            None
+                        };
+                        Some((trait_idx, atoms))
+                    }
                     _ => None,
                 }
             })
             .collect();
+
+        let mut atom_cs_patterns: Vec<String> = Vec::new();
+        let mut atom_cs_map: FxHashMap<String, usize> = FxHashMap::default();
+        let mut atom_cs_to_traits: Vec<Vec<usize>> = Vec::new();
+        let mut atom_ci_patterns: Vec<String> = Vec::new();
+        let mut atom_ci_map: FxHashMap<String, usize> = FxHashMap::default();
+        let mut atom_ci_to_traits: Vec<Vec<usize>> = Vec::new();
+        let mut atom_traits: FxHashSet<usize> = FxHashSet::default();
+        let mut add_atom = |trait_idx: usize, atom: &str, ci: bool| {
+            let (map, patterns, to_traits) = if ci {
+                (&mut atom_ci_map, &mut atom_ci_patterns, &mut atom_ci_to_traits)
+            } else {
+                (&mut atom_cs_map, &mut atom_cs_patterns, &mut atom_cs_to_traits)
+            };
+            let key = if ci {
+                atom.to_ascii_lowercase()
+            } else {
+                atom.to_owned()
+            };
+            if let Some(&pattern_idx) = map.get(&key) {
+                to_traits[pattern_idx].push(trait_idx);
+            } else {
+                map.insert(key.clone(), patterns.len());
+                patterns.push(key);
+                to_traits.push(vec![trait_idx]);
+            }
+            atom_traits.insert(trait_idx);
+        };
         let extract_ms = t_extract.elapsed().as_millis() as u64;
         let t_rest = std::time::Instant::now();
 
@@ -898,18 +947,24 @@ impl StringMatchIndex {
                         substr_to_traits.push((substr_str.clone(), vec![trait_idx]));
                     }
                 }
-                // Regex string patterns - extract literal prefix for pre-filtering
+                // `word:` resolves ahead of `regex:` and needs its needle as a
+                // substring: the needle is the trait's one atom. Its CI search
+                // is an ASCII-case-insensitive automaton, as is the atom one.
+                Condition::Text(TextQuery {
+                    word: Some(word_str),
+                    exact: None,
+                    substr: None,
+                    case_insensitive,
+                    ..
+                }) if !word_str.is_empty() && (!*case_insensitive || word_str.is_ascii()) => {
+                    add_atom(trait_idx, word_str, *case_insensitive);
+                }
+                // Regex string patterns: gate on their mandatory atoms.
                 Condition::Text(TextQuery { regex: Some(_), .. }) => {
                     regex_trait_indices.insert(trait_idx);
-                    let literal = regex_literal_by_trait.get(&trait_idx).cloned().flatten();
-                    if let Some(literal) = literal {
-                        if let Some(&pattern_idx) = regex_literal_map.get(&literal) {
-                            regex_literal_to_traits[pattern_idx].push(trait_idx);
-                        } else {
-                            let pattern_idx = regex_literals.len();
-                            regex_literal_map.insert(literal.clone(), pattern_idx);
-                            regex_literals.push(literal);
-                            regex_literal_to_traits.push(vec![trait_idx]);
+                    if let Some(Some(atoms)) = atoms_by_trait.get(&trait_idx) {
+                        for (atom, ci) in atoms {
+                            add_atom(trait_idx, atom, *ci);
                         }
                     }
                 }
@@ -947,30 +1002,24 @@ impl StringMatchIndex {
             None
         };
 
-        // Build regex literal automaton for pre-filtering (kept as Aho-Corasick)
-        // Stay case-sensitive: a case-insensitive prefilter here dropped
-        // case-sensitive literal traits (microsoft-corp-marker, many-imports).
-        // Source `type: text` regex is not skipped by this automaton (exact-only
-        // raw-haystack prefilter); CI source regexes still run through eval_raw.
-        let regex_literal_automaton = if !regex_literals.is_empty() {
-            build_index_automaton(&regex_literals, false)
-        } else {
-            None
-        };
-
-        // Precompute the regex traits that have no extractable literal and so
-        // can never be pre-filtered. `find_regex_candidates` always adds these,
-        // and it runs once per analyzed file — recomputing this O(traits ×
-        // buckets) scan per call was a dominant cost on archives with many
-        // members (e.g. a Go-source zip with thousands of files).
-        let traits_with_literal: FxHashSet<usize> = regex_literal_to_traits
-            .iter()
-            .flat_map(|traits| traits.iter().copied())
-            .collect();
-        let regex_traits_without_literals: Vec<usize> = regex_trait_indices
+        drop(add_atom);
+        let mut atom_cs_automaton = build_index_automaton(&atom_cs_patterns, false);
+        let mut atom_ci_automaton = build_index_automaton(&atom_ci_patterns, true);
+        // A failed automaton must not silence its traits: without both
+        // automata, no trait is atom-gated and every regex sweeps in full.
+        if (atom_cs_automaton.is_none() && !atom_cs_patterns.is_empty())
+            || (atom_ci_automaton.is_none() && !atom_ci_patterns.is_empty())
+        {
+            atom_cs_automaton = None;
+            atom_ci_automaton = None;
+            atom_cs_to_traits.clear();
+            atom_ci_to_traits.clear();
+            atom_traits.clear();
+        }
+        let regex_traits_without_atoms: Vec<usize> = regex_trait_indices
             .iter()
             .copied()
-            .filter(|idx| !traits_with_literal.contains(idx))
+            .filter(|idx| !atom_traits.contains(idx))
             .collect();
 
         // Source raw-haystack prefilter: exact needles as substring ACs.
@@ -1025,10 +1074,12 @@ impl StringMatchIndex {
             exact_ac_to_traits,
             ci_exact_automaton,
             ci_exact_ac_to_traits,
-            regex_literal_automaton,
-            regex_literal_to_traits,
             regex_trait_indices,
-            regex_traits_without_literals,
+            atom_cs_automaton,
+            atom_cs_to_traits,
+            atom_ci_automaton,
+            atom_ci_to_traits,
+            regex_traits_without_atoms,
             total_patterns,
         };
         tracing::debug!(
@@ -1037,12 +1088,13 @@ impl StringMatchIndex {
             "string match index phase timing"
         );
         tracing::debug!(
-            "Built StringMatchIndex: {} exact, {} ci_exact, {} substr, {} ci_substr, {} regex literals",
+            "Built StringMatchIndex: {} exact, {} ci_exact, {} substr, {} ci_substr, {} cs atoms, {} ci atoms",
             index.exact_patterns.len(),
             index.ci_exact_patterns.len(),
             index.substr_to_traits.len(),
             index.ci_substr_to_traits.len(),
-            index.regex_literal_to_traits.len()
+            index.atom_cs_to_traits.len(),
+            index.atom_ci_to_traits.len()
         );
         index
     }
@@ -1289,37 +1341,76 @@ impl StringMatchIndex {
         (final_traits, final_evidence)
     }
 
-    /// Find regex traits that MIGHT match based on literal prefix matching.
-    /// Returns trait indices whose regex patterns had their literal prefix found.
-    /// Traits not in this set can be skipped without running the full regex.
-    pub(crate) fn find_regex_candidates(&self, strings: &[&StringInfo]) -> FxHashSet<usize> {
+    /// Regex-trait candidates over extracted strings, plus per-trait
+    /// candidate string lists. Every regex/`word:` trait with a mandatory
+    /// atom set (see `mandatory_atom_set`) can only match a string holding
+    /// one of its atoms, so the trait is a candidate only if some string
+    /// does, and `eval_text` sweeps only the ascending indices (among the
+    /// first `native_len` of `strings`) of those strings — reaching the same
+    /// evidence, in the same order, as the full sweep. Regex traits without
+    /// atoms are always candidates and get no list (full sweep); a trait
+    /// whose atoms appear solely past `native_len` (pseudo entries) gets an
+    /// empty list. A list that would hold more than half the strings is
+    /// dropped — the indirection would cost more than the regex calls saved.
+    pub(crate) fn find_regex_candidate_strings(
+        &self,
+        strings: &[&StringInfo],
+        native_len: usize,
+    ) -> (FxHashSet<usize>, FxHashMap<usize, Vec<u32>>) {
         let mut candidates = FxHashSet::default();
+        let mut lists: FxHashMap<usize, Vec<u32>> = FxHashMap::default();
+        let mut full: FxHashSet<usize> = FxHashSet::default();
+        let cap = native_len / 2 + 64;
 
-        if let Some(ref ac) = self.regex_literal_automaton {
-            let total_patterns = self.regex_literal_to_traits.len();
-            let mut seen_patterns: FxHashSet<usize> = FxHashSet::default();
-            'outer: for &string_info in strings {
-                for mat in ac.find_overlapping_iter(string_info.value.as_str()) {
-                    let pattern_idx = mat.pattern().as_usize();
-                    if seen_patterns.insert(pattern_idx) {
-                        if let Some(trait_indices) = self.regex_literal_to_traits.get(pattern_idx) {
-                            for &trait_idx in trait_indices {
-                                candidates.insert(trait_idx);
-                            }
+        let automata = [
+            (self.atom_cs_automaton.as_ref(), &self.atom_cs_to_traits),
+            (self.atom_ci_automaton.as_ref(), &self.atom_ci_to_traits),
+        ];
+        if automata.iter().any(|(ac, _)| ac.is_some()) {
+            // One pattern can hit many times inside one string (every URL
+            // carries `http`): remember the last string each pattern was
+            // seen in and map it to its traits once per string.
+            let mut last_seen: [Vec<u32>; 2] = [
+                vec![u32::MAX; self.atom_cs_to_traits.len()],
+                vec![u32::MAX; self.atom_ci_to_traits.len()],
+            ];
+            for (i, &string_info) in strings.iter().enumerate() {
+                let value = string_info.value.as_str();
+                for (k, (ac, to_traits)) in automata.iter().enumerate() {
+                    let Some(ac) = ac else { continue };
+                    let seen = &mut last_seen[k];
+                    for mat in ac.find_overlapping_iter(value) {
+                        let pattern_idx = mat.pattern().as_usize();
+                        if seen[pattern_idx] == i as u32 {
+                            continue;
                         }
-                        if seen_patterns.len() == total_patterns {
-                            break 'outer;
+                        seen[pattern_idx] = i as u32;
+                        for &trait_idx in &to_traits[pattern_idx] {
+                            if full.contains(&trait_idx) {
+                                continue;
+                            }
+                            let list = match lists.entry(trait_idx) {
+                                std::collections::hash_map::Entry::Vacant(v) => {
+                                    candidates.insert(trait_idx);
+                                    v.insert(Vec::new())
+                                }
+                                std::collections::hash_map::Entry::Occupied(o) => o.into_mut(),
+                            };
+                            if i < native_len && list.last() != Some(&(i as u32)) {
+                                list.push(i as u32);
+                                if list.len() > cap {
+                                    lists.remove(&trait_idx);
+                                    full.insert(trait_idx);
+                                }
+                            }
                         }
                     }
                 }
             }
         }
 
-        // Traits without extractable literals can't be pre-filtered, so they
-        // are always candidates. Precomputed at build time (see constructor).
-        candidates.extend(self.regex_traits_without_literals.iter().copied());
-
-        candidates
+        candidates.extend(self.regex_traits_without_atoms.iter().copied());
+        (candidates, lists)
     }
 
     /// Floor for the source exact-as-substr skip. Independent of the 256 B
@@ -3651,51 +3742,106 @@ mod tests {
         }
     }
 
-    /// A regex trait whose literal prefix IS extractable (`\bfetch\s+...` →
-    /// "fetch") must still surface as a candidate via the literal prefilter.
-    /// Guards the precomputed `regex_traits_without_literals` hoist: the
-    /// candidate set must match the old per-call computation exactly.
+    /// A regex trait with a mandatory atom (`\bfetch\s+...` → "fetch") is
+    /// a candidate exactly when some string holds the atom. Guards the
+    /// precomputed `regex_traits_without_atoms` hoist.
     #[test]
-    fn test_regex_candidate_with_extractable_literal() {
+    fn test_regex_candidate_with_extractable_atom() {
         let pat = r"\bfetch\s+(-|https?://|ftp://)";
-        assert_eq!(
-            StringMatchIndex::extract_regex_literal(pat).as_deref(),
-            Some("fetch"),
-            "literal prefix should be extractable"
-        );
         let traits = vec![make_text_regex_trait("fetch-cmd", pat)];
         let index = StringMatchIndex::build(&traits);
-        // Trait has a literal, so it is NOT in the always-candidate set; it must
-        // be found by the literal prefilter when a matching string is present.
-        assert!(index.regex_traits_without_literals.is_empty());
-        let hit = index.find_regex_candidates(&[&make_string("fetch http://evil.example/x")]);
+        assert!(index.regex_traits_without_atoms.is_empty());
+        let (hit, _) = index
+            .find_regex_candidate_strings(&[&make_string("fetch http://evil.example/x")], 1);
         assert!(
             hit.contains(&0),
             "fetch-cmd must be a candidate when 'fetch' is present"
         );
-        let miss = index.find_regex_candidates(&[&make_string("nothing relevant here")]);
+        let (miss, _) =
+            index.find_regex_candidate_strings(&[&make_string("nothing relevant here")], 1);
         assert!(
             !miss.contains(&0),
-            "fetch-cmd must NOT be a candidate without its literal"
+            "fetch-cmd must NOT be a candidate without its atom"
         );
     }
 
-    /// A regex trait with NO extractable literal must always be a candidate
+    fn make_text_word_trait(id: &str, word: &str, ci: bool) -> TraitDefinition {
+        let mut t = make_text_regex_trait(id, "unused");
+        if let Condition::Text(ref mut q) = t.r#if {
+            q.regex = None;
+            q.word = Some(word.to_string());
+            q.case_insensitive = ci;
+        }
+        t
+    }
+
+    /// Per-trait candidate string lists hold exactly the (native) string
+    /// indices containing one of the trait's atoms, ascending and
+    /// deduplicated; atom-less traits get no list; pseudo-entry-only hits
+    /// give an empty list; `(?i)` and `word:` atoms are case-aware.
+    #[test]
+    fn test_regex_candidate_strings_lists() {
+        let traits = vec![
+            make_text_regex_trait("fetch-cmd", r"\bfetch\s+(-|https?://|ftp://)"),
+            make_text_regex_trait("no-literal", r"\d{3}-\d{4}"),
+            make_text_regex_trait("curl-cmd", r"curl\s+-"),
+            make_text_regex_trait("winrar", r"(?i)\bwinrar\b"),
+            make_text_word_trait("word-cs", "fetch", false),
+            make_text_word_trait("word-ci", "curl", true),
+        ];
+        let index = StringMatchIndex::build(&traits);
+        let strings = [
+            make_string("nothing"),
+            make_string("fetch fetch http://x"),
+            make_string("CURL -s"),
+            make_string("fetch - WinRAR"),
+            make_string("curl -L fetch"),
+        ];
+        let refs: Vec<&StringInfo> = strings.iter().collect();
+        let (cands, lists) = index.find_regex_candidate_strings(&refs, 4);
+        for idx in 0..traits.len() {
+            assert!(cands.contains(&idx), "trait {idx} must be a candidate");
+        }
+        assert_eq!(lists.get(&0).map(Vec::as_slice), Some(&[1u32, 3][..]));
+        assert!(lists.get(&1).is_none(), "atom-less trait keeps the full sweep");
+        assert_eq!(lists.get(&2).map(Vec::as_slice), Some(&[][..]), "CS atom skips CURL");
+        assert_eq!(lists.get(&3).map(Vec::as_slice), Some(&[3u32][..]), "(?i) atom hits WinRAR");
+        assert_eq!(lists.get(&4).map(Vec::as_slice), Some(&[1u32, 3][..]));
+        assert_eq!(lists.get(&5).map(Vec::as_slice), Some(&[2u32][..]), "CI word hits CURL");
+        // No atom anywhere: not a candidate at all (and the atom-less trait still is).
+        let (cands, lists) = index.find_regex_candidate_strings(&[&make_string("zzz")], 1);
+        assert_eq!(cands.into_iter().collect::<Vec<_>>(), vec![1]);
+        assert!(lists.is_empty());
+        // Atom only in a pseudo entry (index >= native_len): candidate, empty list.
+        let only_pseudo = [make_string("x"), make_string("fetch -")];
+        let refs: Vec<&StringInfo> = only_pseudo.iter().collect();
+        let (cands, lists) = index.find_regex_candidate_strings(&refs, 1);
+        assert!(cands.contains(&0));
+        assert_eq!(lists.get(&0).map(Vec::len), Some(0));
+        // Oversized lists are dropped (full sweep) rather than kept.
+        let many: Vec<StringInfo> = (0..200).map(|_| make_string("fetch -")).collect();
+        let refs: Vec<&StringInfo> = many.iter().collect();
+        let (cands, lists) = index.find_regex_candidate_strings(&refs, many.len());
+        assert!(cands.contains(&0));
+        assert!(lists.get(&0).is_none());
+    }
+
+    /// A regex trait with NO extractable atom must always be a candidate
     /// (it can't be prefiltered). This is the case the precompute must never drop.
     #[test]
-    fn test_regex_candidate_without_extractable_literal() {
-        let pat = r"\d{3}-\d{4}"; // no >=3-char literal prefix
-        assert_eq!(StringMatchIndex::extract_regex_literal(pat), None);
+    fn test_regex_candidate_without_extractable_atom() {
+        let pat = r"\d{3}-\d{4}"; // no >=3-byte mandatory literal
         let traits = vec![make_text_regex_trait("no-literal", pat)];
         let index = StringMatchIndex::build(&traits);
-        assert_eq!(index.regex_traits_without_literals, vec![0]);
+        assert_eq!(index.regex_traits_without_atoms, vec![0]);
         // Always a candidate, regardless of input strings.
         assert!(
             index
-                .find_regex_candidates(&[&make_string("xyz")])
+                .find_regex_candidate_strings(&[&make_string("xyz")], 1)
+                .0
                 .contains(&0)
         );
-        assert!(index.find_regex_candidates(&[]).contains(&0));
+        assert!(index.find_regex_candidate_strings(&[], 0).0.contains(&0));
     }
 
     /// Regression test: a longer substr pattern must match even when a shorter

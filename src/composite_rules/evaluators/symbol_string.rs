@@ -132,6 +132,45 @@ thread_local! {
     /// `eval_raw` stops at the first passing match (the dominant RSS lever).
     static NEEDS_MATCH_COUNT: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
     static NEEDS_MATCH_LOCATIONS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// How many matches the current trait's count/density filters can
+    /// distinguish: `usize::MAX` when it has a ceiling (exact count needed),
+    /// otherwise the largest floor. Set by [`MatchCountBoundGuard`].
+    static MATCH_COUNT_BOUND: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
+}
+
+/// Matches past this many cannot change the current trait's verdict: its
+/// filters are floors (`count_min`, `per_kb_min`) and every floor is met.
+/// `usize::MAX` means every match counts (a ceiling filter, a proximity
+/// consumer that reads locations, or no guard installed). An evaluator may
+/// stop enumerating once the count reaches this bound AND its evidence list
+/// is full, so the finding it produces is identical to the exhaustive one:
+/// the count is read only by those filters and the evidence is the same
+/// first `MAX_EVIDENCE_PER_TRAIT` entries. A rule such as
+/// `(array (string) (string) (string))` with `count_min: 3` enumerates every
+/// ordered triple of a minified bundle's string table otherwise: cubic
+/// matches that burned the whole 5 s AST budget on 87 KB files.
+pub(crate) fn match_count_bound() -> usize {
+    if NEEDS_MATCH_LOCATIONS.with(std::cell::Cell::get) {
+        return usize::MAX;
+    }
+    MATCH_COUNT_BOUND.with(std::cell::Cell::get)
+}
+
+/// RAII guard for [`match_count_bound`], restored on drop like
+/// [`MatchCountGuard`].
+#[must_use]
+pub(crate) struct MatchCountBoundGuard(usize);
+
+impl MatchCountBoundGuard {
+    pub(crate) fn set(bound: usize) -> Self {
+        Self(MATCH_COUNT_BOUND.with(|c| c.replace(bound)))
+    }
+}
+
+impl Drop for MatchCountBoundGuard {
+    fn drop(&mut self) {
+        MATCH_COUNT_BOUND.with(|c| c.set(self.0));
+    }
 }
 
 /// Preserve locations for proximity consumers, including nested trait refs.
@@ -1025,14 +1064,35 @@ pub(crate) fn eval_text<'a, 'b>(
     let mut evidence = Vec::new();
     let mut match_count = 0usize;
     let needs_count = match_count_needed();
+    let count_bound = match_count_bound();
+
+    // A `word:`/`regex:` `if:` can only match inside a string that holds one
+    // of its mandatory atoms; the prefilter recorded those strings' indices
+    // (see `EvaluationContext::regex_candidate_strings`). Sweep just those,
+    // in order, so evidence, count and the early break are unchanged. The
+    // key is the pattern `StringMatcher::resolve` picks, so an `unless:`
+    // or a differently-shaped condition on the same trait never borrows it.
+    let candidate_strings: Option<&[u32]> = match ctx.current_trait_idx {
+        Some(idx) if params.exact.is_none() && params.substr.is_none() => params
+            .word
+            .map(String::as_str)
+            .or(params.regex.map(String::as_str))
+            .and_then(|key| {
+                ctx.regex_candidate_strings
+                    .and_then(|m| m.get(&idx))
+                    .filter(|(pattern, _)| *pattern == key)
+                    .map(|(_, list)| *list)
+            }),
+        _ => None,
+    };
 
     matcher.with_batch(ctx.report.strings.len(), |matcher| {
-        for string_info in &ctx.report.strings {
+        let mut visit = |string_info: &crate::types::StringInfo| -> bool {
             if skip_decoded && !string_info.encoding_chain.is_empty() {
-                continue;
+                return true;
             }
             if !offset_in_range(string_info.offset, effective_range) {
-                continue;
+                return true;
             }
 
             if let Some(match_value) = matcher
@@ -1081,7 +1141,31 @@ pub(crate) fn eval_text<'a, 'b>(
                     // the exact same capped evidence (including exclusions and
                     // offsets), then avoid sweeping every native string after
                     // enough accepted hits have already filled that evidence.
-                    if !needs_count && evidence.len() >= MAX_EVIDENCE_PER_TRAIT {
+                    // A floor-only count filter already met is the same
+                    // case: see `match_count_bound`.
+                    if (!needs_count || match_count >= count_bound)
+                        && evidence.len() >= MAX_EVIDENCE_PER_TRAIT
+                    {
+                        return false;
+                    }
+                }
+            }
+            true
+        };
+        match candidate_strings {
+            Some(list) => {
+                for &i in list {
+                    let Some(string_info) = ctx.report.strings.get(i as usize) else {
+                        break;
+                    };
+                    if !visit(string_info) {
+                        break;
+                    }
+                }
+            }
+            None => {
+                for string_info in &ctx.report.strings {
+                    if !visit(string_info) {
                         break;
                     }
                 }

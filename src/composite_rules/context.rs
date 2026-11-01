@@ -274,6 +274,12 @@ pub(crate) struct EvaluationContext<'a> {
     /// whose atoms are absent from every decoded string layer of this member.
     /// `eval_text` skips its decoded-layer pass for exactly that pattern.
     pub decoded_skip: Option<&'a rustc_hash::FxHashMap<usize, &'a str>>,
+    /// Literal-bearing regex `type: text` traits (by index, with their `if:`
+    /// pattern text) and the ascending `report.strings` indices that hold
+    /// the regex's prefix literal. `eval_text` runs exactly that pattern
+    /// over exactly those strings. Missing key → full sweep.
+    pub regex_candidate_strings:
+        Option<&'a rustc_hash::FxHashMap<usize, (&'a str, &'a [u32])>>,
     /// Validated UTF-8 view of `binary_data`, populated once per file for source-code
     /// file types. Lets AST/text evaluators skip the per-rule O(N) `from_utf8` check.
     pub cached_source_utf8: Option<&'a str>,
@@ -394,6 +400,7 @@ impl<'a> EvaluationContext<'a> {
             for_mask: TypeMask::ALL,
             raw_atom_offsets: None,
             decoded_skip: None,
+            regex_candidate_strings: None,
             cached_source_utf8,
             parent_is_exception: false,
         }
@@ -776,9 +783,20 @@ impl<'a> EvaluationContext<'a> {
             for_mask: TypeMask::ALL,
             raw_atom_offsets: None,
             decoded_skip: None,
+            regex_candidate_strings: None,
             cached_source_utf8: None,
             parent_is_exception: false,
         }
+    }
+
+    /// Attach the candidate string lists (see `regex_candidate_strings`).
+    #[must_use]
+    pub(crate) fn with_regex_candidate_strings(
+        mut self,
+        lists: Option<&'a rustc_hash::FxHashMap<usize, (&'a str, &'a [u32])>>,
+    ) -> Self {
+        self.regex_candidate_strings = lists;
+        self
     }
 
     /// Attach the decoded-layer skip map (see `decoded_skip`).

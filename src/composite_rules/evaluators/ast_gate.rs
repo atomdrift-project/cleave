@@ -134,6 +134,26 @@ pub(crate) fn source_contains(source: &[u8], literal: &[u8], ci: bool) -> bool {
 /// `s` the long s, so a case-insensitive atom is cut down to its longest run
 /// free of either letter.
 pub(crate) fn regex_requirement(regex: &str) -> Option<AnyOf> {
+    // A pure function of the pattern text, re-asked by the simple-mode gate
+    // on every file a `regex:` AST trait applies to: without the memo,
+    // `extract_regex_literal` re-parsed (and Unicode case-folded) the same
+    // few hundred patterns once per member, 8 s of a 3,300-member wheel's
+    // 310 CPU-s. Distinct patterns are bounded by the rule set.
+    static MEMO: std::sync::OnceLock<
+        parking_lot::RwLock<rustc_hash::FxHashMap<Box<str>, Option<AnyOf>>>,
+    > = std::sync::OnceLock::new();
+    let memo = MEMO.get_or_init(Default::default);
+    if let Some(hit) = memo.read().get(regex) {
+        return hit.clone();
+    }
+    let computed = compute_regex_requirement(regex);
+    memo.write()
+        .entry(regex.into())
+        .or_insert_with(|| computed.clone());
+    computed
+}
+
+fn compute_regex_requirement(regex: &str) -> Option<AnyOf> {
     let unicode_folded = |atom: String, ci: bool| -> Option<(Box<[u8]>, bool)> {
         if !ci {
             return Some((atom.into_bytes().into_boxed_slice(), false));

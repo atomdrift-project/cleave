@@ -843,6 +843,13 @@ fn eval_ast_query_once<'a>(
         if !super::symbol_string::match_count_needed() {
             break 'matches;
         }
+        // Floor-only count filters already satisfied and the evidence list
+        // full: later matches change neither verdict nor output.
+        if match_count >= super::symbol_string::match_count_bound()
+            && evidence.len() >= MAX_EVIDENCE_PER_TRAIT
+        {
+            break 'matches;
+        }
     }
     let mut warnings = Vec::new();
     if has_parse_errors {

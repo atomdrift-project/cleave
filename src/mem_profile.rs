@@ -39,11 +39,13 @@ pub enum Phase {
     EvalSymbol,
     /// `eval_kv` structured-value matching.
     EvalKv,
+    /// String-index prefilter (atom scan over extracted strings).
+    Prefilter,
 }
 
 #[cfg_attr(not(feature = "memprofile"), allow(dead_code))]
 impl Phase {
-    const COUNT: usize = 8;
+    const COUNT: usize = 9;
     const NAMES: [&'static str; Self::COUNT] = [
         "other",
         "extract",
@@ -53,6 +55,7 @@ impl Phase {
         "eval_raw",
         "eval_symbol",
         "eval_kv",
+        "prefilter",
     ];
 }
 

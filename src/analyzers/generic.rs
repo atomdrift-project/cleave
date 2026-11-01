@@ -200,6 +200,7 @@ impl GenericAnalyzer {
             // `alias.decompress` to become `zlib.decompress`.
             symbol_extraction::ingest_filefacts_calls(&ctx.parsed, &mut report);
             symbol_extraction::ingest_filefacts_imports(&ctx.parsed, &self.file_type, &mut report);
+            report.exports.extend(ctx.exports_from_filefacts());
         }
         let tree = source_ast.map(|ast| ast.tree);
         tracing::debug!(

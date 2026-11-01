@@ -25,6 +25,11 @@ impl Tree {
     }
 
     fn run(&self) -> Run {
+        self.run_with(&[])
+    }
+
+    /// A validation run with `extra` arguments after `validate`'s own.
+    fn run_with(&self, extra: &[&str]) -> Run {
         static INVOCATION: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let invocation = INVOCATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let output = Command::new(env!("CARGO_BIN_EXE_cleave"))
@@ -48,6 +53,7 @@ impl Tree {
             // allowlist lint, and a rule for every type trips the file-type
             // cap; everything else stays enabled.
             .args(["validate", "--exclude", "validation,ft-cap"])
+            .args(extra)
             .output()
             .unwrap();
         Run::from(output)
@@ -56,13 +62,19 @@ impl Tree {
 
 struct Run {
     output: Output,
+    stdout: String,
     stderr: String,
 }
 
 impl From<Output> for Run {
     fn from(output: Output) -> Self {
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
         let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-        Self { output, stderr }
+        Self {
+            output,
+            stdout,
+            stderr,
+        }
     }
 }
 
@@ -324,4 +336,57 @@ fn a_different_engine_or_settings_analyzes_everything() {
     let slow = Run::from(slow);
     assert!(slow.ok(), "{}", slow.stderr);
     assert_eq!(slow.analyzed_and_reused(), (4, 0), "{}", slow.stderr);
+}
+
+/// `--slow-rules` audits a full, uncached validation: it neither replays a
+/// cached verdict nor reuses unchanged fixtures, lists the costliest rules
+/// with the shape of their conditions, and leaves the caches of ordinary
+/// runs as they were.
+#[test]
+fn slow_rule_audit_measures_every_fixture_without_disturbing_the_cache() {
+    let tree = tree();
+    let first = tree.run();
+    assert!(first.ok(), "{}", first.stderr);
+
+    let audit = tree.run_with(&["--slow-rules", "50"]);
+    assert!(audit.ok(), "{}", audit.stderr);
+    assert!(!audit.cache_hit(), "{}", audit.stderr);
+    assert_eq!(audit.analyzed_and_reused(), (4, 0), "{}", audit.stderr);
+    assert!(
+        audit
+            .stdout
+            .contains("Slowest rules by total evaluation time"),
+        "{}",
+        audit.stdout
+    );
+    for (id, shape) in [
+        (
+            "metadata/lang/source/shape::js-marker",
+            "for: javascript  if: text/substr",
+        ),
+        (
+            "objectives/impact/dos/resource::scripted-marker",
+            "if: any(trait)",
+        ),
+    ] {
+        let at = audit.stdout.find(id).unwrap_or_else(|| {
+            panic!(
+                "{id} missing from the audit:
+{}",
+                audit.stdout
+            )
+        });
+        assert!(
+            audit.stdout[at..]
+                .lines()
+                .nth(1)
+                .is_some_and(|l| l.contains(shape)),
+            "{id} should read `{shape}`:
+{}",
+            audit.stdout
+        );
+    }
+
+    let replay = tree.run();
+    assert!(replay.ok() && replay.cache_hit(), "{}", replay.stderr);
 }

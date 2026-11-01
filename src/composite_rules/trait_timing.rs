@@ -3,22 +3,47 @@
 //! The slow-rule warnings only catch single evaluations over 500 ms, but the
 //! cost that dominates archive scans is death-by-repetition: a rule that takes
 //! 10 ms and runs against every one of thousands of members. With
-//! `CLEAVE_TRAIT_TIMING=1`, every trait evaluation adds its duration here and
+//! `CLEAVE_TRAIT_TIMING=1` (or after [`enable`], as `cleave validate
+//! --slow-rules` does), every trait evaluation adds its duration here and
 //! [`report`] logs the top aggregate consumers at end of scan. Off (the
-//! default), [`record`] is a single branch on a cached bool.
+//! default), [`record`] is a single branch on a cached flag.
 
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+/// 0: not decided, 1: off, 2: on.
+static STATE: AtomicU8 = AtomicU8::new(0);
+
 fn enabled() -> bool {
-    static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| crate::env::flag("CLEAVE_TRAIT_TIMING"))
+    match STATE.load(Ordering::Relaxed) {
+        2 => true,
+        1 => false,
+        _ => {
+            let on = crate::env::flag("CLEAVE_TRAIT_TIMING");
+            STATE.store(if on { 2 } else { 1 }, Ordering::Relaxed);
+            on
+        }
+    }
 }
 
-/// (total nanos, evaluation count) per trait id.
-type Times = FxHashMap<String, (u64, u64)>;
+/// Record every trait evaluation from now on, whatever the environment says.
+pub(crate) fn enable() {
+    STATE.store(2, Ordering::Relaxed);
+}
+
+/// Per trait id: total nanos, evaluation count, slowest single evaluation
+/// in nanos.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub(crate) struct Total {
+    pub(crate) nanos: u64,
+    pub(crate) evals: u64,
+    pub(crate) max_nanos: u64,
+}
+
+type Times = FxHashMap<String, Total>;
 type Shard = Arc<Mutex<Times>>;
 
 #[derive(Default)]
@@ -39,10 +64,11 @@ impl Timings {
         let shards = self.shards.lock().clone();
         let mut totals = Times::default();
         for shard in shards {
-            for (id, &(ns, count)) in shard.lock().iter() {
+            for (id, total) in shard.lock().iter() {
                 let entry = totals.entry(id.clone()).or_default();
-                entry.0 += ns;
-                entry.1 += count;
+                entry.nanos += total.nanos;
+                entry.evals += total.evals;
+                entry.max_nanos = entry.max_nanos.max(total.max_nanos);
             }
         }
         totals
@@ -57,11 +83,20 @@ thread_local! {
 }
 
 fn add(map: &mut Times, trait_id: &str, duration: Duration) {
+    let nanos = duration.as_nanos() as u64;
     if let Some(entry) = map.get_mut(trait_id) {
-        entry.0 += duration.as_nanos() as u64;
-        entry.1 += 1;
+        entry.nanos += nanos;
+        entry.evals += 1;
+        entry.max_nanos = entry.max_nanos.max(nanos);
     } else {
-        map.insert(trait_id.to_owned(), (duration.as_nanos() as u64, 1));
+        map.insert(
+            trait_id.to_owned(),
+            Total {
+                nanos,
+                evals: 1,
+                max_nanos: nanos,
+            },
+        );
     }
 }
 
@@ -73,19 +108,50 @@ pub(crate) fn record(trait_id: &str, duration: Duration) {
     }
 }
 
+/// Records the time from its creation to its drop for one rule, whichever
+/// way the evaluation returns. Reads no clock while timing is off.
+pub(crate) struct Recorder<'a> {
+    id: &'a str,
+    started: Option<std::time::Instant>,
+}
+
+impl<'a> Recorder<'a> {
+    pub(crate) fn start(id: &'a str) -> Self {
+        Self {
+            id,
+            started: enabled().then(std::time::Instant::now),
+        }
+    }
+}
+
+impl Drop for Recorder<'_> {
+    fn drop(&mut self) {
+        if let Some(started) = self.started {
+            record(self.id, started.elapsed());
+        }
+    }
+}
+
+/// Every recorded trait with its totals, slowest aggregate first. Empty when
+/// disabled or nothing was recorded.
+pub(crate) fn totals() -> Vec<(String, Total)> {
+    let Some(times) = TIMES.get() else {
+        return Vec::new();
+    };
+    let mut rows: Vec<_> = times.totals().into_iter().collect();
+    rows.sort_by(|(a_id, a), (b_id, b)| b.nanos.cmp(&a.nanos).then_with(|| a_id.cmp(b_id)));
+    rows
+}
+
 /// Log the top-`n` traits by aggregate evaluation time. No-op when disabled or
 /// nothing was recorded.
 pub(crate) fn report(n: usize) {
-    let Some(times) = TIMES.get() else { return };
-    let mut rows: Vec<_> = times.totals().into_iter().collect();
-    rows.sort_by(|(a_id, (a_ns, _)), (b_id, (b_ns, _))| {
-        b_ns.cmp(a_ns).then_with(|| a_id.cmp(b_id))
-    });
-    for (id, (ns, count)) in rows.into_iter().take(n) {
+    for (id, total) in totals().into_iter().take(n) {
         tracing::info!(
             trait_id = %id,
-            total_ms = ns / 1_000_000,
-            evals = count,
+            total_ms = total.nanos / 1_000_000,
+            evals = total.evals,
+            max_ms = total.max_nanos / 1_000_000,
             "trait time aggregate"
         );
     }
@@ -111,8 +177,13 @@ fn trait_timing_combines_live_and_finished_threads() {
     for thread in threads {
         thread.join().unwrap();
     }
-    assert_eq!(times.totals()["shared"], (28_000, 4_000));
-    assert_eq!(times.totals()["shared"], (28_000, 4_000));
+    let expected = Total {
+        nanos: 28_000,
+        evals: 4_000,
+        max_nanos: 7,
+    };
+    assert_eq!(times.totals()["shared"], expected);
+    assert_eq!(times.totals()["shared"], expected);
 }
 
 /// Cheap per-evaluation timer for the slow-rule / hard-timeout checks.

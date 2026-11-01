@@ -209,15 +209,18 @@ pub(crate) fn dispatch_command(
             return Ok(None);
         }
         #[cfg(feature = "lint")]
-        Some(cli::Command::Validate { exclude, soft }) => {
-            cleave::commands::validate::run_with_options(
-                ctx.format,
-                exclude.as_deref(),
-                args.verbose,
-                soft,
-                ctx.analyze.slow_rule_ms,
-            )?
-        }
+        Some(cli::Command::Validate {
+            exclude,
+            soft,
+            slow_rules,
+        }) => cleave::commands::validate::run_with_options(
+            ctx.format,
+            exclude.as_deref(),
+            args.verbose,
+            soft,
+            ctx.analyze.slow_rule_ms,
+            slow_rules,
+        )?,
         Some(cli::Command::Diff {
             old,
             new,

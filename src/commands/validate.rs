@@ -28,6 +28,8 @@ use std::time::Instant;
 mod fixture_state;
 #[path = "validate_cache.rs"]
 mod result_cache;
+#[path = "validate_slow_rules.rs"]
+mod slow_rules;
 
 /// Every fixture derives its sole expectation from its top-level directory.
 struct Target {
@@ -77,6 +79,7 @@ pub fn run(format: &OutputFormat, exclude: Option<&str>, verbose: bool) -> Resul
         verbose,
         false,
         CapabilityMapper::DEFAULT_SLOW_RULE_MS,
+        None,
     )
 }
 
@@ -99,6 +102,7 @@ pub fn run_soft(format: &OutputFormat, exclude: Option<&str>, verbose: bool) -> 
         verbose,
         true,
         CapabilityMapper::DEFAULT_SLOW_RULE_MS,
+        None,
     )
 }
 
@@ -137,14 +141,22 @@ fn report_retiring_condition_types(traits_dir: &Path) {
 
 /// Run validation with the CLI's slow-rule threshold. The environment soft-mode
 /// toggle also applies to callers using the default (strict) mode.
+///
+/// `slow_rules` asks for the slow-rule audit: every fixture is analyzed with
+/// no result or per-fixture cache, every rule evaluation is timed, and the
+/// top `n` rules by total time are printed before the verdict.
 pub fn run_with_options(
     format: &OutputFormat,
     exclude: Option<&str>,
     verbose: bool,
     soft: bool,
     slow_rule_ms: u64,
+    slow_rules: Option<usize>,
 ) -> Result<String> {
     let started = Instant::now();
+    if slow_rules.is_some() {
+        crate::composite_rules::trait_timing::enable();
+    }
     let soft = soft
         || matches!(
             std::env::var("CLEAVE_VALIDATE_SOFT").ok().as_deref(),
@@ -167,15 +179,21 @@ pub fn run_with_options(
         elapsed_ms = discovery_started.elapsed().as_millis(),
         "fixtures discovered and rule tree digested"
     );
-    let result_cache = result_cache::ResultCache::new(
-        &traits_dir,
-        rule_tree,
-        &targets,
-        "severity-directories-v1",
-        soft,
-        verbose,
-        slow_rule_ms,
-    );
+    // The audit measures every rule on every fixture: no cached verdict, no
+    // per-fixture reuse (both hang off the result cache).
+    let result_cache = if slow_rules.is_some() {
+        None
+    } else {
+        result_cache::ResultCache::new(
+            &traits_dir,
+            rule_tree,
+            &targets,
+            "severity-directories-v1",
+            soft,
+            verbose,
+            slow_rule_ms,
+        )
+    };
     // Everything before this point must get by without reading a rule file:
     // a cache hit on an unchanged tree is decided from the directory walk
     // alone, and the first source read costs more than the whole hit.
@@ -414,6 +432,9 @@ pub fn run_with_options(
     // Include aggregate trait costs (CLEAVE_TRAIT_TIMING=1) on validation runs,
     // including runs whose fixture expectations fail below.
     cleave::log_scan_stats();
+    if let Some(n) = slow_rules {
+        print_slow_rules(&slow_rules::audit(&mapper, n), format);
+    }
     let results: Vec<(usize, Result<AnalysisReport>)> = selected
         .iter()
         .map(|&i| {
@@ -510,6 +531,18 @@ pub fn run_with_options(
     }
 
     Ok(format_validate_output(&report, format))
+}
+
+/// The slow-rule audit, as a table on the terminal or one JSON document on
+/// stdout, ahead of the verdict so a failing tree is audited too.
+fn print_slow_rules(audit: &slow_rules::Audit, format: &OutputFormat) {
+    match format {
+        OutputFormat::Json => match serde_json::to_string(audit) {
+            Ok(json) => println!("{json}"),
+            Err(error) => eprintln!("slow-rule audit not encoded: {error}"),
+        },
+        OutputFormat::Annotate | OutputFormat::Toc => print!("{}", audit.table()),
+    }
 }
 
 fn print_performance_issues(

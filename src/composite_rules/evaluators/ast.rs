@@ -945,6 +945,9 @@ const COMBINED_AST_QUERY_MATCH_LIMIT: u32 = 65_536;
 // batch's CPU budget. Its per-pattern overflow bit sends only that query to
 // the ordinary evaluator, which retains the full standalone state limit.
 const COMBINED_AST_QUERY_GROUP_STATE_LIMIT: u32 = 64;
+/// The shared batch walk's CPU budget is the per-query budget times the
+/// active queries it stands in for, up to this many (12 x 5 s = 60 s).
+const BATCH_CPU_BUDGET_MAX_QUERIES: usize = 12;
 
 /// Run every applicable `query:` in one `QueryCursor` walk. `None` means
 /// "do not use a batch" — caller keeps the per-trait `eval_ast_query` path
@@ -1206,12 +1209,22 @@ pub(crate) fn batch_ast_queries_with_index(
     query_cursor.set_byte_range(0..source.len().min(AST_QUERY_BYTE_LIMIT));
 
     let cancelled = || cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed));
-    // Use the same per-query CPU ceiling when there is no outer scan deadline.
-    let default_cpu_budget = compiling
+    // The shared walk replaces one standalone walk per active query, so it
+    // gets their budgets, not one query's: a 10 MB JavaScript bundle (449
+    // traits, 10.15 MB) under the single-query ceiling hit it after 5 s and
+    // then paid ~1 s for every standalone walk that followed (142 CPU-s);
+    // with the walks' combined budget the batch settles every query (70
+    // CPU-s, identical findings). The sum is capped so a pathological tree
+    // cannot hold a worker for minutes before the fallback; above the cap
+    // the standalone walks were going to cost more than the cap anyway.
+    let per_query_budget = compiling
         .iter()
         .map(|(query, _)| ast_query_cpu_budget(query, deadline))
         .min()
         .unwrap_or(AST_QUERY_CPU_BUDGET);
+    let active_queries = active.iter().filter(|&&enabled| enabled).count();
+    let default_cpu_budget = per_query_budget
+        .saturating_mul(u32::try_from(active_queries.clamp(1, BATCH_CPU_BUDGET_MAX_QUERIES)).unwrap_or(1));
     // Diagnostic override for measuring the cost of repeated standalone
     // walks after the shared batch reaches its CPU budget. An unfinished
     // query still falls back to its ordinary per-query budget below.

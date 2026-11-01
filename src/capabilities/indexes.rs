@@ -866,9 +866,17 @@ impl StringMatchIndex {
         let mut atom_traits: FxHashSet<usize> = FxHashSet::default();
         let mut add_atom = |trait_idx: usize, atom: &str, ci: bool| {
             let (map, patterns, to_traits) = if ci {
-                (&mut atom_ci_map, &mut atom_ci_patterns, &mut atom_ci_to_traits)
+                (
+                    &mut atom_ci_map,
+                    &mut atom_ci_patterns,
+                    &mut atom_ci_to_traits,
+                )
             } else {
-                (&mut atom_cs_map, &mut atom_cs_patterns, &mut atom_cs_to_traits)
+                (
+                    &mut atom_cs_map,
+                    &mut atom_cs_patterns,
+                    &mut atom_cs_to_traits,
+                )
             };
             let key = if ci {
                 atom.to_ascii_lowercase()
@@ -3751,8 +3759,8 @@ mod tests {
         let traits = vec![make_text_regex_trait("fetch-cmd", pat)];
         let index = StringMatchIndex::build(&traits);
         assert!(index.regex_traits_without_atoms.is_empty());
-        let (hit, _) = index
-            .find_regex_candidate_strings(&[&make_string("fetch http://evil.example/x")], 1);
+        let (hit, _) =
+            index.find_regex_candidate_strings(&[&make_string("fetch http://evil.example/x")], 1);
         assert!(
             hit.contains(&0),
             "fetch-cmd must be a candidate when 'fetch' is present"
@@ -3803,11 +3811,26 @@ mod tests {
             assert!(cands.contains(&idx), "trait {idx} must be a candidate");
         }
         assert_eq!(lists.get(&0).map(Vec::as_slice), Some(&[1u32, 3][..]));
-        assert!(lists.get(&1).is_none(), "atom-less trait keeps the full sweep");
-        assert_eq!(lists.get(&2).map(Vec::as_slice), Some(&[][..]), "CS atom skips CURL");
-        assert_eq!(lists.get(&3).map(Vec::as_slice), Some(&[3u32][..]), "(?i) atom hits WinRAR");
+        assert!(
+            !lists.contains_key(&1),
+            "atom-less trait keeps the full sweep"
+        );
+        assert_eq!(
+            lists.get(&2).map(Vec::as_slice),
+            Some(&[][..]),
+            "CS atom skips CURL"
+        );
+        assert_eq!(
+            lists.get(&3).map(Vec::as_slice),
+            Some(&[3u32][..]),
+            "(?i) atom hits WinRAR"
+        );
         assert_eq!(lists.get(&4).map(Vec::as_slice), Some(&[1u32, 3][..]));
-        assert_eq!(lists.get(&5).map(Vec::as_slice), Some(&[2u32][..]), "CI word hits CURL");
+        assert_eq!(
+            lists.get(&5).map(Vec::as_slice),
+            Some(&[2u32][..]),
+            "CI word hits CURL"
+        );
         // No atom anywhere: not a candidate at all (and the atom-less trait still is).
         let (cands, lists) = index.find_regex_candidate_strings(&[&make_string("zzz")], 1);
         assert_eq!(cands.into_iter().collect::<Vec<_>>(), vec![1]);
@@ -3823,7 +3846,7 @@ mod tests {
         let refs: Vec<&StringInfo> = many.iter().collect();
         let (cands, lists) = index.find_regex_candidate_strings(&refs, many.len());
         assert!(cands.contains(&0));
-        assert!(lists.get(&0).is_none());
+        assert!(!lists.contains_key(&0));
     }
 
     /// A regex trait with NO extractable atom must always be a candidate

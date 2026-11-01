@@ -848,7 +848,7 @@ checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
 name = "cleave"
-version = "3.0.0-beta.2"
+version = "3.0.0-beta.3"
 dependencies = [
  "aes 0.9.3",
  "aes-gcm",
@@ -1061,9 +1061,9 @@ checksum = "7704b5fdd17b18ae31c4c1da5a2e0305a2bf17b5249300a9ee9ed7b72114c636"
 
 [[package]]
 name = "cpio"
-version = "0.4.1"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "938e716cb1ade5d6c8f959c13a7248b889c07491fc7e41167c3afe20f8f0de1e"
+checksum = "dd609f59ec3371b104ae6b123ff63e89736dc50bae0bb6650295993487197f48"
 
 [[package]]
 name = "cpp_demangle"
@@ -1922,7 +1922,7 @@ checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 [[package]]
 name = "filefacts"
 version = "2.0.1"
-source = "git+https://github.com/atomdrift-project/filefacts.git#b09904616e6ab90d385b0511ee05eae6f84bc6ef"
+source = "git+https://github.com/atomdrift-project/filefacts.git#d6041caa2f9a33f33a9785267c198a3e445ba979"
 dependencies = [
  "aes 0.9.3",
  "aho-corasick",
@@ -5694,7 +5694,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#b09904616e6ab90d385b0511ee05eae6f84bc6ef"
+source = "git+https://github.com/atomdrift-project/filefacts.git#d6041caa2f9a33f33a9785267c198a3e445ba979"
 dependencies = [
  "cc",
  "tree-sitter",
@@ -7114,9 +7114,9 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "9.2.0"
+version = "9.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f5b58784007ff6e5f280ec82c8596686a3b9b5dd5836c63288d4479f84728b9"
+checksum = "848dad21639597378c3be94c59fd4de683f0f6d8a5387575896e1245737d4f37"
 dependencies = [
  "aes 0.9.3",
  "bzip2 0.6.1",

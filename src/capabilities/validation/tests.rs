@@ -4966,6 +4966,40 @@ mod taxonomy_tests {
     }
 
     #[test]
+    fn reviewed_msvc_runtime_path_needs_no_size_bound() {
+        let mut path = leaf(
+            "well-known/lib/runtime/compiled/msvc-runtime::bin64-msvcr120-path",
+            Criticality::Notable,
+        );
+        path.r#for = vec![FileType::Pe];
+        path.r#if = Condition::Path(PathQuery {
+            substr: Some("bin64/msvcr120.dll".into()),
+            ..Default::default()
+        });
+        assert!(find_wellknown_missing_size_filter(&[path.clone()], &HashMap::new()).is_empty());
+        let mut different_match = path.clone();
+        different_match.r#if = Condition::Path(PathQuery {
+            substr: Some("another.dll".into()),
+            ..Default::default()
+        });
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[different_match], &HashMap::new()).len(),
+            1
+        );
+        let mut higher_criticality = path.clone();
+        higher_criticality.crit = Criticality::Suspicious;
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[higher_criticality], &HashMap::new()).len(),
+            1
+        );
+        path.id = "well-known/lib/runtime/compiled/msvc-runtime::other-path".into();
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[path], &HashMap::new()).len(),
+            1
+        );
+    }
+
+    #[test]
     fn low_tier_named_binary_facts_do_not_need_arbitrary_size() {
         let mut fact = leaf("well-known/app/demo::claim", Criticality::Notable);
         fact.r#for = vec![FileType::Pe];
@@ -8596,6 +8630,7 @@ mod defaults_tests {
 mod section_filter_validation_tests {
     use crate::capabilities::validation::taxonomy::{
         find_meta_missing_section_filter, find_wellknown_missing_section_filter,
+        find_wellknown_missing_size_filter,
     };
     use crate::composite_rules::{Arch, Condition, FileType, Platform, TextQuery, TraitDefinition};
     use std::collections::HashMap;
@@ -8698,6 +8733,25 @@ mod section_filter_validation_tests {
             result[0].0,
             "well-known/app/productivity/adobe-reader::other"
         );
+    }
+
+    #[test]
+    fn reviewed_oep_banner_keeps_whole_file_scope_and_no_size_bound() {
+        let marker = text_trait(
+            "well-known/tool/reverse-engineering/oep-finder::geta-oep-banner-marker",
+            vec![FileType::Pe],
+        );
+        let other = text_trait(
+            "well-known/tool/reverse-engineering/oep-finder::other-banner",
+            vec![FileType::Pe],
+        );
+        let traits = vec![marker, other];
+        let sizes = find_wellknown_missing_size_filter(&traits, &HashMap::new());
+        let sections = find_wellknown_missing_section_filter(&traits, &HashMap::new());
+        assert_eq!(sizes.len(), 1);
+        assert_eq!(sections.len(), 1);
+        assert!(sizes[0].0.ends_with("::other-banner"));
+        assert!(sections[0].0.ends_with("::other-banner"));
     }
 
     #[test]

@@ -148,9 +148,8 @@ impl ScanMemGate {
         raw.max(MIN_ESTIMATE_BYTES).min(self.estimate(size))
     }
 
-    /// Block until `size`'s estimated footprint fits, then reserve it; the
-    /// guard releases the reservation on drop. `hint` is what the caller
-    /// learned about the file's footprint (see `FootprintHint`).
+    /// Block until the estimated footprint fits, then reserve it using the
+    /// caller's `FootprintHint`. The guard releases the reservation on drop.
     pub(crate) fn acquire_hinted(&self, size: u64, hint: FootprintHint) -> ScanMemPermit<'_> {
         let est = match hint {
             FootprintHint::Flat => self.estimate_flat(size),

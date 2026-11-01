@@ -24,7 +24,10 @@ use std::path::Path;
 /// line; the snapshot's relative paths carry none.
 #[must_use]
 pub(crate) fn scope_key(path: &Path) -> String {
-    let parts: Vec<String> = path
+    // Scope keys accept either separator regardless of the host OS. On Unix,
+    // `Path::components` otherwise treats backslashes as ordinary characters.
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    let parts: Vec<String> = Path::new(&normalized)
         .components()
         .filter(|c| !matches!(c, std::path::Component::CurDir))
         .map(|c| c.as_os_str().to_string_lossy().into_owned())
@@ -186,12 +189,20 @@ mod tests {
 
     #[test]
     fn scope_keys_are_root_relative_with_forward_slashes() {
-        assert_eq!(
-            scope_key(Path::new(".\\objectives\\a\\b.yaml")),
-            "objectives/a/b.yaml"
-        );
-        assert_eq!(scope_key(Path::new("./x/y.yaml")), "x/y.yaml");
-        assert_eq!(scope_key(Path::new("x/y.yaml")), "x/y.yaml");
+        for (path, expected) in [
+            (r".\objectives\a\b.yaml", "objectives/a/b.yaml"),
+            ("./objectives/a/b.yaml", "objectives/a/b.yaml"),
+            ("/repo/traits/objectives/a/b.yaml", "objectives/a/b.yaml"),
+            (r"C:\repo\traits\objectives\a\b.yaml", "objectives/a/b.yaml"),
+            (r"traits\objectives/a\b.yaml", "objectives/a/b.yaml"),
+            (r"traits\metadata\a.yaml", "metadata/a.yaml"),
+            ("./x/y.yaml", "x/y.yaml"),
+            (r".\x\y.yaml", "x/y.yaml"),
+            ("x/y.yaml", "x/y.yaml"),
+            (r"x\y.yaml", "x/y.yaml"),
+        ] {
+            assert_eq!(scope_key(Path::new(path)), expected, "path: {path}");
+        }
     }
 
     #[test]

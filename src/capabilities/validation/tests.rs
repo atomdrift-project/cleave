@@ -4993,7 +4993,10 @@ mod taxonomy_tests {
             1
         );
         path.id = "well-known/lib/runtime/compiled/msvc-runtime::other-path".into();
-        assert_eq!(find_wellknown_missing_size_filter(&[path], &HashMap::new()).len(), 1);
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[path], &HashMap::new()).len(),
+            1
+        );
     }
 
     #[test]

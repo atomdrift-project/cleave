@@ -3261,10 +3261,6 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     "path:metadata/package/testing/presence/harness/",
     "path:metadata/package/testing/presence/path/",
     "path:metadata/package/testing/presence/suite/paths.yaml",
-    // Test-path / embedded-runtime FP-suppression: excluding `…/test/…` and
-    // `jruby-complete.jar!…` paths from obfuscation flags applies across every
-    // code/archive type the obfuscation composites run on.
-    "path:objectives/anti-static/obfuscation/code-metrics/",
     // Whole-file size / "is-binary" filters carry a match-anything path pattern
     // and apply to the entire native+bytecode binary family (elf/macho/pe/
     // class/pyc) and beyond.
@@ -3779,6 +3775,13 @@ pub(crate) fn find_wellknown_missing_size_filter(
                 && !is_low_tier_named_binary_fact(t)
                 // A Go import path is provenance evidence, not a size-bounded identity.
                 && t.id != "well-known/tool/detection/titus::titus-secret-scan-implementation"
+                // A tool banner is a reference regardless of file size.
+                && t.id != "well-known/tool/reverse-engineering/oep-finder::geta-oep-banner-marker"
+                // This path names a runtime DLL; file size does not change the path.
+                && !(t.id == "well-known/lib/runtime/compiled/msvc-runtime::bin64-msvcr120-path"
+                    && matches!(t.crit, Criticality::Component | Criticality::Notable)
+                    && matches!(&t.r#if, Condition::Path(q)
+                        if q.substr.as_deref() == Some("bin64/msvcr120.dll")))
                 && t.size_min.is_none()
                 && t.size_max.is_none()
         })
@@ -3880,6 +3883,8 @@ pub(crate) fn find_wellknown_missing_section_filter(
                 && t.id != "well-known/app/system/adobe-acrobat-updater::adobe-acrobat-updater-text"
                 // Go package paths can be emitted in different binary sections.
                 && t.id != "well-known/tool/detection/titus::titus-secret-scan-implementation"
+                // The GeTaOEP banner can appear in any section or overlay.
+                && t.id != "well-known/tool/reverse-engineering/oep-finder::geta-oep-banner-marker"
                 && condition_supports_section_filter(&t.r#if)
                 && !condition_has_section_filter(&t.r#if)
         })

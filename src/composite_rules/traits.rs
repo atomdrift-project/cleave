@@ -5310,12 +5310,16 @@ mod match_count_bound_tests {
 
     #[test]
     fn ceiling_filters_need_every_match() {
-        let mut t = TraitDefinition::default();
-        t.count_min = Some(3);
-        t.count_max = Some(10);
+        let t = TraitDefinition {
+            count_min: Some(3),
+            count_max: Some(10),
+            ..Default::default()
+        };
         assert_eq!(t.match_count_bound(4096), usize::MAX);
-        let mut t = TraitDefinition::default();
-        t.per_kb_max = Some(1.0);
+        let t = TraitDefinition {
+            per_kb_max: Some(1.0),
+            ..Default::default()
+        };
         assert_eq!(t.match_count_bound(4096), usize::MAX);
     }
 
@@ -5323,8 +5327,10 @@ mod match_count_bound_tests {
     fn floor_filters_bound_at_the_largest_floor() {
         let t = TraitDefinition::default();
         assert_eq!(t.match_count_bound(4096), 0);
-        let mut t = TraitDefinition::default();
-        t.count_min = Some(3);
+        let mut t = TraitDefinition {
+            count_min: Some(3),
+            ..Default::default()
+        };
         assert_eq!(t.match_count_bound(4096), 3);
         // 2.5 per KB over 4 KB needs 10; the density check must pass at the bound.
         t.per_kb_min = Some(2.5);

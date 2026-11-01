@@ -377,10 +377,10 @@ fn zfs_reclaimable_data() -> u64 {
     // still read on every call. This interval matches admission's polling.
     static CACHE: Mutex<Option<(Instant, u64)>> = Mutex::new(None);
     let mut cache = CACHE.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some((when, bytes)) = *cache {
-        if when.elapsed() < Duration::from_millis(250) {
-            return bytes;
-        }
+    if let Some((when, bytes)) = *cache
+        && when.elapsed() < Duration::from_millis(250)
+    {
+        return bytes;
     }
     let credit = (|| {
         // With a nonzero page-cache reserve, or an unavailable policy file,

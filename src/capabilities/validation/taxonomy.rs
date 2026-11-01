@@ -3090,7 +3090,7 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // bounded query matchers require specific columns and tables in any format.
     "text:micro-behaviors/data/db/access/chromium-queries.yaml",
     // The same carrier-independent SQL predicates, relocated to the read operation.
-    "text:micro-behaviors/data/db/read/review-access-chromium-queries.yaml",
+    "text:micro-behaviors/data/db/read/column/migration-read-review-access-chromium-queries.yaml",
     // Referenced application/product names can occur in source, binaries,
     // manifests and embedded markup. Preserve that coverage when name markers
     // move out of artifact/library or objective-keyword categories. This only

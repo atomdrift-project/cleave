@@ -101,7 +101,9 @@ pub(crate) struct TraitRegex {
 fn engine_config() -> regex_automata::meta::Config {
     regex_automata::meta::Regex::config()
         .onepass(false)
-        .dfa(true)
+        // No fully compiled DFA: see `compile_bytes_regex` for the
+        // regex-automata 0.4.18 missed-match bug it triggers.
+        .dfa(false)
         .which_captures(regex_automata::nfa::thompson::WhichCaptures::Implicit)
         .nfa_size_limit(Some(super::evaluators::REGEX_SIZE_LIMIT))
         .hybrid_cache_capacity(super::evaluators::REGEX_DFA_CACHE_BYTES)

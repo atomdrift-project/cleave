@@ -263,7 +263,13 @@ pub(crate) fn compile_bytes_regex(pattern: &str, case_insensitive: bool) -> Opti
                 regex_automata::meta::Regex::config()
                     .utf8_empty(false)
                     .onepass(false)
-                    .dfa(true)
+                    // No fully compiled DFA: regex-automata 0.4.18 pairs it
+                    // with the auto prefilter in a way that misses matches in
+                    // byte mode (`\w\[[^\[\]]*\]\s?\(` finds nothing in
+                    // `o[0](`; see `byte_regex_with_negated_bracket_class_
+                    // before_optional_space_matches`). The lazy DFA covers the
+                    // same patterns at the same speed.
+                    .dfa(false)
                     .which_captures(regex_automata::nfa::thompson::WhichCaptures::Implicit)
                     .nfa_size_limit(Some(REGEX_SIZE_LIMIT))
                     .hybrid_cache_capacity(REGEX_DFA_CACHE_BYTES),

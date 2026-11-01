@@ -2242,3 +2242,226 @@ fn ast_batch_stops_limited_patterns_and_reenables_them_on_cursor_reuse() {
     assert_eq!(counts, [1, 1, 1]);
     assert!(!cursor.did_exceed_match_limit());
 }
+
+#[test]
+fn pattern_root_kinds_reads_single_node_patterns() {
+    use super::ast_gate::pattern_root_kinds;
+    assert_eq!(
+        pattern_root_kinds("(binary_expression operator: \"-\") @subtraction"),
+        Some(vec!["binary_expression"])
+    );
+    assert_eq!(
+        pattern_root_kinds(
+            "((binary_expression left: (identifier) operator: \"-\" right: (identifier)) @o \
+             (#match? @o \"^[a-z]+ - [a-z]+$\"))"
+        ),
+        Some(vec!["binary_expression"])
+    );
+    assert_eq!(
+        pattern_root_kinds(
+            "(call_expression function: (subscript_expression index: (call_expression))) @call"
+        ),
+        Some(vec!["call_expression"])
+    );
+    assert_eq!(
+        pattern_root_kinds("(array (number) (number)) @a\n(object) @o"),
+        Some(vec!["array", "object"])
+    );
+    assert_eq!(
+        pattern_root_kinds("(call_expression function: [(identifier) (member_expression)] @f)"),
+        Some(vec!["call_expression"])
+    );
+    // Sibling, alternation, wildcard, anonymous and quantified roots walk the
+    // whole tree.
+    for query in [
+        "((identifier) @a (identifier) @b)",
+        "[(identifier) (string)] @x",
+        "(_ (identifier)) @x",
+        "\"delete\" @kw",
+        "(identifier)+ @ids",
+        "((identifier) @a (#eq? @a \"x\"))+",
+        "(#match? @a \"x\")",
+        "(identifier",
+    ] {
+        assert_eq!(pattern_root_kinds(query), None, "{query}");
+    }
+}
+
+#[test]
+fn per_root_walk_matches_the_whole_tree_walk() {
+    let source = r#"
+var a = b - c, d = e-f, g = (h - i) * (j - k);
+obj[fn("x")](1, 2); obj[fn("y")](3); window[a + b](); delete obj[key];
+var arr = [1 ^ 2, 3 ^ 4, 5 ^ 6, 7 ^ 8, 9 ^ 10, 11 ^ 12, 13];
+items["na" + "me"]["pro" + "p"];
+"#;
+    let parsed = parsed_for_test("script.js", source.as_bytes());
+    let report = create_test_report("script.js");
+    let ctx =
+        create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::JavaScript);
+    let _count = super::symbol_string::MatchCountGuard::set(true);
+    for query in [
+        "(binary_expression operator: \"-\") @subtraction",
+        "((binary_expression left: (identifier) operator: \"-\" right: (identifier)) @o \
+         (#match? @o \"^[A-Za-z_$][A-Za-z0-9_$]*[ \t]+-[ \t]+[A-Za-z_$][A-Za-z0-9_$]*$\"))",
+        "(call_expression function: (subscript_expression)) @call",
+        "(call_expression function: (subscript_expression index: (call_expression))) @call",
+        "(subscript_expression index: (call_expression function: (identifier) @decoder arguments: (arguments (_))))",
+        "(subscript_expression index: (binary_expression operator: \"+\")) @access",
+        "(unary_expression operator: \"delete\" argument: (subscript_expression)) @deletion",
+        "(array (binary_expression left: (number) operator: \"^\" right: (number)) \
+                (binary_expression left: (number) operator: \"^\" right: (number)) \
+                (binary_expression left: (number) operator: \"^\" right: (number))) @array",
+        "(subscript_expression index: (binary_expression left: (string) right: (string))) @concat_prop",
+        "(array (number) @n)",
+        "(call_expression function: (identifier) @fn (#eq? @fn \"fn\")) @call",
+    ] {
+        let whole = super::ast::eval_ast_query_with_mode(query, &ctx, false);
+        let per_root = super::ast::eval_ast_query_with_mode(query, &ctx, true);
+        assert!(whole.matched, "fixture exercises {query}");
+        assert_eq!(whole.match_count, per_root.match_count, "{query}");
+        // The same matches, in a different order: the whole-tree cursor
+        // reports an inner root before the outer one that encloses it.
+        let values = |r: &ConditionResult| {
+            let mut values = r
+                .evidence
+                .iter()
+                .map(|e| (e.offsets.clone(), e.value.clone(), e.location.clone()))
+                .collect::<Vec<_>>();
+            values.sort();
+            values
+        };
+        assert_eq!(values(&whole), values(&per_root), "{query}");
+        assert_eq!(
+            format!("{:?}", whole.warnings),
+            format!("{:?}", per_root.warnings),
+            "{query}"
+        );
+    }
+}
+
+#[test]
+fn per_root_walk_completes_on_a_deeply_nested_tree() {
+    // Every call's callee is a subscript whose index is the next call: the
+    // self-nesting shape that holds one cursor state per level.
+    let depth = 2000;
+    let mut source = String::new();
+    for _ in 0..depth {
+        source.push_str("o[f(");
+    }
+    source.push('0');
+    for _ in 0..depth {
+        source.push_str(")]()");
+    }
+    source.push_str(";\n");
+    let parsed = parsed_for_test("deep.js", source.as_bytes());
+    let report = create_test_report("deep.js");
+    let ctx =
+        create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::JavaScript);
+    let _count = super::symbol_string::MatchCountGuard::set(true);
+    let query = "(call_expression function: (subscript_expression index: (call_expression))) @call";
+    let per_root = super::ast::eval_ast_query_with_mode(query, &ctx, true);
+    assert_eq!(
+        per_root.match_count, depth,
+        "warnings={:?}",
+        per_root.warnings
+    );
+    assert!(per_root.warnings.is_empty(), "{:?}", per_root.warnings);
+}
+
+#[test]
+fn deep_tree_batch_runs_per_root_and_leaves_unrooted_queries_alone() {
+    let depth = 2000;
+    let mut source = String::from("var x = 1;\n");
+    for _ in 0..depth {
+        source.push_str("o[f(");
+    }
+    source.push('0');
+    for _ in 0..depth {
+        source.push_str(")]()");
+    }
+    source.push_str(";\nvar y = 2 - 3;\n");
+    let parsed = parsed_for_test("deep.js", source.as_bytes());
+    let tree = parsed.source_ast().expect("ast").tree;
+    let q_call =
+        "(call_expression function: (subscript_expression index: (call_expression))) @call";
+    let q_sub = "(binary_expression operator: \"-\") @subtraction";
+    let q_pair = "((identifier) @a (identifier) @b)";
+    let _count = super::symbol_string::MatchCountGuard::set(true);
+    let batch = super::ast::batch_ast_queries(
+        tree,
+        &source,
+        FileType::JavaScript,
+        &[q_call, q_sub, q_pair],
+        None,
+        None,
+    )
+    .expect("the batch runs");
+    let call = batch
+        .get(q_call)
+        .expect("rooted query settled by the per-root batch");
+    assert_eq!(call.match_count, depth, "warnings={:?}", call.warnings);
+    assert!(call.warnings.is_empty(), "{:?}", call.warnings);
+    assert_eq!(batch.get(q_sub).map(|r| r.match_count), Some(1));
+    assert!(
+        !batch.contains_key(q_pair),
+        "a sibling pattern cannot run per root and walks alone"
+    );
+}
+
+#[test]
+fn per_root_batch_matches_the_whole_tree_batch() {
+    let source = r#"
+var a = b - c, d = e-f, g = (h - i) * (j - k);
+obj[fn("x")](1, 2); obj[fn("y")](3); window[a + b](); delete obj[key];
+var arr = [1 ^ 2, 3 ^ 4, 5 ^ 6, 7 ^ 8, 9 ^ 10, 11 ^ 12, 13];
+items["na" + "me"]["pro" + "p"]; eval(code); x = y;
+"#;
+    let parsed = parsed_for_test("script.js", source.as_bytes());
+    let tree = parsed.source_ast().expect("ast").tree;
+    let queries = [
+        "(binary_expression operator: \"-\") @subtraction",
+        "(call_expression function: (subscript_expression)) @call",
+        "(subscript_expression index: (call_expression function: (identifier) @decoder arguments: (arguments (_))))",
+        "(unary_expression operator: \"delete\" argument: (subscript_expression)) @deletion",
+        "(array (binary_expression left: (number) operator: \"^\" right: (number)) \
+                (binary_expression left: (number) operator: \"^\" right: (number))) @array",
+        "(subscript_expression index: (binary_expression left: (string) right: (string))) @concat_prop",
+        "(call_expression function: (identifier) @fn (#eq? @fn \"eval\")) @call",
+        "((identifier) @a (identifier) @b)",
+    ];
+    let _count = super::symbol_string::MatchCountGuard::set(true);
+    let run = |depth: u32| {
+        super::ast::BATCH_PER_ROOT_DEPTH_OVERRIDE.with(|cell| cell.set(Some(depth)));
+        let out =
+            super::ast::batch_ast_queries(tree, source, FileType::JavaScript, &queries, None, None);
+        super::ast::BATCH_PER_ROOT_DEPTH_OVERRIDE.with(|cell| cell.set(None));
+        out.expect("the batch runs")
+    };
+    let whole = run(u32::MAX);
+    let per_root = run(0);
+    for query in &queries[..7] {
+        let a = whole.get(*query).expect(query);
+        let b = per_root.get(*query).expect(query);
+        assert!(a.matched, "fixture exercises {query}");
+        assert_eq!(a.match_count, b.match_count, "{query}");
+        let values = |r: &ConditionResult| {
+            let mut v = r
+                .evidence
+                .iter()
+                .map(|e| (e.offsets.clone(), e.value.clone()))
+                .collect::<Vec<_>>();
+            v.sort();
+            v
+        };
+        assert_eq!(values(a), values(b), "{query}");
+    }
+    assert!(
+        whole.contains_key(queries[7]),
+        "the whole-tree batch serves sibling patterns"
+    );
+    assert!(
+        !per_root.contains_key(queries[7]),
+        "the per-root batch leaves them to walk alone"
+    );
+}

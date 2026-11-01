@@ -1255,6 +1255,7 @@ impl UnifiedSourceAnalyzer {
         node_text: &mut crate::composite_rules::evaluators::NodeTextIndex,
         seen_strings: &mut SeenStrings,
     ) {
+        let mut depth: u32 = 0;
         loop {
             let node = cursor.node();
             let kind = node.kind();
@@ -1341,6 +1342,8 @@ impl UnifiedSourceAnalyzer {
             }
 
             if cursor.goto_first_child() {
+                depth += 1;
+                node_text.note_depth(depth);
                 continue;
             }
             if cursor.goto_next_sibling() {
@@ -1350,6 +1353,7 @@ impl UnifiedSourceAnalyzer {
                 if !cursor.goto_parent() {
                     return;
                 }
+                depth -= 1;
                 if cursor.goto_next_sibling() {
                     break;
                 }

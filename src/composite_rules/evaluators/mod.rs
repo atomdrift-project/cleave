@@ -1215,10 +1215,12 @@ pub(crate) fn build_regex(pattern: &str, case_insensitive: bool) -> anyhow::Resu
 /// Truncate evidence string to max length for display.
 #[must_use]
 pub(crate) fn truncate_evidence(s: &str, max_len: usize) -> String {
-    if s.chars().count() <= max_len {
-        s.to_string()
-    } else {
-        format!("{}...", s.chars().take(max_len).collect::<String>())
+    // Stop at the first char past the limit instead of counting every char:
+    // callers hand this whole AST node spans (5 MB on a JSFuck bundle), and a
+    // full count per node was 19% of that file's main-thread time.
+    match s.char_indices().nth(max_len) {
+        None => s.to_string(),
+        Some((end, _)) => format!("{}...", &s[..end]),
     }
 }
 
@@ -1234,8 +1236,9 @@ pub(crate) fn match_window(
     mat_end: usize,
     context: usize,
 ) -> String {
-    // Short enough to show in full — no windowing needed.
-    if source.chars().count() <= context * 2 + 40 {
+    // Short enough to show in full — no windowing needed. `nth` stops at the
+    // limit instead of counting every char of a multi-megabyte source.
+    if source.chars().nth(context * 2 + 40).is_none() {
         return source.to_string();
     }
 

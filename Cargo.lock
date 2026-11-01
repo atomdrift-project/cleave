@@ -931,6 +931,7 @@ dependencies = [
  "tree-sitter",
  "unrar-ng",
  "walkdir",
+ "windows-sys 0.59.0",
  "xz2",
  "yara-classify",
  "yara-x",

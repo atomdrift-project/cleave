@@ -397,3 +397,7 @@ opt-level = 3
 tree-sitter-bash = { git = "https://github.com/tstromberg/tree-sitter-bash" }
 tree-sitter = { git = "https://github.com/tstromberg/tree-sitter" }
 tree-sitter-language = { git = "https://github.com/tstromberg/tree-sitter" }
+
+# Thread CPU clock for the per-query AST budgets (`ast_walker::thread_cpu_time`).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }

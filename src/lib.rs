@@ -35,6 +35,7 @@ macro_rules! static_regex {
 
 mod analysis_cache;
 pub(crate) mod analysis_context;
+mod archive_members;
 pub mod breadcrumb;
 pub mod cache;
 pub mod cancellation;
@@ -166,6 +167,7 @@ pub const JEMALLOC_CONF: &std::ffi::CStr =
 // Re-export commonly used types at crate root
 use analyzers::FileTypeExt;
 pub use analyzers::{AnalysisInput, Analyzer, FileType, detect_file_type};
+pub use archive_members::{ArchiveMembers, extract_member};
 pub use capabilities::{CapabilityMapper, LoadOptions};
 pub use composite_rules::Platform;
 pub use engine::Engine;
@@ -980,90 +982,6 @@ pub fn regex_store_usage() -> [(usize, usize, usize, u64); 2] {
         (str_len, str_bytes, str_budget, str_evictions),
         (raw_len, raw_bytes, raw_budget, raw_evictions),
     ]
-}
-
-/// Read one archive member's raw bytes by its in-archive path.
-///
-/// A differential consumer needs the *old* text of a changed
-/// member to show which lines a new release added; the diff carries only
-/// analysis metadata, so the bytes have to come from the archive itself. Reuses
-/// the same decoders as analysis (gzip / bzip2 / xz / zstd tarballs and zip).
-///
-/// Returns `Ok(None)` — never an error — when the member is absent, the format
-/// is not a supported archive, or the member lives inside a *nested* archive
-/// (a `!` in `member`), which would need recursive extraction; the caller then
-/// falls back to whatever evidence it already has. A single member is capped at
-/// `MAX_EXTRACTED_MEMBER` bytes so a crafted archive cannot exhaust memory.
-pub fn extract_member(archive: &Path, member: &str) -> Result<Option<Vec<u8>>> {
-    use anyhow::Context as _;
-    // Nested members carry an inner-archive separator; one level of extraction
-    // cannot reach them.
-    if member.contains('!') {
-        return Ok(None);
-    }
-    let data =
-        std::fs::read(archive).with_context(|| format!("reading archive {}", archive.display()))?;
-    extract_member_bytes(data, member)
-}
-
-/// Hard ceiling on a single extracted member, mirroring analysis's per-member
-/// guard: differential evidence never needs a whole disk image resident.
-const MAX_EXTRACTED_MEMBER: u64 = 64 * 1024 * 1024;
-
-/// Format-dispatch half of [`extract_member`], split out so it owns `data`
-/// (the decoders wrap it by value, keeping the boxed reader `'static`).
-fn extract_member_bytes(data: Vec<u8>, member: &str) -> Result<Option<Vec<u8>>> {
-    use std::io::{Cursor, Read};
-
-    // Zip is addressed by name directly; everything else is a (maybe
-    // compressed) tar we stream. Detection is by magic, not extension, so a
-    // mislabeled archive still resolves.
-    if data.starts_with(b"PK\x03\x04") {
-        let Ok(mut zip) = ::zip::ZipArchive::new(Cursor::new(data)) else {
-            return Ok(None);
-        };
-        let Ok(entry) = zip.by_name(member) else {
-            return Ok(None);
-        };
-        let mut buf = Vec::new();
-        entry.take(MAX_EXTRACTED_MEMBER).read_to_end(&mut buf)?;
-        return Ok(Some(buf));
-    }
-
-    let reader: Box<dyn Read> = if data.starts_with(&[0x1f, 0x8b]) {
-        Box::new(flate2::read::GzDecoder::new(Cursor::new(data)))
-    } else if data.starts_with(&[0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00]) {
-        Box::new(xz2::read::XzDecoder::new(Cursor::new(data)))
-    } else if data.starts_with(b"BZh") {
-        Box::new(bzip2::read::BzDecoder::new(Cursor::new(data)))
-    } else if data.starts_with(&[0x28, 0xb5, 0x2f, 0xfd]) {
-        match zstd::stream::read::Decoder::new(Cursor::new(data)) {
-            Ok(d) => Box::new(d),
-            Err(_) => return Ok(None),
-        }
-    } else if data.get(257..262) == Some(b"ustar") {
-        Box::new(Cursor::new(data))
-    } else {
-        return Ok(None);
-    };
-
-    let mut archive = ::tar::Archive::new(reader);
-    let Ok(entries) = archive.entries() else {
-        return Ok(None);
-    };
-    for entry in entries {
-        let Ok(entry) = entry else { continue };
-        let Ok(path) = entry.path() else { continue };
-        let path = path.to_string_lossy();
-        // Tar entries may or may not carry a `./` prefix; the diff's member path
-        // never does.
-        if path == member || path.strip_prefix("./") == Some(member) {
-            let mut buf = Vec::new();
-            entry.take(MAX_EXTRACTED_MEMBER).read_to_end(&mut buf)?;
-            return Ok(Some(buf));
-        }
-    }
-    Ok(None)
 }
 
 /// Analyze a single file and return a detailed report.

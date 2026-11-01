@@ -409,7 +409,10 @@ traits:
             eprintln!("rizin not installed; skipping");
             return;
         }
-        let elf = std::fs::read("tests/fixtures/lang_strings/go_linux_amd64").unwrap();
+        // A stripped C shared object, which rizin's admission policy sends to
+        // the disassembler. (A Go binary would not do: filefacts reads its
+        // functions from the pclntab and never runs rizin on it.)
+        let elf = std::fs::read("tests/fixtures/test.elf").unwrap();
         let dir = tempfile::tempdir().unwrap();
         let zip_path = dir.path().join("pkg.zip");
         {

@@ -532,6 +532,8 @@ const ALLOWED_MB_PROCESS: &[&str] = &[
     "interpreter",
     "lifecycle",
     "pid",
+    // Execute a new image in the current process; does not require child creation.
+    "replace",
     "resources",
     "stdio", // Reading, writing and relaying explicit process standard streams.
     "sync",

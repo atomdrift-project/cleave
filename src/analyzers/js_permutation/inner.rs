@@ -1,6 +1,9 @@
 //! Reduce a proved literal-table rotation and its read-only lookup aliases.
 //! This only emits source; it never invokes JavaScript, network or process APIs.
-use super::*;
+use super::{
+    HashMap, MAX_FUEL, MAX_OUTPUT, Node, children, literal, nodes, number, raw,
+    signature_with_globals, unwrap,
+};
 use std::collections::HashSet;
 
 fn parse(source: &str) -> Option<tree_sitter::Tree> {
@@ -156,22 +159,21 @@ fn inline_helpers(source: &str) -> Option<String> {
                 continue;
             }
         }
-        if let Some((callee, args)) = call(n).filter(|_| n.kind() == "call_expression") {
-            if let Some((arity, (op, getter))) =
+        if let Some((callee, args)) = call(n).filter(|_| n.kind() == "call_expression")
+            && let Some((arity, (op, getter))) =
                 name(callee, source).and_then(|id| helpers.get(&id))
-            {
-                if args.len() != *arity {
-                    continue;
-                }
-                let value = match args.as_slice() {
-                    [] => format!("({getter})"),
-                    [a] => format!("({op}({}))", raw(*a, source)?),
-                    [a, b] => format!("(({}){op}({}))", raw(*a, source)?, raw(*b, source)?),
-                    _ => continue,
-                };
-                replacements.push((n.byte_range(), value));
+        {
+            if args.len() != *arity {
                 continue;
             }
+            let value = match args.as_slice() {
+                [] => format!("({getter})"),
+                [a] => format!("({op}({}))", raw(*a, source)?),
+                [a, b] => format!("(({}){op}({}))", raw(*a, source)?, raw(*b, source)?),
+                _ => continue,
+            };
+            replacements.push((n.byte_range(), value));
+            continue;
         }
         if n.kind() == "binary_expression" && raw(field(n, "operator")?, source) == Some("&&") {
             let left = unwrap(field(n, "left")?)?;
@@ -442,13 +444,11 @@ fn prove<'a>(source: &str, root: Node<'a>, all: &[Node<'a>]) -> Option<Proof<'a>
                     } else if let Some(object) = field(left, "object")
                         .and_then(unwrap)
                         .and_then(|n| name(n, source))
-                    {
-                        if globals.contains_key(&object)
+                        && (globals.contains_key(&object)
                             || functions.contains_key(&object)
-                            || object == "parseInt"
-                        {
-                            return None;
-                        }
+                            || object == "parseInt")
+                    {
+                        return None;
                     }
                 }
                 "identifier"
@@ -456,14 +456,11 @@ fn prove<'a>(source: &str, root: Node<'a>, all: &[Node<'a>]) -> Option<Proof<'a>
                         p.kind() == "formal_parameters"
                             || p.kind() == "variable_declarator"
                                 && field(p, "name").is_some_and(|v| v.id() == n.id())
-                    }) =>
-                {
-                    if globals.contains_key(raw(*n, source)?)
+                    }) && (globals.contains_key(raw(*n, source)?)
                         || functions.contains_key(raw(*n, source)?)
-                        || raw(*n, source) == Some("parseInt")
-                    {
-                        return None;
-                    }
+                        || raw(*n, source) == Some("parseInt")) =>
+                {
+                    return None;
                 }
                 _ => {}
             }
@@ -692,7 +689,7 @@ fn eval(
                 return None;
             }
             let text = &table[(index + rotation) % table.len()];
-            let digits: String = text.chars().take_while(|c| c.is_ascii_digit()).collect();
+            let digits: String = text.chars().take_while(char::is_ascii_digit).collect();
             (!digits.is_empty())
                 .then(|| digits.parse::<f64>().ok())
                 .flatten()
@@ -818,10 +815,10 @@ fn reduce_aliases(
                 if let Some(value) = value {
                     candidates.push((key, value));
                 }
-            } else if matches!(left.kind(), "member_expression" | "subscript_expression") {
-                if let Some(owner) = field(left, "object").and_then(|o| bindings.key(o, source)) {
-                    bad_owners.insert(owner.0);
-                }
+            } else if matches!(left.kind(), "member_expression" | "subscript_expression")
+                && let Some(owner) = field(left, "object").and_then(|o| bindings.key(o, source))
+            {
+                bad_owners.insert(owner.0);
             }
         }
     }
@@ -906,16 +903,18 @@ fn reduce_aliases(
 
 #[cfg(test)]
 mod tests {
-    fn configuration() -> String {
+    fn configuration() -> Result<String, Box<dyn std::error::Error>> {
         let source = include_str!("../../../tests/data/javascript-permutation/expected.js");
-        let tree = super::parse(source).expect("parse source");
-        let all = super::nodes(tree.root_node()).expect("nodes");
-        super::super::literal_table(source, tree.root_node(), &all).expect("literal table")
+        let tree = super::parse(source).ok_or("parse source")?;
+        let all = super::nodes(tree.root_node()).ok_or("nodes")?;
+        super::super::literal_table(source, tree.root_node(), &all)
+            .ok_or_else(|| "literal table".into())
     }
     #[test]
-    fn exposes_reviewed_stage_calls_without_running_them() {
+    fn exposes_reviewed_stage_calls_without_running_them() -> Result<(), Box<dyn std::error::Error>>
+    {
         let input = include_str!("../../../tests/data/javascript-permutation/expected.js");
-        let config = super::super::reduce_literal_table(input).expect("configuration");
+        let config = super::super::reduce_literal_table(input).ok_or("configuration")?;
         let mut normalized = config.clone();
         for _ in 0..16 {
             let Some(next) = super::inline_helpers(&normalized) else {
@@ -923,8 +922,8 @@ mod tests {
             };
             normalized = next;
         }
-        let tree = super::parse(&normalized).expect("parse");
-        let all = super::nodes(tree.root_node()).expect("nodes");
+        let tree = super::parse(&normalized).ok_or("parse")?;
+        let all = super::nodes(tree.root_node()).ok_or("nodes")?;
         assert!(
             super::prove(&normalized, tree.root_node(), &all).is_some(),
             "proof failed: {normalized}"
@@ -932,20 +931,22 @@ mod tests {
         assert!(config.contains("[\"spawn\"]("), "{config}");
         assert!(config.contains("[\"get\"]("));
         assert!(config.contains("[\"Buffer\"][\"from\"]("));
-        let renamed = configuration()
+        let renamed = configuration()?
             .replace("a0b", "lookup_index")
             .replace("a0a", "get_words")
             .replace("const o=", "const integer_lookup=")
             .replace("o(0x", "integer_lookup(0x");
         assert!(
             super::reduce(&renamed)
-                .expect("renamed decoder")
+                .ok_or("renamed decoder")?
                 .contains("[\"spawn\"](")
         );
+        Ok(())
     }
     #[test]
-    fn refuses_changed_recipes_and_ambiguous_table_state() {
-        let input = configuration();
+    fn refuses_changed_recipes_and_ambiguous_table_state() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let input = configuration()?;
         for changed in [
             format!("{input};a0b=unknown;"),
             format!("{input};parseInt=unknown;"),
@@ -957,7 +958,7 @@ mod tests {
             input.replace("jso$ft$boe$_45(d._,0x11c)", "jso$ft$boe$_43(d._,0x11c)"),
             input.replace("0x938b0", "0x938b1"),
             input.replace("return v._}}", "return unknown(v._)}}"),
-            serde_json::to_string(&input).expect("quoted stage"),
+            serde_json::to_string(&input)?,
         ] {
             assert_ne!(changed, input, "negative control changed no source");
             assert!(
@@ -966,10 +967,12 @@ mod tests {
             );
         }
         assert!(super::reduce(&"x".repeat(128 * 1024 + 1)).is_none());
+        Ok(())
     }
     #[test]
-    fn tracks_read_only_aliases_in_their_own_lexical_scope() {
-        let input = configuration();
+    fn tracks_read_only_aliases_in_their_own_lexical_scope()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let input = configuration()?;
         for extra in ["t._=unknown;", "mutate(t);", "t=unknown;"] {
             let changed = input.replace(
                 "t._= jso$ft$giden$a_48b();",
@@ -977,7 +980,7 @@ mod tests {
             );
             assert_ne!(changed, input);
             let reduced =
-                super::reduce(&changed).expect("other read-only lookups remain available");
+                super::reduce(&changed).ok_or("other read-only lookups remain available")?;
             assert!(
                 !reduced.contains("[\"spawn\"]("),
                 "rewrote a mutated/escaped launch alias"
@@ -990,8 +993,9 @@ mod tests {
         assert_ne!(changed, input);
         assert!(
             super::reduce(&changed)
-                .expect("different lexical binding")
+                .ok_or("different lexical binding")?
                 .contains("[\"spawn\"](")
         );
+        Ok(())
     }
 }

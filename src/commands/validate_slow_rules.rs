@@ -74,8 +74,10 @@ impl Audit {
             self.rules_timed,
             self.total_ms as f64 / 1000.0
         );
-        out.push_str("   #  total_ms   evals  mean_us   max_ms  share  rule
-");
+        out.push_str(
+            "   #  total_ms   evals  mean_us   max_ms  share  rule
+",
+        );
         for (i, rule) in self.slowest.iter().enumerate() {
             let _ = writeln!(
                 out,

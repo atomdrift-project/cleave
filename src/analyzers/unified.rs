@@ -898,6 +898,9 @@ impl UnifiedSourceAnalyzer {
                     &self.file_type,
                     &mut report,
                 );
+                // A module's export surface (CommonJS `exports.x = …`), so a
+                // diff sees the API a release adds, not only what it calls.
+                report.exports.extend(ctx.exports_from_filefacts());
             }
 
             // Analyze paths and environment variables

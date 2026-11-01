@@ -3752,6 +3752,25 @@ fn is_low_tier_named_binary_fact(t: &TraitDefinition) -> bool {
     }
 }
 
+// These family-specific text observations have no evidence for a file-size
+// range or section location. Keep the exception tied to both the ID and the
+// exact matcher so that changes to either are reviewed again.
+fn is_reviewed_linfeng_marker(t: &TraitDefinition) -> bool {
+    let expected = match t.id.as_str() {
+        "well-known/malware/botnet/linfeng::linfeng-adb-bot-marker" => {
+            (Criticality::Notable, ".linfengadbbotmasterchina")
+        }
+        "well-known/malware/botnet/linfeng::linfeng-bot-telegram-handle" => {
+            (Criticality::Component, "t.me/mrrobot764linfengsudoopsec")
+        }
+        _ => return false,
+    };
+    t.crit == expected.0
+        && matches!(&t.r#if, Condition::Text(q)
+            if q.substr.as_deref() == Some(expected.1)
+                && q.exact.is_none() && q.regex.is_none() && q.word.is_none())
+}
+
 /// Find well-known/ atomic traits targeting binaries without any file size filter.
 ///
 /// Binary identity signatures normally need a size bound. Low-tier basename,
@@ -3773,6 +3792,7 @@ pub(crate) fn find_wellknown_missing_size_filter(
                 && !(is_basename_fact(t)
                     && matches!(t.crit, Criticality::Component | Criticality::Notable))
                 && !is_low_tier_named_binary_fact(t)
+                && !is_reviewed_linfeng_marker(t)
                 // A Go import path is provenance evidence, not a size-bounded identity.
                 && t.id != "well-known/tool/detection/titus::titus-secret-scan-implementation"
                 // A tool banner is a reference regardless of file size.
@@ -3885,6 +3905,7 @@ pub(crate) fn find_wellknown_missing_section_filter(
                 && t.id != "well-known/tool/detection/titus::titus-secret-scan-implementation"
                 // The GeTaOEP banner can appear in any section or overlay.
                 && t.id != "well-known/tool/reverse-engineering/oep-finder::geta-oep-banner-marker"
+                && !is_reviewed_linfeng_marker(t)
                 && condition_supports_section_filter(&t.r#if)
                 && !condition_has_section_filter(&t.r#if)
         })

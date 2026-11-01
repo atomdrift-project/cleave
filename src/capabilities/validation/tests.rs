@@ -8755,6 +8755,66 @@ mod section_filter_validation_tests {
     }
 
     #[test]
+    fn reviewed_linfeng_markers_keep_whole_file_scope_only_for_exact_matches() {
+        for (id, marker, crit) in [
+            (
+                "linfeng-adb-bot-marker",
+                ".linfengadbbotmasterchina",
+                crate::types::Criticality::Notable,
+            ),
+            (
+                "linfeng-bot-telegram-handle",
+                "t.me/mrrobot764linfengsudoopsec",
+                crate::types::Criticality::Component,
+            ),
+        ] {
+            let mut fact = text_trait(
+                &format!("well-known/malware/botnet/linfeng::{id}"),
+                vec![FileType::Elf],
+            );
+            fact.crit = crit;
+            fact.r#if =
+                crate::yaml::from_str(&format!("type: text\nsubstr: {marker}\n")).unwrap();
+            assert!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty()
+            );
+            assert!(
+                find_wellknown_missing_section_filter(&[fact.clone()], &HashMap::new()).is_empty()
+            );
+
+            let mut wrong_id = fact.clone();
+            wrong_id.id.push_str("-other");
+            assert_eq!(
+                find_wellknown_missing_size_filter(&[wrong_id.clone()], &HashMap::new()).len(),
+                1
+            );
+            assert_eq!(
+                find_wellknown_missing_section_filter(&[wrong_id], &HashMap::new()).len(),
+                1
+            );
+            let mut wrong_crit = fact.clone();
+            wrong_crit.crit = crate::types::Criticality::Suspicious;
+            assert_eq!(
+                find_wellknown_missing_size_filter(&[wrong_crit.clone()], &HashMap::new()).len(),
+                1
+            );
+            assert_eq!(
+                find_wellknown_missing_section_filter(&[wrong_crit], &HashMap::new()).len(),
+                1
+            );
+            fact.r#if = crate::yaml::from_str("type: text\nsubstr: changed\n").unwrap();
+            assert_eq!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+                1
+            );
+            assert_eq!(
+                find_wellknown_missing_section_filter(&[fact], &HashMap::new()).len(),
+                1
+            );
+        }
+    }
+
+    #[test]
     fn metadata_section_filter_requires_a_location_claim() {
         let traits = vec![
             text_trait(

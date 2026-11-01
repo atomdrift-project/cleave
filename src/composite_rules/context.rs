@@ -278,8 +278,7 @@ pub(crate) struct EvaluationContext<'a> {
     /// pattern text) and the ascending `report.strings` indices that hold
     /// the regex's prefix literal. `eval_text` runs exactly that pattern
     /// over exactly those strings. Missing key → full sweep.
-    pub regex_candidate_strings:
-        Option<&'a rustc_hash::FxHashMap<usize, (&'a str, &'a [u32])>>,
+    pub regex_candidate_strings: Option<&'a rustc_hash::FxHashMap<usize, (&'a str, &'a [u32])>>,
     /// Validated UTF-8 view of `binary_data`, populated once per file for source-code
     /// file types. Lets AST/text evaluators skip the per-rule O(N) `from_utf8` check.
     pub cached_source_utf8: Option<&'a str>,

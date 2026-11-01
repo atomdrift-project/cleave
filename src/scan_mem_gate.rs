@@ -141,12 +141,6 @@ impl ScanMemGate {
         raw.max(MIN_ESTIMATE_BYTES).min(self.budget_bytes)
     }
 
-    /// Block until `size`'s estimated footprint fits, then reserve it. The guard
-    /// releases the reservation on drop.
-    pub(crate) fn acquire(&self, size: u64) -> ScanMemPermit<'_> {
-        self.acquire_hinted(size, FootprintHint::Unknown)
-    }
-
     /// Estimate for a flat image: `size × flat_expansion()`, never above
     /// the plain estimate.
     fn estimate_flat(&self, size: u64) -> usize {
@@ -154,8 +148,8 @@ impl ScanMemGate {
         raw.max(MIN_ESTIMATE_BYTES).min(self.estimate(size))
     }
 
-    /// [`acquire`](Self::acquire) with what the caller learned about the
-    /// file's footprint (see `FootprintHint`).
+    /// Block until the estimated footprint fits, then reserve it using the
+    /// caller's `FootprintHint`. The guard releases the reservation on drop.
     pub(crate) fn acquire_hinted(&self, size: u64, hint: FootprintHint) -> ScanMemPermit<'_> {
         let est = match hint {
             FootprintHint::Flat => self.estimate_flat(size),

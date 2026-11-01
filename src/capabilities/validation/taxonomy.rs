@@ -3261,10 +3261,6 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     "path:metadata/package/testing/presence/harness/",
     "path:metadata/package/testing/presence/path/",
     "path:metadata/package/testing/presence/suite/paths.yaml",
-    // Test-path / embedded-runtime FP-suppression: excluding `…/test/…` and
-    // `jruby-complete.jar!…` paths from obfuscation flags applies across every
-    // code/archive type the obfuscation composites run on.
-    "path:objectives/anti-static/obfuscation/code-metrics/",
     // Whole-file size / "is-binary" filters carry a match-anything path pattern
     // and apply to the entire native+bytecode binary family (elf/macho/pe/
     // class/pyc) and beyond.

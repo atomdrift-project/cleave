@@ -237,6 +237,60 @@ pub(crate) fn bytes_regex_cache() -> &'static RwLock<BytesRegexCache> {
 /// zero-UTF-8-validation matching against raw file bytes. Returns `None` if the
 /// pattern uses features both engines reject (e.g. backreferences) — callers must
 /// gate on `can_use_byte_matching` first.
+/// Thread-local front cache over [`bytes_regex_cache`], keyed by the raw
+/// pattern text. The shared store is an RwLock'd LRU probed with an owned
+/// `(String, bool)` key — one allocation plus a lock per raw evaluation, on
+/// a path that runs once per (text rule x file). Slots hold `Weak` handles so
+/// the store's budget still decides what stays compiled: an evicted engine
+/// simply misses here and takes the shared path again.
+const BYTES_REGEX_TLS_SLOTS: usize = 512;
+
+type BytesRegexTlsSlot = Option<(Box<str>, bool, std::sync::Weak<LeanRegex>)>;
+
+thread_local! {
+    static BYTES_REGEX_TLS: std::cell::RefCell<Vec<BytesRegexTlsSlot>> =
+        std::cell::RefCell::new((0..BYTES_REGEX_TLS_SLOTS).map(|_| None).collect());
+}
+
+fn bytes_regex_tls_index(pattern: &str, case_insensitive: bool) -> usize {
+    use std::hash::{Hash, Hasher};
+    let mut h = rustc_hash::FxHasher::default();
+    pattern.hash(&mut h);
+    case_insensitive.hash(&mut h);
+    (h.finish() as usize) % BYTES_REGEX_TLS_SLOTS
+}
+
+pub(crate) fn bytes_regex_tls_get(
+    pattern: &str,
+    case_insensitive: bool,
+) -> Option<std::sync::Arc<LeanRegex>> {
+    let idx = bytes_regex_tls_index(pattern, case_insensitive);
+    BYTES_REGEX_TLS.with(|slots| {
+        let slots = slots.borrow();
+        let (pat, ci, weak) = slots[idx].as_ref()?;
+        if *ci == case_insensitive && &**pat == pattern {
+            weak.upgrade()
+        } else {
+            None
+        }
+    })
+}
+
+pub(crate) fn bytes_regex_tls_put(
+    pattern: &str,
+    case_insensitive: bool,
+    re: &std::sync::Arc<LeanRegex>,
+) {
+    let idx = bytes_regex_tls_index(pattern, case_insensitive);
+    BYTES_REGEX_TLS.with(|slots| {
+        slots.borrow_mut()[idx] = Some((
+            Box::from(pattern),
+            case_insensitive,
+            std::sync::Arc::downgrade(re),
+        ));
+    });
+}
+
 pub(crate) fn compile_bytes_regex(pattern: &str, case_insensitive: bool) -> Option<LeanRegex> {
     // Meta-engine for everyone: it is a near-optimal SIMD-prefilter + lazy DFA,
     // faster per-pattern than a hand-rolled PikeVM window. The per-pattern lean
@@ -1844,5 +1898,48 @@ mod window_tests {
         );
         let got = windows_from_atom_hits(&hay, &hits, pattern, 0, hay.len()).expect("windowable");
         assert_eq!(got, naive_line_windows(&hay, &hits));
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod window_shape_probe {
+    //! Offline screen: classify every `type: text` regex of a rule set by
+    //! whether `eval_raw` can window it around its atom hits. Run with:
+    //! `PROBE_PATTERNS=<file> cargo test -p cleave --lib window_shape_probe -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn classify_patterns() {
+        let Ok(path) = std::env::var("PROBE_PATTERNS") else {
+            return;
+        };
+        let text = std::fs::read_to_string(path).unwrap();
+        let (mut windowed, mut unbounded, mut invalid) = (0usize, 0usize, 0usize);
+        for pat in text.lines().filter(|l| !l.is_empty()) {
+            let raw = crate::composite_rules::condition::raw_regex_pattern(None, Some(pat), false)
+                .unwrap();
+            if super::parse_hir_like_engine(&raw).is_none() {
+                invalid += 1;
+                continue;
+            }
+            match super::window_shape(&raw) {
+                Some((line, look, radius)) => {
+                    windowed += 1;
+                    println!("W\tline={line}\tlook={look}\tr={radius}\t{pat}");
+                }
+                None => {
+                    unbounded += 1;
+                    let hir = super::parse_hir_like_engine(&raw).unwrap();
+                    let (abs, _, _) = super::look_info(&hir);
+                    let bounded = super::bounded_consumed_bytes(&raw).is_some();
+                    let line_local = super::unbounded_reps_are_line_local(&hir);
+                    let newline = super::hir_can_match_newline(&hir);
+                    println!(
+                        "U\tabs={abs}\tbounded={bounded}\tline_local={line_local}\tnewline={newline}\t{pat}"
+                    );
+                }
+            }
+        }
+        println!("SUMMARY windowed={windowed} unbounded={unbounded} invalid={invalid}");
     }
 }

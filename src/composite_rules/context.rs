@@ -6,8 +6,9 @@ use super::evaluators::kv::StructuredFormat;
 use super::section_map::SectionMap;
 use super::types::{Arch, FileType, Platform, TypeMask};
 use crate::types::{AnalysisReport, Evidence, Finding};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use serde_json::Value;
+use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
@@ -36,19 +37,55 @@ pub(crate) struct FindingScope<'a> {
     /// Findings borrowed from disjoint report members, before `extra`.
     /// Package evaluation can pool them without cloning their evidence.
     pooled: &'a [&'a Finding],
-    /// Hashed ids of all halves, so a lookup for an id nothing produced costs
-    /// one hash instead of a full scan. `None` means always scan.
-    id_hashes: Option<Arc<FxHashSet<u64>>>,
+    /// Hashed ids of all halves mapped to their scope positions (see
+    /// [`scope_pos`]), so an exact-id lookup costs one hash plus a check of the
+    /// candidate positions instead of a scan over every finding in scope — the
+    /// scan was a hot leaf on member-heavy archives, where thousands of pooled
+    /// findings are in scope for every `trait:` reference of every rule.
+    /// `None` means always scan.
+    id_hashes: Option<Arc<FxHashMap<u64, SmallVec<[u32; 2]>>>>,
+}
+
+/// Which half of a [`FindingScope`] a position addresses, ordered as
+/// [`FindingScope::iter`] walks them.
+const HALF_OWN: u32 = 0;
+const HALF_MID: u32 = 1;
+const HALF_POOLED: u32 = 2;
+const HALF_EXTRA: u32 = 3;
+
+#[allow(clippy::cast_possible_truncation)]
+fn scope_pos(half: u32, idx: usize) -> u32 {
+    (half << 30) | (idx as u32 & ((1 << 30) - 1))
+}
+
+fn index_half(
+    index: &mut FxHashMap<u64, SmallVec<[u32; 2]>>,
+    half: u32,
+    findings: impl Iterator<Item = impl std::ops::Deref<Target = Finding>>,
+) {
+    for (idx, finding) in findings.enumerate() {
+        index
+            .entry(hash_str(&finding.id))
+            .or_default()
+            .push(scope_pos(half, idx));
+    }
 }
 
 impl<'a> FindingScope<'a> {
+    /// The id index for a scope made of `own` findings only (see
+    /// [`Self::with_index`]).
+    pub(crate) fn own_index(own: &[Finding]) -> FxHashMap<u64, SmallVec<[u32; 2]>> {
+        let mut index = FxHashMap::default();
+        index_half(&mut index, HALF_OWN, own.iter());
+        index
+    }
+
     /// Scope over `own` plus `extra`, indexed for fast negative lookups.
     pub(crate) fn new(own: &'a [Finding], extra: Option<&'a [Finding]>) -> Self {
         let extra = extra.unwrap_or(&[]);
-        let mut id_hashes = FxHashSet::default();
-        for finding in own.iter().chain(extra) {
-            id_hashes.insert(hash_str(&finding.id));
-        }
+        let mut id_hashes = FxHashMap::default();
+        index_half(&mut id_hashes, HALF_OWN, own.iter());
+        index_half(&mut id_hashes, HALF_EXTRA, extra.iter());
         Self {
             own,
             mid: &[],
@@ -63,7 +100,7 @@ impl<'a> FindingScope<'a> {
     pub(crate) fn with_index(
         own: &'a [Finding],
         extra: Option<&'a [Finding]>,
-        id_hashes: Option<Arc<FxHashSet<u64>>>,
+        id_hashes: Option<Arc<FxHashMap<u64, SmallVec<[u32; 2]>>>>,
     ) -> Self {
         Self {
             own,
@@ -88,12 +125,10 @@ impl<'a> FindingScope<'a> {
         pooled: &'a [&'a Finding],
         extra: &'a [Finding],
     ) -> Self {
-        let id_hashes = own
-            .iter()
-            .chain(pooled.iter().copied())
-            .chain(extra)
-            .map(|finding| hash_str(&finding.id))
-            .collect();
+        let mut id_hashes = FxHashMap::default();
+        index_half(&mut id_hashes, HALF_OWN, own.iter());
+        index_half(&mut id_hashes, HALF_POOLED, pooled.iter().copied());
+        index_half(&mut id_hashes, HALF_EXTRA, extra.iter());
         Self {
             own,
             mid: &[],
@@ -111,12 +146,50 @@ impl<'a> FindingScope<'a> {
         self.mid = mid;
         if let Some(hashes) = self.id_hashes.take() {
             let mut owned = (*hashes).clone();
-            for finding in mid {
-                owned.insert(hash_str(&finding.id));
+            index_half(&mut owned, HALF_MID, mid.iter());
+            // Keep each bucket in scope order: mid sits between own and pooled.
+            for positions in owned.values_mut() {
+                if positions.len() > 1 {
+                    positions.sort_unstable();
+                }
             }
             self.id_hashes = Some(Arc::new(owned));
         }
         self
+    }
+
+    fn at(&self, pos: u32) -> Option<&'a Finding> {
+        let idx = (pos & ((1 << 30) - 1)) as usize;
+        match pos >> 30 {
+            HALF_OWN => self.own.get(idx),
+            HALF_MID => self.mid.get(idx),
+            HALF_POOLED => self.pooled.get(idx).copied(),
+            _ => self.extra.get(idx),
+        }
+    }
+
+    /// Every finding in scope with exactly this id, in scope order.
+    pub(crate) fn exact<'s>(&'s self, id: &'s str) -> impl Iterator<Item = &'a Finding> + 's {
+        let indexed: Option<SmallVec<[u32; 2]>> = self
+            .id_hashes
+            .as_ref()
+            .map(|index| index.get(&hash_str(id)).cloned().unwrap_or_default());
+        let scan = indexed.is_none();
+        indexed
+            .into_iter()
+            .flatten()
+            .filter_map(move |pos| self.at(pos))
+            .chain(self.iter_if(scan))
+            .filter(move |f| f.id == id)
+    }
+
+    fn iter_if<'s>(&'s self, scan: bool) -> impl Iterator<Item = &'a Finding> + 's {
+        self.own
+            .iter()
+            .chain(self.mid)
+            .chain(self.pooled.iter().copied())
+            .chain(self.extra)
+            .take(if scan { usize::MAX } else { 0 })
     }
 
     /// Every finding in scope, all halves, in report-then-mid-then-extra order.
@@ -129,13 +202,19 @@ impl<'a> FindingScope<'a> {
     }
 
     /// Whether any finding in scope has exactly this id.
+    /// Whether any finding in scope has exactly this id. One hash probe when
+    /// nothing carries it (the common case); otherwise only the candidate
+    /// positions are compared.
     pub(crate) fn contains_id(&self, id: &str) -> bool {
-        if let Some(ref hashes) = self.id_hashes
-            && !hashes.contains(&hash_str(id))
-        {
-            return false;
+        match self.id_hashes.as_ref() {
+            Some(index) => index.get(&hash_str(id)).is_some_and(|positions| {
+                positions
+                    .iter()
+                    .filter_map(|&pos| self.at(pos))
+                    .any(|f| f.id == id)
+            }),
+            None => self.iter().any(|f| f.id == id),
         }
-        self.iter().any(|f| f.id == id)
     }
 }
 

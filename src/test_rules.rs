@@ -27,11 +27,8 @@ use crate::composite_rules::{
 };
 use crate::types::{AnalysisReport, Evidence};
 use colored::Colorize;
-use rustc_hash::FxHashSet;
 use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
-
-use crate::hash_str;
 
 /// Result of debugging a single condition
 #[derive(Debug)]
@@ -262,12 +259,8 @@ impl<'a> RuleDebugger<'a> {
     }
 
     /// Build a finding ID index for the context
-    fn build_finding_index(&self) -> FxHashSet<u64> {
-        let mut index = FxHashSet::default();
-        for finding in &self.report.findings {
-            index.insert(hash_str(&finding.id));
-        }
-        index
+    fn build_finding_index(&self) -> rustc_hash::FxHashMap<u64, smallvec::SmallVec<[u32; 2]>> {
+        crate::composite_rules::FindingScope::own_index(&self.report.findings)
     }
 
     /// Resolve location constraints to an effective byte range for searching.

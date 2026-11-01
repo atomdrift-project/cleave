@@ -2488,7 +2488,10 @@ pub(crate) fn eval_raw<'a>(
             });
         }
     } else if let Some(pattern_str) = raw_pattern.as_deref() {
-        let use_bytes_regex = can_use_byte_matching(pattern_str);
+        // A thread-local hit implies the pattern already passed
+        // `can_use_byte_matching` on the compile that filled the slot.
+        let tls_hit = super::bytes_regex_tls_get(pattern_str, case_insensitive);
+        let use_bytes_regex = tls_hit.is_some() || can_use_byte_matching(pattern_str);
 
         if use_bytes_regex {
             // FAST PATH: Use bytes::Regex on raw binary data (no UTF-8 conversion!)
@@ -2504,41 +2507,50 @@ pub(crate) fn eval_raw<'a>(
             // measured wall-faster than serializing on a per-key `OnceLock`, which
             // idles cores during the compile-heavy warmup (compile-once cut CPU but
             // raised wall ~35 %). Wall is the priority, so the parallel race stays.
-            let key = (pattern_str.to_string(), case_insensitive);
-            let cache = super::bytes_regex_cache();
-            // Clone the `Arc`, never the `Regex`: a `Regex` clone gets a cold
-            // lazy-DFA cache and rebuilds every DFA state on first search; the
-            // shared `Arc` reuses the warm instance across members/threads.
-            // On a miss, claim the key so racing workers pick up this compile
-            // instead of duplicating it (see `compile_claim`); the bounded
-            // fallback still compiles independently if the claimant is slow.
-            static CLAIMS: crate::composite_rules::compile_claim::ClaimSet =
-                crate::composite_rules::compile_claim::ClaimSet::new();
-            let compile_and_put = |key: (String, bool)| {
-                super::compile_bytes_regex(pattern_str, case_insensitive).map(|re| {
-                    let arc = std::sync::Arc::new(re);
-                    let size = arc.heap_bytes();
-                    cache.write().put(key, std::sync::Arc::clone(&arc), size);
-                    arc
-                })
-            };
-            let lean: Option<std::sync::Arc<super::LeanRegex>> = {
-                let cached = cache.read().peek(&key).cloned();
-                if cached.is_some() {
-                    cached
-                } else {
-                    let kh = crate::composite_rules::compile_claim::ClaimSet::hash_key(&key);
-                    if let Some(_guard) = CLAIMS.try_claim(kh) {
-                        let hit = cache.read().peek(&key).cloned();
-                        hit.or_else(|| compile_and_put(key))
-                    } else if let Some(hit) =
-                        CLAIMS.wait_for(kh, || cache.read().peek(&key).cloned())
-                    {
-                        Some(hit)
+            let lean: Option<std::sync::Arc<super::LeanRegex>> = if tls_hit.is_some() {
+                tls_hit
+            } else {
+                let key = (pattern_str.to_string(), case_insensitive);
+                let cache = super::bytes_regex_cache();
+                // Clone the `Arc`, never the `Regex`: a `Regex` clone gets a cold
+                // lazy-DFA cache and rebuilds every DFA state on first search; the
+                // shared `Arc` reuses the warm instance across members/threads.
+                // On a miss, claim the key so racing workers pick up this compile
+                // instead of duplicating it (see `compile_claim`); the bounded
+                // fallback still compiles independently if the claimant is slow.
+                static CLAIMS: crate::composite_rules::compile_claim::ClaimSet =
+                    crate::composite_rules::compile_claim::ClaimSet::new();
+                let compile_and_put = |key: (String, bool)| {
+                    super::compile_bytes_regex(pattern_str, case_insensitive).map(|re| {
+                        let arc = std::sync::Arc::new(re);
+                        let size = arc.heap_bytes();
+                        cache.write().put(key, std::sync::Arc::clone(&arc), size);
+                        arc
+                    })
+                };
+                let resolved: Option<std::sync::Arc<super::LeanRegex>> = {
+                    let cached = cache.read().peek(&key).cloned();
+                    if cached.is_some() {
+                        cached
                     } else {
-                        compile_and_put(key)
+                        let kh = crate::composite_rules::compile_claim::ClaimSet::hash_key(&key);
+                        if let Some(_guard) = CLAIMS.try_claim(kh) {
+                            let hit = cache.read().peek(&key).cloned();
+                            hit.or_else(|| compile_and_put(key))
+                        } else if let Some(hit) =
+                            CLAIMS.wait_for(kh, || cache.read().peek(&key).cloned())
+                        {
+                            Some(hit)
+                        } else {
+                            compile_and_put(key)
+                        }
                     }
+                };
+
+                if let Some(ref re) = resolved {
+                    super::bytes_regex_tls_put(pattern_str, case_insensitive, re);
                 }
+                resolved
             };
 
             if let Some(ref lean) = lean {

@@ -205,9 +205,8 @@ fn synthetic_chm_has_no_dropper_findings() {
 const SOFTPEAK_SAMPLE: &str = "tests/fixtures/malware/payment instruction.987976.pdf.chm";
 
 /// The real SoftpeakLive dropper is caught by host-independent behavior, not
-/// its domain: the hidden Help-launch of a scripted download-and-run and the
-/// foreign-locale dropper container are hostile; the install URL itself is
-/// kept only as a notable endpoint observation.
+/// its domain: hidden policy-bypassing Help execution is hostile, while the
+/// locale and install URL are observations rather than evidence of a dropper.
 #[test]
 fn softpeak_live_real_sample_is_hostile_by_behavior() {
     const HOSTILE: i64 = 5;
@@ -223,17 +222,19 @@ fn softpeak_live_real_sample_is_hostile_by_behavior() {
             .and_then(|t| t["crit"].as_i64())
     };
 
-    for hostile in [
-        "objectives/execution/trigger/document::htmlhelp-hidden-bypass-scripted-execution",
-        "objectives/command-and-control/dropper/delivery/chm::chm-foreign-lcid-dropper",
-    ] {
-        assert_eq!(
-            crit(hostile),
-            Some(HOSTILE),
-            "expected the SoftpeakLive sample to fire {hostile} as hostile; got {:?}",
-            trait_ids(f)
-        );
-    }
+    let hostile = "objectives/execution/trigger/document::htmlhelp-hidden-bypass-scripted-execution";
+    assert_eq!(
+        crit(hostile),
+        Some(HOSTILE),
+        "expected the SoftpeakLive sample to fire {hostile} as hostile; got {:?}",
+        trait_ids(f)
+    );
+    assert!(
+        crit("metadata/document/chm::chm-small-russian-or-east-asian-lcid")
+            .is_some_and(|c| c < HOSTILE),
+        "the locale stays a non-hostile document observation: {:?}",
+        trait_ids(f)
+    );
     assert!(
         crit("micro-behaviors/communications/url/host/name::softpeak-install-url-reference")
             .is_some_and(|c| c < HOSTILE),

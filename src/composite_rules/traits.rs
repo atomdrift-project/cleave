@@ -156,9 +156,16 @@ fn eval_condition(
     ctx: &EvaluationContext<'_>,
 ) -> ConditionResult {
     let arch_clamp = ctx.arch_clamp_range(rule.arch);
-    let _query_performance = condition
-        .ast_query_text()
-        .and_then(|query| crate::validation_performance::QueryTimer::start(rule.id, query, ctx));
+    // Rule-performance validation is off in scans: one flag check, and no
+    // walk of `condition` or `ctx` for its arguments.
+    let measuring = crate::validation_performance::active();
+    let _query_performance = if measuring {
+        condition
+            .ast_query_text()
+            .and_then(|query| crate::validation_performance::QueryTimer::start(rule.id, query, ctx))
+    } else {
+        None
+    };
 
     let result = match condition {
         Condition::Symbol(SymbolQuery {
@@ -640,7 +647,9 @@ fn eval_condition(
             })
         }
     };
-    crate::validation_performance::observe_result(rule.id, &ctx.report.target.path, &result);
+    if measuring {
+        crate::validation_performance::observe_result(rule.id, &ctx.report.target.path, &result);
+    }
     result
 }
 
@@ -1597,8 +1606,11 @@ impl TraitDefinition {
         }
 
         // Check architecture match
-        let arch_match = self.arch.contains(&Arch::All)
-            || ctx.arch.contains(&Arch::All)
+        // `ctx.arch` first: it is hot, while `self.arch` is a per-rule heap
+        // Vec that is usually cold here; for non-binary members the context
+        // is `All` and the rule's Vec is never touched.
+        let arch_match = ctx.arch.contains(&Arch::All)
+            || self.arch.contains(&Arch::All)
             || self.arch.iter().any(|a| ctx.arch.contains(a));
 
         if !arch_match {
@@ -2931,8 +2943,11 @@ impl CompositeTrait {
         }
 
         // Check architecture match
-        let arch_match = self.arch.contains(&Arch::All)
-            || ctx.arch.contains(&Arch::All)
+        // `ctx.arch` first: it is hot, while `self.arch` is a per-rule heap
+        // Vec that is usually cold here; for non-binary members the context
+        // is `All` and the rule's Vec is never touched.
+        let arch_match = ctx.arch.contains(&Arch::All)
+            || self.arch.contains(&Arch::All)
             || self.arch.iter().any(|a| ctx.arch.contains(a));
 
         if !arch_match {

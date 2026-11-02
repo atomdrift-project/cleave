@@ -293,7 +293,7 @@ pub fn mark_thread_background() {
 }
 
 /// Size the owner caps for each class from the thread count of the pool it
-/// runs on: the same formulas the lazy defaults use (`threads / 32` inner
+/// runs on: the same formulas the lazy defaults use (`threads / 3` inner
 /// owners, `threads / 8` nested-member owners, each clamped to 1..=16), but
 /// per pool rather than from whichever pool happened to call first. A host
 /// with two pools must call this, or the foreground cap may be derived from
@@ -306,8 +306,18 @@ pub fn set_parallel_owner_caps(foreground_threads: usize, background_threads: us
     BACKGROUND_NESTED_CAP.store(nested_cap_for(background_threads), Ordering::Release);
 }
 
+/// A third of the pool may fan out at once (8 owners on the 24-thread pool
+/// of a 16c/32t host). Measured 2026-11-01 on that host, interleaved runs,
+/// identical output: a 2,454-file hostile corpus 86-87 s wall at one owner,
+/// 83 s at 4, 79-82 s at 8, 83 s at 12, 86 s at 32; a 672-file benign corpus
+/// 134 s at one owner, 123 s at 4, 125-126 s at 6-8, 128 s at 12, 134 s at
+/// 32. Total CPU fell 5-8 % alongside. At one owner every whale walked its
+/// members and trait chunks serially for the whole scan (a 90 CPU-second
+/// bundle took 90 s of wall while a third of the pool idled); with every
+/// analysis an owner the ordered member fan-outs of two dozen archives
+/// contend for the same workers and the gain is gone again.
 fn inner_cap_for(threads: usize) -> usize {
-    (threads / 32).clamp(1, 16)
+    (threads / 3).clamp(1, 16)
 }
 
 fn nested_cap_for(threads: usize) -> usize {

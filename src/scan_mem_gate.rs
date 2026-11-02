@@ -106,6 +106,13 @@ fn admission_limits(total: Option<u64>, available: Option<u64>) -> (usize, u64) 
     (budget, floor)
 }
 
+/// Whether a lane parked at the gate runs other queued scan paths meanwhile
+/// (default on; `CLEAVE_GATE_WAIT_WORK=0` restores plain parking).
+fn gate_wait_work_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| crate::env::parse::<u8>("CLEAVE_GATE_WAIT_WORK").is_none_or(|v| v != 0))
+}
+
 /// Aggregate byte-budget admission gate over concurrently-analysed files.
 pub(crate) struct ScanMemGate {
     /// Aggregate reservation ceiling, sized from memory available at startup.
@@ -180,6 +187,24 @@ impl ScanMemGate {
                     waited_s = started.elapsed().as_secs(),
                     "mem-gate admission stalled; will force-admit against live memory after the timeout"
                 );
+            }
+            // A scan lane analyzes another queued path instead of parking:
+            // the queue leads with the largest files, so at startup several
+            // lanes wait here at once while their cores idle (281 thread-
+            // seconds on the benign corpus, ~12 s of wall at 24 threads).
+            // The pulled path takes its own permit and never nests further
+            // (`run_wait_work` refuses inside a pulled job), so this neither
+            // deepens the stack nor holds a reservation while it waits.
+            if gate_wait_work_enabled() {
+                drop(reserved);
+                let ran = crate::rayon_nest::run_wait_work();
+                reserved = self
+                    .reserved
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if ran {
+                    continue;
+                }
             }
             let (guard, _) = self
                 .released

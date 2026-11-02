@@ -39,6 +39,171 @@ fn immediate_parent_path(path: &str) -> Option<&str> {
     }
 }
 
+/// Which part of an archive entry name a path trait matches.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum PathScope {
+    Base,
+    Dir,
+    Full,
+}
+
+impl PathScope {
+    fn of(self, entry_name: &str) -> &str {
+        match self {
+            Self::Base => crate::composite_rules::evaluators::misc::path_basename(entry_name),
+            Self::Dir => crate::composite_rules::evaluators::misc::path_dirname(entry_name),
+            Self::Full => entry_name,
+        }
+    }
+}
+
+/// One `type: path` trait with its per-trait constants hoisted out of the
+/// entry loop (lowercased needles, resolved regex).
+#[derive(Debug)]
+pub(crate) struct PathTrait {
+    trait_idx: usize,
+    /// Lowercased when `case_insensitive`, matching the target's casing.
+    exact: Option<String>,
+    substr: Option<String>,
+    regex: Option<std::sync::Arc<crate::composite_rules::condition::TraitRegex>>,
+    case_insensitive: bool,
+    scope: PathScope,
+}
+
+/// Every path trait of a mapper, plus an any-of atom gate for the regex-only
+/// ones (`mandatory_atom_set`: every match contains one of the atoms). Built
+/// once per mapper: `evaluate_path_traits_for_file` runs this pass for every
+/// member file, and rebuilding the list (a regex lookup per trait) and running
+/// every path regex on every path was a measured cost.
+#[derive(Debug, Default)]
+pub(crate) struct PathTraitIndex {
+    traits: Vec<PathTrait>,
+    /// `gated[i]`: trait `i` only runs on entries the atom sweep nominated.
+    gated: Vec<bool>,
+    /// `[case-sensitive, ASCII-case-insensitive]` atom automata.
+    automata: [Option<aho_corasick::AhoCorasick>; 2],
+    atom_to_traits: [Vec<Vec<u32>>; 2],
+}
+
+impl PathTraitIndex {
+    fn build(trait_definitions: &[crate::composite_rules::TraitDefinition]) -> Self {
+        use crate::composite_rules::Condition;
+        let traits: Vec<PathTrait> = trait_definitions
+            .iter()
+            .enumerate()
+            .filter_map(|(trait_idx, trait_def)| {
+                // `basename` matches the final path component; `path` matches the
+                // full entry path (or its dir/base when scoped). Archive members
+                // carry their real entry path, so `path` traits detect member
+                // layouts (`node_modules/X/package.json`, nested `*.jar!…`, …).
+                let Condition::Path(PathQuery {
+                    exact,
+                    substr,
+                    regex,
+                    case_insensitive,
+                    basename,
+                    dirname,
+                    ..
+                }) = &trait_def.r#if
+                else {
+                    return None;
+                };
+                let case_insensitive = *case_insensitive;
+                let lower = |s: &String| {
+                    if case_insensitive {
+                        s.to_lowercase()
+                    } else {
+                        s.clone()
+                    }
+                };
+                Some(PathTrait {
+                    trait_idx,
+                    exact: exact.as_ref().map(lower),
+                    substr: substr.as_ref().map(lower),
+                    // Resolved via `lazy_regex` (applies `(?i)` when
+                    // case-insensitive), as the per-entry path did.
+                    regex: regex.as_deref().and_then(|r| {
+                        crate::composite_rules::condition::lazy_regex(Some(r), case_insensitive)
+                    }),
+                    case_insensitive,
+                    scope: if *basename {
+                        PathScope::Base
+                    } else if *dirname {
+                        PathScope::Dir
+                    } else {
+                        PathScope::Full
+                    },
+                })
+            })
+            .collect();
+
+        let mut gated = vec![false; traits.len()];
+        let mut patterns: [Vec<String>; 2] = [Vec::new(), Vec::new()];
+        let mut slots: [rustc_hash::FxHashMap<String, usize>; 2] = Default::default();
+        let mut atom_to_traits: [Vec<Vec<u32>>; 2] = [Vec::new(), Vec::new()];
+        for (ti, pt) in traits.iter().enumerate() {
+            if pt.exact.is_some() || pt.substr.is_some() || pt.regex.is_none() {
+                continue;
+            }
+            let Condition::Path(PathQuery {
+                regex: Some(raw), ..
+            }) = &trait_definitions[pt.trait_idx].r#if
+            else {
+                continue;
+            };
+            // Atoms of the pattern `lazy_regex` actually compiled.
+            let atoms = if pt.case_insensitive {
+                crate::capabilities::derivation_memo::mandatory_atom_set(&format!("(?i){raw}"))
+            } else {
+                crate::capabilities::derivation_memo::mandatory_atom_set(raw)
+            };
+            let Some(atoms) = atoms else { continue };
+            if atoms.is_empty() || atoms.iter().any(|(a, _)| a.is_empty()) {
+                continue;
+            }
+            gated[ti] = true;
+            for (atom, ci) in &atoms {
+                let k = usize::from(*ci);
+                let key = if *ci {
+                    atom.to_ascii_lowercase()
+                } else {
+                    atom.clone()
+                };
+                let slot = *slots[k].entry(key.clone()).or_insert_with(|| {
+                    patterns[k].push(key);
+                    atom_to_traits[k].push(Vec::new());
+                    patterns[k].len() - 1
+                });
+                atom_to_traits[k][slot].push(ti as u32);
+            }
+        }
+        let build = |pats: &[String], ci: bool| {
+            if pats.is_empty() {
+                return Ok(None);
+            }
+            aho_corasick::AhoCorasick::builder()
+                .ascii_case_insensitive(ci)
+                .build(pats)
+                .map(Some)
+        };
+        match (build(&patterns[0], false), build(&patterns[1], true)) {
+            (Ok(cs), Ok(ci)) => Self {
+                traits,
+                gated,
+                automata: [cs, ci],
+                atom_to_traits,
+            },
+            // A gate that failed to build must never hide a match.
+            _ => Self {
+                gated: vec![false; traits.len()],
+                traits,
+                automata: [None, None],
+                atom_to_traits: [Vec::new(), Vec::new()],
+            },
+        }
+    }
+}
+
 impl super::CapabilityMapper {
     /// A decoded layer belongs to its source file for file-scoped exclusions.
     /// Never import context through an archive-member edge: reference data in
@@ -793,116 +958,85 @@ impl super::CapabilityMapper {
         &self,
         entry_names: &[String],
     ) -> Vec<Finding> {
-        use crate::composite_rules::Condition;
         use rayon::prelude::*;
 
-        #[derive(Clone, Copy)]
-        enum Scope {
-            Base,
-            Dir,
-            Full,
-        }
+        let index = self
+            .path_trait_index
+            .get_or_init(|| PathTraitIndex::build(&self.trait_definitions));
 
-        // Hoist the per-trait constants (lowercased patterns, resolved regex)
-        // out of the entry loop: the previous shape recomputed them — plus two
-        // allocations — for every (trait × entry) pair, which on a 13k-member
-        // archive was a measurable single-threaded tail.
-        struct PathTrait<'a> {
-            trait_def: &'a crate::composite_rules::TraitDefinition,
-            /// Lowercased when `case_insensitive`, matching the target's casing.
-            exact: Option<String>,
-            substr: Option<String>,
-            regex: Option<std::sync::Arc<crate::composite_rules::condition::TraitRegex>>,
-            case_insensitive: bool,
-            scope: Scope,
-        }
-
-        let path_traits: Vec<PathTrait<'_>> = self
-            .trait_definitions
-            .iter()
-            .filter_map(|trait_def| {
-                // `basename` matches the final path component; `path` matches the
-                // full entry path (or its dir/base when scoped). Archive members
-                // carry their real entry path, so `path` traits detect member
-                // layouts (`node_modules/X/package.json`, nested `*.jar!…`, …).
-                let Condition::Path(PathQuery {
-                    exact,
-                    substr,
-                    regex,
-                    case_insensitive,
-                    basename,
-                    dirname,
-                    ..
-                }) = &trait_def.r#if
-                else {
-                    return None;
-                };
-                let case_insensitive = *case_insensitive;
-                let lower = |s: &String| {
-                    if case_insensitive {
-                        s.to_lowercase()
-                    } else {
-                        s.clone()
+        // One atom sweep over the entry names nominates (trait, entry) pairs
+        // for the gated regex traits. Scoped targets (basename / dirname) are
+        // substrings of the full name, so a sweep of the full name sees every
+        // atom a scoped match needs.
+        let mut nominated: Vec<(u32, u32)> = Vec::new();
+        if index.automata.iter().any(Option::is_some) {
+            let mut seen: rustc_hash::FxHashSet<u32> = rustc_hash::FxHashSet::default();
+            for (ei, name) in entry_names.iter().enumerate() {
+                seen.clear();
+                for (k, ac) in index.automata.iter().enumerate() {
+                    let Some(ac) = ac else { continue };
+                    for mat in ac.find_overlapping_iter(name.as_str()) {
+                        for &ti in &index.atom_to_traits[k][mat.pattern().as_usize()] {
+                            if seen.insert(ti) {
+                                nominated.push((ti, ei as u32));
+                            }
+                        }
                     }
-                };
-                Some(PathTrait {
-                    trait_def,
-                    exact: exact.as_ref().map(lower),
-                    substr: substr.as_ref().map(lower),
-                    // Resolve the regex lazily + shared via `lazy_regex` (applies
-                    // `(?i)` when case-insensitive) rather than storing it per
-                    // condition.
-                    regex: regex.as_deref().and_then(|r| {
-                        crate::composite_rules::condition::lazy_regex(Some(r), case_insensitive)
-                    }),
-                    case_insensitive,
-                    scope: if *basename {
-                        Scope::Base
-                    } else if *dirname {
-                        Scope::Dir
-                    } else {
-                        Scope::Full
-                    },
-                })
-            })
-            .collect();
+                }
+            }
+            // Stable: each trait's entries stay in entry order, so the first
+            // nominated entry that matches is the first matching entry.
+            nominated.sort_by_key(|&(ti, _)| ti);
+        }
 
         // Each trait yields at most one finding (first matching entry), so the
         // collected order — and therefore the output — stays trait-definition
         // order exactly as the serial loop produced it.
-        let evaluate = |pt: &PathTrait<'_>| {
-            let matched_entry = entry_names.iter().find(|entry_name| {
-                let target: &str = match pt.scope {
-                    Scope::Base => {
-                        crate::composite_rules::evaluators::misc::path_basename(entry_name)
-                    }
-                    Scope::Dir => {
-                        crate::composite_rules::evaluators::misc::path_dirname(entry_name)
-                    }
-                    Scope::Full => entry_name.as_str(),
-                };
-                if target.is_empty() {
-                    return false;
-                }
-                if pt.exact.is_some() || pt.substr.is_some() {
-                    let cmp_target = if pt.case_insensitive {
-                        std::borrow::Cow::Owned(target.to_lowercase())
-                    } else {
-                        std::borrow::Cow::Borrowed(target)
+        let evaluate = |(ti, pt): (usize, &PathTrait)| {
+            let regex_only = pt.exact.is_none() && pt.substr.is_none();
+            let matched_entry = if let (true, Some(re)) = (regex_only, &pt.regex) {
+                // A regex-only trait leases its scratch cache once for all
+                // entries; a checkout per entry was ~31 s of a benign run.
+                re.with_scratch(|cache| {
+                    let hit = |entry_name: &&String| {
+                        let target = pt.scope.of(entry_name);
+                        !target.is_empty() && re.is_match_cached(target, cache)
                     };
-                    if let Some(e) = &pt.exact {
-                        cmp_target.as_ref() == e
+                    if index.gated[ti] {
+                        let start = nominated.partition_point(|&(t, _)| (t as usize) < ti);
+                        let end = nominated.partition_point(|&(t, _)| (t as usize) <= ti);
+                        nominated[start..end]
+                            .iter()
+                            .map(|&(_, ei)| &entry_names[ei as usize])
+                            .find(hit)
                     } else {
-                        // substr is Some by the branch condition above.
-                        pt.substr.as_deref().is_some_and(|s| cmp_target.contains(s))
+                        entry_names.iter().find(hit)
                     }
-                } else if let Some(re) = &pt.regex {
-                    re.is_match(target)
-                } else {
-                    false
-                }
-            })?;
-            let trait_def = pt.trait_def;
+                })
+            } else {
+                entry_names.iter().find(|entry_name| {
+                    let target: &str = pt.scope.of(entry_name);
+                    if target.is_empty() {
+                        return false;
+                    }
+                    if pt.exact.is_some() || pt.substr.is_some() {
+                        let cmp_target = if pt.case_insensitive {
+                            std::borrow::Cow::Owned(target.to_lowercase())
+                        } else {
+                            std::borrow::Cow::Borrowed(target)
+                        };
+                        if let Some(e) = &pt.exact {
+                            cmp_target.as_ref() == e
+                        } else {
+                            // substr is Some by the branch condition above.
+                            pt.substr.as_deref().is_some_and(|s| cmp_target.contains(s))
+                        }
+                    } else {
+                        false
+                    }
+                })
+            }?;
+            let trait_def = &self.trait_definitions[pt.trait_idx];
             Some(Finding {
                 precomputed_spans: None,
                 src: None,
@@ -928,9 +1062,19 @@ impl super::CapabilityMapper {
             })
         };
         if crate::rayon_nest::inner_work_parallel() {
-            path_traits.par_iter().filter_map(evaluate).collect()
+            index
+                .traits
+                .par_iter()
+                .enumerate()
+                .filter_map(evaluate)
+                .collect()
         } else {
-            path_traits.iter().filter_map(evaluate).collect()
+            index
+                .traits
+                .iter()
+                .enumerate()
+                .filter_map(evaluate)
+                .collect()
         }
     }
 

@@ -1472,6 +1472,7 @@ impl super::CapabilityMapper {
             container_ref_index: std::sync::Arc::default(),
             doomed_skip: std::sync::Arc::default(),
             composite_worklists: std::sync::Arc::default(),
+            path_trait_index: std::sync::Arc::default(),
             trait_worklists: std::sync::Arc::default(),
             trait_eval_flags: std::sync::Arc::default(),
             boolean_ast_queries: std::sync::Arc::default(),

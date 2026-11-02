@@ -243,7 +243,7 @@ pub(crate) fn bytes_regex_cache() -> &'static RwLock<BytesRegexCache> {
 /// a path that runs once per (text rule x file). Slots hold `Weak` handles so
 /// the store's budget still decides what stays compiled: an evicted engine
 /// simply misses here and takes the shared path again.
-const BYTES_REGEX_TLS_SLOTS: usize = 512;
+const BYTES_REGEX_TLS_SLOTS: usize = 4096;
 
 type BytesRegexTlsSlot = Option<(Box<str>, bool, std::sync::Weak<LeanRegex>)>;
 
@@ -935,27 +935,29 @@ fn merge_spans(mut spans: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
 pub(crate) fn hits_are_pattern_atoms(haystack: &[u8], hits: &[u32], pattern: &str) -> bool {
     // Memoized: this runs per evaluation, and the unmemoized derivation parses
     // the pattern to HIR every call (0.5 s of pool time on one 37 MB archive).
-    let Some(atoms) = crate::capabilities::derivation_memo::mandatory_atom_set(pattern) else {
-        return false;
-    };
-    for &off in hits {
-        let o = off as usize;
-        for (atom, ci) in &atoms {
-            let b = atom.as_bytes();
-            let Some(slice) = haystack.get(o..o + b.len()) else {
-                continue;
-            };
-            let ok = if *ci {
-                slice.eq_ignore_ascii_case(b)
-            } else {
-                slice == b
-            };
-            if ok {
-                return true;
+    crate::capabilities::derivation_memo::with_mandatory_atom_set(pattern, |atoms| {
+        let Some(atoms) = atoms else {
+            return false;
+        };
+        for &off in hits {
+            let o = off as usize;
+            for (atom, ci) in atoms {
+                let b = atom.as_bytes();
+                let Some(slice) = haystack.get(o..o + b.len()) else {
+                    continue;
+                };
+                let ok = if *ci {
+                    slice.eq_ignore_ascii_case(b)
+                } else {
+                    slice == b
+                };
+                if ok {
+                    return true;
+                }
             }
         }
-    }
-    false
+        false
+    })
 }
 
 /// Windows around gate-supplied atom hits for a bounded pattern, or for
@@ -1068,6 +1070,53 @@ pub(crate) mod raw_window_stats {
     pub(crate) fn bump(counter: &AtomicU64) {
         counter.fetch_add(1, Ordering::Relaxed);
     }
+
+    /// `CLEAVE_RAW_FULL_TOP=N`: log the N traits whose full scans walked
+    /// the most bytes, with the fallback reason (1 no atoms, 2 unbounded,
+    /// 3 other, 4 str engine). Off (0) by default.
+    fn full_top_n() -> usize {
+        static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+        *N.get_or_init(|| crate::env::parse::<usize>("CLEAVE_RAW_FULL_TOP").unwrap_or(0))
+    }
+    type FullTop = rustc_hash::FxHashMap<(Box<str>, u8), (u64, u64)>;
+    static FULL_TOP: std::sync::Mutex<Option<FullTop>> = std::sync::Mutex::new(None);
+    pub(crate) fn note_full(trait_id: Option<&str>, reason: u8, bytes: usize) {
+        if full_top_n() == 0 {
+            return;
+        }
+        let Ok(mut guard) = FULL_TOP.lock() else {
+            return;
+        };
+        let map = guard.get_or_insert_with(FullTop::default);
+        let e = map
+            .entry((Box::from(trait_id.unwrap_or("?")), reason))
+            .or_insert((0, 0));
+        e.0 += 1;
+        e.1 += bytes as u64;
+    }
+    fn log_full_top() {
+        let n = full_top_n();
+        if n == 0 {
+            return;
+        }
+        let Ok(guard) = FULL_TOP.lock() else {
+            return;
+        };
+        let Some(map) = guard.as_ref() else {
+            return;
+        };
+        let mut rows: Vec<_> = map.iter().collect();
+        rows.sort_by_key(|r| std::cmp::Reverse(r.1.1));
+        for ((id, reason), (evals, bytes)) in rows.into_iter().take(n) {
+            tracing::info!(
+                trait_id = %id,
+                reason,
+                evals,
+                mb = bytes / (1 << 20),
+                "eval_raw full-scan top"
+            );
+        }
+    }
     pub(crate) fn add_bytes(counter: &AtomicU64, n: usize) {
         counter.fetch_add(n as u64, Ordering::Relaxed);
     }
@@ -1095,6 +1144,7 @@ pub(crate) mod raw_window_stats {
             decoded_skipped = DECODED_SKIPPED.load(Ordering::Relaxed),
             "eval_raw window coverage"
         );
+        log_full_top();
     }
 }
 

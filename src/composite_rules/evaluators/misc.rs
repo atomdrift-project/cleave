@@ -22,10 +22,14 @@ use crate::types::{Criticality, Evidence, MAX_EVIDENCE_PER_TRAIT};
 ///   e.g., "anti-static/obfuscation" matches "anti-static/obfuscation::python-hex"
 #[must_use]
 pub(crate) fn eval_trait<'a>(id: &str, ctx: &EvaluationContext<'a>) -> ConditionResult {
-    let id = id.trim_end_matches('/');
-
-    // Check if this is a specific trait reference (contains ::)
-    let is_specific = id.contains("::");
+    // Byte loop, not `trim_end_matches('/')`: this runs per (composite x
+    // condition x pass) and the char-pattern searcher's setup was the
+    // largest line of `eval_trait` in a benign profile (27 s of pool time).
+    let mut end = id.len();
+    while end > 0 && id.as_bytes()[end - 1] == b'/' {
+        end -= 1;
+    }
+    let id = &id[..end];
 
     // Fast path: exact match using O(1) index lookup. `origin_allows` is the
     // `for:` filter: at container level a finding only counts when it came
@@ -52,14 +56,19 @@ pub(crate) fn eval_trait<'a>(id: &str, ctx: &EvaluationContext<'a>) -> Condition
         };
     }
 
-    // Specific trait references (with ::) only match exactly - no fallback
+    // Specific trait references (with ::) only match exactly - no fallback.
+    // Tested after the fast path, as a `:` byte scan rather than a `&str`
+    // pattern searcher (16 s of pool time per benign corpus as `contains`).
+    let bytes = id.as_bytes();
+    let is_specific = memchr::memchr_iter(b':', bytes).any(|i| bytes.get(i + 1) == Some(&b':'));
     if is_specific {
         return ConditionResult::no_match();
     }
 
     // Slow path: prefix/suffix matching for non-specific references
-    let slash_count = id.matches('/').count();
-    if slash_count == 0 {
+    // Only "has a slash" matters; a byte scan, not a `char` pattern searcher
+    // (8.5 s of pool time per benign corpus on this line).
+    if !id.as_bytes().contains(&b'/') {
         // Short name: suffix match for same-directory relative reference
         // e.g., "terminate" matches "execution/process::terminate" or legacy "execution/process/terminate"
         // Alloc-free suffix test: `f.id` ends with `id` preceded by `::` or

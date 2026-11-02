@@ -1793,300 +1793,13 @@ pub(crate) fn find_metadata_content_dirs(trait_dirs: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// Existing rule IDs retained during migration. New string-evidence rules must be
-/// placed with the subject they support, not under the generic file/string axis.
-/// Remove each ID from this grandfather list when its definition leaves that tree.
-const LEGACY_METADATA_FILE_STRING_IDS: &[&str] = &[
-    "metadata/file/string/account::account-identity-labels",
-    "metadata/file/string/account::user-email-label",
-    "metadata/file/string/account::email-domain-label",
-    "metadata/file/string/account::customer-email-profile-field",
-    "metadata/file/string/account::email-label-vocabulary",
-    "metadata/file/string/account::postal-address-field",
-    "metadata/file/string/account::customer-contact-field",
-    "metadata/file/string/account::account-email-label",
-    "metadata/file/string/account::dataset-user-id-text-pair",
-    "metadata/file/string/account::account-id-field",
-    "metadata/file/string/account::account-created-field",
-    "metadata/file/string/account::account-last-seen-field",
-    "metadata/file/string/account::account-field-vocabulary",
-    "metadata/file/string/application-name::chrome-browser-name-literal",
-    "metadata/file/string/application-name::firefox-browser-name-literal",
-    "metadata/file/string/application-name::safari-browser-name-literal",
-    "metadata/file/string/application-name::browser-doc-example-index",
-    "metadata/file/string/application-name::edge-name-path",
-    "metadata/file/string/application-name::microsoft-edge-name",
-    "metadata/file/string/application-name::edge-name-ms",
-    "metadata/file/string/application-name::edge-name-other",
-    "metadata/file/string/application-name::opera-name-path",
-    "metadata/file/string/application-name::opera-name-other",
-    "metadata/file/string/application-name::brave-name",
-    "metadata/file/string/application-name::yandex-name",
-    "metadata/file/string/application-name::iexplore-executable-name",
-    "metadata/file/string/application-name::internet-explorer-product-name",
-    "metadata/file/string/application-name::edge-name-reference",
-    "metadata/file/string/application-name::system-settings-name-reference",
-    "metadata/file/string/application-name::system-preferences-name-reference",
-    "metadata/file/string/application-name::settings-app-name-reference",
-    "metadata/file/string/application-name::star-archive-format-marker",
-    "metadata/file/string/application-name::star-default-config-marker",
-    "metadata/file/string/application-name::netstat-usage-banner",
-    "metadata/file/string/application-name::netstat-source-marker",
-    "metadata/file/string/application-name::tool-identity-cpuid",
-    "metadata/file/string/application-name::tool-identity-hwinfo",
-    "metadata/file/string/application-name::tool-identity-putty",
-    "metadata/file/string/application-name::tool-identity-filezilla",
-    "metadata/file/string/application-name::tool-identity-wireshark",
-    "metadata/file/string/application-name::tool-identity-7zip--rx-1",
-    "metadata/file/string/application-name::tool-identity-7zip--rx-2",
-    "metadata/file/string/application-name::tool-identity-7zip--rx-3",
-    "metadata/file/string/application-name::tool-identity-7zip--rx-4",
-    "metadata/file/string/application-name::official-7zip-dll-basename",
-    "metadata/file/string/application-name::official-7zip-dll-reference",
-    "metadata/file/string/application-name::official-7zip-gui-basename",
-    "metadata/file/string/application-name::official-7zip-console-basename",
-    "metadata/file/string/application-name::official-7zip-standalone-basename",
-    "metadata/file/string/application-name::official-7zip-manager-basename",
-    "metadata/file/string/application-name::7zip-gui-official-manifest",
-    "metadata/file/string/application-name::pe-product-name-7zip",
-    "metadata/file/string/application-name::tool-identity-winrar",
-    "metadata/file/string/application-name::tool-identity-notepadplusplus",
-    "metadata/file/string/application-name::software-catalog-token-list",
-    "metadata/file/string/application-name::tool-identity-intel",
-    "metadata/file/string/application-name::tool-identity-7zip-cond-0--inline-573",
-    "metadata/file/string/application-name::trusted-tool-impersonator-context",
-    "metadata/file/string/application-name::tool-identity-7zip",
-    "metadata/file/string/application-name::official-7zip-component",
-    "metadata/file/string/application-name::windows-safe-mode-toggle-script",
-    "metadata/file/string/application-name::microsoft-activation-tool-script-marker",
-    "metadata/file/string/application-name::microsoft-activation-tool-domain-marker",
-    "metadata/file/string/application-name::microsoft-activation-tool-obfuscated-domain-marker",
-    "metadata/file/string/application-name::microsoft-activation-scripts-title",
-    "metadata/file/string/application-name::windows11-defender-disable-tweak",
-    "metadata/file/string/application-name::defender-history-clear-title",
-    "metadata/file/string/application-name::defender-history-remove-task-default",
-    "metadata/file/string/application-name::kms-suite-title",
-    "metadata/file/string/application-name::microsoft-activation-script-identity",
-    "metadata/file/string/application-name::microsoft-activation-script-benign-context",
-    "metadata/file/string/application-name::microsoft-activation-tool-script",
-    "metadata/file/string/application-name::defender-history-clear-once-script",
-    "metadata/file/string/artifact::ptrace-constant-name-table",
-    "metadata/file/string/artifact::cddl-spdx-header",
-    "metadata/file/string/artifact::btf-vmlinux-header-guard",
-    "metadata/file/string/artifact::btf-core-preserve-access-index-pragma",
-    "metadata/file/string/artifact::linux-uapi-bpf-func-mapper-macro",
-    "metadata/file/string/artifact::linux-btf-vmlinux-type-dump",
-    "metadata/file/string/artifact::linux-uapi-bpf-header",
-    "metadata/file/string/artifact::demo-prefix-keyword",
-    "metadata/file/string/artifact::vagrant-machine-communicate-marker",
-    "metadata/file/string/artifact::linux-syscall-note-license",
-    "metadata/file/string/artifact::payload-label",
-    "metadata/file/string/artifact::embedded-256-bit-hex-digest",
-    "metadata/file/string/attribution::upstream-project-attribution",
-    "metadata/file/string/attribution::jsdoc-author-attribution",
-    "metadata/file/string/attribution::spdx-license-identifier",
-    "metadata/file/string/attribution::gnu-license-notice",
-    "metadata/file/string/attribution::meta-platforms-copyright",
-    "metadata/file/string/attribution::attributed-upstream-source",
-    "metadata/file/string/charset::base62-alphanumeric-charset",
-    "metadata/file/string/charset::qwerty-order-alphabet",
-    "metadata/file/string/charset::emoji-library-table-text",
-    "metadata/file/string/charset::professional-setup-phrase",
-    "metadata/file/string/charset::split-string",
-    "metadata/file/string/container::runc-oci-str",
-    "metadata/file/string/container::libcontainer-str",
-    "metadata/file/string/container::cri-api-str",
-    "metadata/file/string/container::runtimeservice-str",
-    "metadata/file/string/container::opencontainers-str",
-    "metadata/file/string/container::oci-runtime-spec-str",
-    "metadata/file/string/container::image-spec-str",
-    "metadata/file/string/container::org-opencontainers-str",
-    "metadata/file/string/container::runc-refs",
-    "metadata/file/string/container::cri-refs",
-    "metadata/file/string/container::oci-refs",
-    "metadata/file/string/container::oci",
-    "metadata/file/string/corpus::hashed-text-record",
-    "metadata/file/string/count::no-strings-dup",
-    "metadata/file/string/credential::uppercase-password-identifier",
-    "metadata/file/string/device::data-section-virtual-word",
-    "metadata/file/string/device::data-section-bluetooth-word",
-    "metadata/file/string/device::plc-keyword",
-    "metadata/file/string/device::hmi-keyword",
-    "metadata/file/string/device::scada-keyword",
-    "metadata/file/string/device::rtu-keyword",
-    "metadata/file/string/device::ics-device-keywords",
-    "metadata/file/string/device::turbine-speed-field",
-    "metadata/file/string/device::reboot-word",
-    "metadata/file/string/device::vboxguest-service-registry-path",
-    "metadata/file/string/device::virtualbox-sdk-module-name",
-    "metadata/file/string/device::windows-usb-hardware-id",
-    "metadata/file/string/file::office-document-extension--docx",
-    "metadata/file/string/file::office-document-extension--xlsx",
-    "metadata/file/string/file::office-document-extension--pptx",
-    "metadata/file/string/file::credential-file-extension--ovpn",
-    "metadata/file/string/file::office-document-file-pattern--docx",
-    "metadata/file/string/file::office-document-file-pattern--xlsx",
-    "metadata/file/string/file::office-document-file-pattern--pptx",
-    "metadata/file/string/file::credential-file-pattern--kdbx",
-    "metadata/file/string/file::credential-file-pattern--psafe3",
-    "metadata/file/string/file::credential-file-pattern--ovpn",
-    "metadata/file/string/file::office-document-extension",
-    "metadata/file/string/file::credential-file-extension",
-    "metadata/file/string/file::office-document-file-pattern",
-    "metadata/file/string/file::credential-file-pattern",
-    "metadata/file/string/file::jvm-dot-cmd-suffix",
-    "metadata/file/string/file::jvm-dot-out-suffix",
-    "metadata/file/string/file::jvm-active-server-log-name",
-    "metadata/file/string/file::jvm-rotated-server-log-prefix",
-    "metadata/file/string/file::jvm-derby-log-path",
-    "metadata/file/string/file::quoted-lib-path-component",
-    "metadata/file/string/file::token-read-text-reference",
-    "metadata/file/string/file::tmp",
-    "metadata/file/string/file::manifest-json-filename",
-    "metadata/file/string/file::content-js-filename",
-    "metadata/file/string/file::error-log-filename",
-    "metadata/file/string/file::config-header-filename",
-    "metadata/file/string/file::scr-extension-string",
-    "metadata/file/string/file::tmpfile-tar-filename",
-    "metadata/file/string/file::configuration-word",
-    "metadata/file/string/file::desktop-ini-filename",
-    "metadata/file/string/file::mscorsvc-dll-filename",
-    "metadata/file/string/form-validation::upgrade-required-message",
-    "metadata/file/string/graphics::mesa-namespace-fragment",
-    "metadata/file/string/graphics::vulkan-text-section-reference",
-    "metadata/file/string/graphics::vulkan-rdata-reference",
-    "metadata/file/string/graphics::graphics-runtime-library-name",
-    "metadata/file/string/graphics::dri-directory-reference",
-    "metadata/file/string/graphics::dri-driver-tokens",
-    "metadata/file/string/graphics::dri-reference",
-    "metadata/file/string/identity::android-aid-platform-marker",
-    "metadata/file/string/identity::android-data-app-path",
-    "metadata/file/string/identity::android-vendor-runtime-path",
-    "metadata/file/string/identity::android-apex-runtime-path",
-    "metadata/file/string/identity::android-property-platform-marker",
-    "metadata/file/string/identity::android-getprop-platform-marker",
-    "metadata/file/string/identity::android-lib-platform-marker",
-    "metadata/file/string/identity::android-java-platform-marker",
-    "metadata/file/string/identity::android-system-path-marker",
-    "metadata/file/string/identity::arch-64bit-string",
-    "metadata/file/string/identity::multi-architecture-name-set--arm-mips",
-    "metadata/file/string/identity::multi-architecture-name-set--other",
-    "metadata/file/string/identity::multi-architecture-name-set",
-    "metadata/file/string/identity::crackme-string",
-    "metadata/file/string/identity::developer-frank-string",
-    "metadata/file/string/identity::developer-email-source-harvest--rx-6",
-    "metadata/file/string/identity::developer-email-source-harvest--rx-7",
-    "metadata/file/string/identity::filename-gvoffoqi",
-    "metadata/file/string/identity::fortios-automation-results-placeholder",
-    "metadata/file/string/identity::corporate-hostname-word-computer",
-    "metadata/file/string/identity::corporate-hostname-word-internal",
-    "metadata/file/string/identity::hostname-marker-word-corp",
-    "metadata/file/string/identity::hostname-marker-word-fqdn",
-    "metadata/file/string/identity::jvm-post-token",
-    "metadata/file/string/identity::jvm-activate-constant",
-    "metadata/file/string/identity::python3-interpreter-basename",
-    "metadata/file/string/identity::chrome-sandbox-basename",
-    "metadata/file/string/identity::chrome-crashpad-handler-basename",
-    "metadata/file/string/identity::node-pty-native-basename",
-    "metadata/file/string/identity::bpf-tool-basename",
-    "metadata/file/string/identity::kernel-module-basename",
-    "metadata/file/string/identity::pkgbuild-basename",
-    "metadata/file/string/identity::cuckoo-typeface-name-token",
-    "metadata/file/string/identity::pattern-rules-catalog",
-    "metadata/file/string/identity::client-uuid-label",
-    "metadata/file/string/identity::code-snippet-identifier",
-    "metadata/file/string/identity::flags-identifier",
-    "metadata/file/string/identity::applescript-hidden-entry-snippet-path",
-    "metadata/file/string/identity::applescript-hidden-entry-secret",
-    "metadata/file/string/identity::applescript-hidden-entry-snippet",
-    "metadata/file/string/identity::abbreviated-curl-bash-reference",
-    "metadata/file/string/identity::cli-posix-shell-common-token",
-    "metadata/file/string/identity::cli-posix-shell-alternate-token",
-    "metadata/file/string/identity::argv-posix-shell-common-token",
-    "metadata/file/string/identity::argv-posix-shell-alternate-token",
-    "metadata/file/string/identity::argv-windows-shell-token",
-    "metadata/file/string/identity::hostname-field-token",
-    "metadata/file/string/identity::babel-script-mime-type",
-    "metadata/file/string/identity::userinfo-token",
-    "metadata/file/string/identity::chunk-token",
-    "metadata/file/string/identity::source-text-token",
-    "metadata/file/string/identity::system-shell-basename",
-    "metadata/file/string/identity::shell-loadable-builtin-path",
-    "metadata/file/string/identity::freedos-program-basename",
-    "metadata/file/string/identity::microsoft-vcredist-context",
-    "metadata/file/string/identity::executable-manifest-reference",
-    "metadata/file/string/identity::is-windows-named",
-    "metadata/file/string/process-name::mobilestored-daemon",
-    "metadata/file/string/process-name::backboardd-daemon",
-    "metadata/file/string/process-name::lockdownd-daemon",
-    "metadata/file/string/process-name::smartd-name",
-    "metadata/file/string/process-name::qmgr-name",
-    "metadata/file/string/process-name::zabbix-agentd-name",
-    "metadata/file/string/process-name::xinetd-name",
-    "metadata/file/string/process-name::inetd-name",
-    "metadata/file/string/process-name::named-name",
-    "metadata/file/string/process-name::native-database-service-names",
-    "metadata/file/string/process-name::httpd-name",
-    "metadata/file/string/process-name::nginx-name",
-    "metadata/file/string/process-name::apache-name",
-    "metadata/file/string/process-name::mysql-name",
-    "metadata/file/string/process-name::postgres-name",
-    "metadata/file/string/process-name::redis-name",
-    "metadata/file/string/process-name::mongod-name",
-    "metadata/file/string/process-name::tomcat-name",
-    "metadata/file/string/process-name::jboss-name",
-    "metadata/file/string/process-name::weblogic-name",
-    "metadata/file/string/process-name::source-kworker-name-literal",
-    "metadata/file/string/process-name::search-filter-host-exe-reference",
-    "metadata/file/string/process-name::search-protocol-host-exe-reference",
-    "metadata/file/string/process-name::runtime-broker-exe-reference",
-    "metadata/file/string/process-name::windows-system-process-name-reference",
-    "metadata/file/string/process-name::updater-exe-name",
-    "metadata/file/string/security::port-network-scanning-phrase",
-    "metadata/file/string/security::scanning-port-target-phrase",
-    "metadata/file/string/security::version-target-identifier",
-    "metadata/file/string/security::version-service-identifier",
-    "metadata/file/string/security::version-scan-identifier",
-    "metadata/file/string/security::target-version-identifier",
-    "metadata/file/string/security::service-version-identifier",
-    "metadata/file/string/security::scan-version-identifier",
-    "metadata/file/string/security::yara-x-engine-marker",
-    "metadata/file/string/security::yara-x-go-module",
-    "metadata/file/string/telemetry::telemetry-context-telemetry",
-    "metadata/file/string/telemetry::telemetry-context-analytics",
-    "metadata/file/string/telemetry::telemetry-context-identify",
-    "metadata/file/string/telemetry::browser-identity-field",
-    "metadata/file/string/telemetry::network-address-profile-field",
-    "metadata/file/string/telemetry::geolocation-profile-field",
-    "metadata/file/string/telemetry::region-profile-field",
-    "metadata/file/string/telemetry::os-profile-field",
-    "metadata/file/string/telemetry::platform-profile-field",
-    "metadata/file/string/telemetry::extension-os-profile-fields",
-    "metadata/file/string/telemetry::extension-runtime-identity-fields",
-    "metadata/file/string/telemetry::telemetry-context-markers",
-    "metadata/file/string/telemetry::telemetry-user-identity-fields",
-    "metadata/file/string/telemetry::geo-system-profile-field",
-    "metadata/file/string/telemetry::os-info-field",
-    "metadata/file/string/telemetry::repeated-analytics-term",
-    "metadata/file/string/telemetry::repeated-counter-term",
-    "metadata/file/string/telemetry::repeated-stats-term",
-    "metadata/file/string/telemetry::repeated-track-substring",
-    "metadata/file/string/telemetry::session-id-field-js",
-    "metadata/file/string/telemetry::repeated-tracking-vocabulary",
-    "metadata/file/string/telemetry::clear-all-logs-symbol",
-    "metadata/file/string/telemetry::beacon-word",
-];
-
-/// Reject any new rule definition under the legacy `metadata/file/string/`
-/// namespace, including additions to already-established source directories.
-/// References to grandfathered IDs remain valid while their definitions move.
+/// Reject definitions under the retired `metadata/file/string/` namespace.
 #[must_use]
 pub(crate) fn find_new_metadata_file_string_ids(rule_ids: &[String]) -> Vec<String> {
     let mut violations: Vec<String> = rule_ids
         .iter()
         .filter(|id| {
-            (id.starts_with("metadata/file/string/") || id.starts_with("metadata/file/string::"))
-                && !LEGACY_METADATA_FILE_STRING_IDS.contains(&id.as_str())
+            id.starts_with("metadata/file/string/") || id.starts_with("metadata/file/string::")
         })
         .cloned()
         .collect();
@@ -2095,49 +1808,13 @@ pub(crate) fn find_new_metadata_file_string_ids(rule_ids: &[String]) -> Vec<Stri
     violations
 }
 
-/// Existing exact IDs retained while context-only literal rules leave the
-/// closed `metadata/file/literal` namespace. Remove each ID when its definition
-/// moves; references to retained IDs remain valid during migration.
-const LEGACY_METADATA_FILE_LITERAL_IDS: &[&str] = &[
-    "metadata/file/literal::lex-word-reference",
-    "metadata/file/literal::lowercase-alnum-alphabet",
-    "metadata/file/literal::bracket-http-url-prefix",
-    "metadata/file/literal::push-string-literal",
-    "metadata/file/literal::bracketed-shift-string",
-    "metadata/file/literal::c-256-entry-array-declaration",
-    "metadata/file/literal::dns-tunnel-phrase",
-    "metadata/file/literal::dns-exfil",
-    "metadata/file/literal::dns-c2",
-    "metadata/file/literal::dns-beacon",
-    "metadata/file/literal::hex-byte-token-3f",
-    "metadata/file/literal::hex-byte-token-ff",
-    "metadata/file/literal::bracket-hex-zero-prefix",
-    "metadata/file/literal::hex-number-text",
-    "metadata/file/literal::hex-token-length-undefined-cluster",
-    "metadata/file/literal::js-long-integer-array-literal",
-    "metadata/file/literal::repeated-85-to-95-character-variable-strings",
-    "metadata/file/literal::powershell-numeric-array-8-plus",
-    "metadata/file/literal::js-numeric-array-64-plus",
-    "metadata/file/literal::remote-desktop-feature-word",
-    "metadata/file/literal::safety-system-phrase",
-    "metadata/file/literal::search-setindex-reference",
-    "metadata/file/literal::staging-key-identifier-reference",
-    "metadata/file/literal::session-identifier-reference",
-    "metadata/file/literal::python-large-numeric-array-literal",
-    "metadata/file/literal::cve-pattern-many",
-    "metadata/file/literal::lowercase-digits-alphabet",
-];
-
-/// Reject new definitions under `metadata/file/literal`, including additions
-/// to existing source files. New literal evidence must live with its subject;
-/// exact legacy IDs remain temporarily valid while their definitions move.
+/// Reject definitions under the retired `metadata/file/literal` namespace.
 #[must_use]
 pub(crate) fn find_new_metadata_file_literal_ids(rule_ids: &[String]) -> Vec<String> {
     let mut violations: Vec<String> = rule_ids
         .iter()
         .filter(|id| {
-            (id.starts_with("metadata/file/literal/") || id.starts_with("metadata/file/literal::"))
-                && !LEGACY_METADATA_FILE_LITERAL_IDS.contains(&id.as_str())
+            id.starts_with("metadata/file/literal/") || id.starts_with("metadata/file/literal::")
         })
         .cloned()
         .collect();
@@ -2303,7 +1980,17 @@ pub(crate) fn find_sibling_name_restatement(
                     == "objectives/command-and-control/backdoor/webshell/request"
                     && short == "command"
                     && long == "command-output";
-                if restates && !distinct_cross_cutting_profile && !distinct_webshell_output {
+                // Hidden target files are a reviewed cross-cutting refinement;
+                // the broad fetch leaf retains chains without that requirement.
+                let distinct_hidden_fetch = parent
+                    == "objectives/execution/payload/file-exec/command"
+                    && short == "fetch"
+                    && long == "fetch-hidden";
+                if restates
+                    && !distinct_cross_cutting_profile
+                    && !distinct_webshell_output
+                    && !distinct_hidden_fetch
+                {
                     out.push((parent.to_string(), short.to_string(), long.to_string()));
                 }
             }
@@ -2311,6 +1998,35 @@ pub(crate) fn find_sibling_name_restatement(
     }
     out.sort();
     out
+}
+
+#[cfg(test)]
+#[test]
+fn hidden_fetch_sibling_exception_is_specific_to_the_reviewed_pair() {
+    let dirs = [
+        "objectives/execution/payload/file-exec/command/fetch",
+        "objectives/execution/payload/file-exec/command/fetch-hidden",
+        "objectives/execution/payload/file-exec/command/fetch-other",
+        "other/command/fetch",
+        "other/command/fetch-hidden",
+    ]
+    .map(str::to_string);
+    let findings = find_sibling_name_restatement(&dirs);
+    assert!(!findings.contains(&(
+        "objectives/execution/payload/file-exec/command".into(),
+        "fetch".into(),
+        "fetch-hidden".into(),
+    )));
+    assert!(findings.contains(&(
+        "objectives/execution/payload/file-exec/command".into(),
+        "fetch".into(),
+        "fetch-other".into(),
+    )));
+    assert!(findings.contains(&(
+        "other/command".into(),
+        "fetch".into(),
+        "fetch-hidden".into(),
+    )));
 }
 
 #[cfg(test)]
@@ -3067,10 +2783,10 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // Shared XOR AST productions are portable across the explicitly scoped
     // grammars. Lua exponentiation and other grammars are excluded; Swift has
     // its own production. One canonical predicate avoids per-language copies.
-    "tree-sitter:micro-behaviors/data/bitwise/parsed-xor.yaml",
+    "tree-sitter:micro-behaviors/data/bitwise/xor/parsed-xor.yaml",
     // Normalized call names describe the same XOR-named helper observation
     // across script/source frontends, without claiming a particular algorithm.
-    "symbol:micro-behaviors/data/bitwise/parsed-xor.yaml",
+    "symbol:micro-behaviors/data/bitwise/xor/parsed-xor.yaml",
     // Named-call references use the normalized call-symbol namespace across
     // script frontends. The printenv reference currently matches 13 script
     // types; narrowing it to seven would discard existing call facts. This
@@ -3156,11 +2872,6 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     "text:micro-behaviors/data/config/syntax/recursive-option.yaml",
     // IMDS credential-header constants are independent of the source/binary carrier.
     "text:micro-behaviors/communications/http/token-auth/aws-imds-headers.yaml",
-    // Download-execute dropper patterns are malicious whether they appear in a
-    // shell script, package.json postinstall, setup.py cmdclass, Dockerfile RUN,
-    // plist ProgramArguments, systemd ExecStart, etc.
-    "text:objectives/command-and-control/dropper/delivery/execute-download/",
-    "text:objectives/command-and-control/dropper/delivery/hidden-stage/",
     // The decoded form of the same dropper one-liner. These match the *decoded*
     // string corpus, so the host language is whatever happened to carry the
     // blob: the identical payload has been observed in a Gradle Kotlin task, an
@@ -3186,7 +2897,6 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     "text:metadata/file/profile/",
     "text:metadata/lang/natural/",
     "text:metadata/lang/locale/",
-    "text:metadata/file/string/",
     "text:metadata/file/extension/",
     "text:micro-behaviors/data/format/media/",
     "text:micro-behaviors/data/runtime/keywords/",
@@ -3242,7 +2952,6 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     "literal:metadata/file/extension/",
     "literal:metadata/file/format/",
     "literal:metadata/file/profile/",
-    "literal:metadata/file/string/",
     "literal:objectives/impact/destroy/keywords/",
     "literal:objectives/command-and-control/remote-command/llm/",
     "literal:objectives/credential-access/theft/authentication/",
@@ -3771,6 +3480,56 @@ fn is_reviewed_linfeng_marker(t: &TraitDefinition) -> bool {
                 && q.exact.is_none() && q.regex.is_none() && q.word.is_none())
 }
 
+// RedShell's paired operator commands are a named-family observation whose
+// bytes may occur in any ELF section and whose meaning is independent of size.
+// The exact ID, severity and matcher keep this exception narrowly reviewable.
+fn is_reviewed_redshell_injection_menu(t: &TraitDefinition) -> bool {
+    t.id == "well-known/malware/backdoor/redc2::redshell-injection-menu"
+        && t.crit == Criticality::Notable
+        && matches!(&t.r#if, Condition::Text(q)
+            if q.regex.as_deref() == Some(r"/redshell bin -inject <proc> <file\.bin>[\s\S]{0,220}/redshell elf -inject <pid> <file>")
+                && !q.case_insensitive && q.exact.is_none() && q.substr.is_none() && q.word.is_none())
+}
+
+// These exact ShellObject markers identify encoded family strings wherever
+// they occur in a PE. Their meaning does not depend on a section name.
+fn is_reviewed_shellobject_marker(t: &TraitDefinition) -> bool {
+    let expected = match t.id.as_str() {
+        "well-known/malware/trojan/shellobject/hijack::encoded-kvic-jpg-payload-url" => {
+            "9/Pz76m8vPT09L349fYAvfnvvAP8APC8+AWvp7357wSf"
+        }
+        "well-known/malware/trojan/shellobject/hijack::encoded-kvic-probe-path" => {
+            "vAP8APC87/H8AQK97/fvnw=="
+        }
+        "well-known/malware/trojan/shellobject/hijack::encoded-temp-res-file-template" => {
+            "0u3+8evyy8Lenw=="
+        }
+        _ => return false,
+    };
+    t.crit == Criticality::Notable
+        && matches!(&t.r#if, Condition::Text(q)
+            if q.exact.as_deref() == Some(expected)
+                && q.substr.is_none() && q.regex.is_none() && q.word.is_none())
+}
+
+// These distinctive Stagecomp references are observations independent of file size.
+// Tie the exception to the reviewed ID, severity and complete matcher.
+fn is_reviewed_stagecomp_marker(t: &TraitDefinition) -> bool {
+    let expected = match t.id.as_str() {
+        "well-known/malware/backdoor/muddywater-darkcomp::stagecomp-moonzonet-domain" => {
+            r"(?i)\bmoonzonet\.com\b"
+        }
+        "well-known/malware/backdoor/muddywater-darkcomp::stagecomp-visualwincomp-output" => {
+            r"(?i)\bvisualwincomp\.txt\b"
+        }
+        _ => return false,
+    };
+    t.crit == Criticality::Notable
+        && matches!(&t.r#if, Condition::Text(q)
+            if q.regex.as_deref() == Some(expected)
+                && q.exact.is_none() && q.substr.is_none() && q.word.is_none())
+}
+
 /// Find well-known/ atomic traits targeting binaries without any file size filter.
 ///
 /// Binary identity signatures normally need a size bound. Low-tier basename,
@@ -3793,6 +3552,8 @@ pub(crate) fn find_wellknown_missing_size_filter(
                     && matches!(t.crit, Criticality::Component | Criticality::Notable))
                 && !is_low_tier_named_binary_fact(t)
                 && !is_reviewed_linfeng_marker(t)
+                && !is_reviewed_redshell_injection_menu(t)
+                && !is_reviewed_stagecomp_marker(t)
                 // A Go import path is provenance evidence, not a size-bounded identity.
                 && t.id != "well-known/tool/detection/titus::titus-secret-scan-implementation"
                 // A tool banner is a reference regardless of file size.
@@ -3883,6 +3644,70 @@ fn condition_keys_on_registry_identity(cond: &Condition, include_name: bool) -> 
     }
 }
 
+// These named-utility text references were reviewed with whole-file scope.
+// Limit each exception to the original ID, criticality and matcher.
+fn is_reviewed_utility_reference(t: &TraitDefinition) -> bool {
+    let (crit, kind, expected) = match t.id.as_str() {
+        "well-known/app/utility/hwinfo::hwinfo-name-reference" => {
+            (Criticality::Component, "regex", r"(?i)HWiNFO")
+        }
+        "well-known/app/network/filezilla::filezilla-name-reference" => {
+            (Criticality::Component, "regex", r"(?i)FileZilla")
+        }
+        "well-known/tool/detection/wireshark::wireshark-name-reference" => {
+            (Criticality::Component, "regex", r"(?i)Wireshark")
+        }
+        "well-known/app/productivity/notepad-plus-plus::notepad-plus-plus-name-reference" => {
+            (Criticality::Component, "regex", r"(?i)Notepad\+\+")
+        }
+        "well-known/tool/sysadmin/7zip::sevenzip-setup-label-reference" => (
+            Criticality::Notable,
+            "regex",
+            r"(?i)7-Zip\s+(Setup|Installer)",
+        ),
+        "well-known/tool/sysadmin/7zip::sevenzip-file-manager-label-reference" => (
+            Criticality::Notable,
+            "regex",
+            r"(?i)7-Zip\s+(File Manager|Standalone)",
+        ),
+        "well-known/tool/sysadmin/7zip::sevenzip-console-label-reference" => (
+            Criticality::Notable,
+            "regex",
+            r"(?i)7-Zip\s+(Console|Archiver)",
+        ),
+        "well-known/tool/sysadmin/7zip::sevenzip-extension-label-reference" => {
+            (Criticality::Component, "regex", r"(?i)7-Zip\s+(Extension)")
+        }
+        "well-known/lib/data/sevenzipjbinding::sevenzipjbinding-package-path-reference" => {
+            (Criticality::Notable, "substr", r"net/sf/sevenzipjbinding")
+        }
+        _ => return false,
+    };
+    t.crit == crit
+        && matches!(&t.r#if, Condition::Text(q)
+        if q.exact.is_none() && q.word.is_none()
+            && match kind {
+                "regex" => q.regex.as_deref() == Some(expected) && q.substr.is_none(),
+                "substr" => q.substr.as_deref() == Some(expected) && q.regex.is_none(),
+                _ => false,
+            })
+}
+
+// Preserve whole-file matching only for these two specific star references.
+fn is_reviewed_star_reference(t: &TraitDefinition) -> bool {
+    let expected = match t.id.as_str() {
+        "well-known/tool/sysadmin/star::star-archive-format-marker" => {
+            "Extended standard tar (star 1994)"
+        }
+        "well-known/tool/sysadmin/star::star-default-config-marker" => "/etc/default/star",
+        _ => return false,
+    };
+    t.crit == Criticality::Notable
+        && matches!(&t.r#if, Condition::Text(q)
+            if q.exact.as_deref() == Some(expected)
+                && q.substr.is_none() && q.regex.is_none() && q.word.is_none())
+}
+
 /// Find well-known/ atomic traits targeting binary file types whose condition lacks a section filter.
 ///
 /// For binary targets (PE, ELF, Mach-O, etc.), section-scoped matching significantly reduces
@@ -3906,6 +3731,26 @@ pub(crate) fn find_wellknown_missing_section_filter(
                 // The GeTaOEP banner can appear in any section or overlay.
                 && t.id != "well-known/tool/reverse-engineering/oep-finder::geta-oep-banner-marker"
                 && !is_reviewed_linfeng_marker(t)
+                && !is_reviewed_redshell_injection_menu(t)
+                && !is_reviewed_shellobject_marker(t)
+                && !is_reviewed_utility_reference(t)
+                // The reviewed star format and config references can occur in
+                // different binary sections; preserve their whole-file scope.
+                && !is_reviewed_star_reference(t)
+                // The Edge product-name reference was reviewed as whole-file
+                // text; narrowing it to a PE section would lose its consumers.
+                && !(t.id == "well-known/app/browser/microsoft-edge::microsoft-edge-name"
+                    && t.crit == Criticality::Notable
+                    && matches!(&t.r#if, Condition::Text(q)
+                        if q.substr.as_deref() == Some("Microsoft Edge")
+                            && q.exact.is_none() && q.regex.is_none() && q.word.is_none()))
+                // A named DLL reference can occur outside a PE section, and its
+                // established consumer needs the original whole-file coverage.
+                && !(t.id == "well-known/lib/runtime/managed/dotnet-runtime::mscorsvc-dll-filename"
+                    && t.crit == Criticality::Notable
+                    && matches!(&t.r#if, Condition::Text(q)
+                        if q.substr.as_deref() == Some("mscorsvc.dll")
+                            && q.exact.is_none() && q.regex.is_none() && q.word.is_none()))
                 && condition_supports_section_filter(&t.r#if)
                 && !condition_has_section_filter(&t.r#if)
         })
@@ -3999,14 +3844,16 @@ mod metadata_file_string_tests {
     }
 
     #[test]
-    fn allows_existing_legacy_definitions_and_nonlegacy_ids() {
+    fn rejects_former_legacy_definitions() {
         let input = ids(&[
             "metadata/file/string/account::account-id-field",
             "metadata/file/string/account::account-last-seen-field",
             "metadata/file/string/application-name::chrome-browser-name-literal",
             "micro-behaviors/communications/http/string::header-reference",
         ]);
-        assert!(find_new_metadata_file_string_ids(&input).is_empty());
+        let mut expected = input[..3].to_vec();
+        expected.sort();
+        assert_eq!(find_new_metadata_file_string_ids(&input), expected);
     }
 
     #[test]
@@ -4076,7 +3923,7 @@ mod metadata_file_literal_tests {
     }
 
     #[test]
-    fn allows_exact_existing_legacy_ids() {
+    fn rejects_former_exact_legacy_ids() {
         let input = ids(&[
             "metadata/file/literal::lex-word-reference",
             "metadata/file/literal::lowercase-alnum-alphabet",
@@ -4107,7 +3954,9 @@ mod metadata_file_literal_tests {
             "metadata/file/literal::lowercase-digits-alphabet",
             "micro-behaviors/data/string::replace",
         ]);
-        assert!(find_new_metadata_file_literal_ids(&input).is_empty());
+        let mut expected = input[..input.len() - 1].to_vec();
+        expected.sort();
+        assert_eq!(find_new_metadata_file_literal_ids(&input), expected);
     }
 
     #[test]

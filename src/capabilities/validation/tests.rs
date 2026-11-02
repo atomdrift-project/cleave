@@ -8755,6 +8755,322 @@ mod section_filter_validation_tests {
     }
 
     #[test]
+    fn reviewed_stagecomp_size_exceptions_require_exact_id_matcher_and_severity() {
+        for (id, pattern) in [
+            ("stagecomp-moonzonet-domain", r"(?i)\bmoonzonet\.com\b"),
+            (
+                "stagecomp-visualwincomp-output",
+                r"(?i)\bvisualwincomp\.txt\b",
+            ),
+        ] {
+            let mut fact = text_trait(
+                &format!("well-known/malware/backdoor/muddywater-darkcomp::{id}"),
+                vec![FileType::Pe],
+            );
+            fact.crit = crate::types::Criticality::Notable;
+            fact.r#if =
+                crate::yaml::from_str(&format!("type: text\nregex: '{pattern}'\n")).unwrap();
+            assert!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty()
+            );
+            let mut wrong_id = fact.clone();
+            wrong_id.id.push_str("-other");
+            assert_eq!(
+                find_wellknown_missing_size_filter(&[wrong_id], &HashMap::new()).len(),
+                1
+            );
+            let mut wrong_crit = fact.clone();
+            wrong_crit.crit = crate::types::Criticality::Suspicious;
+            assert_eq!(
+                find_wellknown_missing_size_filter(&[wrong_crit], &HashMap::new()).len(),
+                1
+            );
+            fact.r#if = crate::yaml::from_str("type: text\nregex: changed\n").unwrap();
+            assert_eq!(
+                find_wellknown_missing_size_filter(&[fact], &HashMap::new()).len(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn utility_section_exceptions_require_exact_reviewed_markers() {
+        for (id, crit, kind, marker) in [
+            (
+                "well-known/app/utility/hwinfo::hwinfo-name-reference",
+                crate::types::Criticality::Component,
+                "regex",
+                r"(?i)HWiNFO",
+            ),
+            (
+                "well-known/app/network/filezilla::filezilla-name-reference",
+                crate::types::Criticality::Component,
+                "regex",
+                r"(?i)FileZilla",
+            ),
+            (
+                "well-known/tool/detection/wireshark::wireshark-name-reference",
+                crate::types::Criticality::Component,
+                "regex",
+                r"(?i)Wireshark",
+            ),
+            (
+                "well-known/app/productivity/notepad-plus-plus::notepad-plus-plus-name-reference",
+                crate::types::Criticality::Component,
+                "regex",
+                r"(?i)Notepad\+\+",
+            ),
+            (
+                "well-known/tool/sysadmin/7zip::sevenzip-setup-label-reference",
+                crate::types::Criticality::Notable,
+                "regex",
+                r"(?i)7-Zip\s+(Setup|Installer)",
+            ),
+            (
+                "well-known/tool/sysadmin/7zip::sevenzip-file-manager-label-reference",
+                crate::types::Criticality::Notable,
+                "regex",
+                r"(?i)7-Zip\s+(File Manager|Standalone)",
+            ),
+            (
+                "well-known/tool/sysadmin/7zip::sevenzip-console-label-reference",
+                crate::types::Criticality::Notable,
+                "regex",
+                r"(?i)7-Zip\s+(Console|Archiver)",
+            ),
+            (
+                "well-known/tool/sysadmin/7zip::sevenzip-extension-label-reference",
+                crate::types::Criticality::Component,
+                "regex",
+                r"(?i)7-Zip\s+(Extension)",
+            ),
+            (
+                "well-known/lib/data/sevenzipjbinding::sevenzipjbinding-package-path-reference",
+                crate::types::Criticality::Notable,
+                "substr",
+                r"net/sf/sevenzipjbinding",
+            ),
+        ] {
+            let mut fact = text_trait(id, vec![FileType::Pe]);
+            fact.crit = crit;
+            fact.r#if =
+                crate::yaml::from_str(&format!("type: text\n{kind}: '{marker}'\n")).unwrap();
+            assert!(
+                find_wellknown_missing_section_filter(&[fact.clone()], &HashMap::new()).is_empty(),
+                "{id}"
+            );
+            let mut wrong_id = fact.clone();
+            wrong_id.id.push_str("-other");
+            assert_eq!(
+                find_wellknown_missing_section_filter(&[wrong_id], &HashMap::new()).len(),
+                1,
+                "{id}"
+            );
+            let mut wrong_crit = fact.clone();
+            wrong_crit.crit = crate::types::Criticality::Suspicious;
+            assert_eq!(
+                find_wellknown_missing_section_filter(&[wrong_crit], &HashMap::new()).len(),
+                1,
+                "{id}"
+            );
+            fact.r#if = crate::yaml::from_str("type: text\nsubstr: changed\n").unwrap();
+            assert_eq!(
+                find_wellknown_missing_section_filter(&[fact], &HashMap::new()).len(),
+                1,
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
+    fn star_section_exceptions_require_exact_markers() {
+        for (id, marker) in [
+            (
+                "star-archive-format-marker",
+                "Extended standard tar (star 1994)",
+            ),
+            ("star-default-config-marker", "/etc/default/star"),
+        ] {
+            let mut fact = text_trait(
+                &format!("well-known/tool/sysadmin/star::{id}"),
+                vec![FileType::Elf],
+            );
+            fact.crit = crate::types::Criticality::Notable;
+            fact.r#if = crate::yaml::from_str(&format!("type: text\nexact: '{marker}'\n")).unwrap();
+            assert!(
+                find_wellknown_missing_section_filter(&[fact.clone()], &HashMap::new()).is_empty()
+            );
+            let mut wrong_id = fact.clone();
+            wrong_id.id.push_str("-other");
+            assert_eq!(
+                find_wellknown_missing_section_filter(&[wrong_id], &HashMap::new()).len(),
+                1
+            );
+            let mut wrong_crit = fact.clone();
+            wrong_crit.crit = crate::types::Criticality::Suspicious;
+            assert_eq!(
+                find_wellknown_missing_section_filter(&[wrong_crit], &HashMap::new()).len(),
+                1
+            );
+            fact.r#if = crate::yaml::from_str("type: text\nexact: changed\n").unwrap();
+            assert_eq!(
+                find_wellknown_missing_section_filter(&[fact], &HashMap::new()).len(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn edge_name_section_exception_requires_exact_marker() {
+        let mut fact = text_trait(
+            "well-known/app/browser/microsoft-edge::microsoft-edge-name",
+            vec![FileType::Pe],
+        );
+        fact.crit = crate::types::Criticality::Notable;
+        fact.r#if = crate::yaml::from_str("type: text\nsubstr: Microsoft Edge\n").unwrap();
+        assert!(find_wellknown_missing_section_filter(&[fact.clone()], &HashMap::new()).is_empty());
+        let mut wrong_id = fact.clone();
+        wrong_id.id.push_str("-other");
+        assert_eq!(
+            find_wellknown_missing_section_filter(&[wrong_id], &HashMap::new()).len(),
+            1
+        );
+        let mut wrong_crit = fact.clone();
+        wrong_crit.crit = crate::types::Criticality::Suspicious;
+        assert_eq!(
+            find_wellknown_missing_section_filter(&[wrong_crit], &HashMap::new()).len(),
+            1
+        );
+        fact.r#if = crate::yaml::from_str("type: text\nsubstr: changed\n").unwrap();
+        assert_eq!(
+            find_wellknown_missing_section_filter(&[fact], &HashMap::new()).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn dotnet_component_section_exception_requires_exact_marker() {
+        let mut fact = text_trait(
+            "well-known/lib/runtime/managed/dotnet-runtime::mscorsvc-dll-filename",
+            vec![FileType::Pe],
+        );
+        fact.crit = crate::types::Criticality::Notable;
+        fact.r#if = crate::yaml::from_str("type: text\nsubstr: mscorsvc.dll\n").unwrap();
+        assert!(find_wellknown_missing_section_filter(&[fact.clone()], &HashMap::new()).is_empty());
+        let mut wrong_id = fact.clone();
+        wrong_id.id.push_str("-other");
+        assert_eq!(
+            find_wellknown_missing_section_filter(&[wrong_id], &HashMap::new()).len(),
+            1
+        );
+        let mut wrong_crit = fact.clone();
+        wrong_crit.crit = crate::types::Criticality::Suspicious;
+        assert_eq!(
+            find_wellknown_missing_section_filter(&[wrong_crit], &HashMap::new()).len(),
+            1
+        );
+        fact.r#if = crate::yaml::from_str("type: text\nsubstr: changed\n").unwrap();
+        assert_eq!(
+            find_wellknown_missing_section_filter(&[fact], &HashMap::new()).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn shellobject_section_exceptions_require_exact_identity_and_matcher() {
+        for (id, marker) in [
+            (
+                "encoded-kvic-jpg-payload-url",
+                "9/Pz76m8vPT09L349fYAvfnvvAP8APC8+AWvp7357wSf",
+            ),
+            ("encoded-kvic-probe-path", "vAP8APC87/H8AQK97/fvnw=="),
+            ("encoded-temp-res-file-template", "0u3+8evyy8Lenw=="),
+        ] {
+            let mut fact = text_trait(
+                &format!("well-known/malware/trojan/shellobject/hijack::{id}"),
+                vec![FileType::Pe],
+            );
+            fact.crit = crate::types::Criticality::Notable;
+            fact.r#if = crate::yaml::from_str(&format!("type: text\nexact: {marker}\n")).unwrap();
+            assert!(
+                find_wellknown_missing_section_filter(&[fact.clone()], &HashMap::new()).is_empty()
+            );
+            let mut wrong_id = fact.clone();
+            wrong_id.id.push_str("-other");
+            assert_eq!(
+                find_wellknown_missing_section_filter(&[wrong_id], &HashMap::new()).len(),
+                1
+            );
+            let mut wrong_crit = fact.clone();
+            wrong_crit.crit = crate::types::Criticality::Suspicious;
+            assert_eq!(
+                find_wellknown_missing_section_filter(&[wrong_crit], &HashMap::new()).len(),
+                1
+            );
+            fact.r#if = crate::yaml::from_str("type: text\nexact: changed\n").unwrap();
+            assert_eq!(
+                find_wellknown_missing_section_filter(&[fact], &HashMap::new()).len(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn reviewed_redshell_injection_menu_exception_is_matcher_scoped() {
+        let mut fact = text_trait(
+            "well-known/malware/backdoor/redc2::redshell-injection-menu",
+            vec![FileType::Elf],
+        );
+        fact.r#if = crate::yaml::from_str(
+            "type: text\nregex: '/redshell bin -inject <proc> <file\\.bin>[\\s\\S]{0,220}/redshell elf -inject <pid> <file>'\n",
+        )
+        .unwrap();
+        assert!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty());
+        assert!(find_wellknown_missing_section_filter(&[fact.clone()], &HashMap::new()).is_empty());
+        let mut wrong_id = fact.clone();
+        wrong_id.id.push_str("-other");
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[wrong_id.clone()], &HashMap::new()).len(),
+            1
+        );
+        assert_eq!(
+            find_wellknown_missing_section_filter(&[wrong_id], &HashMap::new()).len(),
+            1
+        );
+        let mut wrong_case = fact.clone();
+        if let Condition::Text(query) = &mut wrong_case.r#if {
+            query.case_insensitive = true;
+        }
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[wrong_case.clone()], &HashMap::new()).len(),
+            1
+        );
+        assert_eq!(
+            find_wellknown_missing_section_filter(&[wrong_case], &HashMap::new()).len(),
+            1
+        );
+        let mut wrong_crit = fact.clone();
+        wrong_crit.crit = crate::types::Criticality::Suspicious;
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[wrong_crit.clone()], &HashMap::new()).len(),
+            1
+        );
+        assert_eq!(
+            find_wellknown_missing_section_filter(&[wrong_crit], &HashMap::new()).len(),
+            1
+        );
+        fact.r#if = crate::yaml::from_str("type: text\nregex: changed\n").unwrap();
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+            1
+        );
+        assert_eq!(
+            find_wellknown_missing_section_filter(&[fact], &HashMap::new()).len(),
+            1
+        );
+    }
+
+    #[test]
     fn reviewed_linfeng_markers_keep_whole_file_scope_only_for_exact_matches() {
         for (id, marker, crit) in [
             (
@@ -8773,8 +9089,7 @@ mod section_filter_validation_tests {
                 vec![FileType::Elf],
             );
             fact.crit = crit;
-            fact.r#if =
-                crate::yaml::from_str(&format!("type: text\nsubstr: {marker}\n")).unwrap();
+            fact.r#if = crate::yaml::from_str(&format!("type: text\nsubstr: {marker}\n")).unwrap();
             assert!(
                 find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty()
             );

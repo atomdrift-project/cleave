@@ -84,21 +84,20 @@ fn cargo_values(
             if !node.is_array() {
                 *node = Value::Array(Vec::new());
             }
-            let array = node.as_array_mut().expect("array initialized");
-            array.resize_with(array.len().max(index + 1), || Value::Null);
-            insert(&mut array[index], rest.trim_start_matches('.'), value);
+            if let Value::Array(array) = node {
+                array.resize_with(array.len().max(index + 1), || Value::Null);
+                insert(&mut array[index], rest.trim_start_matches('.'), value);
+            }
         } else {
             let end = path.find(['.', '[']).unwrap_or(path.len());
             let (key, rest) = path.split_at(end);
             if !node.is_object() {
                 *node = serde_json::json!({});
             }
-            let child = node
-                .as_object_mut()
-                .expect("object initialized")
-                .entry(key)
-                .or_insert(Value::Null);
-            insert(child, rest.trim_start_matches('.'), value);
+            if let Value::Object(object) = node {
+                let child = object.entry(key).or_insert(Value::Null);
+                insert(child, rest.trim_start_matches('.'), value);
+            }
         }
     }
     let mut tree = serde_json::json!({});
@@ -124,7 +123,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
-    fn compact_cargo_graph_retains_custom_entry_and_helper_upload() {
+    fn compact_cargo_graph_retains_custom_entry_and_helper_upload() -> Result<(), String> {
         let facts = |tree| {
             let mut flat = BTreeMap::new();
             flatten_kv_for_output(&tree, &mut flat);
@@ -160,7 +159,7 @@ mod tests {
         let context =
             filefacts::package_context::cargo_source_context(&members, &ContextLimits::default());
         let [target] = context.targets.as_slice() else {
-            panic!("one build target: {context:?}")
+            return Err(format!("expected one build target: {context:?}"));
         };
         assert_eq!(target.phase, filefacts::package_context::Phase::Build);
         assert_eq!(target.entry, "pkg/bootstrap.rs");
@@ -170,6 +169,7 @@ mod tests {
         );
         assert!(target.members.contains("pkg/support/upload.rs"));
         assert!(!target.members.contains("pkg/unrelated.rs"));
+        Ok(())
     }
 
     #[test]

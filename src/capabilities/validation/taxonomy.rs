@@ -1986,7 +1986,13 @@ pub(crate) fn find_sibling_name_restatement(
                     == "objectives/execution/payload/file-exec/command"
                     && short == "fetch"
                     && long == "fetch-hidden";
+                // User-level systemd services have a distinct persistence scope;
+                // the general leaf holds system-wide or unscoped service evidence.
+                let distinct_systemd_user = parent == "objectives/persistence/system/service"
+                    && short == "systemd"
+                    && long == "systemd-user";
                 if restates
+                    && !distinct_systemd_user
                     && !distinct_cross_cutting_profile
                     && !distinct_webshell_output
                     && !distinct_hidden_fetch
@@ -2775,6 +2781,13 @@ fn broad_filetype_category(cond: &Condition) -> &'static str {
 /// `text` matcher in an allowlisted `text:` directory passes; the same directory
 /// does **not** license a broad `value`/`symbol`/etc. matcher.
 pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
+    // Raw GitHub URL references apply across source, script, and binary
+    // carriers; retain the reviewed scope for this file's text matchers.
+    "text:well-known/app/development/code-forge/github/raw.yaml",
+    // These two neutral service-domain references retain the reviewed cross-format
+    // scope of the original shared observation, including supported archives.
+    "text:well-known/app/storage/filen/cloud-url-references.yaml",
+    "text:well-known/app/storage/koofr/cloud-url-references.yaml",
     // Directory-shaped references occur across source, script, and binary
     // carriers. Preserve the scope of this single neutral path observation.
     "text:metadata/path/directory/storage-default-reference.yaml",
@@ -2946,6 +2959,8 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // credential path, or text marker is written as a quoted literal in source
     // of every language. Same cross-language rationale, different matcher type.
     "literal:micro-behaviors/communications/ip/",
+    // Preserve the reviewed cross-carrier scope of this PHP upload URL literal.
+    "literal:micro-behaviors/communications/url/http-path/resource/php-upload-url-reference.yaml",
     "literal:micro-behaviors/communications/http/url/",
     "literal:objectives/command-and-control/infrastructure/",
     "literal:metadata/file/catalog/",
@@ -2993,6 +3008,8 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
 pub(crate) const ALL_PLATFORM_DIRECTORY_ALLOWLIST: &[&str] = &[
     // Package text/resource facts retain their meaning on every target OS.
     "metadata/package/description/disclosure",
+    // Description claims are metadata; OS-specific rules still need explicit scopes.
+    "metadata/package/description/function",
     "metadata/package/documentation/claims",
     "metadata/package/documentation/security-advisory",
     "metadata/package/documentation/source",
@@ -3025,6 +3042,17 @@ fn all_platform_directory_allowed(id: &str) -> bool {
                 .strip_prefix(allowed)
                 .is_some_and(|suffix| suffix.starts_with('/'))
     })
+}
+
+#[cfg(test)]
+#[test]
+fn package_function_claim_platform_contract_is_scoped() {
+    assert!(all_platform_directory_allowed(
+        "metadata/package/description/function::pypi-summary-fetch-run-phrase"
+    ));
+    assert!(!all_platform_directory_allowed(
+        "metadata/package/description/functionality::unreviewed"
+    ));
 }
 
 /// Review `all` on both atoms and composites, including inherited defaults.
@@ -3530,6 +3558,849 @@ fn is_reviewed_stagecomp_marker(t: &TraitDefinition) -> bool {
                 && q.exact.is_none() && q.substr.is_none() && q.word.is_none())
 }
 
+// These installer-tool observations are specific PE section, debug-path, or
+// string facts. Their meaning does not change with the containing file size.
+// Restrict the allowance to the reviewed ID, severity, and matcher.
+fn is_reviewed_installer_tool_fact(t: &TraitDefinition) -> bool {
+    if t.crit != Criticality::Notable {
+        return false;
+    }
+    let (kind, expected, section) = match t.id.as_str() {
+        "well-known/app/development/code-forge/github::github-web-raw-msi-url" => (
+            "whole-regex",
+            r###"https://github\.com/.{1,40}/.{1,40}/raw/.{1,40}/.{1,80}\.msi"###,
+            "",
+        ),
+        "well-known/app/development/code-forge/github::github-web-raw-url" => (
+            "whole-regex",
+            r###"https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/raw/(refs/heads/)?"###,
+            "",
+        ),
+        "well-known/app/development/code-forge/github::raw-githubusercontent-web-file" => (
+            "whole-regex",
+            r###"raw\.githubusercontent\.com/.{1,100}\.(html|txt|php)"###,
+            "",
+        ),
+        "well-known/app/development/code-forge/github::raw-githubusercontent-script-file" => (
+            "whole-regex",
+            r###"raw\.githubusercontent\.com/.{1,100}\.(sh|py|ps1|cmd)\b"###,
+            "",
+        ),
+        "well-known/app/development/code-forge/github::raw-githubusercontent-scripting-lang" => (
+            "whole-regex",
+            r###"raw\.githubusercontent\.com/.{1,100}\.(rb|pl|js)\b"###,
+            "",
+        ),
+        "well-known/app/development/code-forge/github::raw-githubusercontent-actions-url" => (
+            "whole-regex",
+            r###"(?i)raw\.githubusercontent\.com/actions/"###,
+            "",
+        ),
+        "well-known/app/development/code-forge/github::raw-githubusercontent-native-library" => (
+            "whole-regex",
+            r###"raw\.githubusercontent\.com/.{1,140}\.(so(\.[0-9.]+)?|dylib|dll)\b"###,
+            "",
+        ),
+        "well-known/app/development/code-forge/github::raw-githubusercontent-msbuild-project" => (
+            "whole-regex",
+            r###"raw\.githubusercontent\.com/.{1,160}\.(csproj|vbproj|fsproj|sln)\b"###,
+            "",
+        ),
+        "well-known/app/development/code-forge/github::raw-githubusercontent-image-suffix" => (
+            "whole-regex",
+            r###"(?i)raw\.githubusercontent\.com/[^\s"'`]{1,120}\.(png|jpe?g|gif)\b"###,
+            "",
+        ),
+        "well-known/app/development/code-forge/github::raw-githubusercontent-any" => (
+            "whole-regex",
+            r###"raw\.githubusercontent\.com/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+/"###,
+            "",
+        ),
+        "well-known/app/development/code-forge/github::raw-githubusercontent-refs" => (
+            "whole-regex",
+            r###"raw\.githubusercontent\.com/.{1,80}/refs/heads/"###,
+            "",
+        ),
+        "well-known/app/development/code-forge/github::raw-githubusercontent-host-string" => {
+            ("whole-exact", r###"raw.githubusercontent.com"###, "")
+        }
+        "well-known/app/development/code-forge/github::gist-githubusercontent-raw-binary-url" => (
+            "whole-regex",
+            r###"gist\.githubusercontent\.com/[^\s/]{1,80}/[^\s/]{1,80}/raw/"###,
+            "",
+        ),
+        "well-known/lib/ai/tesseract::tesseract-upstream-model-url" => {
+            ("whole-substr", "github.com/tesseract-ocr/tessdata", "")
+        }
+        "well-known/app/storage/mediafire::mediafire-download-url" => (
+            "whole-regex",
+            r###"mediafire\.com/(file|download)/[a-zA-Z0-9_-]{10,}"###,
+            "",
+        ),
+        "well-known/app/productivity/zoho::zoho-service-url" => (
+            "whole-regex",
+            r###"https?://(www\.)?(zohoapis|workdrive\.zoho|accounts\.zoho)\.[a-z]{2,3}(\.[a-z]{2})?/"###,
+            "",
+        ),
+        "well-known/app/productivity/zoho::zoho-service-host-reference" => (
+            "whole-regex",
+            r###"(?i)(^|[^\w.-])(zohoapis|(workdrive|accounts)\.zoho)\.[a-z]{2,3}(\.[a-z]{2})?([^\w.-]|$)"###,
+            "",
+        ),
+        "well-known/app/productivity/zoho::zoho-oauth-token-url" => (
+            "whole-regex",
+            r###"(?i)(^|[^\w.-])accounts\.zoho\.[a-z]{2,3}(\.[a-z]{2})?/oauth/v2/token\b"###,
+            "",
+        ),
+        "well-known/app/productivity/zoho::workdrive-zoho-host-url" => (
+            "whole-regex",
+            r###"https?://workdrive\.zoho\.(com|eu|in|jp|ca|sa|com\.[a-z]{2})/"###,
+            "",
+        ),
+        "well-known/app/productivity/zoho::workdrive-zoho-api-url" => (
+            "whole-regex",
+            r###"https?://([a-z0-9-]+\.)?zohoapis\.(com|eu|in|jp|ca|sa|com\.[a-z]{2})/workdrive/"###,
+            "",
+        ),
+        "well-known/app/storage/dropbox::dropbox-direct-share-url" => (
+            "whole-regex",
+            r###"(dl\.dropbox\.com|dl\.dropboxusercontent\.com)/s(cl)?/fi/[a-zA-Z0-9_-]{10,}"###,
+            "",
+        ),
+        "well-known/app/storage/dropbox::dropbox-web-share-url" => (
+            "whole-regex",
+            r###"(www\.dropbox\.com)/s(cl)?/fi/[a-zA-Z0-9_-]{10,}"###,
+            "",
+        ),
+        "well-known/app/storage/dropbox::dropboxusercontent-executable-url" => (
+            "whole-regex",
+            r###"dl\.dropboxusercontent\.com/[^\s"'<>]{1,240}\.(exe|dll|bat|ps1|msi)\b"###,
+            "",
+        ),
+        "well-known/app/storage/dropbox::dropbox-share-executable-url" => (
+            "whole-regex",
+            r###"www\.dropbox\.com/s(cl)?/fi/[A-Za-z0-9_-]{10,}[^\s"'<>]{0,240}\.(exe|dll|bat|ps1|msi)\b"###,
+            "",
+        ),
+        "well-known/app/storage/dropbox::dropbox-direct-executable-url" => (
+            "whole-regex",
+            r###"dl\.dropbox\.com/s(cl)?/fi/[A-Za-z0-9_-]{10,}[^\s"'<>]{0,240}\.(exe|dll|bat|ps1|msi)\b"###,
+            "",
+        ),
+        "well-known/app/storage/dropbox::dropbox-share-url-bytecode" => (
+            "whole-regex",
+            r###"(dl\.dropbox|www\.dropbox)\.com/s(cl)?/fi/[a-zA-Z0-9_-]{10,}"###,
+            "",
+        ),
+        "well-known/app/storage/google-drive::gdrive-export-download-url" => (
+            "whole-regex",
+            r###"(drive|docs)\.google\.com/uc\?export=download&id=[a-zA-Z0-9_-]{20,}"###,
+            "",
+        ),
+        "well-known/app/storage/google-drive::gdrive-usercontent-download-reference" => (
+            "whole-substr",
+            r###"drive.usercontent.google.com/download"###,
+            "",
+        ),
+        "well-known/app/storage/google-drive::gdrive-usercontent-host" => {
+            ("whole-exact", r###"drive.usercontent.google.com"###, "")
+        }
+        "well-known/app/storage/google-drive::gdrive-pe-file-url" => (
+            "whole-regex",
+            r###"(drive|docs)\.google\.com/(uc|file/d)/[a-zA-Z0-9_-]{20,}[^\s,"'<>]{0,200}\.(exe|dll)\b"###,
+            "",
+        ),
+        "well-known/app/storage/google-drive::gdrive-script-file-url" => (
+            "whole-regex",
+            r###"(drive|docs)\.google\.com/(uc|file/d)/[a-zA-Z0-9_-]{20,}[^\s,"'<>]{0,200}\.(bat|ps1)\b"###,
+            "",
+        ),
+        "well-known/app/storage/alibaba-oss::oss-service-host-reference" => (
+            "whole-regex",
+            r###"(?i)([A-Za-z0-9-]{1,64}\.oss-(cn|ap|us|eu|me)-[A-Za-z0-9-]{1,32}|oss)\.aliyuncs\.com"###,
+            "",
+        ),
+        "well-known/app/storage/alibaba-oss::oss-bucket-host-cn-ap" => (
+            "whole-regex",
+            r###"[a-z0-9-]{1,64}\.oss-(cn|ap)-[a-z0-9-]{1,32}\.aliyuncs\.com"###,
+            "",
+        ),
+        "well-known/app/storage/alibaba-oss::oss-bucket-host-us-eu" => (
+            "whole-regex",
+            r###"[a-z0-9-]{1,64}\.oss-(us|eu)-[a-z0-9-]{1,32}\.aliyuncs\.com"###,
+            "",
+        ),
+        "well-known/app/storage/alibaba-oss::oss-bucket-host-me" => (
+            "whole-regex",
+            r###"[a-z0-9-]{1,64}\.oss-(me)-[a-z0-9-]{1,32}\.aliyuncs\.com"###,
+            "",
+        ),
+        "well-known/app/storage/alibaba-oss::oss-executable-url-cn-ap" => (
+            "whole-regex",
+            r###"\.oss-(cn|ap)-[a-z0-9-]{1,32}\.aliyuncs\.com/.{1,200}\.(exe|dll)\b"###,
+            "",
+        ),
+        "well-known/app/storage/alibaba-oss::oss-script-url-cn-ap" => (
+            "whole-regex",
+            r###"\.oss-(cn|ap)-[a-z0-9-]{1,32}\.aliyuncs\.com/.{1,200}\.(bat|ps1)\b"###,
+            "",
+        ),
+        "well-known/app/storage/alibaba-oss::oss-executable-url-us-eu" => (
+            "whole-regex",
+            r###"\.oss-(us|eu)-[a-z0-9-]{1,32}\.aliyuncs\.com/.{1,200}\.(exe|dll)\b"###,
+            "",
+        ),
+        "well-known/app/storage/alibaba-oss::oss-script-url-us-eu" => (
+            "whole-regex",
+            r###"\.oss-(us|eu)-[a-z0-9-]{1,32}\.aliyuncs\.com/.{1,200}\.(bat|ps1)\b"###,
+            "",
+        ),
+        "well-known/app/storage/alibaba-oss::oss-executable-url-me" => (
+            "whole-regex",
+            r###"\.oss-(me)-[a-z0-9-]{1,32}\.aliyuncs\.com/.{1,200}\.(exe|dll|bat|ps1)\b"###,
+            "",
+        ),
+        "well-known/app/storage/tencent-cos::myqcloud-domain-reference" => {
+            ("whole-regex", r###"(?i)myqcloud\.com"###, "")
+        }
+        "well-known/app/storage/tencent-cos::tencent-cos-url" => (
+            "whole-regex",
+            r###"[a-z0-9-]{1,64}\.cos\.ap-[a-z0-9-]{1,32}\.myqcloud\.com"###,
+            "",
+        ),
+        "well-known/app/storage/tencent-cos::cos-pe-url" => (
+            "whole-regex",
+            r###"\.cos\.ap-[a-z0-9-]{1,32}\.myqcloud\.com/.{1,200}\.(exe|dll)\b"###,
+            "",
+        ),
+        "well-known/app/storage/tencent-cos::cos-installer-batch-url" => (
+            "whole-regex",
+            r###"\.cos\.ap-[a-z0-9-]{1,32}\.myqcloud\.com/.{1,200}\.(msi|bat)\b"###,
+            "",
+        ),
+        "well-known/app/storage/tencent-cos::cos-powershell-url" => (
+            "whole-regex",
+            r###"\.cos\.ap-[a-z0-9-]{1,32}\.myqcloud\.com/.{1,200}\.(ps1)\b"###,
+            "",
+        ),
+        "well-known/app/storage/tencent-cos::tencent-cos-archive-url" => (
+            "whole-regex",
+            r###"\.cos\.ap-[a-z0-9-]{1,32}\.myqcloud\.com/.{1,200}\.(zip|7z|rar)\b"###,
+            "",
+        ),
+        "well-known/app/storage/digitalocean-spaces::spaces-domain-reference" => {
+            ("whole-regex", r###"(?i)digitaloceanspaces\.com"###, "")
+        }
+        "well-known/app/storage/filen::filen-domain-reference" => {
+            ("whole-regex", r###"(?i)\bfilen\.(io|net)\b"###, "")
+        }
+        "well-known/app/storage/koofr::koofr-domain-reference" => {
+            ("whole-regex", r###"(?i)\bkoofr\.(eu|com)\b"###, "")
+        }
+        "well-known/app/storage/amazon-s3::aws-s3-url" => (
+            "whole-regex",
+            r###"(?i)https?://([a-z0-9-]+\.)?s3([.-][a-z0-9-]+)?\.amazonaws\.com/"###,
+            "",
+        ),
+        "well-known/app/storage/amazon-s3::s3-bucket-uri" => (
+            "whole-regex",
+            r###"(?i)\bs3://[a-z0-9][a-z0-9.-]{1,62}(/|$)"###,
+            "",
+        ),
+        "well-known/app/storage/google-cloud-storage::gcs-url" => (
+            "whole-regex",
+            r###"https?://storage\.googleapis\.com/[a-z0-9-_]+(/|["']|$)"###,
+            "",
+        ),
+        "well-known/app/storage/cloudflare-r2::r2-object-endpoint" => (
+            "whole-regex",
+            r###"(?i)(^|[^A-Za-z0-9.-])([a-z0-9-]+\.)?r2\.cloudflarestorage\.com([^A-Za-z0-9.-]|$)"###,
+            "",
+        ),
+        "well-known/app/storage/cloudflare-r2::cloudflare-r2-url" => (
+            "whole-regex",
+            r###"https?://[a-z0-9-]+\.r2\.cloudflarestorage\.com(/|["']|$)"###,
+            "",
+        ),
+        "well-known/app/storage/cloudflare-r2::cloudflare-r2-pub-url" => {
+            ("whole-regex", r###"https?://pub-[a-f0-9]+\.r2\.dev/"###, "")
+        }
+        "well-known/app/storage/digitalocean-spaces::do-spaces-url" => (
+            "whole-regex",
+            r###"https?://[a-z0-9-]+\.[a-z0-9-]+\.digitaloceanspaces\.com/"###,
+            "",
+        ),
+        "well-known/app/storage/vultr-object-storage::vultr-object-storage-url" => (
+            "whole-regex",
+            r###"https?://[a-z0-9-]+\.[a-z0-9-]+\.vultrobjects\.com/"###,
+            "",
+        ),
+        "well-known/app/storage/backblaze-b2::backblaze-b2-url" => (
+            "whole-regex",
+            r###"https?://[a-z0-9-]+\.backblazeb2\.com/"###,
+            "",
+        ),
+        "well-known/app/communication/discord::discord-cdn-shell-script-url" => (
+            "whole-regex",
+            r##"cdn\.discordapp\.com/attachments/\d+/\d+/[^\s"'<>]{1,80}\.sh\b"##,
+            "",
+        ),
+        "well-known/app/communication/discord::discord-cdn-download-url" => (
+            "whole-regex",
+            r##"(cdn|media)\.discordapp\.(com|net)/attachments/\d+/\d+/"##,
+            "",
+        ),
+        "well-known/app/communication/discord::discord-cdn-windows-executable-url" => (
+            "whole-regex",
+            r##"discordapp\.com/attachments/[0-9]{15,}/[0-9]{15,}/.{1,80}\.(exe|dll|bat|ps1)\b"##,
+            "",
+        ),
+        "well-known/app/communication/discord::discord-cdn-archive-url" => (
+            "whole-regex",
+            r##"discordapp\.com/attachments/[0-9]{15,}/[0-9]{15,}/.{1,80}\.(zip|7z|rar)\b"##,
+            "",
+        ),
+        "well-known/app/storage/mega::mega-file-share-url" => (
+            "whole-regex",
+            r##"mega\.nz/(file/[a-zA-Z0-9_-]{8,}|#![a-zA-Z0-9_-]{8,})"##,
+            "",
+        ),
+        "well-known/app/infrastructure/content-delivery/jsdelivr::jsdelivr-npm-script-url" => (
+            "whole-regex",
+            r#"cdn\.jsdelivr\.net/npm/[^"'\s]{0,160}\.js([?#"'`\s<>)\]}]|$)"#,
+            "",
+        ),
+        "well-known/lib/platform/windows-base-api::microsoft-kernel32-version-identity" => {
+            ("internal-name-exact", "kernel32", "")
+        }
+        "well-known/lib/platform/windows-base-api::microsoft-kernelbase-version-identity" => {
+            ("internal-name-regex", r"(?i)^kernelbase(\.dll)?$", "")
+        }
+        "well-known/app/system/windows-sync-center::syncmgr-registry-cluster" => {
+            ("substr", r"SyncMgr\Handlers", "rdata")
+        }
+        "well-known/app/system/windows-sync-center::syncmgr-handler-clsid" => {
+            ("exact", "{F897AA24-BDC3-11d1-B85B-00C04FB93981}", "rdata")
+        }
+        "well-known/app/system/windows-sync-center::mobsync-pdb-path" => {
+            ("pdb-inline-regex", r"(?i)(^|[\\/])mobsync\.pdb$", "")
+        }
+        "well-known/app/system/windows-sync-center::mobsync-version-name" => {
+            ("exact", "mobsync.exe", "rdata")
+        }
+        "well-known/app/security/microsoft-security-essentials::msse-product-name" => {
+            ("exact", "Microsoft Security Essentials", "rdata")
+        }
+        "well-known/lib/native/madexcept::mad-except" => ("substr", "madExcept", "CODE"),
+        "well-known/lib/development/halide::halide-hexagon-remote-profiler-symbol" => (
+            "export-exact",
+            "halide_hexagon_remote_profiler_get_global_instance",
+            "",
+        ),
+        "well-known/lib/development/halide::halide-library-loader-symbol" => {
+            ("export-exact", "halide_load_library", "")
+        }
+        "well-known/lib/runtime/native-platform/qualcomm-hexagon::qdsp6-start-symbol" => {
+            ("export-exact", "qdsp6_start_main", "")
+        }
+        "well-known/lib/runtime/native-platform/qualcomm-hexagon::hexagon-hvx-lock-symbol" => {
+            ("export-exact", "qurt_hvx_lock", "")
+        }
+        "well-known/app/system/drivers/nvidia::nvidia-nvapi-internal-name" => {
+            ("internal-name-exact", "nvapi.dll", "")
+        }
+        "well-known/app/system/firmware/qualcomm-xbl::qcom-xbl-bootloader-marker" => {
+            ("raw-substr", "XBL_SC_MINI_CTX", "")
+        }
+        "well-known/lib/platform/wine::wine-debug-channel-symbol" => {
+            ("symbol-regex", r"^__wine_dbg_[a-z_]{3,30}$", "")
+        }
+        "well-known/lib/platform/wine::wine-builtin-header-text" => {
+            ("text-offset-64", "Wine builtin DLL", "")
+        }
+        "well-known/tool/development/toolchain/edg::edg-modules-path-env" => {
+            ("word", "EDG_MODULES_PATH", "rodata")
+        }
+        "well-known/tool/development/toolchain/edg::edg-front-end-daemon" => {
+            ("word", "EDG_FRONT_END_DAEMON", "rodata")
+        }
+        "well-known/tool/development/toolchain/dotnet-sdk::dotnet-ilasm-coreclr-binary" => (
+            "regex",
+            r"src[/\\]runtime[/\\]src[/\\]coreclr[/\\]ilasm[/\\]main\.cpp|\.NET IL Assembler version",
+            ".rodata",
+        ),
+        "well-known/lib/platform/atl::atl-module-rtti" => (
+            "regex",
+            "C(AtlModule|ComModule|AtlException)@ATL@@",
+            ".data",
+        ),
+        "well-known/lib/platform/wtl::wtl-frame-rtti" => (
+            "regex",
+            "C(FrameWindowImpl|AppModule|AboutDlg|MainFrame).{0,50}WTL@@",
+            ".data",
+        ),
+        "well-known/lib/platform/mfc::mfc-ccmdtarget" => ("exact", "CCmdTarget", ".rdata"),
+        "well-known/lib/platform/mfc::mfc-cwinapp" => ("exact", "CWinApp", ".rdata"),
+        "well-known/lib/platform/mfc::mfc-afx-window-classes" => (
+            "regex",
+            "Afx(ControlBar|MDIFrame|FrameOrView|OleControl)",
+            ".rdata",
+        ),
+        "well-known/lib/platform/mfc::mfc-symbols" => ("symbol-substr", "AfxWinMain", ""),
+        "well-known/lib/ui/qt::qt-core-runtime-dll" => ("regex", r"Qt\dCore\.dll", "rdata"),
+        "well-known/lib/runtime/managed/dotnet-process::dotnet-system-diagnostics-process-resource" => {
+            ("substr", "FxResources.System.Diagnostics.Process", "rdata")
+        }
+        "well-known/lib/runtime/managed/dotnet-process::dotnet-system-diagnostics-process-pdb" => (
+            "pdb-inline-regex",
+            r"(?i)(^|[\\/])System\.Diagnostics\.Process\.ni\.pdb$",
+            "",
+        ),
+        "well-known/lib/runtime/managed/jvm::jli-launch" => ("symbol-exact", "JLI_Launch", ""),
+        "well-known/lib/runtime/managed/jvm::jli-cmd-to-args" => {
+            ("symbol-exact", "JLI_CmdToArgs", "")
+        }
+        "well-known/lib/runtime/managed/jvm::jli-get-std-args" => {
+            ("symbol-exact", "JLI_GetStdArgs", "")
+        }
+        "well-known/lib/runtime/managed/jvm::jli-init-arg-processing" => {
+            ("symbol-exact", "JLI_InitArgProcessing", "")
+        }
+        "well-known/lib/runtime/managed/jvm::jli-mem-alloc" => ("symbol-exact", "JLI_MemAlloc", ""),
+        "well-known/lib/runtime/managed/jvm::jli-report-error" => {
+            ("symbol-exact", "JLI_ReportErrorMessage", "")
+        }
+        "well-known/tool/packaging/jsmooth::jsmooth-vm-search-order-string" => (
+            "whole-substr",
+            "JSmooth will now try to use the VM in the following order:",
+            "",
+        ),
+        "well-known/tool/packaging/jsmooth::jsmooth-native-class-string" => {
+            ("whole-substr", "jsmooth.Native", "")
+        }
+        "well-known/lib/ui/flutter::flutter-windows-dll" => {
+            ("exact", "flutter_windows.dll", "rdata")
+        }
+        "well-known/lib/ui/flutter::flutter-assets-path" => ("exact", r"\flutter_assets", "rdata"),
+        "well-known/lib/ui/flutter::flutter-desktop-engine-symbols" => {
+            ("symbol-regex", "^FlutterDesktop(Engine|ViewController)", "")
+        }
+        "well-known/lib/ui/flutter::flutter-linux-desktop-runner" => (
+            "symbol-regex",
+            "^fl_(dart_project_new|view_new|plugin_registry_get_type)$",
+            "",
+        ),
+        "well-known/app/system/windows-core-utilities::bits-service-name-reference" => {
+            ("substr", "Background Intelligent Transfer Service", "rdata")
+        }
+        "well-known/app/media/windows-media-player::windows-media-player-name-reference" => {
+            ("substr", "Microsoft Windows Media Player", "rdata")
+        }
+        "well-known/app/system/huawei-pc-manager::pc-manager-uninstall-guide-reference" => (
+            "substr",
+            r"C:\Program Files\Huawei\PCManager\UninstallGuide.exe.FriendlyAppName",
+            "rdata",
+        ),
+        "well-known/game/steam::steam-drivers-archive-title" => {
+            ("exact", "Steam Drivers Archive", "rdata")
+        }
+        "well-known/game/steam::steam-driver-archive-path" => {
+            ("substr", "drivers/Windows10/x64/Steam", "rdata")
+        }
+        "well-known/app/system/mobile/tencent-mobilegamepc::tencent-mobilegamepc-registry" => {
+            ("exact", r"SOFTWARE\Tencent\MobileGamePC", "rdata")
+        }
+        "well-known/app/system/mobile/tencent-mobilegamepc::tencent-tmarketinst-version" => {
+            ("exact", "TMarketInst", "rdata")
+        }
+        "well-known/app/system/mobile/tencent-mobilegamepc::tencent-txmobilegamepc-marker" => {
+            ("exact", "TXMobileGamePC", "rdata")
+        }
+        "well-known/app/system/mobile/tencent-mobilegamepc::tencent-tgbdownloader-marker" => {
+            ("exact", "TGBDownloader", "rdata")
+        }
+        "well-known/tool/packaging/qt-installer-framework::qt-installer-framework" => {
+            ("substr", "Built with Qt Installer Framework", ".rdata")
+        }
+        "well-known/tool/packaging/installshield::installshield-setup-runtime-marker" => (
+            "substr",
+            "InstallShield setup.exe (Unicode) started",
+            ".rdata",
+        ),
+        "well-known/tool/packaging/squirrel-windows::squirrel-windows-setup-marker" => {
+            ("exact", "SquirrelInstall", "rdata")
+        }
+        "well-known/tool/packaging/squirrel-windows::squirrel-temp-marker" => {
+            ("exact", "SQUIRREL_TEMP", "rdata")
+        }
+        "well-known/tool/packaging/smart-install-maker::smart-install-maker-description" => {
+            ("whole-substr", "Smart Install Maker", "")
+        }
+        "well-known/tool/packaging/nsis::nsis-first-header-specific-build-sizes" => (
+            "section-hex",
+            "EF BE AD DE 4E 75 6C 6C 73 6F 66 74 49 6E 73 74 75 11 00 00 18 27 00 00 5D 00 00 80",
+            "overlay",
+        ),
+        "well-known/lib/platform/advanced-installer::external-ui-started-marker" => (
+            "substr",
+            "Advanced Installer External UI started.",
+            ".rdata",
+        ),
+        "well-known/lib/platform/advanced-installer::bootstrapper-flag" => {
+            ("exact", "AI_BOOTSTRAPPER", ".rdata")
+        }
+        "well-known/lib/platform/advanced-installer::caphyon-registry-root" => {
+            ("exact", r"Software\Caphyon\Advanced Installer\", ".rdata")
+        }
+        "well-known/lib/platform/advanced-installer::prerequisite-install-marker" => {
+            ("substr", "AI_InstallPrerequisite", ".rdata")
+        }
+        "well-known/tool/packaging/nsis-inetc::inetc-user-agent" => {
+            ("exact", "NSIS_Inetc (Mozilla)", "rdata")
+        }
+        "well-known/tool/packaging/izpack::izpack-package-path" => {
+            ("path", r"com[/\\]izforge[/\\]izpack", "")
+        }
+        "well-known/tool/packaging/inno-setup-runtime::inno-setup-550-data-marker" => {
+            ("exact", "Inno Setup Setup Data (5.5.0)", "rdata")
+        }
+        "well-known/tool/packaging/inno-setup-runtime::inno-password-canary" => {
+            ("exact", "sccPasswordTest", "rdata")
+        }
+        "well-known/tool/packaging/inno-setup-runtime::inno-setup-header-670" => (
+            "hex",
+            "49 6E 6E 6F 20 53 65 74 75 70 20 53 65 74 75 70 20 44 61 74 61 20 28 36 2E 37 2E 30 29",
+            "",
+        ),
+        "well-known/tool/packaging/nsis::nsis-manifest-identity" => {
+            ("manifest-regex", "(?i)^Nullsoft Install System", "")
+        }
+        "well-known/tool/packaging/nsis::nullsoft-install-system-text" => {
+            ("substr", "Nullsoft Install System", ".text")
+        }
+        "well-known/tool/packaging/nsis::nullsoft-install-system-rdata" => {
+            ("substr", "Nullsoft Install System", ".rdata")
+        }
+        "well-known/tool/packaging/nsis::nsis-error-title-rdata" => {
+            ("exact", "NSIS Error", ".rdata")
+        }
+        "well-known/tool/packaging/nsis::nsis-error-title-data" => ("exact", "NSIS Error", ".data"),
+        "well-known/tool/packaging/nsis::nsis-error-url-rdata" => {
+            ("substr", "nsis.sf.net/NSIS_Error", ".rdata")
+        }
+        "well-known/tool/packaging/nsis::nsis-error-url-data" => {
+            ("substr", "nsis.sf.net/NSIS_Error", ".data")
+        }
+        "well-known/tool/packaging/nsis::nsis-uac-ipc" => ("exact", "NSISUACIPC", ".rdata"),
+        "well-known/tool/packaging/nsis::nullsoftinst-marker" => {
+            ("exact", "NullsoftInst", ".rdata")
+        }
+        "well-known/tool/packaging/inno-setup-loader::inno-manifest-description" => {
+            ("manifest-regex", r"(?i)^Inno Setup\s*$", "")
+        }
+        "well-known/tool/packaging/inno-setup-loader::inno-setup-data-marker" => {
+            ("substr", r"Inno Setup Setup Data (", "rdata")
+        }
+        "well-known/tool/packaging/inno-setup-loader::inno-setup-data-marker-overlay" => {
+            ("substr", r"Inno Setup Setup Data (", "overlay")
+        }
+        "well-known/tool/packaging/inno-setup-loader::inno-setup-installer-marker" => (
+            "substr",
+            r"This installation was built with Inno Setup.",
+            "rdata",
+        ),
+        "well-known/tool/packaging/inno-setup-loader::inno-setup-installer-text" => {
+            ("substr", r"Inno Setup Setup Data (", ".text")
+        }
+        "well-known/tool/packaging/inno-setup-loader::inno-setup-installer-data" => {
+            ("substr", r"Inno Setup Setup Data (", ".data")
+        }
+        "well-known/tool/packaging/inno-setup-loader::inno-setup-built-with-comment" => (
+            "substr",
+            r"This installation was built with Inno Setup",
+            "rdata",
+        ),
+        "well-known/tool/packaging/inno-setup-loader::inno-uninstaller-marker" => {
+            ("exact", r"ISUNINSTALLER", ".text")
+        }
+        "well-known/tool/packaging/embala::embala-banner-token" => (
+            "section-hex",
+            "45 4D 42 41 4C 41 5F 42 41 4E 4E 45 52",
+            ".rdata",
+        ),
+        "well-known/tool/packaging/inno-setup-loader::inno-loader-magic-legacy-120" => (
+            "section-hex",
+            "72 44 6C 50 74 53 30 32 87 65 56 78",
+            ".rsrc",
+        ),
+        "well-known/tool/packaging/inno-setup-loader::inno-loader-magic-legacy-400" => (
+            "section-hex",
+            "72 44 6C 50 74 53 30 34 87 65 56 78",
+            ".rsrc",
+        ),
+        "well-known/tool/packaging/inno-setup-loader::inno-loader-magic-legacy-403" => (
+            "section-hex",
+            "72 44 6C 50 74 53 30 35 87 65 56 78",
+            ".rsrc",
+        ),
+        "well-known/tool/packaging/inno-setup-loader::inno-loader-magic-legacy-410" => (
+            "section-hex",
+            "72 44 6C 50 74 53 30 36 87 65 56 78",
+            ".rsrc",
+        ),
+        "well-known/tool/packaging/inno-setup-loader::inno-loader-magic-legacy-416" => (
+            "section-hex",
+            "72 44 6C 50 74 53 30 37 87 65 56 78",
+            ".rsrc",
+        ),
+        "well-known/tool/packaging/inno-setup-loader::inno-loader-magic-515" => (
+            "section-hex",
+            "72 44 6C 50 74 53 CD E6 D7 7B 0B 2A",
+            ".rsrc",
+        ),
+        "well-known/tool/packaging/installaware::installaware-version-comment" => {
+            ("version-comment-regex", r"(?i)\bInstallAware\b", "")
+        }
+        "well-known/tool/packaging/installaware::installaware-sfx-builder-pdb" => (
+            "pdb-inline-regex",
+            r"(?i)\\InstallAware\\.*\\SFXSetup\.pdb$",
+            "",
+        ),
+        "well-known/tool/packaging/qsetup::qsetup-extraction-banner" => (
+            "exact",
+            "QSetup will extract files to your Temp Drive (<DRIVE>)<P>",
+            "CODE",
+        ),
+        "well-known/tool/packaging/iexpress::wextract-assembly-name" => {
+            ("substr", "Microsoft.Windows.Wextract", "rsrc")
+        }
+        "well-known/tool/packaging/iexpress::wextract-manifest-description" => (
+            "substr",
+            "<description>IExpress extraction tool</description>",
+            "rsrc",
+        ),
+        "well-known/tool/packaging/iexpress::wextract-product-description" => {
+            ("exact", "Win32 Cabinet Self-Extractor", "rsrc")
+        }
+        "well-known/tool/packaging/iexpress::wextract-pdb-path" => {
+            ("exact", "wextract.pdb", ".rdata")
+        }
+        "well-known/tool/packaging/iexpress::wextract-cleanup-string" => {
+            ("whole-substr", "wextract_cleanup%", "")
+        }
+        "well-known/tool/packaging/iexpress::wextract-internal-name" => {
+            ("internal-name-regex", r"(?i)^wextract(\.exe)?$", "")
+        }
+        "well-known/tool/sysadmin/winrar-sfx::winrar-sfx-registry-text" => {
+            ("exact", r"Software\WinRAR SFX", ".rdata")
+        }
+        "well-known/tool/sysadmin/7zip::7zip-fm-app-path" => (
+            "exact-offset",
+            r"Software\Microsoft\Windows\CurrentVersion\App Paths\7zFM.exe",
+            ".rdata",
+        ),
+        "well-known/tool/sysadmin/7zip::7zip-installer-setup-banner" => (
+            "regex",
+            r"7-Zip [0-9]{1,2}\.[0-9]{2}( \(x(64|86)\))? Setup",
+            ".rdata",
+        ),
+        "well-known/tool/sysadmin/7zip::7zip-registry-key" => {
+            ("exact", r"Software\7-Zip", ".rdata")
+        }
+        "well-known/tool/sysadmin/7zip::7zip-shell-extension-clsid" => (
+            "exact",
+            r"CLSID\{23170F69-40C1-278A-1000-000100020000}",
+            ".rdata",
+        ),
+        "well-known/tool/sysadmin/7zip::7zip-uninstall-registry-path" => (
+            "exact",
+            r"Software\Microsoft\Windows\CurrentVersion\Uninstall\7-Zip",
+            ".rdata",
+        ),
+        "well-known/tool/sysadmin/7zip::7zip32-runtime-dll" => {
+            ("exact-offset", r"7-zip32.dll", ".rdata")
+        }
+        "well-known/tool/sysadmin/7zip::7zsfx-runtime-stub" => {
+            ("exact-offset", r"7zS.sfx.exe", ".rdata")
+        }
+        "well-known/tool/packaging/wix::wixburn-section-name" => ("section", ".wixburn", ""),
+        "well-known/tool/packaging/wix::wix-bundle-provider-key" => {
+            ("exact", "WixBundleProviderKey", "rdata")
+        }
+        "well-known/tool/packaging/wix::wix-burn-runonce-token" => {
+            ("exact", "burn.runonce", "rdata")
+        }
+        "well-known/tool/sysadmin/alzip::alzip-self-extractor-banner" => {
+            ("substr", "ALZip Self-Extractor", "rsrc")
+        }
+        "well-known/tool/sysadmin/alzip::alzip-self-extractor-banner-packed" => {
+            ("substr", "ALZip Self-Extractor", "UPX1")
+        }
+        "well-known/tool/sysadmin/alzip::alzip-zipsfx-marker" => ("exact", "ZIPSFX", "UPX1"),
+        "well-known/tool/sysadmin/alzip::alzip-eggsfx-marker" => {
+            ("regex", r"^EGGSFX(\.sfx)?$", "rsrc")
+        }
+        "well-known/tool/sysadmin/alzip::alzip-eggsfx-pdb" => {
+            ("pdb", r"alzip-windows.*EGGSFX\.pdb$", "")
+        }
+        "well-known/tool/sysadmin/alzip::alzip-egg-format-class" => {
+            ("substr", "EggFormatImpr", "UPX1")
+        }
+        "well-known/tool/sysadmin/alzip::alzip-upgrade-prompt" => (
+            "substr",
+            "Please upgrade ALZip to the latest version",
+            "UPX1",
+        ),
+        _ => return false,
+    };
+    match &t.r#if {
+        Condition::Symbol(q) => {
+            (kind == "export-exact"
+                && q.exact.as_deref() == Some(expected)
+                && q.regex.is_none()
+                && q.substr.is_none()
+                && q.kind == Some(crate::composite_rules::condition::SymbolKind::Export)
+                && q.is_check.is_none()
+                && q.not.is_none())
+                || ((kind == "symbol-regex"
+                    && q.regex.as_deref() == Some(expected)
+                    && q.exact.is_none()
+                    && q.substr.is_none())
+                    || (kind == "symbol-exact"
+                        && q.exact.as_deref() == Some(expected)
+                        && q.regex.is_none()
+                        && q.substr.is_none())
+                    || (kind == "symbol-substr"
+                        && q.substr.as_deref() == Some(expected)
+                        && q.exact.is_none()
+                        && q.regex.is_none()))
+                    && q.kind.is_none()
+                    && q.is_check.is_none()
+                    && q.not.is_none()
+        }
+        Condition::Raw(q) => {
+            kind == "raw-substr"
+                && q.substr.as_deref() == Some(expected)
+                && q.exact.is_none()
+                && q.regex.is_none()
+                && q.word.is_none()
+                && q.section.is_none()
+                && q.offset.is_none()
+                && q.offset_range == Some((0, None))
+                && q.section_offset.is_none()
+                && q.section_offset_range.is_none()
+                && !q.case_insensitive
+                && q.is_check.is_none()
+                && q.not.is_none()
+        }
+        Condition::Path(q) => {
+            kind == "path"
+                && q.regex.as_deref() == Some(expected)
+                && !q.case_insensitive
+                && !q.basename
+                && !q.dirname
+                && q.exact.is_none()
+                && q.substr.is_none()
+                && q.is_check.is_none()
+        }
+        Condition::Hex(q) => {
+            q.pattern == expected
+                && q.offset.is_none()
+                && q.not.is_none()
+                && ((kind == "hex"
+                    && q.offset_range == Some((800000, None))
+                    && q.section.is_none())
+                    || (kind == "section-hex"
+                        && q.offset_range.is_none()
+                        && q.section.as_deref() == Some(section)))
+        }
+        Condition::Section(q) => {
+            kind == "section"
+                && !q.case_insensitive
+                && q.exact.as_deref() == Some(expected)
+                && q.substr.is_none()
+                && q.regex.is_none()
+                && q.word.is_none()
+        }
+        Condition::Kv(q) => {
+            if kind == "internal-name-exact" {
+                return q.path == "pe.version.internal_name"
+                    && q.exact.as_deref() == Some(expected)
+                    && q.substr.is_none()
+                    && q.regex.is_none()
+                    && !q.case_insensitive;
+            }
+            ((kind == "pdb" && q.path == "pe.debug.pdb.path" && q.case_insensitive)
+                || (kind == "manifest-regex"
+                    && q.path == "pe.manifest.description"
+                    && !q.case_insensitive)
+                || (kind == "internal-name-regex"
+                    && q.path == "pe.version.internal_name"
+                    && !q.case_insensitive)
+                || (kind == "version-comment-regex"
+                    && q.path == "pe.version.comments"
+                    && !q.case_insensitive)
+                || (kind == "pdb-inline-regex"
+                    && q.path == "pe.debug.pdb.path"
+                    && !q.case_insensitive))
+                && q.regex.as_deref() == Some(expected)
+                && q.exact.is_none()
+                && q.substr.is_none()
+        }
+        Condition::Text(q) => {
+            ((matches!(
+                kind,
+                "whole-substr" | "whole-regex" | "whole-exact" | "text-offset-64"
+            ) && q.section.is_none())
+                || (!matches!(
+                    kind,
+                    "whole-substr" | "whole-regex" | "whole-exact" | "text-offset-64"
+                ) && q.section.as_deref() == Some(section)))
+                && !q.case_insensitive
+                && (kind == "word" || q.word.is_none())
+                && match kind {
+                    "word" => {
+                        q.word.as_deref() == Some(expected)
+                            && q.exact.is_none()
+                            && q.substr.is_none()
+                            && q.regex.is_none()
+                    }
+                    "text-offset-64" => {
+                        q.offset == Some(64)
+                            && q.offset_range.is_none()
+                            && q.exact.as_deref() == Some(expected)
+                            && q.substr.is_none()
+                            && q.regex.is_none()
+                    }
+                    "exact-offset" => {
+                        q.offset_range == Some((6291456, None))
+                            && q.offset.is_none()
+                            && q.exact.as_deref() == Some(expected)
+                            && q.substr.is_none()
+                            && q.regex.is_none()
+                    }
+                    "exact" | "whole-exact" => {
+                        q.exact.as_deref() == Some(expected)
+                            && q.substr.is_none()
+                            && q.regex.is_none()
+                    }
+                    "substr" | "whole-substr" => {
+                        q.substr.as_deref() == Some(expected)
+                            && q.exact.is_none()
+                            && q.regex.is_none()
+                    }
+                    "regex" | "whole-regex" => {
+                        q.regex.as_deref() == Some(expected)
+                            && q.exact.is_none()
+                            && q.substr.is_none()
+                    }
+                    _ => false,
+                }
+        }
+        _ => false,
+    }
+}
+
 /// Find well-known/ atomic traits targeting binaries without any file size filter.
 ///
 /// Binary identity signatures normally need a size bound. Low-tier basename,
@@ -3551,6 +4422,7 @@ pub(crate) fn find_wellknown_missing_size_filter(
                 && !(is_basename_fact(t)
                     && matches!(t.crit, Criticality::Component | Criticality::Notable))
                 && !is_low_tier_named_binary_fact(t)
+                && !is_reviewed_installer_tool_fact(t)
                 && !is_reviewed_linfeng_marker(t)
                 && !is_reviewed_redshell_injection_menu(t)
                 && !is_reviewed_stagecomp_marker(t)
@@ -3725,6 +4597,81 @@ pub(crate) fn find_wellknown_missing_section_filter(
             extract_trait_tier(&t.id) == "well-known"
                 && trait_targets_only_binaries(t)
                 // This reviewed whole-file marker must retain its original scope.
+                && !(matches!(t.id.as_str(),
+                    "well-known/app/development/code-forge/github::github-web-raw-msi-url"
+                    | "well-known/app/development/code-forge/github::github-web-raw-url"
+                    | "well-known/app/development/code-forge/github::raw-githubusercontent-web-file"
+                    | "well-known/app/development/code-forge/github::raw-githubusercontent-script-file"
+                    | "well-known/app/development/code-forge/github::raw-githubusercontent-scripting-lang"
+                    | "well-known/app/development/code-forge/github::raw-githubusercontent-actions-url"
+                    | "well-known/app/development/code-forge/github::raw-githubusercontent-native-library"
+                    | "well-known/app/development/code-forge/github::raw-githubusercontent-msbuild-project"
+                    | "well-known/app/development/code-forge/github::raw-githubusercontent-image-suffix"
+                    | "well-known/app/development/code-forge/github::raw-githubusercontent-any"
+                    | "well-known/app/development/code-forge/github::raw-githubusercontent-refs"
+                    | "well-known/app/development/code-forge/github::raw-githubusercontent-host-string"
+                    | "well-known/app/development/code-forge/github::gist-githubusercontent-raw-binary-url") && is_reviewed_installer_tool_fact(t))
+                && !(t.id == "well-known/lib/ai/tesseract::tesseract-upstream-model-url"
+                    && is_reviewed_installer_tool_fact(t))
+                && !(matches!(t.id.as_str(),
+                    "well-known/app/storage/mediafire::mediafire-download-url"
+                    | "well-known/app/productivity/zoho::zoho-service-url"
+                    | "well-known/app/productivity/zoho::zoho-service-host-reference"
+                    | "well-known/app/productivity/zoho::zoho-oauth-token-url"
+                    | "well-known/app/productivity/zoho::workdrive-zoho-host-url"
+                    | "well-known/app/productivity/zoho::workdrive-zoho-api-url") && is_reviewed_installer_tool_fact(t))
+                && !(matches!(t.id.as_str(),
+                    "well-known/app/storage/dropbox::dropbox-direct-share-url"
+                    | "well-known/app/storage/dropbox::dropbox-web-share-url"
+                    | "well-known/app/storage/dropbox::dropboxusercontent-executable-url"
+                    | "well-known/app/storage/dropbox::dropbox-share-executable-url"
+                    | "well-known/app/storage/dropbox::dropbox-direct-executable-url"
+                    | "well-known/app/storage/dropbox::dropbox-share-url-bytecode"
+                    | "well-known/app/storage/google-drive::gdrive-export-download-url"
+                    | "well-known/app/storage/google-drive::gdrive-usercontent-download-reference"
+                    | "well-known/app/storage/google-drive::gdrive-usercontent-host"
+                    | "well-known/app/storage/google-drive::gdrive-pe-file-url"
+                    | "well-known/app/storage/google-drive::gdrive-script-file-url"
+                    | "well-known/app/storage/alibaba-oss::oss-service-host-reference"
+                    | "well-known/app/storage/alibaba-oss::oss-bucket-host-cn-ap"
+                    | "well-known/app/storage/alibaba-oss::oss-bucket-host-us-eu"
+                    | "well-known/app/storage/alibaba-oss::oss-bucket-host-me"
+                    | "well-known/app/storage/alibaba-oss::oss-executable-url-cn-ap"
+                    | "well-known/app/storage/alibaba-oss::oss-script-url-cn-ap"
+                    | "well-known/app/storage/alibaba-oss::oss-executable-url-us-eu"
+                    | "well-known/app/storage/alibaba-oss::oss-script-url-us-eu"
+                    | "well-known/app/storage/alibaba-oss::oss-executable-url-me"
+                    | "well-known/app/storage/tencent-cos::myqcloud-domain-reference"
+                    | "well-known/app/storage/tencent-cos::tencent-cos-url"
+                    | "well-known/app/storage/tencent-cos::cos-pe-url"
+                    | "well-known/app/storage/tencent-cos::cos-installer-batch-url"
+                    | "well-known/app/storage/tencent-cos::cos-powershell-url"
+                    | "well-known/app/storage/tencent-cos::tencent-cos-archive-url"
+                    | "well-known/app/storage/digitalocean-spaces::spaces-domain-reference"
+                    | "well-known/app/storage/filen::filen-domain-reference"
+                    | "well-known/app/storage/koofr::koofr-domain-reference") && is_reviewed_installer_tool_fact(t))
+                && !(matches!(t.id.as_str(),
+                    "well-known/app/storage/amazon-s3::aws-s3-url"
+                    | "well-known/app/storage/amazon-s3::s3-bucket-uri"
+                    | "well-known/app/storage/google-cloud-storage::gcs-url"
+                    | "well-known/app/storage/cloudflare-r2::r2-object-endpoint"
+                    | "well-known/app/storage/cloudflare-r2::cloudflare-r2-url"
+                    | "well-known/app/storage/cloudflare-r2::cloudflare-r2-pub-url"
+                    | "well-known/app/storage/digitalocean-spaces::do-spaces-url"
+                    | "well-known/app/storage/vultr-object-storage::vultr-object-storage-url"
+                    | "well-known/app/storage/backblaze-b2::backblaze-b2-url") && is_reviewed_installer_tool_fact(t))
+                && !(matches!(t.id.as_str(),
+                    "well-known/app/communication/discord::discord-cdn-shell-script-url"
+                    | "well-known/app/communication/discord::discord-cdn-download-url"
+                    | "well-known/app/communication/discord::discord-cdn-windows-executable-url"
+                    | "well-known/app/communication/discord::discord-cdn-archive-url"
+                    | "well-known/app/storage/mega::mega-file-share-url") && is_reviewed_installer_tool_fact(t))
+                && !(t.id == "well-known/app/infrastructure/content-delivery/jsdelivr::jsdelivr-npm-script-url"
+                    && is_reviewed_installer_tool_fact(t))
+                && !(t.id == "well-known/app/system/firmware/qualcomm-xbl::qcom-xbl-bootloader-marker"
+                    && is_reviewed_installer_tool_fact(t))
+                && !(t.id == "well-known/lib/platform/wine::wine-builtin-header-text"
+                    && is_reviewed_installer_tool_fact(t))
                 && t.id != "well-known/app/system/adobe-acrobat-updater::adobe-acrobat-updater-text"
                 // Go package paths can be emitted in different binary sections.
                 && t.id != "well-known/tool/detection/titus::titus-secret-scan-implementation"
@@ -3734,6 +4681,14 @@ pub(crate) fn find_wellknown_missing_section_filter(
                 && !is_reviewed_redshell_injection_menu(t)
                 && !is_reviewed_shellobject_marker(t)
                 && !is_reviewed_utility_reference(t)
+                && !(t.id == "well-known/tool/packaging/iexpress::wextract-cleanup-string"
+                    && is_reviewed_installer_tool_fact(t))
+                && !(t.id == "well-known/tool/packaging/smart-install-maker::smart-install-maker-description"
+                    && is_reviewed_installer_tool_fact(t))
+                && !(matches!(t.id.as_str(),
+                    "well-known/tool/packaging/jsmooth::jsmooth-vm-search-order-string"
+                    | "well-known/tool/packaging/jsmooth::jsmooth-native-class-string")
+                    && is_reviewed_installer_tool_fact(t))
                 // The reviewed star format and config references can occur in
                 // different binary sections; preserve their whole-file scope.
                 && !is_reviewed_star_reference(t)
@@ -4125,4 +5080,33 @@ mod printenv_filetype_allowance_tests {
         }
         Ok(())
     }
+}
+
+#[cfg(test)]
+#[test]
+fn systemd_user_sibling_exception_is_scoped() {
+    let dirs = [
+        "objectives/persistence/system/service/systemd",
+        "objectives/persistence/system/service/systemd-user",
+        "objectives/persistence/system/service/systemd-other",
+        "other/service/systemd",
+        "other/service/systemd-user",
+    ]
+    .map(str::to_string);
+    let findings = find_sibling_name_restatement(&dirs);
+    assert!(!findings.contains(&(
+        "objectives/persistence/system/service".into(),
+        "systemd".into(),
+        "systemd-user".into(),
+    )));
+    assert!(findings.contains(&(
+        "objectives/persistence/system/service".into(),
+        "systemd".into(),
+        "systemd-other".into(),
+    )));
+    assert!(findings.contains(&(
+        "other/service".into(),
+        "systemd".into(),
+        "systemd-user".into(),
+    )));
 }

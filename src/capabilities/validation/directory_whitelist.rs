@@ -701,7 +701,6 @@ const ALLOWED_C2: &[&str] = &[
 /// Update this list AND TAXONOMY.md when adding new lateral-movement categories.
 const ALLOWED_LATERAL_MOVEMENT: &[&str] = &[
     "brute-force",        // Remote service credential spraying (SSH, IoT)  T1110
-    "delivery",           // Payload delivery to new targets                E1105
     "exploit",            // Remote exploitation for access
     "infection",          // File infection / virus propagation             T1554
     "pass-the-hash",      // Credential reuse for remote access             T1550.002
@@ -984,7 +983,6 @@ const ALLOWED_METADATA_BINARY: &[&str] = &[
     "installer", // TRANSITIONAL -> well-known/ (named products); "is self-extracting" -> layout/
     "framework", // TRANSITIONAL -> well-known/lib/; keep only format-level consequences
     "vendor",    // TRANSITIONAL -> metadata/vendor/ (the sanctioned home) or well-known/
-    "signing",   // TRANSITIONAL -> metadata/signed/
     "license",   // TRANSITIONAL -> provenance/
     "toolchain", // TRANSITIONAL -> provenance/
 ];
@@ -1187,11 +1185,13 @@ const ALLOWED_METADATA_PERMISSION: &[&str] = &[
 /// Code signatures, certificates, and entitlements.
 /// Vendor identification by non-signature means belongs in vendor/, not here.
 const ALLOWED_METADATA_SIGNED: &[&str] = &[
-    "certificate",  // Certificate chain string patterns
-    "entitlements", // Code entitlements (macOS/iOS, Android)
-    "platform",     // Platform-signed binary composites (auto-generated)
-    "script",       // Script signature-block markers; they do not verify trust
-    "trust-level",  // Signing trust level (ad-hoc, developer, platform, app store)
+    "certificate",    // Certificate chain string patterns
+    "entitlements",   // Code entitlements (macOS/iOS, Android)
+    "code-directory", // Identifiers claimed inside Apple CodeDirectory
+    "platform",       // Platform-signed binary composites (auto-generated)
+    "resource",       // Code-signature resource manifest structure
+    "script",         // Script signature-block markers; they do not verify trust
+    "trust-level",    // Signing trust level (ad-hoc, developer, platform, app store)
 ];
 
 /// Validates that only known subdirectories exist in taxonomy tiers.

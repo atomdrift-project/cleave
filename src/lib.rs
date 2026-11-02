@@ -957,6 +957,7 @@ pub fn log_scan_stats() {
     crate::capabilities::log_raw_gate_stats();
     let top = crate::env::parse::<usize>("CLEAVE_TRAIT_TIMING_TOP").unwrap_or(40);
     crate::composite_rules::trait_timing::report(top);
+    crate::yara_engine::yara_rule_timing::report(top);
 }
 
 /// Return `(retained_bytes, budget_bytes)` for the process-wide regex scratch
@@ -3096,8 +3097,50 @@ fn inflated_size(path: &std::path::Path, on_disk: u64) -> Option<u64> {
             Some(u64::from(u32::from_le_bytes(trailer)))
         }
         [b'P', b'K', 3, 4] => zip_inflated_size(&mut file, on_disk),
+        [b'M', b'S', b'C', b'F'] => cab_inflated_size(&mut file, on_disk),
         _ => None,
     }
+}
+
+/// Sum of the uncompressed sizes a cabinet's CFFILE table records. A 23 KB
+/// `.cab` around one 826 KB script cost 15 CPU-seconds yet queued by its
+/// on-disk size behind every larger file, starting at t=75 s of an 80 s
+/// hostile-corpus scan and finishing last. `None` for a truncated header or
+/// table, or more entries than are worth reading for a scheduling hint.
+fn cab_inflated_size(file: &mut std::fs::File, on_disk: u64) -> Option<u64> {
+    use std::io::{Read, Seek, SeekFrom};
+    const HEADER_LEN: usize = 36;
+    const MAX_FILES: usize = 20_000;
+    // CFFILE: cbFile u32, uoffFolderStart u32, iFolder u16, date u16, time u16,
+    // attribs u16, then a NUL-terminated name of at most 256 bytes.
+    const MAX_ENTRY_LEN: usize = 16 + 257;
+    file.seek(SeekFrom::Start(0)).ok()?;
+    let mut header = [0u8; HEADER_LEN];
+    file.read_exact(&mut header).ok()?;
+    let u16_at = |at: usize| u16::from_le_bytes([header[at], header[at + 1]]);
+    let files_offset = u64::from(u32::from_le_bytes([
+        header[16], header[17], header[18], header[19],
+    ]));
+    let entries = usize::from(u16_at(28));
+    if entries == 0 || entries > MAX_FILES || files_offset >= on_disk {
+        return None;
+    }
+    let table_len = (entries * MAX_ENTRY_LEN).min(usize::try_from(on_disk - files_offset).ok()?);
+    file.seek(SeekFrom::Start(files_offset)).ok()?;
+    let mut table = vec![0u8; table_len];
+    file.read_exact(&mut table).ok()?;
+    let mut at = 0usize;
+    let mut total = 0u64;
+    for _ in 0..entries {
+        let size = table.get(at..at + 4)?;
+        total = total.saturating_add(u64::from(u32::from_le_bytes([
+            size[0], size[1], size[2], size[3],
+        ])));
+        let name_start = at + 16;
+        let name_len = memchr::memchr(0, table.get(name_start..)?)?;
+        at = name_start + name_len + 1;
+    }
+    Some(total)
 }
 
 /// What the memory gate can learn about `path` from its magic alone: that
@@ -3201,6 +3244,40 @@ mod scheduling_size_tests {
         let on_disk = std::fs::metadata(&path).unwrap().len();
         assert!(on_disk < 1 << 16);
         assert_eq!(scheduling_size(&path), 2 << 20);
+    }
+
+    #[test]
+    fn cab_ranks_by_its_file_table() {
+        // MSCF header (36 bytes), one CFFOLDER (8 bytes), then two CFFILE
+        // entries; the compressed data itself is never read for the hint.
+        let files_offset: u32 = 36 + 8;
+        let mut cab = Vec::new();
+        cab.extend_from_slice(b"MSCF");
+        cab.extend_from_slice(&0u32.to_le_bytes()); // reserved1
+        cab.extend_from_slice(&0u32.to_le_bytes()); // cbCabinet (patched below)
+        cab.extend_from_slice(&0u32.to_le_bytes()); // reserved2
+        cab.extend_from_slice(&files_offset.to_le_bytes()); // coffFiles
+        cab.extend_from_slice(&0u32.to_le_bytes()); // reserved3
+        cab.extend_from_slice(&[3, 1]); // version
+        cab.extend_from_slice(&1u16.to_le_bytes()); // cFolders
+        cab.extend_from_slice(&2u16.to_le_bytes()); // cFiles
+        cab.extend_from_slice(&0u16.to_le_bytes()); // flags
+        cab.extend_from_slice(&0u16.to_le_bytes()); // setID
+        cab.extend_from_slice(&0u16.to_le_bytes()); // iCabinet
+        cab.extend_from_slice(&[0u8; 8]); // CFFOLDER
+        for (size, name) in [(826_355u32, &b"segment.js"[..]), (1_000, &b"b.txt"[..])] {
+            cab.extend_from_slice(&size.to_le_bytes());
+            cab.extend_from_slice(&[0u8; 12]);
+            cab.extend_from_slice(name);
+            cab.push(0);
+        }
+        cab.extend_from_slice(&[0u8; 64]);
+        let len = u32::try_from(cab.len()).unwrap();
+        cab[8..12].copy_from_slice(&len.to_le_bytes());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("segment.cab");
+        std::fs::write(&path, &cab).unwrap();
+        assert_eq!(scheduling_size(&path), 827_355);
     }
 
     #[test]

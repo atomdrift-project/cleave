@@ -10,7 +10,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 pub(crate) const VALIDATOR: &str = "rule-performance";
-static ACTIVE: AtomicBool = AtomicBool::new(false);
+/// Read by every condition evaluation of every scan, so it gets a cache line
+/// of its own: the statics linked next to it include per-member counters
+/// that other workers write.
+#[repr(align(128))]
+struct ActiveFlag(AtomicBool);
+static ACTIVE: ActiveFlag = ActiveFlag(AtomicBool::new(false));
 static ISSUES: Mutex<BTreeMap<(String, String), ValidationIssue>> = Mutex::new(BTreeMap::new());
 
 /// Per fixture and count mode, each rule's costliest AST query: the query
@@ -268,7 +273,7 @@ fn outlier_fence<C: MeasuredCost>(costs: &BTreeMap<String, C>) -> Option<(Durati
 }
 
 pub(crate) fn active() -> bool {
-    ACTIVE.load(Ordering::Relaxed)
+    ACTIVE.0.load(Ordering::Relaxed)
 }
 
 /// Full-validation cache hits may reuse a previously measured pass. Fresh
@@ -278,7 +283,7 @@ impl Session {
     pub(crate) fn begin() -> Self {
         ISSUES.lock().clear();
         QUERY_COSTS.lock().clear();
-        ACTIVE.store(
+        ACTIVE.0.store(
             !validation_controls::is_validator_disabled(VALIDATOR),
             Ordering::Relaxed,
         );
@@ -305,7 +310,7 @@ impl Session {
 }
 impl Drop for Session {
     fn drop(&mut self) {
-        ACTIVE.store(false, Ordering::Relaxed);
+        ACTIVE.0.store(false, Ordering::Relaxed);
         ISSUES.lock().clear();
         QUERY_COSTS.lock().clear();
     }

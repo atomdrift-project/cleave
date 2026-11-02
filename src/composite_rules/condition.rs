@@ -174,6 +174,23 @@ impl TraitRegex {
         })
     }
 
+    /// [`Self::is_match`] with caller-held scratch (see [`Self::with_scratch`]):
+    /// batch callers verify many haystacks against one regex without the
+    /// per-call scratch checkout.
+    pub(crate) fn is_match_cached(
+        &self,
+        haystack: &str,
+        cache: &mut regex_automata::meta::Cache,
+    ) -> bool {
+        if haystack.len() < self.min_len {
+            return false;
+        }
+        self.engine
+            .re
+            .search_half_with(cache, &regex_automata::Input::new(haystack).earliest(true))
+            .is_some()
+    }
+
     /// Leftmost-first match, returned as a borrow of `haystack`.
     ///
     /// A byte-mode engine can in principle end a match mid-codepoint (`.` and
@@ -306,7 +323,7 @@ fn compile_codepoint(pattern: &str) -> Option<regex_automata::meta::Regex> {
 /// stays alive while some thread's slot still references it. That is bounded by
 /// `LOCAL_REGEX_SLOTS` per thread and is the deliberate trade for dropping the
 /// lock traffic.
-const LOCAL_REGEX_SLOTS: usize = 512;
+const LOCAL_REGEX_SLOTS: usize = 4096;
 
 thread_local! {
     static LOCAL_REGEX: std::cell::RefCell<Vec<Option<(Box<str>, bool, Arc<TraitRegex>)>>> =

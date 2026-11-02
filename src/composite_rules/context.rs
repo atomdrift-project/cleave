@@ -238,6 +238,7 @@ pub(crate) struct FileEvalCaches {
     encoded_string_indices: Arc<OnceLock<Vec<u32>>>,
     literal_string_indices: Arc<OnceLock<Vec<u32>>>,
     flow_call_index: Arc<OnceLock<FxHashMap<(u64, usize), Vec<usize>>>>,
+    flow_targets: Arc<OnceLock<Vec<String>>>,
     html_comment_free_source: Arc<OnceLock<Option<Vec<u8>>>>,
     commentless_ast: Arc<OnceLock<Option<tree_sitter::Tree>>>,
 }
@@ -312,6 +313,9 @@ pub(crate) struct EvaluationContext<'a> {
     pub literal_string_indices: Arc<OnceLock<Vec<u32>>>,
     /// Call candidates by source offset and arity, in flow-value order.
     pub flow_call_index: Arc<OnceLock<FxHashMap<(u64, usize), Vec<usize>>>>,
+    /// Distinct, sorted call targets of the filefacts flow graph (see
+    /// `origin_matches`).
+    pub flow_targets: Arc<OnceLock<Vec<String>>>,
     /// Lazily masked copy used only by `type: text` rules that explicitly
     /// ignore markup comments. `None` means the file had no such comments.
     pub cached_html_comment_free_source: Arc<OnceLock<Option<Vec<u8>>>>,
@@ -466,6 +470,7 @@ impl<'a> EvaluationContext<'a> {
             encoded_string_indices: Arc::new(OnceLock::new()),
             literal_string_indices: Arc::new(OnceLock::new()),
             flow_call_index: Arc::new(OnceLock::new()),
+            flow_targets: Arc::new(OnceLock::new()),
             cached_html_comment_free_source: Arc::new(OnceLock::new()),
             cached_commentless_ast: Arc::new(OnceLock::new()),
             deadline: None,
@@ -498,6 +503,7 @@ impl<'a> EvaluationContext<'a> {
         self.encoded_string_indices = Arc::clone(&caches.encoded_string_indices);
         self.literal_string_indices = Arc::clone(&caches.literal_string_indices);
         self.flow_call_index = Arc::clone(&caches.flow_call_index);
+        self.flow_targets = Arc::clone(&caches.flow_targets);
         self.cached_html_comment_free_source = Arc::clone(&caches.html_comment_free_source);
         self.cached_commentless_ast = Arc::clone(&caches.commentless_ast);
         self
@@ -849,6 +855,7 @@ impl<'a> EvaluationContext<'a> {
             encoded_string_indices: Arc::new(OnceLock::new()),
             literal_string_indices: Arc::new(OnceLock::new()),
             flow_call_index: Arc::new(OnceLock::new()),
+            flow_targets: Arc::new(OnceLock::new()),
             cached_html_comment_free_source: Arc::new(OnceLock::new()),
             cached_commentless_ast: Arc::new(OnceLock::new()),
             deadline: None,

@@ -1703,7 +1703,16 @@ impl YaraEngine {
                 // Log any rule that exceeded 1s using yara-x built-in profiling
                 // (rules-profiling feature is always enabled in Cargo.toml).
                 if raw_rules_result.is_ok() {
+                    let aggregate = yara_rule_timing::enabled();
                     for pd in scanner.slowest_rules(20) {
+                        if aggregate {
+                            yara_rule_timing::record(
+                                pd.namespace,
+                                pd.rule,
+                                pd.pattern_matching_time,
+                                pd.condition_exec_time,
+                            );
+                        }
                         let condition_ms = pd.condition_exec_time.as_millis() as u64;
                         let pattern_ms = pd.pattern_matching_time.as_millis() as u64;
                         if condition_ms + pattern_ms >= 1_000 {
@@ -5723,6 +5732,60 @@ rule builtin_generic_rule {
             for name in names {
                 eprintln!("  {name}");
             }
+        }
+    }
+}
+
+/// `CLEAVE_YARA_RULE_TIMING=1`: sum yara-x's per-rule profiling (each scan's
+/// 20 slowest rules) across the whole scan and log the top consumers at the
+/// end ([`yara_rule_timing::report`]). The per-scan "Slow YARA rule" warning
+/// only sees single scans over a second; a rule that costs 50 ms on each of
+/// thousands of members never shows there. Off by default: one cached flag.
+pub(crate) mod yara_rule_timing {
+    use parking_lot::Mutex;
+    use rustc_hash::FxHashMap;
+    use std::sync::OnceLock;
+    use std::time::Duration;
+
+    type Totals = FxHashMap<(String, String), (Duration, Duration, u64)>;
+    static TOTALS: Mutex<Option<Totals>> = Mutex::new(None);
+
+    pub(crate) fn enabled() -> bool {
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| crate::env::flag("CLEAVE_YARA_RULE_TIMING"))
+    }
+
+    pub(crate) fn record(namespace: &str, rule: &str, pattern: Duration, condition: Duration) {
+        let key = (namespace.to_string(), rule.to_string());
+        let mut guard = TOTALS.lock();
+        let entry = guard
+            .get_or_insert_with(Totals::default)
+            .entry(key)
+            .or_default();
+        entry.0 += pattern;
+        entry.1 += condition;
+        entry.2 += 1;
+        drop(guard);
+    }
+
+    pub(crate) fn report(top: usize) {
+        if !enabled() {
+            return;
+        }
+        let mut rows: Vec<_> = match TOTALS.lock().as_ref() {
+            Some(totals) => totals.iter().map(|(k, v)| (k.clone(), *v)).collect(),
+            None => return,
+        };
+        rows.sort_by_key(|(_, (p, c, _))| std::cmp::Reverse(*p + *c));
+        for ((namespace, rule), (pattern, condition, scans)) in rows.into_iter().take(top) {
+            tracing::info!(
+                namespace = %namespace,
+                rule = %rule,
+                pattern_ms = pattern.as_millis() as u64,
+                condition_ms = condition.as_millis() as u64,
+                scans,
+                "yara rule time aggregate"
+            );
         }
     }
 }

@@ -1423,9 +1423,8 @@ pub(crate) fn eval_string_literal_with_options<'a, 'b>(
 #[inline]
 fn can_use_byte_matching(pattern: &str) -> bool {
     pattern.is_ascii()
-        && !pattern.contains("\\u")
-        && !pattern.contains("\\p")
-        && !pattern.contains("\\P")
+        && (!pattern.contains('\\')
+            || (!pattern.contains("\\u") && !pattern.contains("\\p") && !pattern.contains("\\P")))
 }
 
 /// Evaluate `type: symbol, kind: call [+ arg: ...]` — match call
@@ -1995,35 +1994,46 @@ fn origin_matches(
         });
     }
     let mut models = Vec::new();
+    // The flow's distinct call targets, sorted, computed once per file: this
+    // runs per (rule x call site), and sorting every value's target into a
+    // fresh `BTreeSet` each time was ~2/3 of the evaluator's cost.
+    let flow_targets = ctx.flow_targets.get_or_init(|| {
+        flow.values
+            .iter()
+            .filter_map(|v| v.target.clone())
+            .collect::<std::collections::BTreeSet<String>>()
+            .into_iter()
+            .collect()
+    });
     for model in &origin.through {
         let Some(pattern) = crate::composite_rules::condition::cached_regex(&model.call) else {
             return false;
         };
-        let targets: std::collections::BTreeSet<_> = flow
-            .values
-            .iter()
-            .filter_map(|v| v.target.as_ref())
-            .filter(|t| pattern.is_match(t))
-            .collect();
-        models.extend(targets.into_iter().map(|target| {
-            filefacts::FlowTransfer::new(target.clone(), model.arguments.clone(), model.receiver)
-        }));
+        models.extend(
+            flow_targets
+                .iter()
+                .filter(|t| pattern.is_match(t))
+                .map(|target| {
+                    filefacts::FlowTransfer::new(
+                        target.clone(),
+                        model.arguments.clone(),
+                        model.receiver,
+                    )
+                }),
+        );
     }
     // Selected sources are terminal evidence for this query. Their internal
     // implementation need not be modeled to establish that they supply data.
     // Argument constraints are still checked below, in the same invocation.
-    for target in flow
-        .values
-        .iter()
-        .filter_map(|v| v.target.as_ref())
-        .collect::<std::collections::BTreeSet<_>>()
-    {
-        if source_pattern.as_ref().is_some_and(|p| p.is_match(target)) {
-            models.push(filefacts::FlowTransfer::new(
-                target.clone(),
-                Vec::new(),
-                false,
-            ));
+    if let Some(p) = source_pattern.as_ref() {
+        for target in flow_targets {
+            if p.is_match(target) {
+                models.push(filefacts::FlowTransfer::new(
+                    target.clone(),
+                    Vec::new(),
+                    false,
+                ));
+            }
         }
     }
     let found = if let Some(field) = &origin.field {
@@ -2611,11 +2621,13 @@ pub(crate) fn eval_raw<'a>(
                     use super::raw_window_stats as ws;
                     ws::bump(&ws::FULL);
                     ws::add_bytes(&ws::FULL_BYTES, search_data.len());
-                    match ws::LAST_REASON.with(std::cell::Cell::get) {
+                    let reason = ws::LAST_REASON.with(std::cell::Cell::get);
+                    match reason {
                         1 => ws::add_bytes(&ws::NO_ATOMS_BYTES, search_data.len()),
                         2 => ws::add_bytes(&ws::UNBOUNDED_BYTES, search_data.len()),
                         _ => ws::add_bytes(&ws::OTHER_FULL_BYTES, search_data.len()),
                     }
+                    ws::note_full(trait_id, reason, search_data.len());
                     lean.for_each_match(search_data, |start, end| {
                         visit(search_start + start, search_start + end)
                     });
@@ -2630,6 +2642,7 @@ pub(crate) fn eval_raw<'a>(
                 ws::bump(&ws::STR_ENGINE);
                 ws::bump(&ws::FULL);
                 ws::add_bytes(&ws::FULL_BYTES, search_end - search_start);
+                ws::note_full(trait_id, 4, search_end - search_start);
             }
             if let Some(re) = crate::composite_rules::condition::cached_regex(pattern_str) {
                 // Reuse the whole-file UTF-8 view built once at ctx construction
@@ -2812,7 +2825,7 @@ pub(crate) fn eval_raw<'a>(
                     );
                 } else {
                     let needle = substr_str.as_bytes();
-                    let finder = memchr::memmem::Finder::new(needle);
+                    let finder = crate::composite_rules::condition::cached_finder(substr_str);
 
                     let mut pos = 0;
                     while let Some(offset) = finder.find(&search_data[pos..]) {
@@ -2875,7 +2888,7 @@ pub(crate) fn eval_raw<'a>(
                     );
                 } else {
                     let needle = substr_str.as_bytes();
-                    let finder = memchr::memmem::Finder::new(needle);
+                    let finder = crate::composite_rules::condition::cached_finder(substr_str);
                     let mut pos = 0;
                     while let Some(offset) = finder.find(&search_data[pos..]) {
                         let abs_pos = pos + offset;
@@ -2920,8 +2933,10 @@ pub(crate) fn eval_raw<'a>(
                         needs_count
                     });
                 } else {
-                    let needle = substr_str.as_bytes();
-                    let iter = memchr::memmem::find_iter(search_data, needle);
+                    // Shared searcher per needle: building a memmem `Searcher`
+                    // per evaluation measured ~13 s of pool time per corpus.
+                    let finder = crate::composite_rules::condition::cached_finder(substr_str);
+                    let iter = finder.find_iter(search_data);
                     first_offset = iter.clone().next().map(|o| (search_start + o) as u64);
                     match_count = if needs_count {
                         iter.count()

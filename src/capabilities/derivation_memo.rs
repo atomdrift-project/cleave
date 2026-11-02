@@ -124,6 +124,35 @@ pub(crate) fn mandatory_atom_set(pattern: &str) -> Option<Vec<(String, bool)>> {
     computed
 }
 
+thread_local! {
+    /// Per-thread view of `atom_set`, handing out borrows instead of clones.
+    static LOCAL_ATOM_SETS: std::cell::RefCell<FxHashMap<Box<str>, Option<std::sync::Arc<Vec<(String, bool)>>>>> =
+        std::cell::RefCell::new(FxHashMap::default());
+}
+
+/// Run `f` over the memoized atom set of `pattern` without cloning it.
+///
+/// [`mandatory_atom_set`] returns an owned `Vec<String>` clone taken under the
+/// shared read lock; the raw-window check calls it once per (trait x member),
+/// and that clone + lock traffic measured ~13 s of pool time per corpus. The
+/// per-thread map resolves each pattern once per thread and then answers
+/// from a borrow with no shared-state access at all.
+pub(crate) fn with_mandatory_atom_set<R>(
+    pattern: &str,
+    f: impl FnOnce(Option<&[(String, bool)]>) -> R,
+) -> R {
+    LOCAL_ATOM_SETS.with(|cell| {
+        let mut map = cell.borrow_mut();
+        if !map.contains_key(pattern) {
+            let shared = mandatory_atom_set(pattern).map(std::sync::Arc::new);
+            map.insert(Box::from(pattern), shared);
+        }
+        f(map
+            .get(pattern)
+            .and_then(|v| v.as_deref().map(Vec::as_slice)))
+    })
+}
+
 /// Flush the memo to disk if any entry was added since load. Called once after
 /// the match indexes finish building — the only phase that computes derivations.
 pub(crate) fn persist() {

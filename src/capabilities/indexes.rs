@@ -270,12 +270,19 @@ impl ScratchRegex {
         })
     }
 
-    /// `regex::Regex::is_match`: an earliest-match search on the same engine.
-    pub(crate) fn is_match(&self, haystack: &str) -> bool {
-        crate::composite_rules::regex_scratch::with_cache(self.id, &self.meta, |cache| {
-            self.meta
-                .search_half_with(cache, &regex_automata::Input::new(haystack).earliest(true))
-                .is_some()
+    /// Lease one scratch cache for a batch of `regex::Regex::is_match`-style
+    /// earliest-match searches on the same engine. The fallback
+    /// sweep runs one pattern over every symbol of a member; checking the
+    /// cache out and back in per symbol was ~31 s of a benign corpus run
+    /// (`regex_scratch::finish` + `global_take`), more than many searches.
+    pub(crate) fn with_matcher<R>(&self, f: impl FnOnce(&mut dyn FnMut(&str) -> bool) -> R) -> R {
+        crate::composite_rules::regex_scratch::with_batch_cache(self.id, &self.meta, |cache| {
+            let mut is_match = |haystack: &str| {
+                self.meta
+                    .search_half_with(cache, &regex_automata::Input::new(haystack).earliest(true))
+                    .is_some()
+            };
+            f(&mut is_match)
         })
     }
 }
@@ -325,6 +332,15 @@ pub(crate) struct SymbolMatchIndex {
     regex_fallback_patterns: Vec<String>,
     regex_fallback_regexes: Vec<OnceLock<Option<ScratchRegex>>>,
     regex_fallback_traits: Vec<usize>,
+    /// Any-of atom gate for the fallbacks (`mandatory_atom_set`: every match
+    /// contains one of the pattern's atoms). Most fallbacks are literal
+    /// alternations such as `^(exec|execSync)$`; with the gate they verify
+    /// only the symbols one sweep nominated instead of every symbol.
+    /// `[cs, ci]` automata map pattern -> fallback positions;
+    /// `regex_fallback_gated[i]` marks fallbacks that run on candidates only.
+    fallback_atom_automata: [Option<AhoCorasick>; 2],
+    fallback_atom_to_fallbacks: [Vec<Vec<u32>>; 2],
+    regex_fallback_gated: Vec<bool>,
 }
 
 impl SymbolMatchIndex {
@@ -444,6 +460,57 @@ impl SymbolMatchIndex {
             .map(|_| OnceLock::new())
             .collect();
 
+        // Any-of atom gate for the fallbacks; a pattern without a guaranteed
+        // set stays on the full sweep, and so does every fallback if either
+        // automaton fails to build (a missing gate must never hide a match).
+        let mut regex_fallback_gated = vec![false; regex_fallback_patterns.len()];
+        let mut atom_patterns: [Vec<String>; 2] = [Vec::new(), Vec::new()];
+        let mut atom_maps: [FxHashMap<String, usize>; 2] =
+            [FxHashMap::default(), FxHashMap::default()];
+        let mut fallback_atom_to_fallbacks: [Vec<Vec<u32>>; 2] = [Vec::new(), Vec::new()];
+        for (fi, pattern) in regex_fallback_patterns.iter().enumerate() {
+            let Some(atoms) = super::derivation_memo::mandatory_atom_set(pattern) else {
+                continue;
+            };
+            if atoms.is_empty() || atoms.iter().any(|(a, _)| a.is_empty()) {
+                continue;
+            }
+            regex_fallback_gated[fi] = true;
+            for (atom, ci) in &atoms {
+                let k = usize::from(*ci);
+                let key = if *ci {
+                    atom.to_ascii_lowercase()
+                } else {
+                    atom.clone()
+                };
+                let slot = match atom_maps[k].get(&key) {
+                    Some(&slot) => slot,
+                    None => {
+                        let slot = atom_patterns[k].len();
+                        atom_maps[k].insert(key.clone(), slot);
+                        atom_patterns[k].push(key);
+                        fallback_atom_to_fallbacks[k].push(Vec::new());
+                        slot
+                    }
+                };
+                fallback_atom_to_fallbacks[k][slot].push(fi as u32);
+            }
+        }
+        let mut fallback_atom_automata = [
+            build_index_automaton(&atom_patterns[0], false),
+            build_index_automaton(&atom_patterns[1], true),
+        ];
+        if (0..2).any(|k| fallback_atom_automata[k].is_none() && !atom_patterns[k].is_empty()) {
+            fallback_atom_automata = [None, None];
+            fallback_atom_to_fallbacks = [Vec::new(), Vec::new()];
+            regex_fallback_gated.iter_mut().for_each(|g| *g = false);
+        }
+        tracing::debug!(
+            gated = regex_fallback_gated.iter().filter(|g| **g).count(),
+            fallbacks = regex_fallback_gated.len(),
+            "symbol fallback atom gate"
+        );
+
         tracing::debug!(
             "Built SymbolMatchIndex: {} exact, {} substr, {} regex-literal, {} regex-fallback",
             exact_symbols.len(),
@@ -463,6 +530,9 @@ impl SymbolMatchIndex {
             regex_fallback_patterns,
             regex_fallback_regexes,
             regex_fallback_traits,
+            fallback_atom_automata,
+            fallback_atom_to_fallbacks,
+            regex_fallback_gated,
         }
     }
 
@@ -523,6 +593,19 @@ impl SymbolMatchIndex {
         let mut evidence: FxHashMap<usize, Vec<Evidence>> = FxHashMap::default();
         // Reused across symbols to avoid per-symbol allocation.
         let mut seen_candidates: FxHashSet<usize> = FxHashSet::default();
+        // (trait, symbol position) pairs the literal prefilter nominated,
+        // verified pattern-major after the sweep: one scratch checkout per
+        // regex instead of one per candidate. Per-candidate `is_match` thrashed
+        // the thread's hot scratch slot (a different regex nearly every call)
+        // and spent more in checkout/park bookkeeping than in the search —
+        // ~45% of this function's time on the benign corpus. Each trait holds
+        // exactly one pattern kind, so its evidence order (symbol order) is
+        // unchanged.
+        let mut regex_candidates: Vec<(usize, u32)> = Vec::new();
+        // (fallback position, symbol position) pairs nominated by the
+        // fallback atom gate; deduped per symbol by `seen_fallbacks`.
+        let mut fallback_candidates: Vec<(u32, u32)> = Vec::new();
+        let mut seen_fallbacks: FxHashSet<u32> = FxHashSet::default();
 
         // Rule loading strips up to two leading underscores. Report symbols
         // are normally pre-normalized, but normalize here for edge cases.
@@ -532,7 +615,7 @@ impl SymbolMatchIndex {
             n.strip_prefix('_').unwrap_or(n)
         }
 
-        for &symbol in symbols {
+        for (pos, &symbol) in symbols.iter().enumerate() {
             let normalized = normalize(symbol);
             if normalized.is_empty() {
                 continue;
@@ -558,7 +641,7 @@ impl SymbolMatchIndex {
                 }
             }
 
-            // Regex literal prefilter + per-trait verification.
+            // Regex literal prefilter; verification is deferred (see above).
             if let Some(ref ac) = self.regex_literal_automaton {
                 seen_candidates.clear();
                 for mat in ac.find_overlapping_iter(normalized) {
@@ -567,28 +650,76 @@ impl SymbolMatchIndex {
                         if !seen_candidates.insert(trait_idx) {
                             continue;
                         }
-                        if let Some(Some((pattern, slot))) = self.trait_regex.get(trait_idx)
-                            && compile_once(slot, || cached_regex(pattern))
-                                .is_some_and(|re| re.is_match(normalized))
-                        {
-                            matched.insert(trait_idx);
-                            Self::push_evidence(&mut evidence, trait_idx, symbol);
+                        regex_candidates.push((trait_idx, pos as u32));
+                    }
+                }
+            }
+
+            if self.fallback_atom_automata.iter().any(Option::is_some) {
+                seen_fallbacks.clear();
+                for (k, ac) in self.fallback_atom_automata.iter().enumerate() {
+                    let Some(ac) = ac else { continue };
+                    for mat in ac.find_overlapping_iter(normalized) {
+                        for &fi in &self.fallback_atom_to_fallbacks[k][mat.pattern().as_usize()] {
+                            if seen_fallbacks.insert(fi) {
+                                fallback_candidates.push((fi, pos as u32));
+                            }
                         }
                     }
                 }
             }
+        }
+        // Stable: each fallback's symbols stay in sweep order.
+        fallback_candidates.sort_by_key(|&(fi, _)| fi);
+
+        // Pattern-major verification of the nominated (trait, symbol) pairs.
+        // Stable sort keeps each trait's symbols in sweep order.
+        regex_candidates.sort_by_key(|&(trait_idx, _)| trait_idx);
+        let mut i = 0;
+        while i < regex_candidates.len() {
+            let trait_idx = regex_candidates[i].0;
+            let mut j = i;
+            while j < regex_candidates.len() && regex_candidates[j].0 == trait_idx {
+                j += 1;
+            }
+            if let Some(Some((pattern, slot))) = self.trait_regex.get(trait_idx)
+                && let Some(re) = compile_once(slot, || cached_regex(pattern))
+            {
+                re.with_scratch(|cache| {
+                    for &(_, pos) in &regex_candidates[i..j] {
+                        let symbol = symbols[pos as usize];
+                        if re.is_match_cached(normalize(symbol), cache) {
+                            matched.insert(trait_idx);
+                            Self::push_evidence(&mut evidence, trait_idx, symbol);
+                        }
+                    }
+                });
+            }
+            i = j;
         }
 
         // Regex fallback (no-literal patterns), pattern-major: each regex's
         // lazy-DFA cache stays hot across the whole symbol list instead of
         // being re-entered per symbol.
         if !symbols.is_empty() {
-            for ((slot, pattern), &trait_idx) in self
+            for (fi, ((slot, pattern), &trait_idx)) in self
                 .regex_fallback_regexes
                 .iter()
                 .zip(&self.regex_fallback_patterns)
                 .zip(&self.regex_fallback_traits)
+                .enumerate()
             {
+                let gated = self.regex_fallback_gated.get(fi).copied().unwrap_or(false);
+                let nominated: &[(u32, u32)] = if gated {
+                    let start = fallback_candidates.partition_point(|&(f, _)| (f as usize) < fi);
+                    let end = fallback_candidates.partition_point(|&(f, _)| (f as usize) <= fi);
+                    if start == end {
+                        continue;
+                    }
+                    &fallback_candidates[start..end]
+                } else {
+                    &[]
+                };
                 let Some(re) = compile_once(slot, || {
                     ScratchRegex::new(pattern)
                         .inspect_err(|e| tracing::warn!(pattern, error = %e, "symbol fallback pattern failed to compile; skipping"))
@@ -596,13 +727,24 @@ impl SymbolMatchIndex {
                 }) else {
                     continue;
                 };
-                for &symbol in symbols {
-                    let normalized = normalize(symbol);
-                    if !normalized.is_empty() && re.is_match(normalized) {
-                        matched.insert(trait_idx);
-                        Self::push_evidence(&mut evidence, trait_idx, symbol);
+                re.with_matcher(|is_match| {
+                    let mut check = |symbol: &str| {
+                        let normalized = normalize(symbol);
+                        if !normalized.is_empty() && is_match(normalized) {
+                            matched.insert(trait_idx);
+                            Self::push_evidence(&mut evidence, trait_idx, symbol);
+                        }
+                    };
+                    if gated {
+                        for &(_, pos) in nominated {
+                            check(symbols[pos as usize]);
+                        }
+                    } else {
+                        for &symbol in symbols {
+                            check(symbol);
+                        }
                     }
-                }
+                });
             }
         }
 
@@ -1010,7 +1152,6 @@ impl StringMatchIndex {
             None
         };
 
-        drop(add_atom);
         let mut atom_cs_automaton = build_index_automaton(&atom_cs_patterns, false);
         let mut atom_ci_automaton = build_index_automaton(&atom_ci_patterns, true);
         // A failed automaton must not silence its traits: without both
@@ -3465,6 +3606,77 @@ mod tests {
             defined_in: std::path::PathBuf::from("test.yaml"),
             precision: None,
             ..Default::default()
+        }
+    }
+
+    fn make_symbol_regex_trait(id: &str, regex: &str) -> TraitDefinition {
+        let mut t = make_text_regex_trait(id, regex);
+        t.r#if = Condition::Symbol(crate::composite_rules::condition::SymbolQuery {
+            regex: Some(regex.to_string()),
+            ..Default::default()
+        });
+        t
+    }
+
+    /// No-literal symbol regexes gated by their any-of atom set match exactly
+    /// the symbols a full regex sweep matches, with the same evidence;
+    /// an atom-less fallback (`^[a-z]\d+$`) still sweeps every symbol.
+    #[test]
+    fn symbol_fallback_atom_gate_matches_full_sweep() {
+        let patterns = [
+            r"^(exec|execSync)$",
+            r"(?i)(^|\.)(post|postasync)$",
+            r"^_?(stat|lstat)$",
+            r"^[a-z]\d+$",
+        ];
+        let traits: Vec<TraitDefinition> = patterns
+            .iter()
+            .enumerate()
+            .map(|(i, p)| make_symbol_regex_trait(&format!("t{i}"), p))
+            .collect();
+        let index = SymbolMatchIndex::build_filtered(&traits, &[Platform::All]);
+        assert_eq!(index.regex_fallback_patterns.len(), patterns.len());
+        assert_eq!(
+            index.regex_fallback_gated,
+            vec![true, true, true, false],
+            "alternations gate, the class-only pattern does not"
+        );
+        let symbols = [
+            "execSync",
+            "exec",
+            "__exec",
+            "execx",
+            "req.POST",
+            "client.postAsync",
+            "post",
+            "_stat",
+            "lstat",
+            "fstat",
+            "a12",
+            "B12",
+            "x9",
+        ];
+        let (matched, evidence) = index.find_matches_with_evidence(&symbols);
+        for (i, p) in patterns.iter().enumerate() {
+            let re = regex::Regex::new(p).unwrap();
+            let mut want: Vec<&str> = symbols
+                .iter()
+                .copied()
+                .filter(|s| {
+                    let n = s.strip_prefix('_').unwrap_or(s);
+                    let n = n.strip_prefix('_').unwrap_or(n);
+                    !n.is_empty() && re.is_match(n)
+                })
+                .collect();
+            let mut got: Vec<&str> = evidence
+                .get(&i)
+                .map(|v| v.iter().map(|e| e.value.as_str()).collect())
+                .unwrap_or_default();
+            // `deduplicate_evidence` returns hash order on both paths.
+            got.sort_unstable();
+            want.sort_unstable();
+            assert_eq!(got, want, "pattern {p}");
+            assert_eq!(matched.contains(&i), !want.is_empty(), "pattern {p}");
         }
     }
 

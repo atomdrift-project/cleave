@@ -186,6 +186,9 @@ pub struct CapabilityMapper {
     /// (mapper, file type); testing them per (rule x member) was a measured
     /// leaf on many-member archives. Memoized here and shared across the
     /// per-file mapper clones, like the other lazy indexes.
+    /// Path/basename traits with resolved needles and an any-of atom gate for
+    /// their regexes (see `evaluate_basename_traits_for_entries`), built once.
+    pub(super) path_trait_index: Arc<OnceLock<evaluate_composites::PathTraitIndex>>,
     pub(super) composite_worklists:
         Arc<parking_lot::RwLock<rustc_hash::FxHashMap<RuleFileType, Arc<CompositeTypeLists>>>>,
     /// Maps trait ID -> index in trait_definitions

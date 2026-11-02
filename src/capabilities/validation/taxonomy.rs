@@ -2788,6 +2788,9 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // scope of the original shared observation, including supported archives.
     "text:well-known/app/storage/filen/cloud-url-references.yaml",
     "text:well-known/app/storage/koofr/cloud-url-references.yaml",
+    // An abbreviated command is documentation in every original carrier,
+    // including embedded document text. Consolidation must retain that union.
+    "text:metadata/package/documentation/source/review-identity-shell-examples.yaml",
     // Directory-shaped references occur across source, script, and binary
     // carriers. Preserve the scope of this single neutral path observation.
     "text:metadata/path/directory/storage-default-reference.yaml",

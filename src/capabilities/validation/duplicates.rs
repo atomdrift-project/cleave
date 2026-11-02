@@ -3223,6 +3223,7 @@ pub(crate) fn find_regex_literal_overlap_issues(
         file_path: String,
         for_types: HashSet<String>,
         crit: Criticality,
+        argument_key: String,
     }
 
     // Helper structure for literal patterns
@@ -3236,6 +3237,7 @@ pub(crate) fn find_regex_literal_overlap_issues(
         file_path: String,
         for_types: HashSet<String>,
         crit: Criticality,
+        argument_key: String,
     }
 
     // Collect all regex patterns (ANY regex, not just those with |)
@@ -3248,6 +3250,12 @@ pub(crate) fn find_regex_literal_overlap_issues(
             .map(|ft| format!("{:?}", ft).to_lowercase())
             .collect();
         let file_path = trait_def.defined_in.to_string_lossy().to_string();
+        let argument_key = match &trait_def.r#if {
+            Condition::Symbol(query) => {
+                symbol_argument_discriminator(query.arg.as_ref(), query.args.as_deref())
+            }
+            _ => String::new(),
+        };
 
         let mut add_regex = |condition_type: &str, pattern: String| {
             let normalized = normalize_pattern_for_comparison(&pattern, true);
@@ -3259,6 +3267,7 @@ pub(crate) fn find_regex_literal_overlap_issues(
                 file_path: file_path.clone(),
                 for_types: for_types.clone(),
                 crit: trait_def.crit,
+                argument_key: argument_key.clone(),
             });
         };
 
@@ -3287,6 +3296,12 @@ pub(crate) fn find_regex_literal_overlap_issues(
             .map(|ft| format!("{:?}", ft).to_lowercase())
             .collect();
         let file_path = trait_def.defined_in.to_string_lossy().to_string();
+        let argument_key = match &trait_def.r#if {
+            Condition::Symbol(query) => {
+                symbol_argument_discriminator(query.arg.as_ref(), query.args.as_deref())
+            }
+            _ => String::new(),
+        };
 
         let mut add_literal = |condition_type: &str, match_type: &str, pattern: String| {
             let normalized = normalize_pattern_for_comparison(&pattern, false);
@@ -3299,6 +3314,7 @@ pub(crate) fn find_regex_literal_overlap_issues(
                 file_path: file_path.clone(),
                 for_types: for_types.clone(),
                 crit: trait_def.crit,
+                argument_key: argument_key.clone(),
             });
         };
 
@@ -3477,14 +3493,11 @@ pub(crate) fn find_regex_literal_overlap_issues(
                     continue;
                 }
 
-                // Arg-discriminated calls are distinct facts even when the
-                // symbol literal matches — `codecs.decode(base64)` vs a generic
-                // `codecs.decode`, or `require('fs')` vs `require('dns')`. The
-                // `#arg:` marker (added by `extract_patterns`) survives in the
-                // raw pattern but is normalized away, so guard on it explicitly.
-                let arg_a = regex_pat.pattern.contains("#arg:");
-                let arg_b = literal_pat.pattern.contains("#arg:");
-                if arg_a != arg_b || (arg_a && regex_pat.pattern != literal_pat.pattern) {
+                // Compare the actual argument predicates. These collectors
+                // keep raw symbol patterns; extract_patterns' #arg markers
+                // are never present here. A mode-filtered fopen call is a
+                // distinct fact from a generic fopen API reference.
+                if regex_pat.argument_key != literal_pat.argument_key {
                     continue;
                 }
 

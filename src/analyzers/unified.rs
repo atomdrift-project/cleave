@@ -1071,10 +1071,15 @@ impl UnifiedSourceAnalyzer {
             // A module containing only immutable quoted constants has no
             // executable use of those strings. Keep its encoded layers, but
             // do not infer program behavior from plain quoted source examples.
-            let data_only = matches!(self.config.name, "javascript" | "typescript")
-                && source_ctx
-                    .and_then(crate::analysis_context::AnalysisContext::source_ast)
-                    .is_some_and(crate::analyzers::js_literal_catalog::is_data_only);
+            let data_only = source_ctx
+                .and_then(crate::analysis_context::AnalysisContext::source_ast)
+                .is_some_and(|ast| match self.config.name {
+                    "javascript" | "typescript" => {
+                        crate::analyzers::js_literal_catalog::is_data_only(ast)
+                    }
+                    "python" => crate::analyzers::python_literal_catalog::is_data_only(ast),
+                    _ => false,
+                });
             let encoded_constants: Vec<_> = if data_only {
                 report
                     .strings

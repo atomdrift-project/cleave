@@ -2822,7 +2822,10 @@ impl ArchiveAnalyzer {
                 }
 
                 // One encrypted member does not make the rest unreadable.
-                if entry.encrypted {
+                if entry.encrypted
+                    && super::zip::read_verified_plaintext_member(data, entry, MAX_FILE_SIZE)
+                        .is_err()
+                {
                     guard.add_extraction_note(format!("{entry_name}: encrypted, skipped"));
                     continue;
                 }

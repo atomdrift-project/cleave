@@ -1931,6 +1931,7 @@ fn origin_matches(
         && value_pattern.is_none()
         && member_pattern.is_none()
         && whole_pattern.is_none()
+        && origin.whole_number.is_none()
         && !origin.field_exists
         && !origin.field_absent
     {
@@ -1981,6 +1982,16 @@ fn origin_matches(
             gaps.record(AnalysisGap::FlowFieldUnavailable);
         }
         return !found.values.is_empty();
+    }
+    if let Some(expected) = origin.whole_number {
+        let values = flow.complete_values(value, origin.field.as_deref(), 10_000);
+        if values.incomplete {
+            gaps.record(AnalysisGap::FlowQueryIncomplete);
+        }
+        return values.values.iter().any(|v| {
+            matches!(flow.values[v.value].literal.as_ref(),
+                Some(filefacts::Arg::Number { value, .. }) if *value == expected)
+        });
     }
     if let Some(pattern) = whole_pattern {
         let values = flow.complete_values(value, origin.field.as_deref(), 10_000);
@@ -3752,6 +3763,126 @@ mod multi_arg_tests {
             base.analysis_gaps.is_empty(),
             "cloned evaluations must not contaminate another report"
         );
+    }
+
+    #[test]
+    fn yaml_complete_number_provenance_rejects_stale_and_partial_values() {
+        use crate::composite_rules::{Condition, context::EvaluationContext, types::FileType};
+        use crate::types::{AnalysisReport, FilefactsView, TargetInfo};
+        let filter: ArgFilter =
+            crate::yaml::from_str("index: 1\nfrom:\n  whole_number: 0\n").unwrap();
+        for (path, kind, source, expected) in [
+            ("a.lua", FileType::Lua, "ffi.C.ShowWindow(h,0)", true),
+            (
+                "a.lua",
+                FileType::Lua,
+                "local renamed=0x0; ffi.C.ShowWindow(h,renamed)",
+                true,
+            ),
+            (
+                "a.lua",
+                FileType::Lua,
+                "local renamed=0; local alias=renamed; ffi.C.ShowWindow(h,alias)",
+                true,
+            ),
+            (
+                "a.lua",
+                FileType::Lua,
+                "local mode=0; mode=1; ffi.C.ShowWindow(h,mode)",
+                false,
+            ),
+            (
+                "a.lua",
+                FileType::Lua,
+                "local mode=1; mode=0; ffi.C.ShowWindow(h,mode)",
+                true,
+            ),
+            (
+                "a.lua",
+                FileType::Lua,
+                "local mode=0+1; ffi.C.ShowWindow(h,mode)",
+                false,
+            ),
+            (
+                "a.lua",
+                FileType::Lua,
+                "ffi.C.ShowWindow(h,opaque(0))",
+                false,
+            ),
+            ("a.lua", FileType::Lua, "ffi.C.ShowWindow(0,1)", false),
+            ("a.lua", FileType::Lua, "ffi.C.ShowWindow(h,'0')", false),
+            ("a.lua", FileType::Lua, "ffi.C.ShowWindow(h,false)", false),
+            (
+                "a.lua",
+                FileType::Lua,
+                "local mode=0; function f(mode) ffi.C.ShowWindow(h,mode) end",
+                false,
+            ),
+            (
+                "a.js",
+                FileType::JavaScript,
+                "let mode=0; ffi.C.ShowWindow(h,mode);",
+                true,
+            ),
+            (
+                "a.js",
+                FileType::JavaScript,
+                "let mode=0; mode=1; ffi.C.ShowWindow(h,mode);",
+                false,
+            ),
+        ] {
+            let parsed = filefacts::OpenOptions::new()
+                .path(std::path::Path::new(path))
+                .open(source.as_bytes());
+            let mut report = AnalysisReport::new(TargetInfo {
+                path: path.into(),
+                file_type: if path.ends_with("lua") {
+                    "lua"
+                } else {
+                    "javascript"
+                }
+                .into(),
+                size_bytes: source.len() as u64,
+                sha256: String::new(),
+                architectures: None,
+            });
+            report.filefacts = Some(FilefactsView {
+                flow: parsed.flow().cloned(),
+                symbols: parsed.symbols().into_iter().cloned().collect(),
+                ..Default::default()
+            });
+            let ctx = EvaluationContext::new(&report, source.as_bytes(), kind, &[], None, None);
+            let result = super::eval_call(
+                Some(&"ffi.C.ShowWindow".into()),
+                None,
+                None,
+                Some(&filter),
+                None,
+                super::CallSite::default(),
+                &ctx,
+            );
+            assert_eq!(result.matched, expected, "{source}");
+        }
+        for (selection, valid) in [
+            ("{whole_number: 0}", true),
+            ("{whole_number: -1}", true),
+            ("{field: mode, whole_number: 0}", true),
+            ("{whole_number: 0, value: '0'}", false),
+            ("{whole_number: 0, whole_value: '0'}", false),
+            ("{whole_number: 0, call: source}", false),
+            ("{whole_number: 0, field_exists: true, field: mode}", false),
+            ("{whole_number: 0, literal: '0'}", false),
+            (
+                "{whole_number: 0, through: [{call: '^identity$', arguments: [0]}]}",
+                false,
+            ),
+        ] {
+            let condition: Condition = crate::yaml::from_str(&format!(
+                "type: symbol\nkind: call\nexact: sink\narg:\n  from: {selection}\n"
+            ))
+            .unwrap();
+            assert_eq!(condition.validate().is_ok(), valid, "{selection}");
+        }
     }
 
     #[test]

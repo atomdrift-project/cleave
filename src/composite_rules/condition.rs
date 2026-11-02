@@ -1113,6 +1113,10 @@ pub(crate) struct FlowOriginFilter {
     /// Unknown expressions and unmodeled return values remain opaque.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub whole_value: Option<String>,
+    /// A proven complete integer value, not a contributing arithmetic operand.
+    /// Uses the same fail-closed complete-value projection as `whole_value`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub whole_number: Option<i64>,
     /// Observe an explicitly present named field, even if its value is opaque.
     #[serde(default)]
     pub field_exists: bool,
@@ -4696,6 +4700,7 @@ fn validate_origin(origin: &FlowOriginFilter) -> Result<()> {
         + usize::from(origin.value.is_some())
         + usize::from(origin.member.is_some())
         + usize::from(origin.whole_value.is_some())
+        + usize::from(origin.whole_number.is_some())
         + usize::from(origin.field_exists)
         + usize::from(origin.field_absent)
         != 1
@@ -4703,7 +4708,7 @@ fn validate_origin(origin: &FlowOriginFilter) -> Result<()> {
         || origin.through.len() > 32
     {
         return Err(anyhow::anyhow!(
-            "provenance requires exactly one of call/value/member/whole_value/field_exists/field_absent and at most 32 transfer models"
+            "provenance requires exactly one of call/value/member/whole_value/whole_number/field_exists/field_absent and at most 32 transfer models"
         ));
     }
     if (origin.field_exists || origin.field_absent)
@@ -4711,8 +4716,9 @@ fn validate_origin(origin: &FlowOriginFilter) -> Result<()> {
     {
         anyhow::bail!("field presence/absence requires a nonempty field and no transfer models");
     }
-    if origin.whole_value.is_some() && !origin.through.is_empty() {
-        anyhow::bail!("whole_value does not accept provenance transfer models");
+    if (origin.whole_value.is_some() || origin.whole_number.is_some()) && !origin.through.is_empty()
+    {
+        anyhow::bail!("complete-value selection does not accept provenance transfer models");
     }
     if !has_call && (origin.literal.is_some() || origin.argument != 0) {
         return Err(anyhow::anyhow!(

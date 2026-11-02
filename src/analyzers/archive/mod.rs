@@ -2157,9 +2157,11 @@ impl ArchiveAnalyzer {
         let archive_fits_memory = data.len() as u64 <= self.max_memory_file_size;
         let zip_family_in_memory = is_zip_container(file_type)
             && archive_fits_memory
-            && !filefacts_archive_entries
+            && (!filefacts_archive_entries
                 .iter()
-                .any(|entry| entry.encrypted);
+                .any(|entry| entry.encrypted)
+                || (file_type == FileType::ApkAndroid
+                    && zip::only_plaintext_encryption_flags(data, &filefacts_archive_entries)));
         // Tar family (plain and gzip/bzip2/xz/zstd compressed, and the
         // packages built on them) streams through the same in-memory member
         // window as zips when the archive fits in memory.

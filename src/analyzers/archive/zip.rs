@@ -603,3 +603,91 @@ mod tests {
         );
     }
 }
+
+/// Recover members with false encryption flags only after bounded decompression
+/// reproduces the complete declared size and CRC. Real encryption still takes
+/// the password path; the original forensic flag remains in archive metadata.
+pub(super) fn read_verified_plaintext_member(
+    data: &[u8],
+    entry: &ArchiveEntry,
+    limit: u64,
+) -> Result<Vec<u8>> {
+    if entry.size_bytes > limit {
+        anyhow::bail!("plaintext member exceeds read cap");
+    }
+    let crc = entry
+        .crc32
+        .ok_or_else(|| anyhow::anyhow!("missing plaintext CRC"))?;
+    let bytes = read_indexed_member(data, entry, limit)?;
+    if bytes.len() as u64 != entry.size_bytes || crc32fast::hash(&bytes) != crc {
+        anyhow::bail!("encrypted member is not verified plaintext");
+    }
+    Ok(bytes)
+}
+
+/// Keep truly encrypted APKs on the existing password path. Probe only a
+/// bounded set of flagged files, without allowing one fake flag to suppress
+/// every ordinary DEX member or force extraction through filesystem collisions.
+pub(super) fn only_plaintext_encryption_flags(data: &[u8], entries: &[ArchiveEntry]) -> bool {
+    let mut remaining = 32 * 1024 * 1024u64;
+    let mut seen = 0usize;
+    for entry in entries
+        .iter()
+        .filter(|e| e.encrypted && e.entry_type.as_deref() != Some("directory"))
+    {
+        seen += 1;
+        if seen > 128
+            || entry.size_bytes > remaining
+            || entry.size_bytes > entry.compressed_size.unwrap_or(0).saturating_mul(1000)
+            || read_verified_plaintext_member(data, entry, remaining).is_err()
+        {
+            return false;
+        }
+        remaining -= entry.size_bytes;
+    }
+    seen > 0
+}
+
+#[cfg(test)]
+mod plaintext_flag_tests {
+    use super::*;
+
+    fn entry(bytes: &[u8]) -> ArchiveEntry {
+        ArchiveEntry {
+            path: "classes.dex".into(),
+            size_bytes: bytes.len() as u64,
+            compressed_size: Some(bytes.len() as u64),
+            data_offset: Some(0),
+            compression_method: Some("stored".into()),
+            encrypted: true,
+            crc32: Some(crc32fast::hash(bytes)),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn false_flags_require_complete_size_crc_and_budget() -> Result<()> {
+        let bytes = b"plaintext member";
+        let mut e = entry(bytes);
+        assert_eq!(read_verified_plaintext_member(bytes, &e, 100)?, bytes);
+        assert!(only_plaintext_encryption_flags(bytes, &[e.clone()]));
+        assert!(read_verified_plaintext_member(bytes, &e, 3).is_err());
+        e.crc32 = Some(1);
+        assert!(!only_plaintext_encryption_flags(bytes, &[e.clone()]));
+        e = entry(bytes);
+        e.size_bytes += 1;
+        assert!(read_verified_plaintext_member(bytes, &e, 100).is_err());
+        e = entry(bytes);
+        e.data_offset = Some(u64::MAX);
+        assert!(read_verified_plaintext_member(bytes, &e, 100).is_err());
+        assert!(!only_plaintext_encryption_flags(bytes, &[]));
+        assert!(!only_plaintext_encryption_flags(
+            bytes,
+            &vec![entry(bytes); 129]
+        ));
+        e = entry(bytes);
+        e.size_bytes = 33 * 1024 * 1024;
+        assert!(!only_plaintext_encryption_flags(bytes, &[e]));
+        Ok(())
+    }
+}

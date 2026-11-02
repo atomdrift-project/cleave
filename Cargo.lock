@@ -1417,9 +1417,9 @@ dependencies = [
 
 [[package]]
 name = "ctutils"
-version = "0.4.7"
+version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2376ffd6f96d8a9db59875b4b6b0237d6900b5baf64279714e05493ce64828a"
+checksum = "261af4dc7a06ea8a527a8717d8cbba3417530d6ea14e1edb3de6b67806be474f"
 dependencies = [
  "cmov",
  "subtle",
@@ -1922,7 +1922,7 @@ checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 [[package]]
 name = "filefacts"
 version = "2.0.1"
-source = "git+https://github.com/atomdrift-project/filefacts.git#eeeed3f459cc842934ed91c2601128ee88537f36"
+source = "git+https://github.com/atomdrift-project/filefacts.git#35f4a5c25f773f8b6b282cfaf2a0db7c4f45cd59"
 dependencies = [
  "aes 0.9.4",
  "aho-corasick",
@@ -5112,7 +5112,7 @@ dependencies = [
 [[package]]
 name = "stng"
 version = "3.0.0"
-source = "git+https://github.com/atomdrift-project/stng.git#71facd929d2831808ca19d3194cfec308c13725c"
+source = "git+https://github.com/atomdrift-project/stng.git#b1e9ce719cf38b56a976314d1b5643b2f5287139"
 dependencies = [
  "aho-corasick",
  "base64 0.22.1",
@@ -5137,7 +5137,7 @@ dependencies = [
 [[package]]
 name = "stng-process"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/stng.git#71facd929d2831808ca19d3194cfec308c13725c"
+source = "git+https://github.com/atomdrift-project/stng.git#b1e9ce719cf38b56a976314d1b5643b2f5287139"
 dependencies = [
  "libc",
 ]
@@ -5694,7 +5694,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#eeeed3f459cc842934ed91c2601128ee88537f36"
+source = "git+https://github.com/atomdrift-project/filefacts.git#35f4a5c25f773f8b6b282cfaf2a0db7c4f45cd59"
 dependencies = [
  "cc",
  "tree-sitter",

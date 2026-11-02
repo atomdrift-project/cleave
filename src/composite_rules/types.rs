@@ -948,7 +948,7 @@ impl From<filefacts::FileType> for FileType {
             Ff::IrcII => Self::IrcII,
             Ff::Markdown => Self::Markdown,
             Ff::Text => Self::Text,
-            Ff::Data | Ff::Ani | Ff::Nrbf => Self::Data,
+            Ff::Data | Ff::Ani | Ff::Nrbf | Ff::FatBootSector => Self::Data,
             Ff::PgpSignature => Self::PgpSignature,
             Ff::Yaml => Self::Yaml,
             // Archives / packages
@@ -1077,6 +1077,7 @@ impl FileType {
             FileType::Rust => "rust",
             FileType::Go => "go",
             FileType::Java => "java",
+            FileType::Kotlin => "kotlin",
             FileType::Ruby => "ruby",
             FileType::Shell => "shell",
             FileType::Php => "php",
@@ -1494,7 +1495,7 @@ impl FileType {
             "makefile" | "make" | "mk" | "mak" => FileType::Makefile,
             "dockerfile" | "docker" | "containerfile" => FileType::Dockerfile,
             "text" | "txt" | "b64" | "base64" => FileType::Text,
-            "data" | "dat" | "bin" | "payload" | "raw" => FileType::Data,
+            "data" | "dat" | "bin" | "payload" | "raw" | "fat_boot_sector" => FileType::Data,
             "yaml" | "yml" => FileType::Yaml,
             "json" => FileType::Json,
             "gyp" | "gypi" | "binding.gyp" => FileType::Gyp,
@@ -1850,6 +1851,11 @@ mod tests {
     fn recognized_binary_formats_use_data_rules() {
         assert_eq!(FileType::from_str("ani"), FileType::Data);
         assert_eq!(FileType::from_str("nrbf"), FileType::Data);
+        assert_eq!(FileType::from_str("fat_boot_sector"), FileType::Data);
+        assert_eq!(
+            FileType::from(filefacts::FileType::FatBootSector),
+            FileType::Data
+        );
     }
 
     #[test]

@@ -1240,7 +1240,8 @@ impl PackageJsonAnalyzer {
             "color-",
             "colours-",
             "lodash-",
-            "axios-",
+            // Axios integrations use axios-* names; the prefix alone is not
+            // an attack indicator. Keep typo and offensive-token checks below.
             "babel-",
             "eslint-config-",
             "webpack-",
@@ -1319,6 +1320,8 @@ impl PackageJsonAnalyzer {
             "preact",
             "asynct",
             "axios",
+            // A distinct HTTP client; name similarity alone is not impersonation.
+            "gaxios",
             "axios-proxy-builder",
             "babel-core",
             "babel-cli",
@@ -1861,6 +1864,38 @@ mod tests {
     }
 
     #[test]
+    fn gaxios_does_not_hide_an_unrelated_typosquat() {
+        let analyzer = PackageJsonAnalyzer::new();
+        assert_eq!(analyzer.check_typosquat("gaxios"), None);
+        assert_eq!(analyzer.check_typosquat("axois"), Some("axios"));
+        for (dependencies, expected) in [
+            (r#"{"gaxios":"^7.0.0"}"#, 0),
+            (r#"{"gaxios":"^7.0.0","axois":"^1.0.0"}"#, 1),
+        ] {
+            let content = format!(
+                r#"{{"name":"http-client-consumer","version":"1.0.0","dependencies":{dependencies}}}"#
+            );
+            let report = analyzer
+                .analyze_package(Path::new("package.json"), &content)
+                .unwrap();
+            let findings: Vec<_> = report
+                .findings
+                .iter()
+                .filter(|finding| finding.id == "supply-chain/typosquat")
+                .collect();
+            assert_eq!(findings.len(), expected);
+            if expected == 1 {
+                assert!(
+                    findings[0]
+                        .evidence
+                        .iter()
+                        .any(|e| e.value == "axois -> axios")
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_npm_alias_to_typosquat_target_is_not_flagged() {
         let content = r#"{
             "name": "legacy-typescript-consumer",
@@ -1926,6 +1961,45 @@ mod tests {
     fn test_types_devdependency_is_not_suspicious() {
         let analyzer = PackageJsonAnalyzer::new();
         assert!(!analyzer.is_suspicious_package_name("@types/color-convert"));
+    }
+
+    #[test]
+    fn axios_integration_names_do_not_imply_malicious_packages() {
+        let analyzer = PackageJsonAnalyzer::new();
+        for name in [
+            "axios-cookiejar-support",
+            "axios-http2-adapter",
+            "axios-custom-integration",
+            "@vendor/axios-cookiejar-support",
+        ] {
+            assert!(!analyzer.is_suspicious_package_name(name), "{name}");
+            assert_eq!(analyzer.check_typosquat(name), None, "{name}");
+        }
+        // Removing the generic prefix must retain the actual abuse clues.
+        assert!(analyzer.is_suspicious_package_name("axios-stealer"));
+        assert!(analyzer.is_suspicious_package_name("axios-backdoor"));
+        assert_eq!(analyzer.check_typosquat("axois"), Some("axios"));
+    }
+
+    #[test]
+    fn axios_integration_manifest_and_dependencies_have_no_suspicion_claim() {
+        let content = r#"{
+            "name": "axios-custom-integration",
+            "version": "1.2.3",
+            "dependencies": { "axios-cookiejar-support": "^5.0.5" }
+        }"#;
+        let report = PackageJsonAnalyzer::new()
+            .analyze_package(Path::new("package.json"), content)
+            .unwrap();
+        for id in [
+            "supply-chain/suspicious-name",
+            "supply-chain/suspicious-package",
+        ] {
+            assert!(
+                !report.findings.iter().any(|finding| finding.id == id),
+                "{id}"
+            );
+        }
     }
 
     #[test]

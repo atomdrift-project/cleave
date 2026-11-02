@@ -1102,6 +1102,44 @@ fn is_benign_archive_symlink_escape(path: &str) -> bool {
         if interpreter_shim {
             return true;
         }
+        // Shared-library development links and loader shims in rootfs exports.
+        // Keep both sides constrained; a user-data link to a system library is
+        // still an escape, as is a library path pointing to a sensitive file.
+        let library_link = [
+            "usr/lib/",
+            "usr/lib32/",
+            "usr/lib64/",
+            "usr/libx32/",
+            "lib/",
+            "lib32/",
+            "lib64/",
+            "libx32/",
+        ]
+        .iter()
+        .any(|prefix| link_name.starts_with(prefix));
+        let library_target = ["/lib/", "/lib32/", "/lib64/", "/libx32/"]
+            .iter()
+            .any(|prefix| target.starts_with(prefix));
+        let normal_library_path = !link_name.split('/').any(|part| part == "..")
+            && !target.split('/').any(|part| part == "..");
+        if library_link && library_target && normal_library_path {
+            return true;
+        }
+        let standard_system_link = matches!(
+            (link_name, target),
+            ("bin/pidof" | "usr/bin/pidof", "/sbin/killall5")
+                | ("dev/core", "/proc/kcore")
+                | ("dev/fd", "/proc/self/fd")
+                | ("etc/sgml/catalog", "/var/lib/sgml-base/supercatalog")
+                | ("usr/share/locale/locale.alias", "/etc/locale.alias")
+        );
+        let masked_service = link_name.starts_with("lib/systemd/system/")
+            && link_name.ends_with(".service")
+            && target == "/dev/null"
+            && !link_name.split('/').any(|part| part == "..");
+        if standard_system_link || masked_service {
+            return true;
+        }
         let system_link = link_name.starts_with("etc/")
             || ["lib/", "lib32/", "lib64/", "libx32/"]
                 .iter()
@@ -3166,6 +3204,37 @@ mod tests {
         assert!(!is_benign_archive_symlink_escape(
             "venv/bin/python3 -> /etc/shadow"
         ));
+    }
+
+    #[test]
+    fn rootfs_standard_symlinks_keep_both_operands_constrained() {
+        for link in [
+            "usr/lib64/ld-linux-x86-64.so.2 -> /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+            "usr/lib/x86_64-linux-gnu/libdl.so -> /lib/x86_64-linux-gnu/libdl.so.2",
+            "usr/bin/pidof -> /sbin/killall5",
+            "bin/pidof -> /sbin/killall5",
+            "dev/core -> /proc/kcore",
+            "dev/fd -> /proc/self/fd",
+            "lib/systemd/system/bootlogs.service -> /dev/null",
+            "etc/sgml/catalog -> /var/lib/sgml-base/supercatalog",
+            "usr/share/locale/locale.alias -> /etc/locale.alias",
+        ] {
+            assert!(is_benign_archive_symlink_escape(link), "{link}");
+        }
+        for link in [
+            "data/libdl.so -> /lib/x86_64-linux-gnu/libdl.so.2",
+            "usr/lib64/loader -> /etc/shadow",
+            "usr/lib64/loader -> /lib/../../etc/shadow",
+            "usr/lib/../../data/loader -> /lib/loader",
+            "usr/bin/pidof -> /sbin/attacker",
+            "dev/core -> /etc/passwd",
+            "data/fd -> /proc/self/fd",
+            "lib/systemd/system/../../data/x.service -> /dev/null",
+            "etc/sgml/catalog -> /var/lib/other/secret",
+            "usr/share/locale/locale.alias -> /etc/shadow",
+        ] {
+            assert!(!is_benign_archive_symlink_escape(link), "{link}");
+        }
     }
 
     #[test]

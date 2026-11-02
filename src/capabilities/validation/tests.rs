@@ -9016,6 +9016,61 @@ mod section_filter_validation_tests {
     }
 
     #[test]
+    fn reviewed_redshell_injection_menu_exception_is_matcher_scoped() {
+        let mut fact = text_trait(
+            "well-known/malware/backdoor/redc2::redshell-injection-menu",
+            vec![FileType::Elf],
+        );
+        fact.r#if = crate::yaml::from_str(
+            "type: text\nregex: '/redshell bin -inject <proc> <file\\.bin>[\\s\\S]{0,220}/redshell elf -inject <pid> <file>'\n",
+        )
+        .unwrap();
+        assert!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty());
+        assert!(find_wellknown_missing_section_filter(&[fact.clone()], &HashMap::new()).is_empty());
+        let mut wrong_id = fact.clone();
+        wrong_id.id.push_str("-other");
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[wrong_id.clone()], &HashMap::new()).len(),
+            1
+        );
+        assert_eq!(
+            find_wellknown_missing_section_filter(&[wrong_id], &HashMap::new()).len(),
+            1
+        );
+        let mut wrong_case = fact.clone();
+        if let Condition::Text(query) = &mut wrong_case.r#if {
+            query.case_insensitive = true;
+        }
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[wrong_case.clone()], &HashMap::new()).len(),
+            1
+        );
+        assert_eq!(
+            find_wellknown_missing_section_filter(&[wrong_case], &HashMap::new()).len(),
+            1
+        );
+        let mut wrong_crit = fact.clone();
+        wrong_crit.crit = crate::types::Criticality::Suspicious;
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[wrong_crit.clone()], &HashMap::new()).len(),
+            1
+        );
+        assert_eq!(
+            find_wellknown_missing_section_filter(&[wrong_crit], &HashMap::new()).len(),
+            1
+        );
+        fact.r#if = crate::yaml::from_str("type: text\nregex: changed\n").unwrap();
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+            1
+        );
+        assert_eq!(
+            find_wellknown_missing_section_filter(&[fact], &HashMap::new()).len(),
+            1
+        );
+    }
+
+    #[test]
     fn reviewed_linfeng_markers_keep_whole_file_scope_only_for_exact_matches() {
         for (id, marker, crit) in [
             (

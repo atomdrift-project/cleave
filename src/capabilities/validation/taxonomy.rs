@@ -3480,6 +3480,17 @@ fn is_reviewed_linfeng_marker(t: &TraitDefinition) -> bool {
                 && q.exact.is_none() && q.regex.is_none() && q.word.is_none())
 }
 
+// RedShell's paired operator commands are a named-family observation whose
+// bytes may occur in any ELF section and whose meaning is independent of size.
+// The exact ID, severity and matcher keep this exception narrowly reviewable.
+fn is_reviewed_redshell_injection_menu(t: &TraitDefinition) -> bool {
+    t.id == "well-known/malware/backdoor/redc2::redshell-injection-menu"
+        && t.crit == Criticality::Notable
+        && matches!(&t.r#if, Condition::Text(q)
+            if q.regex.as_deref() == Some(r"/redshell bin -inject <proc> <file\.bin>[\s\S]{0,220}/redshell elf -inject <pid> <file>")
+                && !q.case_insensitive && q.exact.is_none() && q.substr.is_none() && q.word.is_none())
+}
+
 // These exact ShellObject markers identify encoded family strings wherever
 // they occur in a PE. Their meaning does not depend on a section name.
 fn is_reviewed_shellobject_marker(t: &TraitDefinition) -> bool {
@@ -3541,6 +3552,7 @@ pub(crate) fn find_wellknown_missing_size_filter(
                     && matches!(t.crit, Criticality::Component | Criticality::Notable))
                 && !is_low_tier_named_binary_fact(t)
                 && !is_reviewed_linfeng_marker(t)
+                && !is_reviewed_redshell_injection_menu(t)
                 && !is_reviewed_stagecomp_marker(t)
                 // A Go import path is provenance evidence, not a size-bounded identity.
                 && t.id != "well-known/tool/detection/titus::titus-secret-scan-implementation"
@@ -3719,6 +3731,7 @@ pub(crate) fn find_wellknown_missing_section_filter(
                 // The GeTaOEP banner can appear in any section or overlay.
                 && t.id != "well-known/tool/reverse-engineering/oep-finder::geta-oep-banner-marker"
                 && !is_reviewed_linfeng_marker(t)
+                && !is_reviewed_redshell_injection_menu(t)
                 && !is_reviewed_shellobject_marker(t)
                 && !is_reviewed_utility_reference(t)
                 // The reviewed star format and config references can occur in

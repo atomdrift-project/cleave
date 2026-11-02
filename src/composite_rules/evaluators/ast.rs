@@ -1251,7 +1251,8 @@ pub(crate) fn batch_ast_queries_with_index(
                 boolean_queries,
                 true,
             ) {
-                out.get_or_insert_with(FxHashMap::default).extend(comment_out);
+                out.get_or_insert_with(FxHashMap::default)
+                    .extend(comment_out);
             }
         }
     }

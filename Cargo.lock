@@ -58,9 +58,9 @@ dependencies = [
 
 [[package]]
 name = "aes"
-version = "0.9.3"
+version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35f0f96ce78e38c3dc6d8948aa8163d06385be74000f3c7a95bf1eef35d3ea32"
+checksum = "fc0fc36d7440d015b45468ba08a21e80e056ebbd014c611c6298bb7503e04bd1"
 dependencies = [
  "cipher 0.5.2",
  "cpubits",
@@ -670,9 +670,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.10.0"
+version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86e055fa6e3e40ad6187ba25b6855eeb635d5271f8e0f0e1e9a5826b8d75bea0"
+checksum = "375989decec1a0fa424442bed520fa12ede43a48475ce8c7417d2c69b32b5f6b"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -850,7 +850,7 @@ checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 name = "cleave"
 version = "3.0.0-beta.3"
 dependencies = [
- "aes 0.9.3",
+ "aes 0.9.4",
  "aes-gcm",
  "aho-corasick",
  "anyhow",
@@ -1922,9 +1922,9 @@ checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 [[package]]
 name = "filefacts"
 version = "2.0.1"
-source = "git+https://github.com/atomdrift-project/filefacts.git#811d82149b6f658d7469c9e3a6cf1921576d3573"
+source = "git+https://github.com/atomdrift-project/filefacts.git#eeeed3f459cc842934ed91c2601128ee88537f36"
 dependencies = [
- "aes 0.9.3",
+ "aes 0.9.4",
  "aho-corasick",
  "base64 0.22.1",
  "cab",
@@ -3935,9 +3935,9 @@ dependencies = [
 
 [[package]]
 name = "psl"
-version = "2.1.245"
+version = "2.1.246"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46cce9bc841c0eeb395275a775d11e3cc91b904e6ab370a9a42369e111b3038e"
+checksum = "27d58bd13c235442118460335daf360f0fefaa9035ec4ad957f851d738e7b7d6"
 dependencies = [
  "psl-types",
 ]
@@ -5112,7 +5112,7 @@ dependencies = [
 [[package]]
 name = "stng"
 version = "3.0.0"
-source = "git+https://github.com/atomdrift-project/stng.git#1752542f3fcff2af676441766eba11bf13001687"
+source = "git+https://github.com/atomdrift-project/stng.git#71facd929d2831808ca19d3194cfec308c13725c"
 dependencies = [
  "aho-corasick",
  "base64 0.22.1",
@@ -5137,7 +5137,7 @@ dependencies = [
 [[package]]
 name = "stng-process"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/stng.git#1752542f3fcff2af676441766eba11bf13001687"
+source = "git+https://github.com/atomdrift-project/stng.git#71facd929d2831808ca19d3194cfec308c13725c"
 dependencies = [
  "libc",
 ]
@@ -5694,7 +5694,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#811d82149b6f658d7469c9e3a6cf1921576d3573"
+source = "git+https://github.com/atomdrift-project/filefacts.git#eeeed3f459cc842934ed91c2601128ee88537f36"
 dependencies = [
  "cc",
  "tree-sitter",
@@ -7114,11 +7114,11 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "9.2.1"
+version = "9.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "848dad21639597378c3be94c59fd4de683f0f6d8a5387575896e1245737d4f37"
+checksum = "e408c6cc4699dd017d53dc080cd51c2cea2b5354af57a1479bd265ed42911487"
 dependencies = [
- "aes 0.9.3",
+ "aes 0.9.4",
  "bzip2 0.6.1",
  "constant_time_eq",
  "crc32fast",
@@ -7127,6 +7127,7 @@ dependencies = [
  "getrandom 0.4.3",
  "hmac 0.13.0",
  "indexmap",
+ "libc",
  "lzma-rust2 0.23.0",
  "memchr",
  "nix",

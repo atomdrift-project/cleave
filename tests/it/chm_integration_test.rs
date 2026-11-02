@@ -222,7 +222,8 @@ fn softpeak_live_real_sample_is_hostile_by_behavior() {
             .and_then(|t| t["crit"].as_i64())
     };
 
-    let hostile = "objectives/execution/trigger/document::htmlhelp-hidden-bypass-scripted-execution";
+    let hostile =
+        "objectives/execution/trigger/document::htmlhelp-hidden-bypass-scripted-execution";
     assert_eq!(
         crit(hostile),
         Some(HOSTILE),

@@ -1199,6 +1199,88 @@ pub(crate) fn batch_ast_queries_with_index(
     node_text: Option<&NodeTextIndex>,
     boolean_queries: Option<&rustc_hash::FxHashSet<String>>,
 ) -> Option<FxHashMap<String, ConditionResult>> {
+    let mut out = batch_ast_bank(
+        tree,
+        source,
+        file_type,
+        query_strs,
+        deadline,
+        cancellation,
+        cpu_budget_override,
+        node_text,
+        boolean_queries,
+        false,
+    );
+    // Comment-ignoring queries read a comment-masked reparse, so they share a
+    // second walk over that tree instead of walking it one query at a time
+    // (each also outside the structural gate). The view is built only when
+    // two of them can match the file's literals; when it cannot be built
+    // they stay on the per-query path, which reports why.
+    if comment_bank_enabled() && source.len() <= AST_QUERY_BYTE_LIMIT {
+        let lang = &*tree.language();
+        let candidates = query_strs
+            .iter()
+            .filter(|q| batch_leaves_out_by_design(q) && count_unbounded_any_wildcards(q) < 2)
+            .filter_map(|q| cached_ast_query(lang, file_type, q))
+            .filter(|compiled| compiled.ignore_comments && compiled.may_match(source.as_bytes()))
+            .take(2)
+            .count();
+        if candidates >= 2
+            && let Ok(view) = super::ast_comment_view::build(
+                tree,
+                source,
+                AST_QUERY_BYTE_LIMIT,
+                AST_QUERY_CPU_BUDGET,
+                deadline,
+                cancellation,
+            )
+        {
+            let (view_tree, view_index) = match &view {
+                Some(view) => (view, None),
+                None => (tree, node_text),
+            };
+            if let Some(comment_out) = batch_ast_bank(
+                view_tree,
+                source,
+                file_type,
+                query_strs,
+                deadline,
+                cancellation,
+                cpu_budget_override,
+                view_index,
+                boolean_queries,
+                true,
+            ) {
+                out.get_or_insert_with(FxHashMap::default).extend(comment_out);
+            }
+        }
+    }
+    out
+}
+
+/// Whether comment-ignoring queries share a walk (`CLEAVE_AST_COMMENT_BATCH`,
+/// on by default).
+fn comment_bank_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| crate::env::bool_var("CLEAVE_AST_COMMENT_BATCH").unwrap_or(true))
+}
+
+/// One shared walk for the queries of one tree view: ordinary queries over the
+/// parsed tree (`comment_view == false`) or comment-ignoring queries over the
+/// comment-masked reparse (`comment_view == true`).
+#[allow(clippy::too_many_arguments)]
+fn batch_ast_bank(
+    tree: &tree_sitter::Tree,
+    source: &str,
+    file_type: FileType,
+    query_strs: &[&str],
+    deadline: Option<Instant>,
+    cancellation: Option<&AtomicBool>,
+    cpu_budget_override: Option<std::time::Duration>,
+    node_text: Option<&NodeTextIndex>,
+    boolean_queries: Option<&rustc_hash::FxHashSet<String>>,
+    comment_view: bool,
+) -> Option<FxHashMap<String, ConditionResult>> {
     if query_strs.len() < 2 || source.len() > AST_QUERY_BYTE_LIMIT {
         return None;
     }
@@ -1237,9 +1319,9 @@ pub(crate) fn batch_ast_queries_with_index(
         // early and their matches later in the file came and went with load.
         // Left out of the map, it runs alone under its own budget.
         if let Some(compiled) = cached_ast_query(lang, file_type, q) {
-            // This query needs a different tree. Leave it out of the raw-tree
-            // bank so the ordinary per-query path can use its cached view.
-            if compiled.ignore_comments {
+            // A comment-ignoring query reads the comment-masked tree; each
+            // bank holds only the queries of the tree it walks.
+            if compiled.ignore_comments != comment_view {
                 continue;
             }
             let mut enabled: Vec<bool> = (0..compiled.query.pattern_count())

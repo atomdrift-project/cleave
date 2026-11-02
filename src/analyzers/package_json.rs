@@ -858,29 +858,9 @@ impl PackageJsonAnalyzer {
                 }
             }
 
-            // Check for PHP endpoints (common C2 pattern)
-            if script.contains(".php") {
-                report.add_finding(
-                    Finding::indicator(
-                        "command-and-control/endpoint/php".to_string(),
-                        format!(
-                            "Script '{}' contacts PHP endpoint (common C2 pattern)",
-                            name
-                        ),
-                        0.75,
-                    )
-                    .with_criticality(Criticality::Notable)
-                    .with_attack("T1071.001")
-                    .with_evidence(vec![Evidence {
-                        method: "pattern".to_string(),
-                        source: "package.json".to_string(),
-                        value: truncate_str(script, 200).to_string(),
-                        location: json_entry_offset(content, "scripts", name)
-                            .map(|o| format!("offset:{o}")),
-                        ..Default::default()
-                    }]),
-                );
-            }
+            // PHP URL references are ordinary resource observations, not C2.
+            // extract_script_strings retains actual URLs for canonical YAML
+            // URL rules; a local filename ending in .php proves no endpoint.
 
             // Surface suspicious-looking domain patterns as package facts. The
             // policy decision to escalate them belongs in YAML, where lifecycle
@@ -1666,6 +1646,49 @@ mod tests {
                 .iter()
                 .any(|f| f.id.contains("install-hook"))
         );
+    }
+
+    #[test]
+    fn local_php_scripts_do_not_claim_command_and_control() {
+        let content = r#"{"name":"formatter","version":"1.0.0","scripts":{
+            "check":"php vendor/bin/php-cs-fixer fix --config=.php-cs-fixer.dist.php",
+            "test":"php -f test.php"
+        }}"#;
+        let report = PackageJsonAnalyzer::new()
+            .analyze_package(Path::new("package.json"), content)
+            .unwrap();
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.id == "command-and-control/endpoint/php")
+        );
+        assert!(
+            !report
+                .strings
+                .iter()
+                .any(|s| s.string_type == Some(StringType::Url))
+        );
+    }
+
+    #[test]
+    fn php_script_urls_remain_visible_without_c2_claims() {
+        let content = r#"{"name":"api-client","version":"1.0.0","scripts":{
+            "fetch":"curl https://example.test/api.php?format=json"
+        }}"#;
+        let report = PackageJsonAnalyzer::new()
+            .analyze_package(Path::new("package.json"), content)
+            .unwrap();
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.id == "command-and-control/endpoint/php")
+        );
+        assert!(report.strings.iter().any(|s| {
+            s.string_type == Some(StringType::Url)
+                && s.value.as_str() == "https://example.test/api.php?format=json"
+        }));
     }
 
     #[test]

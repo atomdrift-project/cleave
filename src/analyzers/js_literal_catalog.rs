@@ -16,6 +16,26 @@ pub(crate) fn is_data_only(ast: filefacts::SourceAst<'_>) -> bool {
     if statements.is_empty() || statements.len() > 4096 {
         return false;
     }
+    // Exporting a literal string exposes data; it does not execute the source
+    // text inside it. Keep this deliberately narrower than arbitrary exports.
+    if statements.len() == 1 {
+        let statement = statements[0];
+        if statement.kind() == "expression_statement" {
+            let expressions = children(statement);
+            if expressions.len() == 1 && expressions[0].kind() == "assignment_expression" {
+                let assignment = expressions[0];
+                if assignment
+                    .child_by_field_name("left")
+                    .is_some_and(|left| ast.source[left.byte_range()] == *"module.exports")
+                    && assignment
+                        .child_by_field_name("right")
+                        .is_some_and(|right| right.kind() == "string")
+                {
+                    return true;
+                }
+            }
+        }
+    }
     statements.into_iter().all(|n| {
         if n.kind() != "lexical_declaration" || !ast.source[n.byte_range()].starts_with("const ") {
             return false;
@@ -50,6 +70,16 @@ mod tests {
     #[test]
     fn multiple_constants_are_data() {
         assert!(check("const a='hello', b='world'; const c='\\u0061';"));
+    }
+    #[test]
+    fn directly_exported_literal_is_data() {
+        assert!(check("module.exports = 'require(\"https\").get(url);';"));
+        assert!(check(
+            "// template\nmodule.exports = 'postcss([helper(options)])';"
+        ));
+        assert!(!check("module.exports = 'example'; eval(module.exports);"));
+        assert!(!check("module.exports = loadCode();"));
+        assert!(!check("module.exports = `prefix ${loadCode()}`;"));
     }
     #[test]
     fn invoked_or_exported_source_is_not_a_catalog() {

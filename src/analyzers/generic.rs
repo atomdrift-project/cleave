@@ -254,6 +254,17 @@ impl GenericAnalyzer {
                 );
             }
 
+            // DEX has no source AST, but its const-string instructions are
+            // format-defined literals. Preserve filefacts' source anchors so
+            // literal rules can distinguish used constants from the string pool.
+            if self.file_type == FileType::Dex
+                && let Some(ctx) = source_ctx
+            {
+                report
+                    .strings
+                    .extend(crate::strings::dex_literal_strings(ctx));
+            }
+
             if self.detect_embedded {
                 // Analyze embedded code in strings
                 let t_embedded = std::time::Instant::now();

@@ -1595,6 +1595,43 @@ mod duplicate_tests {
     }
 
     #[test]
+    fn regex_literal_overlap_respects_call_arguments() {
+        let generic = create_symbol_exact_with_kind(
+            "micro-behaviors/test::open",
+            "fopen",
+            SymbolKind::Call,
+            vec![FileType::Php],
+            "open.yaml",
+        );
+        let append = create_symbol_exact_with_arg(
+            "micro-behaviors/test::append",
+            "fopen",
+            "a",
+            vec![FileType::Php],
+            "append.yaml",
+        );
+        let mut qualified_append = append.clone();
+        qualified_append.id = "micro-behaviors/test::qualified-append".into();
+        qualified_append.defined_in = "qualified.yaml".into();
+        if let Condition::Symbol(query) = &mut qualified_append.r#if {
+            query.exact = None;
+            query.regex = Some(r"^\\?fopen$".into());
+        }
+        assert!(find_regex_literal_overlap_issues(&[generic, qualified_append.clone()]).is_empty());
+        let mut write = append.clone();
+        if let Condition::Symbol(query) = &mut write.r#if {
+            query.arg.as_mut().unwrap().exact = Some("w".into());
+        }
+        assert!(find_regex_literal_overlap_issues(&[write, qualified_append.clone()]).is_empty());
+        // Equivalent filters still represent overlap; do not silence the
+        // duplicate merely because both conditions carry an arg predicate.
+        assert_eq!(
+            find_regex_literal_overlap_issues(&[append, qualified_append]).len(),
+            1
+        );
+    }
+
+    #[test]
     fn test_broad_regex_matching_literal_no_warning() {
         let exact = create_string_exact(
             "test::exact",

@@ -41,6 +41,21 @@ pub(crate) fn scpt_literal_strings(
         .collect()
 }
 
+/// Project parser-referenced DEX constants into the precise literal section.
+/// Raw string-pool names remain ordinary text and cannot satisfy literal rules.
+pub(crate) fn dex_literal_strings(
+    ctx: &crate::analysis_context::AnalysisContext<'_>,
+) -> Vec<StringInfo> {
+    if ctx.parsed.fileid().file_type() != filefacts::fileid::FileType::Dex {
+        return Vec::new();
+    }
+    ctx.parsed
+        .literals()
+        .iter()
+        .map(scpt_literal_string)
+        .collect()
+}
+
 fn scpt_literal_string(literal: &filefacts::Literal) -> StringInfo {
     // Only decoders cleave can name contribute a chain; anything else is a
     // literal the parser read verbatim.

@@ -75,6 +75,7 @@ pub(crate) mod php_blocks;
 pub(crate) mod pickle;
 mod png;
 pub(crate) mod python_encoded_command;
+pub(crate) mod python_literal_catalog;
 pub(crate) mod rtf;
 pub(crate) mod sfx_detector;
 pub(crate) mod vsix_manifest;

@@ -299,10 +299,7 @@ pub(super) fn metadata_content_dirs<'a>(input: &'a ValidationInput<'a>) -> Repor
     })
 }
 
-/// `metadata/file/string/` is a legacy namespace, not a valid
-/// home for new text evidence. Grandfather exact existing IDs
-/// while their definitions move; do not allow additions even in
-/// an established source directory.
+/// The retired generic string and literal namespaces have no valid definitions.
 pub(super) fn new_metadata_file_ids<'a>(input: &'a ValidationInput<'a>) -> Report<'a> {
     report(move |warnings| {
         let rule_ids: Vec<String> = input
@@ -318,7 +315,7 @@ pub(super) fn new_metadata_file_ids<'a>(input: &'a ValidationInput<'a>) -> Repor
                 new_string_ids.len()
             );
             eprintln!(
-                "   String literals are file content, not structural metadata. Place each rule with the subject it evidences; only exact legacy IDs are temporarily allowed:\n"
+                "   String literals are file content, not structural metadata. Place each rule with the subject it evidences:\n"
             );
             for rule_id in &new_string_ids {
                 eprintln!("   {}", rule_id);
@@ -331,17 +328,14 @@ pub(super) fn new_metadata_file_ids<'a>(input: &'a ValidationInput<'a>) -> Repor
         }
 
         // `metadata/file/literal/` is also closed: context-only
-        // literals must move to a subject home or remain on reviewed
-        // hold, not grow a generic string-evidence bucket.
+        // literal evidence must have a subject-specific home.
         let new_literal_ids = find_new_metadata_file_literal_ids(&rule_ids);
         if !new_literal_ids.is_empty() {
             eprintln!(
                 "\n❌ ERROR: {} new rule ID(s) under legacy metadata/file/literal/",
                 new_literal_ids.len()
             );
-            eprintln!(
-                "   Literal evidence needs a subject-specific home; only exact legacy IDs are temporarily allowed:\n"
-            );
+            eprintln!("   Literal evidence needs a subject-specific home:\n");
             for rule_id in &new_literal_ids {
                 eprintln!("   {}", rule_id);
             }

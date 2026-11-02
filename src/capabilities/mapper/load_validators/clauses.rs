@@ -412,7 +412,7 @@ pub(super) fn overlapping_scope_duplicates<'a>(input: &'a ValidationInput<'a>) -
 /// Traits whose logic is identical and that differ only in `for:` or
 /// `platforms:` should be one trait.
 pub(super) fn for_only_duplicates<'a>(input: &'a ValidationInput<'a>) -> Report<'a> {
-    let for_duplicates = find_for_only_duplicates(input.trait_definitions);
+    let for_duplicates = find_for_only_duplicates(input.trait_definitions, input.rule_source_files);
     report(move |warnings| {
         if !for_duplicates.is_empty() {
             eprintln!(

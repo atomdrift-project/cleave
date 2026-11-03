@@ -3502,16 +3502,28 @@ fn is_low_tier_named_binary_fact(t: &TraitDefinition) -> bool {
             // the file, and is meaningful regardless of its size.
             let plex_network_route = t.id
                 == "well-known/app/media/plex::plex-plugin-network-function-route"
-                && q.regex.as_deref() == Some(r"com\.plexapp\.agents\.[\w.]+(/|%2[fF])function(/|%2[fF])GetResultFromNetwork")
-                && q.exact.is_none() && q.substr.is_none() && q.word.is_none();
+                && q.regex.as_deref()
+                    == Some(
+                        r"com\.plexapp\.agents\.[\w.]+(/|%2[fF])function(/|%2[fF])GetResultFromNetwork",
+                    )
+                && q.exact.is_none()
+                && q.substr.is_none()
+                && q.word.is_none();
             // A name in read-only data is a reference to the utility, not
             // an ownership or execution claim, regardless of carrier size.
             let mshta_name_reference = t.id
                 == "well-known/app/system/windows-mshta::mshta-exe-literal"
                 && q.section.as_deref() == Some("rdata")
                 && q.exact.as_deref() == Some("mshta.exe")
-                && q.substr.is_none() && q.regex.is_none() && q.word.is_none();
-            resource_label || plex_preference_name || plex_network_route || schneider_product_reference || netscape_name_reference || mshta_name_reference
+                && q.substr.is_none()
+                && q.regex.is_none()
+                && q.word.is_none();
+            resource_label
+                || plex_preference_name
+                || plex_network_route
+                || schneider_product_reference
+                || netscape_name_reference
+                || mshta_name_reference
         }
         _ => false,
     }
@@ -3599,9 +3611,11 @@ fn is_reviewed_installer_tool_fact(t: &TraitDefinition) -> bool {
         "well-known/app/system/sshtty::sshtty-server-crate-marker" => {
             ("whole-substr", "sshtty::server", "")
         }
-        "well-known/app/system/sshtty::sshtty-terminal-banner" => {
-            ("whole-substr", "Browser terminal with groups and tabs that keeps your shells running", "")
-        }
+        "well-known/app/system/sshtty::sshtty-terminal-banner" => (
+            "whole-substr",
+            "Browser terminal with groups and tabs that keeps your shells running",
+            "",
+        ),
         // These are product-specific path references, not claims that the
         // containing binary is the product. Preserve whole-file matching.
         "well-known/app/security/eset::eset-update-manifest-path" => {
@@ -4508,14 +4522,18 @@ fn is_reviewed_remote_tool_reference(t: &TraitDefinition) -> bool {
         return false;
     }
     let expected = match t.id.as_str() {
-        "well-known/tool/offensive/impacket::impacket-psexec-script-reference" =>
-            r"(?i)\bpsexec\.py\b",
-        "well-known/tool/offensive/impacket::impacket-wmiexec-script-reference" =>
-            r"(?i)(impacket[\\/]examples[\\/]wmiexec\.py|wmiexec\.py)\b",
-        "well-known/tool/offensive/impacket::impacket-wmiexec-target" =>
-            r"(?i)\bwmiexec\.py\b[^\r\n]{0,180}@(\[[^\]\r\n]{1,40}\]|[A-Za-z0-9_.-]+)",
-        "well-known/tool/sysadmin/sysinternals::psexec-remote-invocation" =>
-            r#"(?i)\bpsexec(64)?(\.exe)?\b[^\r\n]{0,160}\s+["']?\\\\[\w.%${}<>-]{1,80}(\s|["']|$)"#,
+        "well-known/tool/offensive/impacket::impacket-psexec-script-reference" => {
+            r"(?i)\bpsexec\.py\b"
+        }
+        "well-known/tool/offensive/impacket::impacket-wmiexec-script-reference" => {
+            r"(?i)(impacket[\\/]examples[\\/]wmiexec\.py|wmiexec\.py)\b"
+        }
+        "well-known/tool/offensive/impacket::impacket-wmiexec-target" => {
+            r"(?i)\bwmiexec\.py\b[^\r\n]{0,180}@(\[[^\]\r\n]{1,40}\]|[A-Za-z0-9_.-]+)"
+        }
+        "well-known/tool/sysadmin/sysinternals::psexec-remote-invocation" => {
+            r#"(?i)\bpsexec(64)?(\.exe)?\b[^\r\n]{0,160}\s+["']?\\\\[\w.%${}<>-]{1,80}(\s|["']|$)"#
+        }
         _ => return false,
     };
     matches!(&t.r#if, Condition::Text(q)
@@ -4531,29 +4549,36 @@ fn is_reviewed_dotnet_tool_name_reference(t: &TraitDefinition) -> bool {
         return false;
     }
     let (kind, expected) = match t.id.as_str() {
-        "well-known/lib/runtime/managed/dotnet-runtime::servicemodelreg-exe-name" =>
-            ("regex", r"(?i)\bServiceModelReg\.exe\b"),
-        "well-known/lib/runtime/managed/dotnet-runtime::addinprocess32-exe-name" =>
-            ("regex", r"(?i)\bAddInProcess32\.exe\b"),
-        "well-known/lib/runtime/managed/dotnet-runtime::regasm-exe-name" =>
-            ("regex", r"(?i)\bRegAsm\.exe\b"),
-        "well-known/lib/runtime/managed/dotnet-runtime::installutil-exe-name" =>
-            ("regex", r"(?i)\bInstallUtil\.exe\b"),
-        "well-known/lib/runtime/managed/dotnet-runtime::mscorsvw-exe-name" =>
-            ("regex", r"(?i)\bmscorsvw\.exe\b"),
-        "well-known/lib/runtime/managed/dotnet-runtime::msbuild-exe-name" =>
-            ("word", "MSBuild.exe"),
-        "well-known/lib/runtime/managed/dotnet-runtime::aspnet-tool-exe-name" =>
-            ("regex", r"aspnet_(compiler|regiis|state|wp)\.exe"),
+        "well-known/lib/runtime/managed/dotnet-runtime::servicemodelreg-exe-name" => {
+            ("regex", r"(?i)\bServiceModelReg\.exe\b")
+        }
+        "well-known/lib/runtime/managed/dotnet-runtime::addinprocess32-exe-name" => {
+            ("regex", r"(?i)\bAddInProcess32\.exe\b")
+        }
+        "well-known/lib/runtime/managed/dotnet-runtime::regasm-exe-name" => {
+            ("regex", r"(?i)\bRegAsm\.exe\b")
+        }
+        "well-known/lib/runtime/managed/dotnet-runtime::installutil-exe-name" => {
+            ("regex", r"(?i)\bInstallUtil\.exe\b")
+        }
+        "well-known/lib/runtime/managed/dotnet-runtime::mscorsvw-exe-name" => {
+            ("regex", r"(?i)\bmscorsvw\.exe\b")
+        }
+        "well-known/lib/runtime/managed/dotnet-runtime::msbuild-exe-name" => {
+            ("word", "MSBuild.exe")
+        }
+        "well-known/lib/runtime/managed/dotnet-runtime::aspnet-tool-exe-name" => {
+            ("regex", r"aspnet_(compiler|regiis|state|wp)\.exe")
+        }
         _ => return false,
     };
     matches!(&t.r#if, Condition::Text(q)
-        if q.exact.is_none() && q.substr.is_none()
-            && match kind {
-                "regex" => q.regex.as_deref() == Some(expected) && q.word.is_none(),
-                "word" => q.word.as_deref() == Some(expected) && q.regex.is_none(),
-                _ => false,
-            })
+    if q.exact.is_none() && q.substr.is_none()
+        && match kind {
+            "regex" => q.regex.as_deref() == Some(expected) && q.word.is_none(),
+            "word" => q.word.as_deref() == Some(expected) && q.regex.is_none(),
+            _ => false,
+        })
 }
 
 /// Find well-known/ traits that identify a family by registry metadata alone.

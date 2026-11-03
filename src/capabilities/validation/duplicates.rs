@@ -3468,10 +3468,10 @@ pub(crate) fn find_regex_literal_overlap_issues(
 
                 // An import, call, and declaration are different observations.
                 // An unspecified kind still overlaps every explicit kind.
-                if let (Some(a), Some(b)) = (regex_pat.symbol_kind, literal_pat.symbol_kind) {
-                    if a != b {
-                        continue;
-                    }
+                if let (Some(a), Some(b)) = (regex_pat.symbol_kind, literal_pat.symbol_kind)
+                    && a != b
+                {
+                    continue;
                 }
 
                 // Argument-constrained calls and unconstrained API-name

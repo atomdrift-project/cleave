@@ -90,7 +90,10 @@ pub(crate) fn check_emitted_ref(id: &str) -> Option<Result<(), String>> {
             if path == "metadata/lang/encoding/layer" {
                 return Some(match leaf {
                     Some(encoding) if ENCODED_LAYER_NAMES.contains(&encoding) => Ok(()),
-                    Some(_) => Err(format!("decoded layer names are {}", ENCODED_LAYER_NAMES.join(", "))),
+                    Some(_) => Err(format!(
+                        "decoded layer names are {}",
+                        ENCODED_LAYER_NAMES.join(", ")
+                    )),
                     None => Err("decoded layers require a named leaf".to_string()),
                 });
             }
@@ -351,7 +354,10 @@ mod tests {
                 "{name}"
             );
         }
-        assert!(matches!(check_emitted_ref("metadata/lang/encoding/layer::rot47"), Some(Err(_))));
+        assert!(matches!(
+            check_emitted_ref("metadata/lang/encoding/layer::rot47"),
+            Some(Err(_))
+        ));
         assert_eq!(check_emitted_ref("metadata/lang/encoded/base64"), None);
         assert_eq!(check_emitted_ref("metadata/lang/encoding/base64"), None);
     }

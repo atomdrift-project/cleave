@@ -1942,7 +1942,10 @@ mod tests {
             let temp = TempDir::new().unwrap();
             std::fs::create_dir_all(temp.path().join(retired).join("nested")).unwrap();
             let errors = validate_directory_structure(temp.path()).unwrap_err();
-            assert!(errors.iter().any(|error| error.contains(retired)), "{retired}: {errors:?}");
+            assert!(
+                errors.iter().any(|error| error.contains(retired)),
+                "{retired}: {errors:?}"
+            );
         }
     }
 

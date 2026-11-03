@@ -253,6 +253,7 @@ const ALLOWED_MB_BROWSER_EXTENSION: &[&str] = &[
 
 /// Allowed subdirectories in micro-behaviors/communications/
 const ALLOWED_MB_COMMUNICATIONS: &[&str] = &[
+    "adb", // Android Debug Bridge protocol and service operations
     "async-io",
     "blockchain", // Blockchain-client operation composites
     "bacnet",     // BACnet building/industrial automation      (UDP 47808)
@@ -263,6 +264,7 @@ const ALLOWED_MB_COMMUNICATIONS: &[&str] = &[
     "email",
     "ethernet-ip", // EtherNet/IP + CIP industrial protocol     (TCP 44818)
     "flood",       // Network flooding signals, independent of benchmark tools
+    "finger",      // Finger network protocol queries
     "ftp",
     "tftp", // Trivial File Transfer Protocol is distinct from FTP
     "grpc", // gRPC client/server (HTTP/2 RPC)             (TCP 50051)
@@ -1898,6 +1900,8 @@ mod tests {
         std::fs::create_dir_all(traits_path.join("objectives/command-and-control")).unwrap();
         std::fs::create_dir_all(traits_path.join("objectives/collection")).unwrap();
         std::fs::create_dir_all(traits_path.join("micro-behaviors/communications")).unwrap();
+        std::fs::create_dir_all(traits_path.join("micro-behaviors/communications/adb")).unwrap();
+        std::fs::create_dir_all(traits_path.join("micro-behaviors/communications/finger")).unwrap();
         std::fs::create_dir_all(traits_path.join("micro-behaviors/process")).unwrap();
         std::fs::create_dir_all(traits_path.join("micro-behaviors/data/property/access")).unwrap();
         std::fs::create_dir_all(traits_path.join("well-known/malware")).unwrap();

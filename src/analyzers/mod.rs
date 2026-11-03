@@ -459,6 +459,13 @@ fn sniff_script_type_from_content(data: &[u8]) -> Option<FileType> {
         return None;
     }
 
+    // Compiled YARA-X databases contain fragments from many unrelated scripts.
+    // Their binary header is not script source, even when those fragments
+    // satisfy the fallback VBScript marker threshold.
+    if data.starts_with(b"YARA-X\0\0") {
+        return None;
+    }
+
     let mut seen: u32 = 0;
     for m in vbs_marker_automaton()?.find_overlapping_iter(data) {
         seen |= 1 << (m.pattern().as_usize() % VBS_MARKERS.len());
@@ -1128,6 +1135,10 @@ mod tests {
             .flat_map(u16::to_le_bytes)
             .collect();
         assert_eq!(sniff_script_type_from_content(&wide), Some(FileType::Vbs));
+
+        let mut compiled_rules = b"YARA-X\0\0\x02\0\0\0".to_vec();
+        compiled_rules.extend_from_slice(vbs);
+        assert_eq!(sniff_script_type_from_content(&compiled_rules), None);
 
         // One marker repeated is one marker, not three.
         assert_eq!(

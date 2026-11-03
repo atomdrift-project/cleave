@@ -2781,9 +2781,13 @@ fn broad_filetype_category(cond: &Condition) -> &'static str {
 /// `text` matcher in an allowlisted `text:` directory passes; the same directory
 /// does **not** license a broad `value`/`symbol`/etc. matcher.
 pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
+    // Plex's plugin route is a neutral text reference in every original carrier.
+    "text:well-known/app/media/plex/network-function-route.yaml",
     // Raw GitHub URL references apply across source, script, and binary
     // carriers; retain the reviewed scope for this file's text matchers.
     "text:well-known/app/development/code-forge/github/raw.yaml",
+    // This literal configuration value is evidence in source and binaries.
+    "text:micro-behaviors/communications/socket/port/credential-keyword-review-traits.yaml",
     // These two neutral service-domain references retain the reviewed cross-format
     // scope of the original shared observation, including supported archives.
     "text:well-known/app/storage/filen/cloud-url-references.yaml",
@@ -2799,10 +2803,10 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // Shared XOR AST productions are portable across the explicitly scoped
     // grammars. Lua exponentiation and other grammars are excluded; Swift has
     // its own production. One canonical predicate avoids per-language copies.
-    "tree-sitter:micro-behaviors/data/bitwise/xor/parsed-xor.yaml",
+    "tree-sitter:micro-behaviors/data/bitwise/xor/expression/xor-split-parsed-xor.yaml",
     // Normalized call names describe the same XOR-named helper observation
     // across script/source frontends, without claiming a particular algorithm.
-    "symbol:micro-behaviors/data/bitwise/xor/parsed-xor.yaml",
+    "symbol:micro-behaviors/data/bitwise/xor/expression/xor-split-parsed-xor.yaml",
     // Named-call references use the normalized call-symbol namespace across
     // script frontends. The printenv reference currently matches 13 script
     // types; narrowing it to seven would discard existing call facts. This
@@ -2972,7 +2976,6 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     "literal:metadata/file/profile/",
     "literal:objectives/impact/destroy/keywords/",
     "literal:objectives/command-and-control/remote-command/llm/",
-    "literal:objectives/credential-access/theft/authentication/",
     // Archive-member structural matchers (a vim-swap file, go.mod, .go source,
     // or Package.swift shipped inside a package) legitimately span the whole
     // archive family — the same member can appear in an npm tarball, gem, whl,
@@ -3486,7 +3489,29 @@ fn is_low_tier_named_binary_fact(t: &TraitDefinition) -> bool {
                 && q.exact.is_none()
                 && q.substr.is_none()
                 && q.word.is_none();
-            resource_label || plex_preference_name || schneider_product_reference
+            // A Netscape name in a code section is a product reference, not
+            // an identity claim about the binary that contains the text.
+            let netscape_name_reference = t.id
+                == "well-known/app/browser/netscape::netscape-name-text-reference"
+                && q.regex.as_deref() == Some(r"(?i)(Netscape Navigator|Netscape Communicator)")
+                && q.section.as_deref() == Some(".text")
+                && q.exact.is_none()
+                && q.substr.is_none()
+                && q.word.is_none();
+            // This product-specific route is a reference, not ownership of
+            // the file, and is meaningful regardless of its size.
+            let plex_network_route = t.id
+                == "well-known/app/media/plex::plex-plugin-network-function-route"
+                && q.regex.as_deref() == Some(r"com\.plexapp\.agents\.[\w.]+(/|%2[fF])function(/|%2[fF])GetResultFromNetwork")
+                && q.exact.is_none() && q.substr.is_none() && q.word.is_none();
+            // A name in read-only data is a reference to the utility, not
+            // an ownership or execution claim, regardless of carrier size.
+            let mshta_name_reference = t.id
+                == "well-known/app/system/windows-mshta::mshta-exe-literal"
+                && q.section.as_deref() == Some("rdata")
+                && q.exact.as_deref() == Some("mshta.exe")
+                && q.substr.is_none() && q.regex.is_none() && q.word.is_none();
+            resource_label || plex_preference_name || plex_network_route || schneider_product_reference || netscape_name_reference || mshta_name_reference
         }
         _ => false,
     }
@@ -3569,6 +3594,22 @@ fn is_reviewed_installer_tool_fact(t: &TraitDefinition) -> bool {
         return false;
     }
     let (kind, expected, section) = match t.id.as_str() {
+        // These are embedded product references, not identity claims about
+        // the containing binary; keep their original whole-file scope.
+        "well-known/app/system/sshtty::sshtty-server-crate-marker" => {
+            ("whole-substr", "sshtty::server", "")
+        }
+        "well-known/app/system/sshtty::sshtty-terminal-banner" => {
+            ("whole-substr", "Browser terminal with groups and tabs that keeps your shells running", "")
+        }
+        // These are product-specific path references, not claims that the
+        // containing binary is the product. Preserve whole-file matching.
+        "well-known/app/security/eset::eset-update-manifest-path" => {
+            ("whole-regex", r"/eset_upd/[\w./-]{0,64}update\.ver\b", "")
+        }
+        "well-known/app/security/globalprotect::globalprotect-sslvpn-login-esp" => {
+            ("whole-substr", "/ssl-vpn/login.esp", "")
+        }
         "well-known/app/development/code-forge/github::github-web-raw-msi-url" => (
             "whole-regex",
             r###"https://github\.com/.{1,40}/.{1,40}/raw/.{1,40}/.{1,80}\.msi"###,
@@ -4426,9 +4467,18 @@ pub(crate) fn find_wellknown_missing_size_filter(
                     && matches!(t.crit, Criticality::Component | Criticality::Notable))
                 && !is_low_tier_named_binary_fact(t)
                 && !is_reviewed_installer_tool_fact(t)
+                && !is_reviewed_dotnet_tool_name_reference(t)
+                && !is_reviewed_remote_tool_reference(t)
                 && !is_reviewed_linfeng_marker(t)
                 && !is_reviewed_redshell_injection_menu(t)
                 && !is_reviewed_stagecomp_marker(t)
+                // The Tauri plugin string is a section-scoped product reference,
+                // not an identity or a size-bounded signature of the file.
+                && !(t.id == "well-known/lib/development/tauri::tauri-shell-open-plugin"
+                    && t.crit == Criticality::Notable
+                    && matches!(&t.r#if, Condition::Text(q)
+                        if q.substr.as_deref() == Some("plugin:shell|open")
+                            && q.section.as_deref() == Some(".rdata")))
                 // A Go import path is provenance evidence, not a size-bounded identity.
                 && t.id != "well-known/tool/detection/titus::titus-secret-scan-implementation"
                 // A tool banner is a reference regardless of file size.
@@ -4449,6 +4499,61 @@ pub(crate) fn find_wellknown_missing_size_filter(
             (t.id.clone(), source)
         })
         .collect()
+}
+
+// These are command and script references within another file, not claims
+// about that file's own identity or size. Keep the exception matcher-specific.
+fn is_reviewed_remote_tool_reference(t: &TraitDefinition) -> bool {
+    if t.crit != Criticality::Notable {
+        return false;
+    }
+    let expected = match t.id.as_str() {
+        "well-known/tool/offensive/impacket::impacket-psexec-script-reference" =>
+            r"(?i)\bpsexec\.py\b",
+        "well-known/tool/offensive/impacket::impacket-wmiexec-script-reference" =>
+            r"(?i)(impacket[\\/]examples[\\/]wmiexec\.py|wmiexec\.py)\b",
+        "well-known/tool/offensive/impacket::impacket-wmiexec-target" =>
+            r"(?i)\bwmiexec\.py\b[^\r\n]{0,180}@(\[[^\]\r\n]{1,40}\]|[A-Za-z0-9_.-]+)",
+        "well-known/tool/sysadmin/sysinternals::psexec-remote-invocation" =>
+            r#"(?i)\bpsexec(64)?(\.exe)?\b[^\r\n]{0,160}\s+["']?\\\\[\w.%${}<>-]{1,80}(\s|["']|$)"#,
+        _ => return false,
+    };
+    matches!(&t.r#if, Condition::Text(q)
+        if q.regex.as_deref() == Some(expected)
+            && q.exact.is_none() && q.substr.is_none() && q.word.is_none())
+}
+
+// These low-tier observations report named .NET Framework tools in another
+// file; they do not claim that the containing binary is that tool. Restrict
+// the exception to the reviewed IDs and matchers, without a file-size cutoff.
+fn is_reviewed_dotnet_tool_name_reference(t: &TraitDefinition) -> bool {
+    if t.crit != Criticality::Notable {
+        return false;
+    }
+    let (kind, expected) = match t.id.as_str() {
+        "well-known/lib/runtime/managed/dotnet-runtime::servicemodelreg-exe-name" =>
+            ("regex", r"(?i)\bServiceModelReg\.exe\b"),
+        "well-known/lib/runtime/managed/dotnet-runtime::addinprocess32-exe-name" =>
+            ("regex", r"(?i)\bAddInProcess32\.exe\b"),
+        "well-known/lib/runtime/managed/dotnet-runtime::regasm-exe-name" =>
+            ("regex", r"(?i)\bRegAsm\.exe\b"),
+        "well-known/lib/runtime/managed/dotnet-runtime::installutil-exe-name" =>
+            ("regex", r"(?i)\bInstallUtil\.exe\b"),
+        "well-known/lib/runtime/managed/dotnet-runtime::mscorsvw-exe-name" =>
+            ("regex", r"(?i)\bmscorsvw\.exe\b"),
+        "well-known/lib/runtime/managed/dotnet-runtime::msbuild-exe-name" =>
+            ("word", "MSBuild.exe"),
+        "well-known/lib/runtime/managed/dotnet-runtime::aspnet-tool-exe-name" =>
+            ("regex", r"aspnet_(compiler|regiis|state|wp)\.exe"),
+        _ => return false,
+    };
+    matches!(&t.r#if, Condition::Text(q)
+        if q.exact.is_none() && q.substr.is_none()
+            && match kind {
+                "regex" => q.regex.as_deref() == Some(expected) && q.word.is_none(),
+                "word" => q.word.as_deref() == Some(expected) && q.regex.is_none(),
+                _ => false,
+            })
 }
 
 /// Find well-known/ traits that identify a family by registry metadata alone.
@@ -4599,6 +4704,10 @@ pub(crate) fn find_wellknown_missing_section_filter(
         .filter(|t| {
             extract_trait_tier(&t.id) == "well-known"
                 && trait_targets_only_binaries(t)
+                && !(matches!(t.id.as_str(),
+                    "well-known/app/system/sshtty::sshtty-server-crate-marker"
+                    | "well-known/app/system/sshtty::sshtty-terminal-banner")
+                    && is_reviewed_installer_tool_fact(t))
                 // This reviewed whole-file marker must retain its original scope.
                 && !(matches!(t.id.as_str(),
                     "well-known/app/development/code-forge/github::github-web-raw-msi-url"
@@ -4615,6 +4724,8 @@ pub(crate) fn find_wellknown_missing_section_filter(
                     | "well-known/app/development/code-forge/github::raw-githubusercontent-host-string"
                     | "well-known/app/development/code-forge/github::gist-githubusercontent-raw-binary-url") && is_reviewed_installer_tool_fact(t))
                 && !(t.id == "well-known/lib/ai/tesseract::tesseract-upstream-model-url"
+                    && is_reviewed_installer_tool_fact(t))
+                && !(t.id == "well-known/app/security/eset::eset-update-manifest-path"
                     && is_reviewed_installer_tool_fact(t))
                 && !(matches!(t.id.as_str(),
                     "well-known/app/storage/mediafire::mediafire-download-url"

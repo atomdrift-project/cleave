@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// statics in this crate, so library code never `expect()`s.
 fn inline_interp_re() -> Option<&'static Regex> {
     static_regex!(
-        r#"(?:^|[\s;&|(])(python3|python|nodejs|node|deno|bun|ruby|perl|php)\s+(?:-c|-e|-r|--eval)\s+("|')"#
+        r#"(?:^|[\s;&|(])(python3|python|nodejs|node|deno|bun|ruby|perl|php)(?i:\.exe)?\s+(?:-c|-e|-r|--eval)\s+("|')"#
     )
 }
 
@@ -756,7 +756,7 @@ pub(crate) const EMBEDDED_LANG_NAMES: &[&str] =
     &["python", "javascript", "shell", "php", "unknown"];
 
 /// Every encoding-chain step the analyzers produce, i.e. the `<encoding>` of
-/// `metadata/lang/encoded/<encoding>`: stng's decoder methods
+/// `metadata/lang/encoding/layer::<encoding>`: stng's decoder methods
 /// (`generic.rs`), the compression and nested layers peeled by
 /// `extractors::encoded_payload::decompress_and_nest`, and the script and
 /// variation-selector layers decoded here. Reference validation checks YAML
@@ -837,7 +837,7 @@ fn generate_embedded_language_trait(detected_lang: &FileType, offset: u64, value
 }
 
 /// Generate automatic encoded-layer metadata for each step in the
-/// encoding chain (`metadata/lang/encoded/<encoding>`). Lets trait
+/// encoding chain (`metadata/lang/encoding/layer::<encoding>`). Lets trait
 /// authors and ML pipelines key off "this layer was unwrapped from
 /// hex / base64 / xor / etc." without re-deriving from
 /// `encoding_chain` everywhere.
@@ -861,7 +861,7 @@ fn encoded_layer_finding(encoding: &str, offset: u64) -> Finding {
     Finding {
         precomputed_spans: None,
         src: None,
-        id: format!("metadata/lang/encoded/{encoding}").into(),
+        id: format!("metadata/lang/encoding/layer::{encoding}").into(),
         kind: crate::types::FindingKind::Capability,
         desc: format!("Code recovered from {encoding}-encoded layer").into(),
         conf: 1.0,
@@ -1004,7 +1004,9 @@ fn analyze_embedded_haystack(
         .without_embedded_detection();
     if is_encoded {
         analyzer = analyzer.with_encoded_context(encoding_chain.to_vec());
-    } else {
+    } else if inline_code.is_none() {
+        // A recognized interpreter command supplies an execution context;
+        // heuristic origin is reserved for otherwise unbound quoted source.
         analyzer = analyzer.with_heuristic_quoted_context();
     }
 
@@ -1061,7 +1063,7 @@ fn analyze_embedded_haystack(
             }
         }
 
-        // Auto-generated `metadata/lang/encoded/<encoding>` traits —
+        // Auto-generated `metadata/lang/encoding/layer::<encoding>` traits —
         // one per step in the encoding chain — so trait authors can
         // target "anything reached via hex" / "anything reached via
         // base64+gzip" without re-walking `encoding_chain` inline.
@@ -2354,7 +2356,7 @@ traits:
     }
 
     /// Script-deobfuscation layers name themselves from a closed set; each
-    /// must be listed so its `metadata/lang/encoded/<name>` id validates.
+    /// must be listed so its `metadata/lang/encoding/layer::<name>` id validates.
     #[test]
     fn deobfuscation_layers_are_known_encoded_layer_names() {
         use stng::script::detect::ScriptLanguage;
@@ -2387,7 +2389,7 @@ traits:
     fn wide_encoded_layer_emits_registered_metadata() {
         let findings = generate_encoded_layer_traits(&["wide".to_string()], 0x40);
         assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].id.as_ref(), "metadata/lang/encoded/wide");
+        assert_eq!(findings[0].id.as_ref(), "metadata/lang/encoding/layer::wide");
         assert_eq!(findings[0].evidence[0].location.as_deref(), Some("0x40"));
     }
 
@@ -2533,7 +2535,7 @@ composite_rules:
     platforms: [windows]
     for: [powershell]
     all:
-      - id: metadata/lang/encoded/powershell-literal-program
+      - id: metadata/lang/encoding/layer::powershell-literal-program
 "#,
         )
         .unwrap();
@@ -2561,7 +2563,7 @@ composite_rules:
             layer
                 .findings
                 .iter()
-                .filter(|finding| finding.id == "metadata/lang/encoded/powershell-literal-program")
+                .filter(|finding| finding.id == "metadata/lang/encoding/layer::powershell-literal-program")
                 .count(),
             1
         );
@@ -3324,6 +3326,51 @@ IAAAAAAAsDyZDwU=";
             extract_inline_interpreter_code(host).expect("python3 -c body should unwrap");
         assert_eq!(lang, FileType::Python);
         assert!(code.contains("os.system"));
+    }
+
+    #[test]
+    fn test_extract_windows_interpreter_inline_code() {
+        let command = r#"python.exe -c \"import base64; exec(base64.b64decode(data))\""#;
+        let command = command.replace("\\\"", "\"");
+        let Some((lang, code)) = extract_inline_interpreter_code(&command) else {
+            panic!("Windows interpreter should unwrap");
+        };
+        assert_eq!(lang, FileType::Python);
+        assert!(code.contains("base64.b64decode"));
+    }
+
+    #[test]
+    fn windows_inline_python_is_not_heuristic_quoted_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("traits.yaml");
+        std::fs::write(&path, r#"
+defaults:
+  for: [python]
+  platforms: [unix, windows]
+traits:
+  - id: test/source::base64-exec
+    desc: Inline Base64 execution
+    crit: notable
+    if:
+      type: symbol
+      kind: call
+      exact: exec
+      arg:
+        index: 0
+        from: {call: '(^|\.)b64decode$'}
+    unless:
+      - id: metadata/lang/source/origin::heuristic-quoted-source
+"#).unwrap();
+        let mapper = crate::capabilities::CapabilityMapper::from_yaml(&path).unwrap();
+        let engine = crate::Engine::from_rules(std::sync::Arc::new(mapper));
+        let host = r#"@echo off
+python.exe -c "import base64; exec(base64.b64decode(open('x').read()))"
+"#;
+        let (_, findings) = process_all_strings_with_host("launcher.bat", &[], &engine, 0, Some(&FileType::Batch), None, true, Some(host));
+        assert!(findings.iter().any(|f| f.id == "test/source::base64-exec"), "{findings:?}");
+        let extracted = make_string_info(r#"python.exe -c "import base64; exec(base64.b64decode(open('x').read()))""#);
+        let (_, findings) = process_all_strings("launcher.bat", &[extracted], &engine, 0, Some(&FileType::Batch), None);
+        assert!(findings.iter().any(|f| f.id == "test/source::base64-exec"), "extracted: {findings:?}");
     }
 
     #[test]

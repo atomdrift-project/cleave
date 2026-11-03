@@ -87,11 +87,12 @@ pub(crate) fn check_emitted_ref(id: &str) -> Option<Result<(), String>> {
             ))
         }),
         _ => {
-            if let Some(encoding) = path.strip_prefix("metadata/lang/encoded/") {
-                // `metadata/lang/encoded/<encoding>` is itself the emitted id;
-                // `<encoding>/…` subdirectories and `::` leaves are YAML.
-                return (leaf.is_none() && ENCODED_LAYER_NAMES.contains(&encoding))
-                    .then_some(Ok(()));
+            if path == "metadata/lang/encoding/layer" {
+                return Some(match leaf {
+                    Some(encoding) if ENCODED_LAYER_NAMES.contains(&encoding) => Ok(()),
+                    Some(_) => Err(format!("decoded layer names are {}", ENCODED_LAYER_NAMES.join(", "))),
+                    None => Err("decoded layers require a named leaf".to_string()),
+                });
             }
             if let Some(category) = path.strip_prefix("metadata/signed/") {
                 return check_signed(category, leaf);
@@ -220,8 +221,8 @@ mod tests {
             "metadata/entitlement/security::com.apple.security.cs.debugger",
             "metadata/entitlement/security",
             "metadata/lang/embedded::shell",
-            "metadata/lang/encoded/base64",
-            "metadata/lang/encoded/wide",
+            "metadata/lang/encoding/layer::base64",
+            "metadata/lang/encoding/layer::wide",
             "metadata/binary/linking::macho-rpath",
         ] {
             assert_eq!(check_emitted_ref(id), Some(Ok(())), "{id}");
@@ -247,8 +248,8 @@ mod tests {
         for id in [
             "metadata/signed/trust-level::unsigned",
             "metadata/signed/certificate/identity::pe-signature-verified",
-            "metadata/lang/encoded/unicode-escape::electron-js2c-marker",
-            "metadata/lang/encoded/wide::shell-interpreter-powershell",
+            "metadata/lang/encoding/unicode-escape::electron-js2c-marker",
+            "metadata/lang/encoding/wide::shell-interpreter-powershell",
             "metadata/dylib::mscoree/dll.",
             "metadata/entitlement/bogus::com.apple.x",
         ] {
@@ -345,12 +346,14 @@ mod tests {
     fn every_encoded_layer_name_is_an_emitted_id() {
         for name in ENCODED_LAYER_NAMES {
             assert_eq!(
-                check_emitted_ref(&format!("metadata/lang/encoded/{name}")),
+                check_emitted_ref(&format!("metadata/lang/encoding/layer::{name}")),
                 Some(Ok(())),
                 "{name}"
             );
         }
-        assert_eq!(check_emitted_ref("metadata/lang/encoded/rot47"), None);
+        assert!(matches!(check_emitted_ref("metadata/lang/encoding/layer::rot47"), Some(Err(_))));
+        assert_eq!(check_emitted_ref("metadata/lang/encoded/base64"), None);
+        assert_eq!(check_emitted_ref("metadata/lang/encoding/base64"), None);
     }
 
     #[test]

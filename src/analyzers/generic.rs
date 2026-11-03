@@ -269,13 +269,15 @@ impl GenericAnalyzer {
                 // Analyze embedded code in strings
                 let t_embedded = std::time::Instant::now();
                 let (encoded_layers, plain_findings) =
-                    crate::analyzers::embedded_code_detector::process_all_strings(
+                    crate::analyzers::embedded_code_detector::process_all_strings_with_host(
                         &file_path.display().to_string(),
                         &report.strings,
                         &self.engine,
                         0,
                         Some(&self.file_type),
                         None,
+                        false,
+                        (self.file_type == FileType::Batch).then_some(content),
                     );
                 report.files.extend(encoded_layers);
                 report.findings.extend(plain_findings);
@@ -657,7 +659,7 @@ fn push_stng_string(report: &mut AnalysisReport, es: &stng::ExtractedString) {
 /// corpus stays text.
 /// The encoding-chain step for a string stng recovered by decoding, or `None`
 /// when the method only located the string. Each name is also the `<encoding>`
-/// of a `metadata/lang/encoded/<encoding>` id, so it must be listed in
+/// of a `metadata/lang/encoding/layer::<encoding>` id, so it must be listed in
 /// `embedded_code_detector::ENCODED_LAYER_NAMES`.
 fn stng_method_encoding(method: stng::StringMethod) -> Option<&'static str> {
     use stng::StringMethod as M;
@@ -758,7 +760,7 @@ mod tests {
 
     /// Every decoder stng reports maps to a name the reference validator
     /// knows; a new mapping without a matching ENCODED_LAYER_NAMES entry would
-    /// make its `metadata/lang/encoded/<name>` id unreferenceable.
+    /// make its `metadata/lang/encoding/layer::<name>` id unreferenceable.
     #[test]
     fn stng_decoders_map_to_known_encoded_layer_names() {
         use crate::analyzers::embedded_code_detector::ENCODED_LAYER_NAMES;
@@ -828,7 +830,7 @@ start payload.exe
             layer
                 .findings
                 .iter()
-                .any(|f| f.id == "metadata/lang/encoded/batch-expansion"),
+                .any(|f| f.id == "metadata/lang/encoding/layer::batch-expansion"),
             "expanded layer is missing its encoding finding: {:?}",
             layer.findings.iter().map(|f| &f.id).collect::<Vec<_>>(),
         );

@@ -823,7 +823,11 @@ impl<'a> RuleDebugger<'a> {
             Condition::Metrics(MetricsQuery {
                 field, min, max, ..
             }) => self.debug_metrics_condition(field, *min, *max),
-            Condition::Yara { source, .. } => self.debug_yara_inline_condition(source),
+            Condition::Yara {
+                source,
+                namespace,
+                compiled,
+            } => self.debug_yara_inline_condition(source, namespace.as_deref(), compiled.as_ref()),
             Condition::Raw(query) => self.debug_raw_condition(query, &ctx),
             Condition::TreeSitter(TreeSitterQuery {
                 kind,
@@ -1437,7 +1441,12 @@ impl<'a> RuleDebugger<'a> {
         result
     }
 
-    fn debug_yara_inline_condition(&self, source: &str) -> ConditionDebugResult {
+    fn debug_yara_inline_condition(
+        &self,
+        source: &str,
+        namespace: Option<&str>,
+        compiled: Option<&std::sync::Arc<yara_x::Rules>>,
+    ) -> ConditionDebugResult {
         use crate::composite_rules::evaluators::eval_yara_inline;
 
         // Extract rule name from YARA source
@@ -1450,59 +1459,28 @@ impl<'a> RuleDebugger<'a> {
 
         let desc = format!("yara: {} ({} chars)", rule_name, source.len());
 
-        // Create evaluation context
-        let ctx = EvaluationContext {
-            report: self.report,
-            target_path_override: None,
-            member_files: None,
-            binary_data: self.binary_data,
-            file_type: self.file_type,
-            platforms: &self.platforms,
-            arch: vec![Arch::All].into(),
-            arch_ranges: None,
-            findings: crate::composite_rules::FindingScope::with_index(
-                &self.report.findings,
-                None,
-                None,
-            ),
-            cached_ast: None,
-            ast_kind_cache: None,
-            ast_query_cache: None,
-            ast_node_text: None,
-            debug_collector: None,
-            suppressions: None,
-            section_map: None,
-            inline_yara_results: None,
-            cached_kv_format: std::sync::Arc::new(std::sync::OnceLock::new()),
-            cached_kv_parsed: std::sync::Arc::new(std::sync::OnceLock::new()),
-            cached_kv_offsets: std::sync::Arc::new(std::sync::OnceLock::new()),
-            cached_lower_binary: std::sync::Arc::new(std::sync::OnceLock::new()),
-            cached_lossy_utf8: std::sync::Arc::new(std::sync::OnceLock::new()),
-            cached_ast_source_utf8: std::sync::Arc::new(std::sync::OnceLock::new()),
-            string_exact_index: std::sync::Arc::new(std::sync::OnceLock::new()),
-            string_exact_index_ci: std::sync::Arc::new(std::sync::OnceLock::new()),
-            encoded_string_indices: std::sync::Arc::new(std::sync::OnceLock::new()),
-            literal_string_indices: std::sync::Arc::new(std::sync::OnceLock::new()),
-            flow_call_index: std::sync::Arc::new(std::sync::OnceLock::new()),
-            flow_targets: std::sync::Arc::new(std::sync::OnceLock::new()),
-            cached_html_comment_free_source: std::sync::Arc::new(std::sync::OnceLock::new()),
-            cached_commentless_ast: std::sync::Arc::new(std::sync::OnceLock::new()),
-            deadline: None,
-            slow_rule_ms: 4000,
-            cached_evidence: None,
-            current_trait_idx: None,
-            finding_origins: None,
-            for_mask: TypeMask::ALL,
-            raw_atom_offsets: None,
-            decoded_skip: None,
-            regex_candidate_strings: None,
-            cached_source_utf8: None,
-            parent_is_exception: false,
-            cancellation: None,
-        };
-
-        // Actually evaluate the inline YARA rule
-        let eval_result = eval_yara_inline(source, None, None, &ctx);
+        // Reuse production's combined-engine result when available. For an
+        // isolated condition without a precompiled rule, compile it locally;
+        // passing neither results nor compiled rules means YARA is disabled.
+        let mut fallback = None;
+        if compiled.is_none() && (namespace.is_none() || self.inline_yara_results.is_none()) {
+            let mut condition = Condition::Yara {
+                source: source.to_string(),
+                compiled: None,
+                namespace: None,
+            };
+            condition.compile_yara();
+            if let Condition::Yara { compiled, .. } = condition {
+                fallback = compiled;
+            }
+            if fallback.is_none() {
+                let mut result = ConditionDebugResult::new(desc, false);
+                result.details.push("✗ Inline YARA rule failed to compile".to_string());
+                return result;
+            }
+        }
+        let ctx = self.create_eval_context(None);
+        let eval_result = eval_yara_inline(source, namespace, compiled.or(fallback.as_ref()), &ctx);
 
         let mut result = ConditionDebugResult::new(desc, eval_result.matched);
         result.evidence = eval_result.evidence;
@@ -2783,6 +2761,32 @@ composite_rules:
         let mut report = AnalysisReport::new(target);
         report.findings = findings;
         report
+    }
+
+    #[test]
+    fn debug_inline_yara_evaluates_uncompiled_conditions() {
+        let mapper = CapabilityMapper::empty();
+        let report = create_test_report_with_findings(vec![]);
+        let source = r#"rule test { strings: $a = "needle" condition: $a }"#;
+        for (data, expected) in [(b"needle".as_slice(), true), (b"nothing".as_slice(), false)] {
+            let debugger = RuleDebugger::new(&mapper, &report, data, vec![Platform::All], None);
+            assert_eq!(debugger.debug_yara_inline_condition(source, None, None).matched, expected);
+        }
+        let debugger = RuleDebugger::new(&mapper, &report, b"needle", vec![Platform::All], None);
+        let invalid = debugger.debug_yara_inline_condition("not a YARA rule", None, None);
+        assert!(!invalid.matched);
+        assert!(invalid.details.iter().any(|detail| detail.contains("failed to compile")));
+    }
+
+    #[test]
+    fn debug_inline_yara_uses_prescanned_results() {
+        let mapper = CapabilityMapper::empty();
+        let report = create_test_report_with_findings(vec![]);
+        let results = HashMap::new();
+        let debugger = RuleDebugger::new(&mapper, &report, b"needle", vec![Platform::All], Some(&results));
+        let result = debugger.debug_yara_inline_condition("not a YARA rule", Some("test"), None);
+        assert!(!result.matched);
+        assert!(result.details.iter().any(|detail| detail.contains("did not match")));
     }
 
     fn create_test_finding(id: &str) -> Finding {

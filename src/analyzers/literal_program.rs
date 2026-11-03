@@ -48,6 +48,18 @@ pub(crate) fn decode(source: &str) -> Vec<(usize, String, &'static str)> {
     }
     let mut results = Vec::new();
     let mut budget = MAX_OUTPUT;
+    if let Some((decoded, scripts)) = super::python_char_array::decode(source) {
+        if decoded.len() <= budget {
+            budget -= decoded.len();
+            results.push((0, decoded, "python"));
+        }
+        for (offset, script) in scripts {
+            if script.len() <= budget {
+                budget -= script.len();
+                results.push((offset, script, "javascript"));
+            }
+        }
+    }
     for (offset, decoded) in super::js_permutation::decode(source) {
         if decoded.len() <= budget {
             budget -= decoded.len();

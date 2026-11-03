@@ -25,6 +25,59 @@ fn encode_utf16le_with_bom(text: &str) -> Vec<u8> {
     bytes
 }
 
+#[test]
+fn recovers_only_valid_bounded_base64_pe_candidates() {
+    use base64::{Engine as _, engine::general_purpose};
+    let mut pe = vec![0u8; 1024];
+    pe[..2].copy_from_slice(b"MZ");
+    pe[60..64].copy_from_slice(&128u32.to_le_bytes());
+    pe[128..132].copy_from_slice(b"PE\0\0");
+    pe[132..134].copy_from_slice(&0x014cu16.to_le_bytes());
+    pe[134..136].copy_from_slice(&1u16.to_le_bytes());
+    pe[148..150].copy_from_slice(&224u16.to_le_bytes());
+    pe[152..154].copy_from_slice(&0x010bu16.to_le_bytes());
+    let encoded = general_purpose::STANDARD.encode(&pe);
+    let carrier = format!("GIF89a<<payload>>{encoded}<<end>>");
+    let found = super::extract_media_base64_pes(carrier.as_bytes());
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].data, pe);
+    assert_eq!(found[0].original_offset, "GIF89a<<payload>>".len());
+    assert_eq!(found[0].encoding_chain, ["media-base64-pe"]);
+
+    pe[128..132].copy_from_slice(b"NOPE");
+    let invalid = format!(
+        "GIF89a<<payload>>{}<<end>>",
+        general_purpose::STANDARD.encode(&pe)
+    );
+    assert!(super::extract_media_base64_pes(invalid.as_bytes()).is_empty());
+    assert!(super::extract_media_base64_pes(b"GIF89a<<TVqQAAM=>>").is_empty());
+}
+
+#[test]
+fn recovers_only_valid_single_byte_xor_pe_candidates() {
+    let mut pe = vec![0u8; 1024];
+    pe[..4].copy_from_slice(b"MZ\x90\0");
+    pe[60..64].copy_from_slice(&128u32.to_le_bytes());
+    pe[128..132].copy_from_slice(b"PE\0\0");
+    pe[132..134].copy_from_slice(&0x014cu16.to_le_bytes());
+    pe[134..136].copy_from_slice(&1u16.to_le_bytes());
+    pe[148..150].copy_from_slice(&224u16.to_le_bytes());
+    pe[152..154].copy_from_slice(&0x010bu16.to_le_bytes());
+    let mut carrier = b"GIF89a".to_vec();
+    carrier.extend(pe.iter().map(|b| b ^ 0x2f));
+    let found = super::extract_media_xor_pes(&carrier);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].data, pe);
+    assert_eq!(found[0].original_offset, 6);
+    assert_eq!(found[0].encoding_chain, ["media-xor-pe"]);
+
+    pe[128..132].copy_from_slice(b"NOPE");
+    let mut invalid = b"GIF89a".to_vec();
+    invalid.extend(pe.iter().map(|b| b ^ 0x2f));
+    assert!(super::extract_media_xor_pes(&invalid).is_empty());
+    assert!(super::extract_media_xor_pes(&pe).is_empty());
+}
+
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 mod tests {

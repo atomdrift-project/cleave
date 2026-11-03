@@ -1741,23 +1741,16 @@ impl AnalysisReport {
             // Files were pre-populated by archive/payload analyzers
             // Renumber IDs and insert root file at position 0
             let root_path = self.target.path.clone();
-            let archive_root_prefix =
-                format!("{}{}", root_path, super::file_analysis::ARCHIVE_DELIMITER);
             for (idx, file) in self.files.iter_mut().enumerate() {
                 file.id = (idx + 1) as u32; // Shift IDs to make room for root
                 if file.depth == 1 && file.parent_id.is_none() {
                     file.parent_id = Some(0); // Point to root
                 }
                 // Ensure paths have proper archive prefix (!! for archives, ## for decoded)
-                let needs_root_prefix =
-                    if file.path.contains(super::file_analysis::ARCHIVE_DELIMITER) {
-                        !file.path.starts_with(&archive_root_prefix)
-                    } else {
-                        // Local decoded paths still need the root/member chain.
-                        // Only skip rebasing when the decoder already received
-                        // the full path of the analyzed root as its parent.
-                        !file.path.starts_with(&root_path)
-                    };
+                let needs_root_prefix = !file.path.strip_prefix(&root_path).is_some_and(|suffix| {
+                    suffix.starts_with(super::file_analysis::ARCHIVE_DELIMITER)
+                        || suffix.starts_with(super::file_analysis::ENCODING_DELIMITER)
+                });
                 if needs_root_prefix {
                     file.path = super::file_analysis::encode_archive_path(&root_path, &file.path);
                 }
@@ -3225,6 +3218,40 @@ mod tests {
         assert_eq!(
             report.files[2].path,
             "/samples/reference.tar.gz!!PayloadsAllTheThings-4.2/.github/hopla_config.json##base64@12728"
+        );
+        assert_eq!(report.files[2].parent_id, Some(1));
+    }
+
+    #[test]
+    fn finalize_links_embedded_file_in_decoded_root() {
+        let mut report = AnalysisReport::new(TargetInfo {
+            path: "/samples/carrier.gif".into(),
+            file_type: "gif".into(),
+            size_bytes: 100,
+            sha256: "carrier-sha".into(),
+            architectures: None,
+        });
+        let mut decoded = FileAnalysis::new(
+            0,
+            "/samples/carrier.gif##base64@42".into(),
+            "pe".into(),
+            "pe-sha".into(),
+            50,
+        );
+        decoded.depth = 1;
+        let mut embedded = FileAnalysis::new(
+            1,
+            "/samples/carrier.gif##base64@42!!embedded:pe:payload.dll@7".into(),
+            "pe".into(),
+            "dll-sha".into(),
+            20,
+        );
+        embedded.depth = 2;
+        report.files.extend([decoded, embedded]);
+        report.finalize();
+        assert_eq!(
+            report.files[2].path,
+            "/samples/carrier.gif##base64@42!!embedded:pe:payload.dll@7"
         );
         assert_eq!(report.files[2].parent_id, Some(1));
     }

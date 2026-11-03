@@ -1134,6 +1134,11 @@ pub(crate) fn parse_platforms(platforms: &[String], warnings: &mut Vec<String>) 
             "netscaler" => Some(Platform::Netscaler),
             "ivanti" => Some(Platform::Ivanti),
             "vxworks" => Some(Platform::VxWorks),
+            "commodore64" | "c64" => Some(Platform::Commodore64),
+            "apple2" | "apple-ii" => Some(Platform::Apple2),
+            "vmcms" | "vm/cms" => Some(Platform::VmCms),
+            "sapabap" | "sap-abap" => Some(Platform::SapAbap),
+            "zxspectrum" | "zx-spectrum" => Some(Platform::ZxSpectrum),
             _ => None,
         })
         .collect()
@@ -1952,6 +1957,46 @@ mod tests {
     }
 
     // ==================== parse_platforms Tests ====================
+
+    #[test]
+    fn test_parse_apple2_platform_alias() {
+        let mut warnings = Vec::new();
+        let result = parse_platforms(&["apple2".into(), "apple-ii".into()], &mut warnings);
+        assert_eq!(result, vec![Platform::Apple2, Platform::Apple2]);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_parse_commodore_platform_alias() {
+        let mut warnings = Vec::new();
+        let result = parse_platforms(&["commodore64".into(), "c64".into()], &mut warnings);
+        assert_eq!(result, vec![Platform::Commodore64, Platform::Commodore64]);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_parse_vm_cms_platform_alias() {
+        let mut warnings = Vec::new();
+        let result = parse_platforms(&["vmcms".into(), "vm/cms".into()], &mut warnings);
+        assert_eq!(result, vec![Platform::VmCms, Platform::VmCms]);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_parse_sap_abap_platform_alias() {
+        let mut warnings = Vec::new();
+        let result = parse_platforms(&["sapabap".into(), "sap-abap".into()], &mut warnings);
+        assert_eq!(result, vec![Platform::SapAbap, Platform::SapAbap]);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_parse_zx_spectrum_platform_alias() {
+        let mut warnings = Vec::new();
+        let result = parse_platforms(&["zxspectrum".into(), "zx-spectrum".into()], &mut warnings);
+        assert_eq!(result, vec![Platform::ZxSpectrum, Platform::ZxSpectrum]);
+        assert!(warnings.is_empty());
+    }
 
     #[test]
     fn test_parse_platforms_all_is_valid() {

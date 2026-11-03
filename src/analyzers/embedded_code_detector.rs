@@ -1601,7 +1601,9 @@ fn host_may_contain_script_obfuscation(content: &str) -> bool {
         "iex(",
         "IEX(",
     ];
-    (content.contains("5578712") && content.contains("charAt"))
+    (content.contains("__builtins__") && content.contains("copyright.__str__"))
+        || ((content.contains("5578712") || content.contains("5145329"))
+            && content.contains("charAt"))
         || NEEDLES.iter().any(|needle| content.contains(*needle))
         || content
             .as_bytes()
@@ -2867,6 +2869,12 @@ composite_rules:
     fn test_looks_like_base64_rejects_prose() {
         let prose = "This is a normal English sentence with spaces and punctuation, which is definitely not base64 encoded binary content at all.";
         assert!(!looks_like_base64(prose));
+    }
+
+    #[test]
+    fn alternate_permutation_is_admitted_to_literal_analysis() {
+        assert!(host_may_contain_script_obfuscation("5145329 charAt"));
+        assert!(!host_may_contain_script_obfuscation("5145329"));
     }
 
     #[test]

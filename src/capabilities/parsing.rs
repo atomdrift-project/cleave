@@ -2430,6 +2430,36 @@ mod tests {
     }
 
     #[test]
+    fn legacy_platforms_remain_distinct_from_all_and_other_platforms() {
+        let mut warnings = Vec::new();
+        let names = ["sapabap", "vmcms", "commodore64", "zxspectrum", "apple2"];
+        let parsed = parse_platforms(
+            &names
+                .iter()
+                .map(|name| (*name).to_string())
+                .collect::<Vec<_>>(),
+            &mut warnings,
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(
+            parsed,
+            vec![
+                Platform::SapAbap,
+                Platform::VmCms,
+                Platform::Commodore64,
+                Platform::ZxSpectrum,
+                Platform::Apple2
+            ]
+        );
+        for (platform, name) in parsed.iter().zip(names) {
+            assert_eq!(platform.label(), name);
+            assert!(platform.matches_filter(platform));
+            assert!(platform.matches_filter(&Platform::All));
+            assert!(!platform.matches_filter(&Platform::Windows));
+        }
+    }
+
+    #[test]
     fn jsp_token_stays_on_desktop_platforms() {
         let mut w = Vec::new();
         let parsed = parse_file_types(

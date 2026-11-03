@@ -275,6 +275,7 @@ const ALLOWED_MB_COMMUNICATIONS: &[&str] = &[
     "irc",       // IRC network protocol; target home of ipc/irc (IRC is not local IPC)
     "mcp",       // Model Context Protocol (stdio and HTTP transports)
     "messaging", // Chat/bot messaging-platform send APIs (sendMessage, etc.)
+    "smb",       // Server Message Block protocol operations and components
     "telephony", // Telephone and VoIP call operations.
     "modbus",    // Modbus industrial control protocol          (TCP 502)
     "nats",      // NATS pub/sub messaging                      (TCP 4222)
@@ -351,6 +352,7 @@ const ALLOWED_MB_DATA: &[&str] = &[
     "nezha",
     "parse",
     "reassembly",
+    "retrieve", // Obtaining data from alternative source types
     "parsing",
     "path",
     "plugin",
@@ -479,6 +481,7 @@ const ALLOWED_MB_OS: &[&str] = &[
     "callback",
     "clipboard",
     "com",
+    "command", // OS command resolution and availability checks.
     "compat",
     "console",
     "container",
@@ -1004,6 +1007,7 @@ const ALLOWED_METADATA: &[&str] = &[
     "hardening",  // Security hardening features (sandbox, seccomp, pledge)
     "image",      // Image-specific neutral measurements (entropy, edge density)
     "import",     // Dependencies/imports (auto-generated)
+    "installer",  // Installer layout, configuration, and other properties
     "lang",       // Language, compiler, encoding detection
     "library",    // Library/framework detection (react, vue, jquery, etc.)
     "package",    // Package ecosystem metadata & project quality
@@ -1135,6 +1139,9 @@ const ALLOWED_METADATA_FONT: &[&str] = &[
 /// Language, compiler, and encoding detection.
 /// Build orchestration (cmake, docker, CI/CD) belongs in build/, not here.
 const ALLOWED_METADATA_LANG: &[&str] = &[
+    "charset",             // Character repertoires and ordered alphabets
+    "country",             // Country code and geographic selector evidence
+    "translation",         // Localization message and translation catalogs
     "compiled",            // Compiled language detection
     "compiler",            // Compiler identification
     "encoding",            // Text encoding of source/strings (unicode, wide)
@@ -1863,6 +1870,7 @@ mod tests {
 
         // Create micro-behaviors/ with valid and invalid subdirectories
         std::fs::create_dir_all(traits_path.join("micro-behaviors/communications")).unwrap();
+        std::fs::create_dir_all(traits_path.join("micro-behaviors/communications/smb")).unwrap();
         std::fs::create_dir_all(traits_path.join("micro-behaviors/communications/transfer"))
             .unwrap();
         std::fs::create_dir_all(traits_path.join("micro-behaviors/network/interface")).unwrap();
@@ -1903,9 +1911,13 @@ mod tests {
         std::fs::create_dir_all(traits_path.join("micro-behaviors/communications/adb")).unwrap();
         std::fs::create_dir_all(traits_path.join("micro-behaviors/communications/finger")).unwrap();
         std::fs::create_dir_all(traits_path.join("micro-behaviors/process")).unwrap();
+        std::fs::create_dir_all(traits_path.join("micro-behaviors/os/command/lookup")).unwrap();
         std::fs::create_dir_all(traits_path.join("micro-behaviors/data/property/access")).unwrap();
+        std::fs::create_dir_all(traits_path.join("micro-behaviors/data/retrieve")).unwrap();
         std::fs::create_dir_all(traits_path.join("well-known/malware")).unwrap();
         std::fs::create_dir_all(traits_path.join("metadata/binary")).unwrap();
+        std::fs::create_dir_all(traits_path.join("metadata/installer/layout")).unwrap();
+        std::fs::create_dir_all(traits_path.join("metadata/lang/charset/alphabet")).unwrap();
         std::fs::create_dir_all(traits_path.join("metadata/vendor")).unwrap();
 
         let result = validate_directory_structure(traits_path);

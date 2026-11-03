@@ -3224,6 +3224,8 @@ pub(crate) fn find_regex_literal_overlap_issues(
         for_types: HashSet<String>,
         crit: Criticality,
         argument_key: String,
+        symbol_kind: Option<crate::composite_rules::condition::SymbolKind>,
+        symbol_has_arguments: bool,
     }
 
     // Helper structure for literal patterns
@@ -3238,6 +3240,8 @@ pub(crate) fn find_regex_literal_overlap_issues(
         for_types: HashSet<String>,
         crit: Criticality,
         argument_key: String,
+        symbol_kind: Option<crate::composite_rules::condition::SymbolKind>,
+        symbol_has_arguments: bool,
     }
 
     // Collect all regex patterns (ANY regex, not just those with |)
@@ -3268,6 +3272,12 @@ pub(crate) fn find_regex_literal_overlap_issues(
                 for_types: for_types.clone(),
                 crit: trait_def.crit,
                 argument_key: argument_key.clone(),
+                symbol_kind: match &trait_def.r#if {
+                    Condition::Symbol(query) => query.kind,
+                    _ => None,
+                },
+                symbol_has_arguments: matches!(&trait_def.r#if,
+                    Condition::Symbol(query) if query.arg.is_some() || query.args.is_some()),
             });
         };
 
@@ -3315,6 +3325,12 @@ pub(crate) fn find_regex_literal_overlap_issues(
                 for_types: for_types.clone(),
                 crit: trait_def.crit,
                 argument_key: argument_key.clone(),
+                symbol_kind: match &trait_def.r#if {
+                    Condition::Symbol(query) => query.kind,
+                    _ => None,
+                },
+                symbol_has_arguments: matches!(&trait_def.r#if,
+                    Condition::Symbol(query) if query.arg.is_some() || query.args.is_some()),
             });
         };
 
@@ -3447,6 +3463,23 @@ pub(crate) fn find_regex_literal_overlap_issues(
                 // Skip if criticalities are different (intentional layering)
                 // Note: Component/Baseline/Filtered are treated as equivalent "inert" levels
                 if !criticalities_equivalent(regex_pat.crit, literal_pat.crit) {
+                    continue;
+                }
+
+                // An import, call, and declaration are different observations.
+                // An unspecified kind still overlaps every explicit kind.
+                if let (Some(a), Some(b)) = (regex_pat.symbol_kind, literal_pat.symbol_kind) {
+                    if a != b {
+                        continue;
+                    }
+                }
+
+                // Argument-constrained calls and unconstrained API-name
+                // observations are distinct even when their names overlap.
+                if regex_pat.condition_type == "symbol"
+                    && literal_pat.condition_type == "symbol"
+                    && regex_pat.symbol_has_arguments != literal_pat.symbol_has_arguments
+                {
                     continue;
                 }
 

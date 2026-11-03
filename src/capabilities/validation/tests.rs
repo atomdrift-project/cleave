@@ -1571,6 +1571,41 @@ mod duplicate_tests {
     }
 
     #[test]
+    fn regex_literal_symbol_overlap_respects_explicit_kinds() {
+        let import = create_test_trait(
+            "metadata/demo::import",
+            Condition::Symbol(SymbolQuery {
+                regex: Some("createRootShell$".to_string()),
+                kind: Some(SymbolKind::Import),
+                ..Default::default()
+            }),
+            vec![FileType::All],
+            "import.yaml",
+        );
+        let mut call = create_symbol_exact_with_kind(
+            "micro-behaviors/demo::call",
+            "createRootShell",
+            SymbolKind::Call,
+            vec![FileType::All],
+            "call.yaml",
+        );
+        let mut warnings = Vec::new();
+        check_regex_contains_literal(&[import.clone(), call.clone()], &mut warnings);
+        assert!(warnings.is_empty());
+        if let Condition::Symbol(query) = &mut call.r#if {
+            query.kind = Some(SymbolKind::Import);
+        }
+        check_regex_contains_literal(&[import.clone(), call.clone()], &mut warnings);
+        assert_eq!(warnings.len(), 1);
+        warnings.clear();
+        if let Condition::Symbol(query) = &mut call.r#if {
+            query.kind = None;
+        }
+        check_regex_contains_literal(&[import, call], &mut warnings);
+        assert_eq!(warnings.len(), 1);
+    }
+
+    #[test]
     fn test_regex_contains_literal() {
         let exact = create_string_exact(
             "test::exact",
@@ -4376,7 +4411,7 @@ mod taxonomy_tests {
         find_objectives_wellknown_violations, find_oversized_trait_directories,
         find_sparse_sibling_cohorts, find_suppression_only_building_blocks,
         find_wellknown_baseline_rules, find_wellknown_high_criticality_basenames,
-        find_wellknown_missing_size_filter,
+        find_wellknown_missing_section_filter, find_wellknown_missing_size_filter,
     };
     use crate::composite_rules::traits::CompositeTrait;
     use crate::composite_rules::{Arch, Condition, FileType, PathQuery, Platform, TraitDefinition};
@@ -5003,6 +5038,25 @@ mod taxonomy_tests {
     }
 
     #[test]
+    fn reviewed_netscape_name_reference_needs_no_size_bound() {
+        let mut fact = leaf(
+            "well-known/app/browser/netscape::netscape-name-text-reference",
+            Criticality::Notable,
+        );
+        fact.r#for = vec![FileType::Pe];
+        fact.r#if = crate::yaml::from_str(
+            "type: text\nregex: '(?i)(Netscape Navigator|Netscape Communicator)'\nsection: .text\n",
+        )
+        .unwrap();
+        assert!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty());
+        fact.crit = Criticality::Suspicious;
+        assert_eq!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(), 1);
+        fact.crit = Criticality::Notable;
+        fact.r#if = crate::yaml::from_str("type: text\nregex: other\nsection: .text\n").unwrap();
+        assert_eq!(find_wellknown_missing_size_filter(&[fact], &HashMap::new()).len(), 1);
+    }
+
+    #[test]
     fn reviewed_msvc_runtime_path_needs_no_size_bound() {
         let mut path = leaf(
             "well-known/lib/runtime/compiled/msvc-runtime::bin64-msvcr120-path",
@@ -5034,6 +5088,136 @@ mod taxonomy_tests {
             find_wellknown_missing_size_filter(&[path], &HashMap::new()).len(),
             1
         );
+    }
+
+    #[test]
+    fn reviewed_sshtty_references_preserve_whole_file_scope() {
+        for (id, marker) in [
+            ("sshtty-server-crate-marker", "sshtty::server"),
+            ("sshtty-terminal-banner", "Browser terminal with groups and tabs that keeps your shells running"),
+        ] {
+            let mut fact = leaf(&format!("well-known/app/system/sshtty::{id}"), Criticality::Notable);
+            fact.r#for = vec![FileType::Pe];
+            fact.r#if = crate::yaml::from_str(&format!("type: text\nsubstr: '{marker}'\n")).unwrap();
+            assert!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty());
+            assert!(find_wellknown_missing_section_filter(&[fact.clone()], &HashMap::new()).is_empty());
+            fact.crit = Criticality::Suspicious;
+            assert_eq!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(), 1);
+            assert_eq!(find_wellknown_missing_section_filter(&[fact.clone()], &HashMap::new()).len(), 1);
+            fact.crit = Criticality::Notable;
+            fact.r#if = crate::yaml::from_str("type: text\nsubstr: unrelated\n").unwrap();
+            assert_eq!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(), 1);
+            assert_eq!(find_wellknown_missing_section_filter(&[fact], &HashMap::new()).len(), 1);
+        }
+    }
+
+    #[test]
+    fn reviewed_dotnet_tool_references_do_not_need_size_bounds() {
+        for (id, yaml) in [
+            ("servicemodelreg-exe-name", "type: text\nregex: '(?i)\\bServiceModelReg\\.exe\\b'\n"),
+            ("addinprocess32-exe-name", "type: text\nregex: '(?i)\\bAddInProcess32\\.exe\\b'\n"),
+            ("regasm-exe-name", "type: text\nregex: '(?i)\\bRegAsm\\.exe\\b'\n"),
+            ("installutil-exe-name", "type: text\nregex: '(?i)\\bInstallUtil\\.exe\\b'\n"),
+            ("mscorsvw-exe-name", "type: text\nregex: '(?i)\\bmscorsvw\\.exe\\b'\n"),
+            ("msbuild-exe-name", "type: text\nword: MSBuild.exe\n"),
+            ("aspnet-tool-exe-name", "type: text\nregex: 'aspnet_(compiler|regiis|state|wp)\\.exe'\n"),
+        ] {
+            let mut fact = leaf(&format!("well-known/lib/runtime/managed/dotnet-runtime::{id}"), Criticality::Notable);
+            fact.r#for = vec![FileType::Pe];
+            fact.r#if = crate::yaml::from_str(yaml).unwrap();
+            assert!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty(), "{id}");
+            fact.crit = Criticality::Suspicious;
+            assert_eq!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(), 1, "{id}");
+            fact.crit = Criticality::Notable;
+            fact.r#if = crate::yaml::from_str("type: text\nsubstr: unrelated\n").unwrap();
+            assert_eq!(find_wellknown_missing_size_filter(&[fact], &HashMap::new()).len(), 1, "{id}");
+        }
+    }
+
+    #[test]
+    fn remote_tool_reference_size_exceptions_are_matcher_specific() {
+        let cases = [
+            ("well-known/tool/offensive/impacket::impacket-psexec-script-reference", r"(?i)\bpsexec\.py\b"),
+            ("well-known/tool/offensive/impacket::impacket-wmiexec-script-reference", r"(?i)(impacket[\\/]examples[\\/]wmiexec\.py|wmiexec\.py)\b"),
+            ("well-known/tool/offensive/impacket::impacket-wmiexec-target", r"(?i)\bwmiexec\.py\b[^\r\n]{0,180}@(\[[^\]\r\n]{1,40}\]|[A-Za-z0-9_.-]+)"),
+            ("well-known/tool/sysadmin/sysinternals::psexec-remote-invocation", r#"(?i)\bpsexec(64)?(\.exe)?\b[^\r\n]{0,160}\s+["']?\\\\[\w.%${}<>-]{1,80}(\s|["']|$)"#),
+        ];
+        for (id, pattern) in cases {
+            let mut fact = leaf(id, Criticality::Notable);
+            fact.r#for = vec![FileType::Pe];
+            let yaml = format!("type: text\nregex: {}\n", serde_json::to_string(pattern).unwrap());
+            fact.r#if = crate::yaml::from_str(&yaml).unwrap();
+            assert!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty(), "{id}");
+            fact.crit = Criticality::Suspicious;
+            assert_eq!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(), 1, "{id}");
+            fact.crit = Criticality::Notable;
+            fact.r#if = crate::yaml::from_str("type: text\nregex: other\n").unwrap();
+            assert_eq!(find_wellknown_missing_size_filter(&[fact], &HashMap::new()).len(), 1, "{id}");
+        }
+    }
+
+    #[test]
+    fn tauri_plugin_reference_has_a_narrow_size_exception() {
+        let mut fact = leaf("well-known/lib/development/tauri::tauri-shell-open-plugin", Criticality::Notable);
+        fact.r#for = vec![FileType::Pe];
+        fact.r#if = crate::yaml::from_str("type: text\nsubstr: 'plugin:shell|open'\nsection: .rdata\n").unwrap();
+        assert!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty());
+        fact.crit = Criticality::Suspicious;
+        assert_eq!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(), 1);
+        fact.crit = Criticality::Notable;
+        fact.r#if = crate::yaml::from_str("type: text\nsubstr: 'plugin:shell|open'\nsection: .text\n").unwrap();
+        assert_eq!(find_wellknown_missing_size_filter(&[fact], &HashMap::new()).len(), 1);
+    }
+
+    #[test]
+    fn plex_plugin_route_size_exception_is_matcher_specific() {
+        let mut fact = leaf("well-known/app/media/plex::plex-plugin-network-function-route", Criticality::Notable);
+        fact.r#for = vec![FileType::Pe];
+        fact.r#if = crate::yaml::from_str(r#"type: text
+regex: 'com\.plexapp\.agents\.[\w.]+(/|%2[fF])function(/|%2[fF])GetResultFromNetwork'
+"#).unwrap();
+        assert!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty());
+        fact.crit = Criticality::Suspicious;
+        assert_eq!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(), 1);
+        fact.crit = Criticality::Notable;
+        fact.r#if = crate::yaml::from_str("type: text\nregex: 'com\\.plexapp\\.other'\n").unwrap();
+        assert_eq!(find_wellknown_missing_size_filter(&[fact], &HashMap::new()).len(), 1);
+    }
+
+    #[test]
+    fn mshta_name_size_exception_is_matcher_specific() {
+        let mut fact = leaf("well-known/app/system/windows-mshta::mshta-exe-literal", Criticality::Notable);
+        fact.r#for = vec![FileType::Pe];
+        fact.r#if = crate::yaml::from_str("type: text\nsection: rdata\nexact: mshta.exe\n").unwrap();
+        assert!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty());
+        fact.crit = Criticality::Suspicious;
+        assert_eq!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(), 1);
+        fact.crit = Criticality::Notable;
+        fact.r#if = crate::yaml::from_str("type: text\nsection: rdata\nexact: other.exe\n").unwrap();
+        assert_eq!(find_wellknown_missing_size_filter(&[fact], &HashMap::new()).len(), 1);
+    }
+
+    #[test]
+    fn call_argument_predicates_are_not_bare_name_duplicates() {
+        use crate::capabilities::validation::duplicates::find_regex_literal_overlap_issues;
+        let mut base = leaf("micro-behaviors/fs/file/open::fopen", Criticality::Notable);
+        base.defined_in = PathBuf::from("open.yaml");
+        base.r#for = vec![FileType::Php];
+        base.r#if = crate::yaml::from_str("type: symbol\nkind: call\nexact: fopen\n").unwrap();
+        let mut mode = leaf("micro-behaviors/fs/file/io-mode::append", Criticality::Notable);
+        mode.defined_in = PathBuf::from("mode.yaml");
+        mode.r#for = vec![FileType::Php];
+        mode.r#if = crate::yaml::from_str(r#"type: symbol
+kind: call
+regex: '^\\?fopen$'
+arg: {index: 1, exact: a}
+"#).unwrap();
+        assert!(find_regex_literal_overlap_issues(&[base.clone(), mode.clone()]).is_empty());
+        mode.r#if = crate::yaml::from_str(r#"type: symbol
+kind: call
+regex: '^\\?fopen$'
+"#).unwrap();
+        assert!(!find_regex_literal_overlap_issues(&[base, mode]).is_empty());
     }
 
     #[test]
@@ -9574,6 +9758,52 @@ regex: 'cdn\.jsdelivr\.net/npm/[^"''\s]{0,160}\.js([?#"''`\s<>)\]}]|$)'
             assert!(
                 find_wellknown_missing_section_filter(&[fact.clone()], &HashMap::new()).is_empty()
             );
+            fact.id.push_str("-changed");
+            assert_eq!(
+                find_wellknown_missing_size_filter(&[fact], &HashMap::new()).len(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn security_product_path_references_keep_reviewed_whole_file_scope() {
+        for (id, query) in [
+            (
+                "well-known/app/security/eset::eset-update-manifest-path",
+                "type: text\nregex: '/eset_upd/[\\w./-]{0,64}update\\.ver\\b'\n",
+            ),
+            (
+                "well-known/app/security/globalprotect::globalprotect-sslvpn-login-esp",
+                "type: text\nsubstr: /ssl-vpn/login.esp\n",
+            ),
+        ] {
+            let mut fact = text_trait(id, vec![FileType::Pe]);
+            fact.crit = crate::types::Criticality::Notable;
+            fact.r#if = crate::yaml::from_str(query).unwrap();
+            assert!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty()
+            );
+            // GlobalProtect normally targets mixed scripts and binaries;
+            // only ESET's binary-only rule needs the section allowance.
+            if id.contains("eset::") {
+                assert!(
+                    find_wellknown_missing_section_filter(&[fact.clone()], &HashMap::new())
+                        .is_empty()
+                );
+            }
+            let mut altered = fact.clone();
+            altered.r#if = crate::yaml::from_str("type: text\nsubstr: unrelated\n").unwrap();
+            assert_eq!(
+                find_wellknown_missing_size_filter(&[altered], &HashMap::new()).len(),
+                1
+            );
+            fact.crit = crate::types::Criticality::Suspicious;
+            assert_eq!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+                1
+            );
+            fact.crit = crate::types::Criticality::Notable;
             fact.id.push_str("-changed");
             assert_eq!(
                 find_wellknown_missing_size_filter(&[fact], &HashMap::new()).len(),

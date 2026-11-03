@@ -166,8 +166,8 @@ fn test_analyze_hex_encoded_javascript() {
                 file_analysis
                     .findings
                     .iter()
-                    .any(|f| f.id.contains("metadata/lang/encoded/hex")),
-                "Should have auto-generated metadata/lang/encoded/hex trait"
+                    .any(|f| f.id.contains("metadata/lang/encoding/layer::hex")),
+                "Should have auto-generated metadata/lang/encoding/layer::hex trait"
             );
         }
         EmbeddedAnalysisResult::PlainEmbedded(_) => {

@@ -294,6 +294,7 @@ const ALLOWED_MB_METAPROGRAMMING: &[&str] = &["ast", "generation", "reflection"]
 
 /// Allowed subdirectories in micro-behaviors/crypto/
 const ALLOWED_MB_CRYPTO: &[&str] = &[
+    "analysis", // Cryptanalysis evidence without assuming a cipher or credential target
     "asymmetric",
     "certificate",
     "cipher",  // Generic cipher API names without a supported algorithm family
@@ -544,9 +545,68 @@ const ALLOWED_MB_PROCESS: &[&str] = &[
     "work",
 ];
 
+/// Completed migrations; their old homes must not be populated again.
+const RETIRED_TAXONOMY_PATHS: &[&str] = &[
+    "micro-behaviors/communications/ipc/irc",
+    "micro-behaviors/crypto/asymmetric/ecdh",
+    "micro-behaviors/crypto/asymmetric/encrypt",
+    "micro-behaviors/crypto/asymmetric/key",
+    "micro-behaviors/crypto/hash/crc32",
+    "micro-behaviors/crypto/hash/fnv",
+    "micro-behaviors/crypto/symmetric/aes/decrypt",
+    "micro-behaviors/os/env/check",
+    "micro-behaviors/os/env/dump",
+    "micro-behaviors/os/env/enumeration",
+    "micro-behaviors/os/env/gate",
+    "micro-behaviors/os/env/modify",
+    "micro-behaviors/os/env/user-paths",
+    "micro-behaviors/os/service/driver",
+    "micro-behaviors/process/interpreter/reflection",
+    "micro-behaviors/process/threading/queue",
+    "objectives/collection/email-harvest",
+    "objectives/command-and-control/dropper",
+    "objectives/credential-access/windows-registry",
+    "objectives/lateral-movement/social-engineering/spam",
+];
+
 /// Retired process categories: execution host is not the affected resource.
 /// Keep aligned with traits/scripts/review/process-taxonomy-policy.json.
 const RETIRED_PROCESS_PATHS: &[&str] = &[
+    "micro-behaviors/process/create/start-process",
+    "micro-behaviors/process/create/shortcut",
+    "micro-behaviors/process/create/remote",
+    "micro-behaviors/process/create/local-exec",
+    "micro-behaviors/process/create/api-system",
+    "micro-behaviors/process/create/argv-launch",
+    "micro-behaviors/process/create/background",
+    "micro-behaviors/process/create/command-handler",
+    "micro-behaviors/process/create/direct",
+    "micro-behaviors/process/create/embedded",
+    "micro-behaviors/process/create/execv",
+    "micro-behaviors/process/create/indirect",
+    "micro-behaviors/process/create/launch",
+    "micro-behaviors/process/create/managed",
+    "micro-behaviors/process/create/output-root-shell",
+    "micro-behaviors/process/create/popen",
+    "micro-behaviors/process/create/root-shell",
+    "micro-behaviors/process/create/runtime-host",
+    "micro-behaviors/process/create/self-respawn",
+    "micro-behaviors/process/create/server",
+    "micro-behaviors/process/create/service-api",
+    "micro-behaviors/process/create/shell-subprocess",
+    "micro-behaviors/process/create/spawn",
+    "micro-behaviors/process/create/spawnv",
+    "micro-behaviors/process/create/sshtty",
+    "micro-behaviors/process/create/stdlib",
+    "micro-behaviors/process/create/variable-spawn",
+    "micro-behaviors/process/create/vb-shell",
+    "micro-behaviors/process/create/vb6",
+    "micro-behaviors/process/create/wrapper",
+    "micro-behaviors/process/create/parent-attribute",
+    "micro-behaviors/process/create/native",
+    "micro-behaviors/process/create/fiber",
+    "micro-behaviors/process/create/inline-script",
+    "micro-behaviors/process/create/workers",
     "micro-behaviors/process/io",
     "micro-behaviors/process/tls",
     "micro-behaviors/process/sync/lock-free",
@@ -1008,7 +1068,6 @@ const ALLOWED_METADATA_FILE: &[&str] = &[
     "archive",           // Member counts of the archive itself
     "catalog",           // File/catalog identity and generated registries
     "comment",           // Comment volume and span
-    "encoded",           // Encoded content presence (base64); migrating to encoding
     "encoding",          // Encoded content representation without a decoding operation
     "entropy",           // Whole-file byte entropy; decoded-image measurements stay in image/
     "extension",         // File extension classification
@@ -1076,7 +1135,6 @@ const ALLOWED_METADATA_FONT: &[&str] = &[
 const ALLOWED_METADATA_LANG: &[&str] = &[
     "compiled",            // Compiled language detection
     "compiler",            // Compiler identification
-    "encoded",             // Encoded strings (unicode, wide); migrating to encoding
     "encoding",            // Text encoding of source/strings (unicode, wide)
     "generated",           // Emitted by a code generator rather than hand-written
     "runtime",             // Language runtime markers left in a compiled binary
@@ -1549,6 +1607,15 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
         }
     }
 
+    for retired in RETIRED_TAXONOMY_PATHS {
+        if traits_path.join(retired).is_dir() {
+            errors.push(format!(
+                "Retired taxonomy directory: '{retired}'\n  \
+                 Classify by the supported behavior or subject; see TAXONOMY.md."
+            ));
+        }
+    }
+
     // Banned subtrees cannot return under a new nested leaf. Root bans also
     // live in ALLOWED_MB_PROCESS; this list records the deeper boundaries.
     for retired in RETIRED_PROCESS_PATHS {
@@ -1857,52 +1924,42 @@ mod tests {
     }
 
     #[test]
-    fn test_taxonomy_migration_old_and_new_homes_coexist() {
-        // Each pair is (legacy home, target home) from TAXONOMY.md's migration
-        // map. Both must validate while rules move between them.
-        let pairs = [
-            (
-                "micro-behaviors/communications/ipc/irc",
-                "micro-behaviors/communications/irc",
-            ),
-            (
-                "micro-behaviors/crypto/symmetric/aes/decrypt",
-                "micro-behaviors/crypto/decrypt",
-            ),
-            (
-                "micro-behaviors/crypto/asymmetric/key",
-                "micro-behaviors/crypto/key",
-            ),
-            (
-                "micro-behaviors/crypto/hash/crc32",
-                "micro-behaviors/data/checksum",
-            ),
-            (
-                "objectives/command-and-control/dropper/staging",
-                "objectives/execution/staging",
-            ),
-            (
-                "objectives/collection/email-harvest",
-                "objectives/collection/email",
-            ),
-            (
-                "objectives/credential-access/windows-registry",
-                "objectives/credential-access/registry",
-            ),
-            (
-                "objectives/lateral-movement/social-engineering/spam",
-                "objectives/impact/spam",
-            ),
-            ("metadata/file/encoded", "metadata/file/encoding"),
-            ("metadata/lang/encoded", "metadata/lang/encoding"),
-        ];
+    fn retired_encoding_directories_are_rejected() {
+        for retired in ["metadata/file/encoded", "metadata/lang/encoded"] {
+            let temp = TempDir::new().unwrap();
+            std::fs::create_dir_all(temp.path().join(retired)).unwrap();
+            let errors = validate_directory_structure(temp.path()).unwrap_err();
+            assert!(
+                errors.iter().any(|error| error.contains("encoded")),
+                "{retired}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn retired_taxonomy_subtrees_are_rejected() {
+        for retired in RETIRED_TAXONOMY_PATHS {
+            let temp = TempDir::new().unwrap();
+            std::fs::create_dir_all(temp.path().join(retired).join("nested")).unwrap();
+            let errors = validate_directory_structure(temp.path()).unwrap_err();
+            assert!(errors.iter().any(|error| error.contains(retired)), "{retired}: {errors:?}");
+        }
+    }
+
+    #[test]
+    fn migrated_taxonomy_target_homes_are_valid() {
         let temp_dir = TempDir::new().unwrap();
         let traits_path = temp_dir.path();
-        for (old, new) in pairs {
-            std::fs::create_dir_all(traits_path.join(old)).unwrap();
-            std::fs::create_dir_all(traits_path.join(new)).unwrap();
-        }
         for new in [
+            "micro-behaviors/communications/irc",
+            "micro-behaviors/crypto/decrypt",
+            "micro-behaviors/crypto/key",
+            "micro-behaviors/crypto/asymmetric/signature",
+            "micro-behaviors/data/checksum",
+            "objectives/execution/staging",
+            "objectives/collection/email",
+            "objectives/credential-access/registry",
+            "objectives/impact/spam",
             "micro-behaviors/crypto/encrypt",
             "micro-behaviors/crypto/sign",
             "micro-behaviors/crypto/verify",

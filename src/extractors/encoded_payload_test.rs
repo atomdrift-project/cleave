@@ -611,7 +611,7 @@ mod offset_tests {
 }
 
 /// Both compression layers the peeler adds are names reference validation
-/// accepts as `metadata/lang/encoded/<encoding>`.
+/// accepts as `metadata/lang/encoding/layer::<encoding>`.
 #[test]
 fn decompression_layers_are_known_encoded_layer_names() {
     use crate::analyzers::embedded_code_detector::ENCODED_LAYER_NAMES;

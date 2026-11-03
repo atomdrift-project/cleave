@@ -25,6 +25,8 @@
 
 #[path = "pyarmor_members.rs"]
 mod pyarmor_members;
+#[path = "rc4_members.rs"]
+mod rc4_members;
 
 use super::ArchiveAnalyzer;
 use super::guards::{
@@ -2781,6 +2783,8 @@ impl ArchiveAnalyzer {
             let mut window = MemberWindow::new_in(scope, self, "filefacts ZIP index");
             let mut jar_members: Vec<MemoryArchiveMember> = Vec::new();
             let mut pyarmor = pyarmor_members::Collector::default();
+            let mut rc4 = (report.target.file_type == FileType::ApkAndroid.report_file_type())
+                .then(rc4_members::Collector::default);
 
             for entry in indexed_entries {
                 if self.is_cancelled() {
@@ -2913,10 +2917,39 @@ impl ArchiveAnalyzer {
                     container_kind: None,
                 };
                 pyarmor.observe(&member);
+                if let Some(rc4) = rc4.as_mut() {
+                    rc4.observe(&member, &|| self.is_cancelled());
+                }
                 if is_jar {
                     jar_members.push(member);
                 } else {
                     window.push(member);
+                }
+            }
+
+            if let Some(rc4) = rc4 {
+                for recovered in rc4.recover(
+                    |message| {
+                        report.metadata.errors.push(message);
+                        report
+                            .analysis_gaps
+                            .record(crate::types::AnalysisGap::EmbeddedSourceIncomplete);
+                    },
+                    || self.is_cancelled(),
+                ) {
+                    if !guard.check_file_count()
+                        || !guard.check_bytes(
+                            recovered.member.data.len() as u64,
+                            &recovered.member.relative_path,
+                        )
+                    {
+                        guard.add_extraction_note(
+                            "RC4 code-asset recovery exceeded the archive extraction budget".into(),
+                        );
+                        break;
+                    }
+                    recovered.record_provenance(report);
+                    window.push(recovered.member);
                 }
             }
 
@@ -2995,6 +3028,8 @@ impl ArchiveAnalyzer {
             let mut window = MemberWindow::new_in(scope, self, "memory ZIP");
             let mut jar_members: Vec<MemoryArchiveMember> = Vec::new();
             let mut pyarmor = pyarmor_members::Collector::default();
+            let mut rc4 = (report.target.file_type == FileType::ApkAndroid.report_file_type())
+                .then(rc4_members::Collector::default);
 
             for i in 0..archive.len() {
                 if self.is_cancelled() {
@@ -3181,10 +3216,39 @@ impl ArchiveAnalyzer {
                     container_kind: None,
                 };
                 pyarmor.observe(&member);
+                if let Some(rc4) = rc4.as_mut() {
+                    rc4.observe(&member, &|| self.is_cancelled());
+                }
                 if is_jar {
                     jar_members.push(member);
                 } else {
                     window.push(member);
+                }
+            }
+
+            if let Some(rc4) = rc4 {
+                for recovered in rc4.recover(
+                    |message| {
+                        report.metadata.errors.push(message);
+                        report
+                            .analysis_gaps
+                            .record(crate::types::AnalysisGap::EmbeddedSourceIncomplete);
+                    },
+                    || self.is_cancelled(),
+                ) {
+                    if !guard.check_file_count()
+                        || !guard.check_bytes(
+                            recovered.member.data.len() as u64,
+                            &recovered.member.relative_path,
+                        )
+                    {
+                        guard.add_extraction_note(
+                            "RC4 code-asset recovery exceeded the archive extraction budget".into(),
+                        );
+                        break;
+                    }
+                    recovered.record_provenance(report);
+                    window.push(recovered.member);
                 }
             }
 

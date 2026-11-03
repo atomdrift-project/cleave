@@ -1922,7 +1922,7 @@ checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 [[package]]
 name = "filefacts"
 version = "2.0.1"
-source = "git+https://github.com/atomdrift-project/filefacts.git#f3f8e5b9f3aee35e7fdfdcd1ac6271a055478a64"
+source = "git+https://github.com/atomdrift-project/filefacts.git#86fa38e18ce0484c441ee8dfd5af9b8fb71491a3"
 dependencies = [
  "aes 0.9.4",
  "aho-corasick",
@@ -1939,7 +1939,7 @@ dependencies = [
  "iced-x86",
  "jpeg-decoder",
  "libc",
- "lzma-rust2 0.24.0",
+ "lzma-rust2",
  "md-5 0.10.6",
  "memchr",
  "p256 0.13.2",
@@ -3042,15 +3042,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5baab2bbbd7d75a144d671e9ff79270e903957d92fb7386fd39034c709bd2661"
 dependencies = [
  "byteorder",
-]
-
-[[package]]
-name = "lzma-rust2"
-version = "0.23.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1c46f3fcd2e888afdb01a07efc071cb21300e07c68d32c3e8b01b5c8cb1fcaa"
-dependencies = [
- "sha2 0.11.1",
 ]
 
 [[package]]
@@ -5115,7 +5106,7 @@ dependencies = [
 [[package]]
 name = "stng"
 version = "3.0.0"
-source = "git+https://github.com/atomdrift-project/stng.git#b1e9ce719cf38b56a976314d1b5643b2f5287139"
+source = "git+https://github.com/atomdrift-project/stng.git#00026f7a60b1a20cba2c31c4b64561736ac17be3"
 dependencies = [
  "aho-corasick",
  "base64 0.22.1",
@@ -5140,7 +5131,7 @@ dependencies = [
 [[package]]
 name = "stng-process"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/stng.git#b1e9ce719cf38b56a976314d1b5643b2f5287139"
+source = "git+https://github.com/atomdrift-project/stng.git#00026f7a60b1a20cba2c31c4b64561736ac17be3"
 dependencies = [
  "libc",
 ]
@@ -5697,7 +5688,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#f3f8e5b9f3aee35e7fdfdcd1ac6271a055478a64"
+source = "git+https://github.com/atomdrift-project/filefacts.git#86fa38e18ce0484c441ee8dfd5af9b8fb71491a3"
 dependencies = [
  "cc",
  "tree-sitter",
@@ -7117,9 +7108,9 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "9.2.2"
+version = "9.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e408c6cc4699dd017d53dc080cd51c2cea2b5354af57a1479bd265ed42911487"
+checksum = "eaeb7f16d2605b49aef586996ded29e65642fab7259a3077e537351df6d80426"
 dependencies = [
  "aes 0.9.4",
  "bzip2 0.6.1",
@@ -7131,7 +7122,7 @@ dependencies = [
  "hmac 0.13.0",
  "indexmap",
  "libc",
- "lzma-rust2 0.23.0",
+ "lzma-rust2",
  "memchr",
  "nix",
  "pbkdf2 0.13.0",

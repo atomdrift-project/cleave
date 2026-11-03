@@ -41,7 +41,6 @@ traits:
     cleave::traits_repo::set_override_dir(Some(repo.path().to_path_buf()));
     let options = cleave::AnalysisOptions {
         yara: false,
-        rizin: false,
         upx: false,
         ..Default::default()
     };

@@ -98,7 +98,6 @@ impl Collector {
             self.sources.push(member.relative_path.clone());
             let parsed = filefacts::OpenOptions::new()
                 .cache(false)
-                .rizin(false)
                 .file_type(filefacts::FileType::Dex)
                 .open(data);
             for literal in parsed.literals() {

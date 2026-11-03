@@ -120,11 +120,6 @@ pub(crate) fn loaded_capability_mapper() -> Option<Arc<CapabilityMapper>> {
 pub(crate) fn settings_for_options(options: &crate::AnalysisOptions) -> crate::engine::Settings {
     crate::engine::Settings {
         upx: options.upx,
-        rizin: options.rizin,
-        rizin_timeout: options.rizin_timeout,
-        rizin_retry_timeout: options.rizin_retry_timeout,
-        rizin_max_bytes: options.rizin_max_bytes,
-        rizin_native_arch_only: options.rizin_native_arch_only,
         compact_members: options.compact_members,
         yara: options.yara,
         third_party_yara: options.third_party_yara,

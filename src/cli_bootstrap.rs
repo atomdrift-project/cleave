@@ -105,13 +105,11 @@ pub(crate) fn init_logging(verbose: bool, is_validate: bool) {
 }
 
 /// Flip the library's cancellation flag on SIGINT/SIGTERM so long scans drain
-/// cleanly; a second signal reaps rizin process groups and exits. Runs on the
-/// `ctrlc` dispatch thread, so locking and deleting temp inputs is safe there.
+/// cleanly; a second signal exits. Runs on the `ctrlc` dispatch thread.
 pub(crate) fn install_signal_handlers() {
     let flag = cleave::cancellation::global_flag();
     let result = ctrlc::set_handler(move || {
         if flag.swap(true, std::sync::atomic::Ordering::SeqCst) {
-            cleave::kill_all_rizin_groups();
             eprintln!("\n[cleave] second interrupt, forcing exit");
             std::process::exit(130);
         }

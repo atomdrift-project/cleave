@@ -11,7 +11,6 @@ fn anton_overwriter_is_dispatched_as_dos_com_and_exposes_its_markers() -> anyhow
         "anton-97",
         &AnalysisOptions {
             yara: false,
-            rizin: false,
             upx: false,
             ..Default::default()
         },

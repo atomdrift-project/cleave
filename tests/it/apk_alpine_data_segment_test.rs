@@ -24,7 +24,6 @@ use std::io::Write;
 fn opts() -> AnalysisOptions {
     AnalysisOptions {
         yara: false,
-        rizin: false,
         upx: false,
         ..Default::default()
     }

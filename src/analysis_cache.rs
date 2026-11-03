@@ -896,12 +896,11 @@ fn options_hash_with(
     // older binaries deserialize via `serde_json::Value` flexibility,
     // but the underlying field semantics differ — force re-analysis.
     //
-    // `rizin=` folds in filefacts' rizin fingerprint (tool presence /
-    // version / native-arch slicing). This lookup short-circuits *before*
-    // filefacts runs, so without it a report built when rizin was absent
-    // (or on an older rizin) would be served to a run that now has it,
-    // hiding the recovered symbols. filefacts' own cache uses the same
-    // fingerprint; this keeps the report layer in step.
+    // `recovery=` folds in filefacts' recovery fingerprint (the binform
+    // recovery policy). This lookup short-circuits *before* filefacts runs, so
+    // without it a report built under an older recovery policy would be served
+    // to a run with a newer one, hiding newly recovered symbols. filefacts' own
+    // cache uses the same fingerprint; this keeps the report layer in step.
     // v=6 → v=7: the raw report now serializes the transient fields the cache
     // round-trip needs — context-line `notes`, finding `evidence` (compact
     // `spans`), and `composite_sources` (compact `from`). Older entries lack
@@ -941,31 +940,31 @@ fn options_hash_with(
     // overrides outside `AnalysisOptions` (`CLEAVE_SKIP_YARA`, builtin-only)
     // and the zip passwords, which decide whether encrypted members are read.
     // v=21: filefacts 2.0 renamed 75 fact keys (schema v9); older reports carry
-    // the old names, which no rule reads any more. `rizin=` is now the
-    // fingerprint of the options the analysis opened files with, so it also
-    // says whether rizin ran.
+    // the old names, which no rule reads any more. `recovery=` is the
+    // fingerprint of the options the analysis opened files with.
     // v=22: compact members retain npm identity and install hooks for dependency
     // discovery. Historical compact reports discarded them before scan ran.
     // v=23: context windows store bytes as byte text (`s`) and no notes; notes
     // are derived from findings when a report renders.
     // v=27: combine the context-byte schema with packed binary extraction.
+    // v=28: rizin severed — recovery is now unconditional binform, so the
+    // standalone `rizin` on/off flag is gone and `recovery=` carries the policy.
     let zip_passwords = Sha256::digest(options.zip_passwords.join("\0").as_bytes());
     let key = format!(
-        "v=27,cm={},3p={},yara={},yskip={},ybuiltin={},zpw={},r2={},upx={},plat={},hp={},sp={},ps={},fv={},rizin={}",
+        "v=28,cm={},3p={},yara={},yskip={},ybuiltin={},zpw={},upx={},plat={},hp={},sp={},ps={},fv={},recovery={}",
         settings.compact_members,
         settings.third_party_yara,
         settings.yara,
         yara.skip,
         yara.builtin_only,
         hex::encode(&zip_passwords[..8]),
-        settings.rizin,
         settings.upx,
         platforms_str,
         settings.min_hostile_precision,
         settings.min_suspicious_precision,
         settings.precision_scoring,
         settings.full_validation,
-        crate::engine::filefacts_options(settings).rizin_fingerprint(),
+        crate::engine::filefacts_options(settings).recovery_fingerprint(),
     );
     let hash = Sha256::digest(key.as_bytes());
     // First 16 hex chars is plenty for a small option space
@@ -1605,33 +1604,6 @@ mod tests {
             ..Settings::default()
         };
         assert_ne!(options_hash(&a, &settings), options_hash(&a, &no_upx));
-        let no_rizin = Settings {
-            rizin: false,
-            ..Settings::default()
-        };
-        assert_ne!(options_hash(&a, &settings), options_hash(&a, &no_rizin));
-
-        // The timeout cannot change a cached report: a run that completes is
-        // the same under any budget, and one that does not is never cached.
-        let short_budget = Settings {
-            rizin_timeout: Some(std::time::Duration::from_secs(1)),
-            ..Settings::default()
-        };
-        assert_eq!(options_hash(&a, &settings), options_hash(&a, &short_budget));
-        // The size cap and native-slice limit change what rizin sees, so they
-        // separate entries wherever rizin runs at all.
-        if filefacts::rizin::available() {
-            let capped = Settings {
-                rizin_max_bytes: Some(1 << 20),
-                ..Settings::default()
-            };
-            assert_ne!(options_hash(&a, &settings), options_hash(&a, &capped));
-            let native = Settings {
-                rizin_native_arch_only: true,
-                ..Settings::default()
-            };
-            assert_ne!(options_hash(&a, &settings), options_hash(&a, &native));
-        }
     }
     use super::*;
     use crate::types::FileAnalysis;

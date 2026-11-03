@@ -25,10 +25,10 @@ type Ctx<'a> = crate::analysis_context::AnalysisContext<'a>;
 /// Analyzer for Windows PE binaries (executables, DLLs, drivers).
 ///
 /// All deep-binary signal — function CFG fields, sections recovered
-/// from packed binaries, the rizin import fallback — now flows in
+/// from packed binaries, the recovered import table — now flows in
 /// through `filefacts::open`. The analyzer projects from
-/// `ctx.parsed.symbols()` (filtered by kind) / `sections()` rather than
-/// spawning rizin itself.
+/// `ctx.parsed.symbols()` (filtered by kind) / `sections()`; recovery
+/// runs in-process inside filefacts.
 #[derive(Debug)]
 pub struct PEAnalyzer {
     engine: crate::Engine,

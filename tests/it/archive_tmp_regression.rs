@@ -42,7 +42,6 @@ fn zip_analysis_does_not_extract_to_tmpdir_by_default() -> anyhow::Result<()> {
         &zip_path,
         &cleave::AnalysisOptions {
             yara: false,
-            rizin: false,
             ..Default::default()
         },
     );

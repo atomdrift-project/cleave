@@ -12,7 +12,8 @@
 //!
 //! cleave supports disabling expensive analysis components:
 //! - `--disable yara` - Skip YARA pattern matching
-//! - `--disable rizin` - Skip binary disassembly
+//! - `--disable rizin` - Accepted for compatibility; binary disassembly is now
+//!   unconditional in-process recovery and cannot be turned off
 //! - `--disable upx` - Skip UPX unpacking attempts
 //! - `--disable third-party` - Skip third-party YARA rules
 
@@ -33,7 +34,8 @@ pub const DEFAULT_ZIP_PASSWORDS: &[&str] = &[
 pub struct DisabledComponents {
     /// Whether YARA scanning is disabled
     pub yara: bool,
-    /// Whether rizin analysis is disabled
+    /// Accepted for compatibility; disassembly is now always-on and this has
+    /// no effect.
     pub rizin: bool,
     /// Whether UPX unpacking is disabled
     pub upx: bool,
@@ -46,7 +48,7 @@ pub struct DisabledComponents {
 pub enum Component {
     /// YARA pattern matching
     Yara,
-    /// Rizin disassembly
+    /// Accepted for compatibility; disassembly is always-on and cannot be disabled.
     #[value(alias = "radare2")]
     Rizin,
     /// UPX unpacking

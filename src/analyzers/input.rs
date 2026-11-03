@@ -43,9 +43,6 @@ pub struct AnalysisInput<'a> {
     /// Detected file type
     pub file_type: FileType,
 
-    /// Skip deep rizin analysis for this input.
-    pub skip_rizin: bool,
-
     /// Optional SHA256 hash (memoized if computed during extraction)
     pub sha256: Option<String>,
 
@@ -75,7 +72,6 @@ impl<'a> AnalysisInput<'a> {
             strings: &[],
             payloads: &[],
             file_type,
-            skip_rizin: false,
             sha256: None,
             depth: 0,
             cancellation: None,
@@ -98,7 +94,6 @@ impl<'a> AnalysisInput<'a> {
             strings,
             payloads: &[],
             file_type,
-            skip_rizin: false,
             sha256: None,
             depth: 0,
             cancellation: None,
@@ -122,7 +117,6 @@ impl<'a> AnalysisInput<'a> {
             strings,
             payloads,
             file_type,
-            skip_rizin: false,
             sha256: None,
             depth: 0,
             cancellation: None,
@@ -171,9 +165,9 @@ impl<'a> AnalysisInput<'a> {
         }
     }
 
-    /// Open a fresh context on `data` with filefacts' default settings,
-    /// honoring [`Self::skip_rizin`]. Analyzers holding an engine use
-    /// [`Self::open_ctx_with`] and its options instead.
+    /// Open a fresh context on `data` with filefacts' default settings.
+    /// Analyzers holding an engine use [`Self::open_ctx_with`] and its options
+    /// instead.
     #[must_use]
     pub fn open_ctx(&self) -> crate::analysis_context::AnalysisContext<'a> {
         self.open_ctx_with(crate::engine::filefacts_options(
@@ -181,35 +175,15 @@ impl<'a> AnalysisInput<'a> {
         ))
     }
 
-    /// Open a fresh context on `data` under `options` (an engine's, normally),
-    /// with rizin off when [`Self::skip_rizin`] says so. Prefer
-    /// [`Self::parsed_ctx`] when a caller threaded one in: a second open
+    /// Open a fresh context on `data` under `options` (an engine's, normally).
+    /// Prefer [`Self::parsed_ctx`] when a caller threaded one in: a second open
     /// repeats the whole extraction.
     #[must_use]
     pub fn open_ctx_with(
         &self,
         options: filefacts::OpenOptions<'a>,
     ) -> crate::analysis_context::AnalysisContext<'a> {
-        let options = if self.skip_rizin {
-            options.rizin(false)
-        } else {
-            options
-        };
         crate::analysis_context::AnalysisContext::open_with(options, self.path, self.data)
-    }
-
-    /// Disable deep rizin analysis for this input.
-    #[must_use]
-    pub fn with_skip_rizin(mut self) -> Self {
-        self.skip_rizin = true;
-        self
-    }
-
-    /// Conditionally disable deep rizin analysis for this input.
-    #[must_use]
-    pub fn with_skip_rizin_if(mut self, skip_rizin: bool) -> Self {
-        self.skip_rizin = skip_rizin;
-        self
     }
 
     /// Get SHA256 (computes if not already memoized).

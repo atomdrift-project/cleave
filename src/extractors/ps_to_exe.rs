@@ -321,7 +321,7 @@ mod tests {
     fn recovers_benign_scripts_with_changed_seed_base_sections_and_resource_name() {
         for (seed, base) in [(b"new seed", 0x180000000), (b"seed two", 0x240000000)] {
             let data = fixture(seed, base);
-            let parsed = filefacts::OpenOptions::new().rizin(false).open(&data);
+            let parsed = filefacts::OpenOptions::new().open(&data);
             let recovered = recover(&data, &parsed);
             assert_eq!(recovered.len(), 1);
             assert_eq!(recovered[0].offset, 0x680);
@@ -342,7 +342,7 @@ mod tests {
                 1 => data[0x400..0x420].fill(0),
                 _ => data.truncate(0x690),
             }
-            let parsed = filefacts::OpenOptions::new().rizin(false).open(&data);
+            let parsed = filefacts::OpenOptions::new().open(&data);
             assert!(recover(&data, &parsed).is_empty());
         }
     }

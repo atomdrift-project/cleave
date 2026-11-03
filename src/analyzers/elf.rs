@@ -28,7 +28,7 @@ type Ctx<'a> = crate::analysis_context::AnalysisContext<'a>;
 ///
 /// Function CFG fields and recovered symbols for stripped binaries arrive
 /// through `filefacts::open` on `ctx.parsed.symbols()` (filtered by kind)
-/// and `sections()`; the analyzer never spawns rizin itself.
+/// and `sections()`; recovery runs in-process inside filefacts.
 #[derive(Debug)]
 pub(crate) struct ElfAnalyzer {
     engine: crate::Engine,
@@ -1318,6 +1318,10 @@ mod tests {
         buf[16..18].copy_from_slice(&2u16.to_le_bytes()); // ET_EXEC
         buf[18..20].copy_from_slice(&62u16.to_le_bytes()); // EM_X86_64
         buf[20..24].copy_from_slice(&1u32.to_le_bytes()); // e_version
+        // Entry point at the code's address seeds recovery; with no symbols,
+        // no PLT and no unwind info it is the only thing that marks the section
+        // start as a function to walk.
+        buf[24..32].copy_from_slice(&(EH as u64).to_le_bytes()); // e_entry == code vaddr
         buf[40..48].copy_from_slice(&(shtab as u64).to_le_bytes()); // e_shoff
         buf[52..54].copy_from_slice(&(EH as u16).to_le_bytes()); // e_ehsize
         buf[58..60].copy_from_slice(&(SH as u16).to_le_bytes()); // e_shentsize
@@ -1325,7 +1329,12 @@ mod tests {
         buf[EH..EH + code.len()].copy_from_slice(&code);
         let sh = shtab + SH; // [0] is the mandatory null header
         buf[sh + 4..sh + 8].copy_from_slice(&1u32.to_le_bytes()); // SHT_PROGBITS
-        buf[sh + 8..sh + 16].copy_from_slice(&0x4u64.to_le_bytes()); // SHF_EXECINSTR
+        // SHF_ALLOC | SHF_EXECINSTR: ALLOC makes it a loadable segment recovery
+        // reads, EXECINSTR marks it as code.
+        buf[sh + 8..sh + 16].copy_from_slice(&0x6u64.to_le_bytes());
+        // sh_addr == sh_offset, so a site's virtual address equals its file
+        // offset and the `address == 74` assertion still pins the file offset.
+        buf[sh + 16..sh + 24].copy_from_slice(&(EH as u64).to_le_bytes()); // sh_addr
         buf[sh + 24..sh + 32].copy_from_slice(&(EH as u64).to_le_bytes()); // sh_offset
         buf[sh + 32..sh + 40].copy_from_slice(&(code.len() as u64).to_le_bytes()); // sh_size
 

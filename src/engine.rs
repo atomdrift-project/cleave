@@ -37,16 +37,6 @@ struct Inner {
 pub(crate) struct Settings {
     /// Unpack UPX-packed executables and analyze the unpacked image too.
     pub(crate) upx: bool,
-    /// Recover symbols and code metrics by disassembling native binaries with
-    /// rizin (filefacts' per-file `OpenOptions::rizin`).
-    pub(crate) rizin: bool,
-    /// filefacts' `OpenOptions::rizin_timeout`; `None` is its default.
-    pub(crate) rizin_timeout: Option<std::time::Duration>,
-    pub(crate) rizin_retry_timeout: Option<std::time::Duration>,
-    /// filefacts' `OpenOptions::rizin_max_bytes`; `None` is no cap.
-    pub(crate) rizin_max_bytes: Option<usize>,
-    /// filefacts' `OpenOptions::rizin_native_arch_only`.
-    pub(crate) rizin_native_arch_only: bool,
     /// Fold archive members into the compact projection: fields only the full
     /// v3 output reads (`kv` no rule reaches, `filefacts.values`, findings no
     /// rule references) are dropped as each member folds into its container.
@@ -67,11 +57,6 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             upx: true,
-            rizin: true,
-            rizin_timeout: None,
-            rizin_retry_timeout: None,
-            rizin_max_bytes: None,
-            rizin_native_arch_only: false,
             compact_members: false,
             yara: false,
             third_party_yara: false,
@@ -84,24 +69,12 @@ impl Default for Settings {
     }
 }
 
-/// The filefacts options an engine with `settings` parses files with: its
-/// rizin settings, and filefacts' disk cache only when `FILEFACTS_CACHE` turns
-/// it on and cleave's own cache is in use.
-pub(crate) fn filefacts_options(settings: &Settings) -> filefacts::OpenOptions<'static> {
-    let mut options = filefacts::OpenOptions::new()
-        .rizin(settings.rizin)
-        .rizin_native_arch_only(settings.rizin_native_arch_only)
-        .cache(!crate::cache::skip_cache() && filefacts::cache::env_override().unwrap_or(false));
-    if let Some(timeout) = settings.rizin_timeout {
-        options = options.rizin_timeout(timeout);
-    }
-    if let Some(timeout) = settings.rizin_retry_timeout {
-        options = options.rizin_retry_timeout(timeout);
-    }
-    if let Some(max_bytes) = settings.rizin_max_bytes {
-        options = options.rizin_max_bytes(max_bytes);
-    }
-    options
+/// The filefacts options an engine with `settings` parses files with:
+/// filefacts' disk cache only when `FILEFACTS_CACHE` turns it on and cleave's
+/// own cache is in use.
+pub(crate) fn filefacts_options(_settings: &Settings) -> filefacts::OpenOptions<'static> {
+    filefacts::OpenOptions::new()
+        .cache(!crate::cache::skip_cache() && filefacts::cache::env_override().unwrap_or(false))
 }
 
 /// The engine with no rules, no YARA and default settings.
@@ -214,12 +187,6 @@ impl Engine {
     #[must_use]
     pub(crate) fn upx(&self) -> bool {
         self.0.settings.upx
-    }
-
-    /// Whether native binaries are disassembled with rizin.
-    #[must_use]
-    pub(crate) fn rizin(&self) -> bool {
-        self.0.settings.rizin
     }
 
     /// The filefacts options this engine's analyses parse files with. Per
@@ -398,56 +365,6 @@ traits:
         assert_eq!(full.kv.get("name"), Some(&serde_json::json!("x")));
     }
 
-    /// Rizin is a per-file setting: a vendored native module inside a package
-    /// skips it while the same binary elsewhere in the package does not, even
-    /// though identical bytes would otherwise share one analysis and one cache
-    /// entry. Before filefacts 2 this skip muted rizin only around `open`, so
-    /// it never took effect.
-    #[test]
-    fn archive_member_rizin_skip_is_per_member() {
-        if !filefacts::rizin::available() {
-            eprintln!("rizin not installed; skipping");
-            return;
-        }
-        // A stripped C shared object, which rizin's admission policy sends to
-        // the disassembler. (A Go binary would not do: filefacts reads its
-        // functions from the pclntab and never runs rizin on it.)
-        let elf = std::fs::read("tests/fixtures/test.elf").unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let zip_path = dir.path().join("pkg.zip");
-        {
-            let file = std::fs::File::create(&zip_path).unwrap();
-            let mut zip = zip::ZipWriter::new(file);
-            let stored = zip::write::FileOptions::<()>::default()
-                .compression_method(zip::CompressionMethod::Stored);
-            for name in ["node_modules/x/prebuilds/linux-x64/x.node", "bin/tool"] {
-                zip.start_file(name, stored).unwrap();
-                std::io::Write::write_all(&mut zip, &elf).unwrap();
-            }
-            zip.finish().unwrap();
-        }
-        let options = AnalysisOptions {
-            yara: false,
-            ..AnalysisOptions::default()
-        };
-        let report = Engine::for_options(&options)
-            .unwrap()
-            .analyze_file(&zip_path, &options)
-            .unwrap();
-        let disassembled = |suffix: &str| {
-            let file = report
-                .files
-                .iter()
-                .find(|f| f.path.ends_with(suffix))
-                .expect("both members are in the report");
-            file.filefacts_metrics
-                .as_ref()
-                .is_some_and(|m| m.contains_key("binary.basic_block_count"))
-        };
-        assert!(disassembled("bin/tool"));
-        assert!(!disassembled("x.node"));
-    }
-
     #[test]
     fn settings_changes_share_rules_and_yara() {
         let engine = Engine::empty();
@@ -459,21 +376,5 @@ traits:
             &compact.0,
             &compact.with_compact_members(true).0
         ));
-    }
-}
-
-#[cfg(test)]
-mod retry_settings_tests {
-    #[test]
-    fn native_retry_setting_survives_engine_configuration() {
-        let options = crate::AnalysisOptions {
-            rizin_timeout: Some(std::time::Duration::from_secs(60)),
-            rizin_retry_timeout: Some(std::time::Duration::from_secs(120)),
-            ..crate::AnalysisOptions::default()
-        };
-        let settings = crate::shared_resources::settings_for_options(&options);
-        assert_eq!(settings.rizin_timeout, options.rizin_timeout);
-        assert_eq!(settings.rizin_retry_timeout, options.rizin_retry_timeout);
-        let _parser_options = super::filefacts_options(&settings);
     }
 }

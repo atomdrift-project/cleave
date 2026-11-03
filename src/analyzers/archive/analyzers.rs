@@ -1766,28 +1766,6 @@ impl ArchiveAnalyzer {
         file_type.yara_filetypes()
     }
 
-    fn archive_member_rizin_skip_reason(
-        relative_path: &str,
-        file_type: &FileType,
-    ) -> Option<&'static str> {
-        if !matches!(file_type, FileType::Pe | FileType::Elf | FileType::MachO) {
-            return Some("not a native binary file type");
-        }
-
-        let lower_path = relative_path.to_ascii_lowercase();
-        let is_vendored_node_native = lower_path.ends_with(".node")
-            && lower_path.contains("node_modules/")
-            && (lower_path.contains("/prebuilds/")
-                || lower_path.contains("/build/release/")
-                || lower_path.contains("app.asar.unpacked/"));
-
-        if is_vendored_node_native {
-            return Some("vendored node native module under archive dependency tree");
-        }
-
-        None
-    }
-
     fn nested_archive_analyzer(&self, relative_path: &str) -> ArchiveAnalyzer {
         let nested_prefix = match &self.archive_path_prefix {
             Some(prefix) => format!("{}!{}", prefix, relative_path),
@@ -1919,18 +1897,9 @@ impl ArchiveAnalyzer {
         }
         let is_archive = file_type.is_archive();
         let file_type_key = file_type.label();
-        // The settings this member is analyzed under: the engine's, with rizin
-        // off for a member whose disassembly is skipped. They key the cache
-        // and the in-process sharing below, so a skipped member's report (no
-        // rizin facts) is never served to an analysis that runs rizin.
-        let member_settings = match Self::archive_member_rizin_skip_reason(relative_path, file_type)
-        {
-            Some(_) if self.engine.rizin() => crate::engine::Settings {
-                rizin: false,
-                ..self.engine.settings().clone()
-            },
-            _ => self.engine.settings().clone(),
-        };
+        // The settings this member is analyzed under: the engine's. They key
+        // the cache and the in-process sharing below.
+        let member_settings = self.engine.settings().clone();
         let report_type_key = crate::analysis_cache::report_type_key(
             file_type_key,
             std::path::Path::new(relative_path),
@@ -2461,8 +2430,6 @@ impl ArchiveAnalyzer {
             }
         } {
             let extract_payloads = Self::should_extract_archive_payloads(file_type);
-            let skip_rizin_reason =
-                Self::archive_member_rizin_skip_reason(relative_path, file_type);
 
             // Archive members get the SAME string-extraction treatment as a
             // standalone file (`lib.rs` uses `stng_analysis_opts` for every
@@ -2473,9 +2440,7 @@ impl ArchiveAnalyzer {
             // (npm tarballs, zips, jars). XOR/base64 detection parity with the
             // standalone path matters far more than the per-member scan cost;
             // an inconsistency that weakens detection only for archived content
-            // is a security hole. `skip_rizin_reason` still governs the rizin
-            // (binary disassembly) skip below — that's correct for non-native
-            // members — but it must NOT also gate string extraction.
+            // is a security hole.
             crate::memory_tracker::set_current_phase(format!("strings on {relative_path}"));
             // Normalize UTF-16 (LE/BE BOM) member content to UTF-8 before string
             // extraction and trait matching, mirroring the standalone path in
@@ -2488,19 +2453,11 @@ impl ArchiveAnalyzer {
             let logical_path = Path::new(relative_path);
             // filefacts is the string authority and the parser: open the
             // member once and thread it into the analyzer (below) so it is
-            // parsed a single time, regardless of member type.
-            // The rizin skip is per member, so it is a setting of this member's
-            // parse, not a mute: members fan out across rayon, and the old
-            // process-wide mute stripped symbols and metrics from whatever
-            // binary another thread was parsing (measured: an ARM ELF lost
-            // `binary.leaf_function_count`). The analyzer reuses this
-            // parse (`with_parsed_ctx`) rather than opening the member again.
-            let member_rizin = skip_rizin_reason.is_none() && self.engine.rizin();
+            // parsed a single time, regardless of member type. The analyzer
+            // reuses this parse (`with_parsed_ctx`) rather than opening the
+            // member again.
             let member_ctx = Some(crate::analysis_context::AnalysisContext::open_with(
-                crate::engine::filefacts_options(&crate::engine::Settings {
-                    rizin: member_rizin,
-                    ..self.engine.settings().clone()
-                }),
+                crate::engine::filefacts_options(self.engine.settings()),
                 logical_path,
                 data,
             ));
@@ -2536,7 +2493,6 @@ impl ArchiveAnalyzer {
                 *file_type,
             )
             .with_backing_path(file_path)
-            .with_skip_rizin_if(!member_rizin)
             .with_sha256(sha256.to_string())
             .at_depth((self.current_depth + 1) as u32);
             if let Some(ctx) = member_ctx {
@@ -2549,8 +2505,6 @@ impl ArchiveAnalyzer {
                 file_type = %file_type.report_file_type(),
                 string_count = stng_strings.len(),
                 payload_count = payloads.len(),
-                rizin_mode = if skip_rizin_reason.is_some() { "skipped" } else { "enabled" },
-                rizin_reason = skip_rizin_reason.unwrap_or("deep binary analysis allowed"),
                 payload_mode = if extract_payloads { "enabled" } else { "skipped" },
                 payload_reason = if extract_payloads {
                     "unified source analyzer consumes encoded payloads"

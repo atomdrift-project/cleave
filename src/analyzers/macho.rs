@@ -24,7 +24,7 @@ type Ctx<'a> = crate::analysis_context::AnalysisContext<'a>;
 
 /// Analyzer for macOS Mach-O binaries (executables, dylibs, bundles).
 ///
-/// Function CFG fields and rizin-recovered symbols arrive through
+/// Function CFG fields and recovered symbols arrive through
 /// `filefacts::open` on `ctx.parsed.symbols()` (filtered by kind), and
 /// imports come from filefacts's typed Mach-O view.
 #[derive(Debug)]
@@ -1971,11 +1971,6 @@ impl Analyzer for MachOAnalyzer {
             None
         } else {
             let options = self.engine.filefacts_options();
-            let options = if input.skip_rizin {
-                options.rizin(false)
-            } else {
-                options
-            };
             Some(crate::analysis_context::AnalysisContext::open_with(
                 options,
                 input.path,
@@ -2159,7 +2154,7 @@ mod tests {
     fn fat_slices_come_from_the_callers_parse() {
         let data = crate::test_samples::read("testdata/xor/gapi-update.macho");
         let ctx = crate::analysis_context::AnalysisContext::open_with(
-            filefacts::OpenOptions::new().rizin(false),
+            filefacts::OpenOptions::new(),
             Path::new("gapi-update.macho"),
             &data,
         );

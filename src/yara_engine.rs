@@ -3396,10 +3396,7 @@ composite_rules:
         crate::Engine::new(
             Arc::new(mapper),
             Some(Arc::new(yara)),
-            crate::engine::Settings {
-                rizin: false,
-                ..Default::default()
-            },
+            crate::engine::Settings::default(),
         )
     }
 

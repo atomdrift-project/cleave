@@ -239,7 +239,6 @@ pub fn run_with_options(
     }));
     let options = cleave::AnalysisOptions {
         yara: true,
-        rizin: false,
         upx: false,
         all_files: true,
         slow_rule_ms,

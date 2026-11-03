@@ -15,17 +15,16 @@
 //!   hands the flag to filefacts, whose parse polls it and abandons the tree,
 //!   degrading to a `source.ast_unavailable.parse_cancelled` diagnostic. A
 //!   15 s wall budget backs it up when no flag is supplied.
-//! - **rizin** — does not. cleave's `radare2/mod.rs` propagated cancellation,
-//!   but it was retired in the filefacts migration and `filefacts::rizin` has
-//!   not picked it up (tracked there as #75c). Bounded instead by its own hard
-//!   timeout and process-group kill, so it stops on its own; the flag just
-//!   doesn't make it stop *sooner*.
+//! - **native recovery** — now in-process (binform, inside filefacts' parse);
+//!   no subprocess remains to reap. It is bounded by being fast rather than by
+//!   a subprocess timeout, so the flag does not make a parse already underway
+//!   stop sooner.
 //! - **YARA** — an in-flight scan runs to yara-x's cooperative `set_timeout`
 //!   (20 min); the flag only prevents a scan that hasn't begun.
 //!
 //! So a cancelled run stops scheduling promptly and abandons the one leaf that
-//! could otherwise run long in-process, but a rizin child or an in-flight YARA
-//! scan still costs its own timeout.
+//! could otherwise run long in-process, but an in-flight YARA scan still costs
+//! its own timeout.
 //!
 //! The library never installs signal handlers: the host sets the flag. The
 //! `cleave` binary does so on SIGINT/SIGTERM and force-exits on the second.

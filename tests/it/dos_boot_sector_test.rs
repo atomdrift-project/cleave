@@ -10,7 +10,6 @@ fn shimmer_boot_sector_is_recognized_and_exposes_embedded_strings() -> anyhow::R
         "shimmer.d",
         &AnalysisOptions {
             yara: false,
-            rizin: false,
             upx: false,
             ..Default::default()
         },

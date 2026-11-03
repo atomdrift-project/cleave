@@ -1,5 +1,5 @@
-//! Resolving the external tools rizin integration runs, and the environment
-//! such a tool may inherit.
+//! Resolving the external tools cleave shells out to (nm, lldb, gdb, 7-Zip,
+//! …), and the environment such a tool may inherit.
 
 use std::collections::HashMap;
 use std::ffi::OsStr;

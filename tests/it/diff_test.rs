@@ -20,7 +20,6 @@ fn options() -> AnalysisOptions {
         // Speed up the test: skip YARA and r2 — the diff cares about traits,
         // metrics, kv, symbols, strings, sections, none of which require YARA.
         yara: false,
-        rizin: false,
         ..AnalysisOptions::default()
     }
 }

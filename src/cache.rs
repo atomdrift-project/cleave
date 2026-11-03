@@ -11,7 +11,7 @@
 //! - compiled-rule caches (`yara-rules-*.bin`, `capability-mapper-*.bin`)
 //! - the SQLite analysis-report cache (`crate::analysis_cache`)
 //!
-//! Rizin disassembly results are cached by filefacts (`filefacts::cache`),
+//! Binary recovery results are cached by filefacts (`filefacts::cache`),
 //! not here; `maintain_filefacts_cache` deletes the obsolete `re/` tree.
 //!
 //! # Cleanup
@@ -1115,11 +1115,11 @@ pub fn save_rule_stats(trait_count: usize, composite_count: usize) -> Result<()>
     Ok(())
 }
 
-/// Maintain the filefacts disk cache that now owns rizin recovery.
+/// Maintain the filefacts disk cache that owns binary recovery.
 ///
-/// Rizin moved into filefacts, which caches its extraction snapshot
+/// Recovery lives in filefacts, which caches its extraction snapshot
 /// (recovered imports/exports/functions/sections included) keyed by
-/// `(content, filefacts build, rizin config)`. cleave relies on that
+/// `(content, filefacts build, recovery policy)`. cleave relies on that
 /// cache instead of the old `re/` tree it kept before the migration.
 /// filefacts' `cleanup` prunes superseded schema versions and enforces
 /// its item cap (LRU eviction orphans entries left by earlier filefacts

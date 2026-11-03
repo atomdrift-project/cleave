@@ -139,7 +139,6 @@ fn archive_member_findings_are_deterministic() -> anyhow::Result<()> {
     // the tree-sitter path stays enabled.
     let options = cleave::AnalysisOptions {
         yara: false,
-        rizin: false,
         upx: false,
         ..Default::default()
     };

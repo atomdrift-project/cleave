@@ -105,7 +105,6 @@ fn cache_preserves_archive_and_memory_api_context() {
         cleave::traits_repo::set_override_dir(Some(root.join("rules")));
         let options = cleave::AnalysisOptions {
             yara: false,
-            rizin: false,
             upx: false,
             ..Default::default()
         };

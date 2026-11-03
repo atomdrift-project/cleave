@@ -15,7 +15,6 @@ use cleave::{AnalysisOptions, AnalysisReport, analyze_file};
 fn opts() -> AnalysisOptions {
     AnalysisOptions {
         yara: false,
-        rizin: false,
         upx: false,
         ..Default::default()
     }

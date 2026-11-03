@@ -60,7 +60,6 @@ composite_rules:
     cleave::traits_repo::set_override_dir(Some(dir.path().to_path_buf()));
     let options = cleave::AnalysisOptions {
         yara: false,
-        rizin: false,
         upx: false,
         ..Default::default()
     };

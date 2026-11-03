@@ -35,7 +35,6 @@ traits:
     cleave::traits_repo::set_override_dir(Some(traits));
     let opts = AnalysisOptions {
         yara: false,
-        rizin: false,
         upx: false,
         ..Default::default()
     };

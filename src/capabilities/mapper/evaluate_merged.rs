@@ -78,7 +78,7 @@ pub(crate) fn merge_filefacts_context(
     ctx: &crate::analysis_context::AnalysisContext<'_>,
 ) {
     super::CapabilityMapper::generate_import_findings(report, &ctx.parsed);
-    if ctx.parsed.rizin_recovery_incomplete() {
+    if ctx.parsed.recovery_incomplete() {
         report
             .analysis_gaps
             .record(crate::types::AnalysisGap::DisassemblyIncomplete);

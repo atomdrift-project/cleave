@@ -2915,6 +2915,8 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     "text:metadata/file/catalog/",
     "text:metadata/file/format/",
     "text:metadata/file/profile/",
+    // Ordered character alphabets can occur in source or compiled artifacts.
+    "text:metadata/lang/charset/alphabet/review-literal-charset.yaml",
     "text:metadata/lang/natural/",
     "text:metadata/lang/locale/",
     "text:metadata/file/extension/",
@@ -3119,7 +3121,7 @@ fn effective_filetype_count(t: &TraitDefinition) -> usize {
 /// file-type, duplicate, and condition validation.
 const REVIEWED_BROAD_PLATFORM_SCOPES: &[(&str, &[Platform])] = &[
     (
-        "micro-behaviors/fs/read/file/full::swift-direct-file-read-api",
+        "micro-behaviors/fs/read/file/content/unspecified::swift-direct-file-read-api",
         &[
             Platform::Ios,
             Platform::MacOS,
@@ -3128,7 +3130,7 @@ const REVIEWED_BROAD_PLATFORM_SCOPES: &[(&str, &[Platform])] = &[
         ],
     ),
     (
-        "micro-behaviors/fs/read/file/full::swift-data-file-read",
+        "micro-behaviors/fs/read/file/content/unspecified::swift-data-file-read",
         &[
             Platform::Ios,
             Platform::MacOS,
@@ -3606,6 +3608,11 @@ fn is_reviewed_installer_tool_fact(t: &TraitDefinition) -> bool {
         return false;
     }
     let (kind, expected, section) = match t.id.as_str() {
+        // This exact embedded product banner is a reference, not a claim
+        // about the size or section layout of its containing binary.
+        "well-known/lib/runtime/scripted/python-runtime::python-launcher-banner-marker" => {
+            ("whole-exact", "Python Launcher for Windows Version %ls", "")
+        }
         // These are embedded product references, not identity claims about
         // the containing binary; keep their original whole-file scope.
         "well-known/app/system/sshtty::sshtty-server-crate-marker" => {
@@ -4483,6 +4490,8 @@ pub(crate) fn find_wellknown_missing_size_filter(
                 && !is_reviewed_installer_tool_fact(t)
                 && !is_reviewed_dotnet_tool_name_reference(t)
                 && !is_reviewed_remote_tool_reference(t)
+                && !is_reviewed_nping_command_reference(t)
+                && !is_reviewed_product_registry_reference(t)
                 && !is_reviewed_linfeng_marker(t)
                 && !is_reviewed_redshell_injection_menu(t)
                 && !is_reviewed_stagecomp_marker(t)
@@ -4513,6 +4522,65 @@ pub(crate) fn find_wellknown_missing_size_filter(
             (t.id.clone(), source)
         })
         .collect()
+}
+
+// Registry key text refers to another product, not the containing binary.
+// Preserve whole-file coverage without arbitrary size or section limits.
+fn is_reviewed_product_registry_reference(t: &TraitDefinition) -> bool {
+    if t.crit != Criticality::Notable {
+        return false;
+    }
+    let (kind, expected) = match t.id.as_str() {
+        "well-known/lib/runtime/managed/java-runtime::java-runtime-home-key-reference" => {
+            ("exact", r"SOFTWARE\JavaSoft\Java Runtime Environment")
+        }
+        "well-known/game/roblox::roblox-studio-registry-key" => (
+            "regex",
+            r"(?i)SOFTWARE[\\/]Roblox[\\/]RobloxStudioBrowser[\\/]roblox\.com",
+        ),
+        "well-known/game/steam-registry::steam-path-string" => ("substr", r"Software\Valve\Steam"),
+        "well-known/app/productivity/onenote::onenote-options-other-policy-path" => (
+            "exact",
+            r"Software\Policies\Microsoft\Office\16.0\OneNote\Options\Other",
+        ),
+        "well-known/app/system/pcanywhere::pcanywhere-data-port-reference" => (
+            "substr",
+            r"Symantec\pcAnywhere\CurrentVersion\System\TCPIPDataPort",
+        ),
+        _ => return false,
+    };
+    matches!(&t.r#if, Condition::Text(q)
+    if q.word.is_none() && match kind {
+        "exact" => q.exact.as_deref() == Some(expected) && q.substr.is_none() && q.regex.is_none(),
+        "substr" => q.substr.as_deref() == Some(expected) && q.exact.is_none() && q.regex.is_none(),
+        "regex" => q.regex.as_deref() == Some(expected) && q.exact.is_none() && q.substr.is_none(),
+        _ => false,
+    })
+}
+
+// These exact Nping command references describe text inside another file.
+// They do not identify the containing binary or imply a meaningful size bound.
+fn is_reviewed_nping_command_reference(t: &TraitDefinition) -> bool {
+    if t.crit != Criticality::Notable {
+        return false;
+    }
+    let (kind, expected) = match t.id.as_str() {
+        "well-known/tool/offensive/reconnaissance/nping::nping" => ("word", "nping"),
+        "well-known/tool/offensive/reconnaissance/nping::source-port" => {
+            ("regex", r"(?i)\bnping\b[^\r\n]{0,300}--source-port")
+        }
+        "well-known/tool/offensive/reconnaissance/nping::payload-data" => {
+            ("regex", r"(?i)\bnping\b[^\r\n]{0,300}--data=")
+        }
+        _ => return false,
+    };
+    matches!(&t.r#if, Condition::Text(q)
+    if q.exact.is_none() && q.substr.is_none()
+        && match kind {
+            "word" => q.word.as_deref() == Some(expected) && q.regex.is_none(),
+            "regex" => q.regex.as_deref() == Some(expected) && q.word.is_none(),
+            _ => false,
+        })
 }
 
 // These are command and script references within another file, not claims
@@ -4729,6 +4797,8 @@ pub(crate) fn find_wellknown_missing_section_filter(
         .filter(|t| {
             extract_trait_tier(&t.id) == "well-known"
                 && trait_targets_only_binaries(t)
+                && !(t.id == "well-known/lib/runtime/scripted/python-runtime::python-launcher-banner-marker"
+                    && is_reviewed_installer_tool_fact(t))
                 && !(matches!(t.id.as_str(),
                     "well-known/app/system/sshtty::sshtty-server-crate-marker"
                     | "well-known/app/system/sshtty::sshtty-terminal-banner")
@@ -4831,6 +4901,7 @@ pub(crate) fn find_wellknown_missing_section_filter(
                 // The reviewed star format and config references can occur in
                 // different binary sections; preserve their whole-file scope.
                 && !is_reviewed_star_reference(t)
+                && !is_reviewed_product_registry_reference(t)
                 // The Edge product-name reference was reviewed as whole-file
                 // text; narrowing it to a PE section would lose its consumers.
                 && !(t.id == "well-known/app/browser/microsoft-edge::microsoft-edge-name"

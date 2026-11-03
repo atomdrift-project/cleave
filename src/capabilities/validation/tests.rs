@@ -5141,6 +5141,39 @@ mod taxonomy_tests {
     }
 
     #[test]
+    fn python_launcher_banner_exception_requires_exact_notable_marker() {
+        let mut fact = leaf(
+            "well-known/lib/runtime/scripted/python-runtime::python-launcher-banner-marker",
+            Criticality::Notable,
+        );
+        fact.r#for = vec![FileType::Pe];
+        fact.r#if =
+            crate::yaml::from_str("type: text\nexact: 'Python Launcher for Windows Version %ls'\n")
+                .unwrap();
+        assert!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty());
+        assert!(find_wellknown_missing_section_filter(&[fact.clone()], &HashMap::new()).is_empty());
+        fact.crit = Criticality::Suspicious;
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+            1
+        );
+        assert_eq!(
+            find_wellknown_missing_section_filter(&[fact.clone()], &HashMap::new()).len(),
+            1
+        );
+        fact.crit = Criticality::Notable;
+        fact.r#if = crate::yaml::from_str("type: text\nexact: 'unrelated'\n").unwrap();
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+            1
+        );
+        assert_eq!(
+            find_wellknown_missing_section_filter(&[fact], &HashMap::new()).len(),
+            1
+        );
+    }
+
+    #[test]
     fn reviewed_dotnet_tool_references_do_not_need_size_bounds() {
         for (id, yaml) in [
             (
@@ -5187,6 +5220,124 @@ mod taxonomy_tests {
             );
             fact.crit = Criticality::Notable;
             fact.r#if = crate::yaml::from_str("type: text\nsubstr: unrelated\n").unwrap();
+            assert_eq!(
+                find_wellknown_missing_size_filter(&[fact], &HashMap::new()).len(),
+                1,
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
+    fn product_registry_reference_exceptions_are_matcher_specific() {
+        let cases = [
+            (
+                "well-known/lib/runtime/managed/java-runtime::java-runtime-home-key-reference",
+                "exact",
+                r"SOFTWARE\JavaSoft\Java Runtime Environment",
+            ),
+            (
+                "well-known/game/roblox::roblox-studio-registry-key",
+                "regex",
+                r"(?i)SOFTWARE[\\/]Roblox[\\/]RobloxStudioBrowser[\\/]roblox\.com",
+            ),
+            (
+                "well-known/game/steam-registry::steam-path-string",
+                "substr",
+                r"Software\Valve\Steam",
+            ),
+            (
+                "well-known/app/productivity/onenote::onenote-options-other-policy-path",
+                "exact",
+                r"Software\Policies\Microsoft\Office\16.0\OneNote\Options\Other",
+            ),
+            (
+                "well-known/app/system/pcanywhere::pcanywhere-data-port-reference",
+                "substr",
+                r"Symantec\pcAnywhere\CurrentVersion\System\TCPIPDataPort",
+            ),
+        ];
+        for (id, kind, pattern) in cases {
+            let mut fact = leaf(id, Criticality::Notable);
+            fact.r#for = vec![FileType::Pe];
+            fact.r#if = crate::yaml::from_str(&format!(
+                "type: text\n{kind}: {}\n",
+                serde_json::to_string(pattern).unwrap()
+            ))
+            .unwrap();
+            assert!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty(),
+                "{id}"
+            );
+            assert!(
+                find_wellknown_missing_section_filter(&[fact.clone()], &HashMap::new()).is_empty(),
+                "{id}"
+            );
+            fact.crit = Criticality::Suspicious;
+            assert_eq!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+                1,
+                "{id}"
+            );
+            assert_eq!(
+                find_wellknown_missing_section_filter(&[fact.clone()], &HashMap::new()).len(),
+                1,
+                "{id}"
+            );
+            fact.crit = Criticality::Notable;
+            fact.r#if = crate::yaml::from_str("type: text\nsubstr: unrelated\n").unwrap();
+            assert_eq!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+                1,
+                "{id}"
+            );
+            assert_eq!(
+                find_wellknown_missing_section_filter(&[fact], &HashMap::new()).len(),
+                1,
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
+    fn nping_command_reference_size_exceptions_are_matcher_specific() {
+        let cases = [
+            (
+                "well-known/tool/offensive/reconnaissance/nping::nping",
+                "word",
+                "nping",
+            ),
+            (
+                "well-known/tool/offensive/reconnaissance/nping::source-port",
+                "regex",
+                r"(?i)\bnping\b[^\r\n]{0,300}--source-port",
+            ),
+            (
+                "well-known/tool/offensive/reconnaissance/nping::payload-data",
+                "regex",
+                r"(?i)\bnping\b[^\r\n]{0,300}--data=",
+            ),
+        ];
+        for (id, kind, pattern) in cases {
+            let mut fact = leaf(id, Criticality::Notable);
+            fact.r#for = vec![FileType::Pe];
+            fact.r#if = crate::yaml::from_str(&format!(
+                "type: text\n{kind}: {}\n",
+                serde_json::to_string(pattern).unwrap()
+            ))
+            .unwrap();
+            assert!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty(),
+                "{id}"
+            );
+            fact.crit = Criticality::Suspicious;
+            assert_eq!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+                1,
+                "{id}"
+            );
+            fact.crit = Criticality::Notable;
+            fact.r#if = crate::yaml::from_str("type: text\nword: unrelated\n").unwrap();
             assert_eq!(
                 find_wellknown_missing_size_filter(&[fact], &HashMap::new()).len(),
                 1,
@@ -13680,7 +13831,8 @@ mod platform_breadth_review_tests {
             Platform::Windows,
         ];
         let mut traits = vec![TraitDefinition {
-            id: "micro-behaviors/fs/read/file/full::swift-data-file-read".to_string(),
+            id: "micro-behaviors/fs/read/file/content/unspecified::swift-data-file-read"
+                .to_string(),
             platforms: scope.clone(),
             ..Default::default()
         }];

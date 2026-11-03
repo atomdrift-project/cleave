@@ -207,6 +207,21 @@ pub enum Platform {
     Ivanti,
     /// VxWorks RTOS/appliance platform
     VxWorks,
+    /// Commodore 64 computer platform
+    #[serde(alias = "c64")]
+    Commodore64,
+    /// Apple II and ProDOS computer platform
+    #[serde(alias = "apple-ii")]
+    Apple2,
+    /// IBM VM/CMS environment
+    #[serde(rename = "vmcms", alias = "vm/cms")]
+    VmCms,
+    /// SAP ABAP runtime
+    #[serde(rename = "sapabap", alias = "sap-abap")]
+    SapAbap,
+    /// Sinclair ZX Spectrum and compatible systems
+    #[serde(rename = "zxspectrum", alias = "zx-spectrum")]
+    ZxSpectrum,
 }
 
 impl Platform {
@@ -240,6 +255,11 @@ impl Platform {
             Self::Netscaler => "netscaler",
             Self::Ivanti => "ivanti",
             Self::VxWorks => "vxworks",
+            Self::Commodore64 => "commodore64",
+            Self::Apple2 => "apple2",
+            Self::VmCms => "vmcms",
+            Self::SapAbap => "sapabap",
+            Self::ZxSpectrum => "zxspectrum",
         }
     }
 
@@ -2186,6 +2206,18 @@ mod tests {
 
     #[test]
     fn test_platform_rollup_intersection() {
+        assert!(platforms_intersect(
+            &[Platform::Commodore64],
+            &[Platform::Commodore64]
+        ));
+        assert!(!platforms_intersect(
+            &[Platform::Commodore64],
+            &[Platform::Unix]
+        ));
+        assert!(!platforms_intersect(
+            &[Platform::Commodore64],
+            &[Platform::Windows]
+        ));
         assert!(platforms_intersect(&[Platform::FreeBsd], &[Platform::Unix]));
         assert!(platforms_intersect(&[Platform::Unix], &[Platform::OpenWrt]));
         assert!(platforms_intersect(

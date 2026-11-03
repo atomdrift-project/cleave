@@ -83,6 +83,7 @@ struct Table {
     name: String,
     scope: Span,
     strings: Vec<String>,
+    base64_strings: Option<Vec<String>>,
 }
 struct Object {
     visible: Span,
@@ -100,6 +101,7 @@ struct Proxy<'a> {
     parameters: Vec<String>,
     result: Node<'a>,
 }
+#[derive(Clone)]
 struct Decoder {
     binding: usize,
     visible: Span,
@@ -109,6 +111,9 @@ struct Decoder {
     table: usize,
     offset: f64,
     rc4: bool,
+    plain: bool,
+    alias_value: Option<Span>,
+    available_at: usize,
 }
 struct Context<'a> {
     source: &'a str,
@@ -585,6 +590,12 @@ fn rotation_shape(
                     {
                         continue;
                     }
+                    if ctx.decoders.iter().any(|d| {
+                        d.binding == name.start_byte()
+                            && d.alias_value == Some((value.start_byte(), value.end_byte()))
+                    }) {
+                        continue;
+                    }
                     if value.kind() == "call_expression"
                         && value
                             .child_by_field_name("function")
@@ -711,6 +722,11 @@ fn table_reference_region(
             })
             .all(|n| {
                 covers(decoder.function, n.start_byte())
+                    || n.start_byte() == decoder.binding
+                    || ctx.decoders.iter().any(|alias| {
+                        alias.table == decoder.table
+                            && alias.alias_value == Some((n.start_byte(), n.end_byte()))
+                    })
                     || n.parent().is_some_and(|p| {
                         p.kind() == "call_expression"
                             && p.child_by_field_name("function")
@@ -1064,6 +1080,7 @@ impl<'a> Context<'a> {
                     Some(d.table) == active_table
                         && d.name == name
                         && covers(d.visible, n.start_byte())
+                        && n.start_byte() >= d.available_at
                         && self.resolves(name, n.start_byte(), d.binding)
                 });
                 if d.is_some() {
@@ -1077,7 +1094,12 @@ impl<'a> Context<'a> {
                     if index >= table.strings.len() {
                         return None;
                     }
-                    let cipher = &table.strings[(index + self.rotation) % table.strings.len()];
+                    let strings = if d.plain {
+                        &table.strings
+                    } else {
+                        table.base64_strings.as_ref()?
+                    };
+                    let cipher = &strings[(index + self.rotation) % strings.len()];
                     let value = if d.rc4 {
                         rc4(cipher, &args.get(1)?.text())?
                     } else {
@@ -1166,9 +1188,9 @@ fn function_name(n: Node<'_>, source: &str) -> Option<String> {
 pub(crate) fn decode(ast: filefacts::SourceAst<'_>) -> Option<String> {
     let source = ast.source;
     if source.len() > MAX_SOURCE
-        || !source.contains(ALPHABET)
         || !source.contains("parseInt")
-        || !source.contains("decodeURIComponent")
+        || !source.contains("push")
+        || !source.contains("shift")
     {
         return None;
     }
@@ -1262,13 +1284,12 @@ pub(crate) fn decode(ast: filefacts::SourceAst<'_>) -> Option<String> {
                 if !table_producer(f, name, source) {
                     continue;
                 }
-                let decoded: Option<Vec<_>> = entries
-                    .iter()
-                    .map(|e| base64_text(&raw_string(*e, source)?))
-                    .collect();
-                if let Some(strings) = decoded
+                let strings: Option<Vec<_>> =
+                    entries.iter().map(|e| raw_string(*e, source)).collect();
+                if let Some(strings) = strings
                     && strings.iter().map(String::len).sum::<usize>() <= MAX_SOURCE
                 {
+                    let base64_strings = strings.iter().map(|s| base64_text(s)).collect();
                     ctx.tables.push(Table {
                         binding: f.child_by_field_name("name")?.start_byte(),
                         visible: visible_scope(f),
@@ -1276,6 +1297,7 @@ pub(crate) fn decode(ast: filefacts::SourceAst<'_>) -> Option<String> {
                         name: fn_name,
                         scope: scope(f),
                         strings,
+                        base64_strings,
                     });
                 }
             } else if value.kind() == "object" {
@@ -1380,13 +1402,11 @@ pub(crate) fn decode(ast: filefacts::SourceAst<'_>) -> Option<String> {
         let Some(raw) = text(f, source) else {
             continue;
         };
-        if !raw.contains(ALPHABET)
-            || !raw.contains("fromCharCode")
-            || !raw.contains("indexOf")
-            || !raw.contains("charAt")
-        {
-            continue;
-        }
+        let encoded = source.contains("decodeURIComponent")
+            && raw.contains(ALPHABET)
+            && raw.contains("fromCharCode")
+            && raw.contains("indexOf")
+            && raw.contains("charAt");
         let Some(assignment) = statements[0].named_child(0) else {
             continue;
         };
@@ -1459,6 +1479,28 @@ pub(crate) fn decode(ast: filefacts::SourceAst<'_>) -> Option<String> {
         {
             continue;
         }
+        // Plain table readers must consist solely of the index adjustment,
+        // table read, lookup, and return. This rules out arbitrary transforms.
+        let plain = !encoded;
+        if plain
+            && (statements.len() != 4
+                || children(statements[1]).len() != 1
+                || children(statements[2]).len() != 1
+                || !table_call
+                    .child_by_field_name("arguments")
+                    .is_some_and(|args| children(args).is_empty())
+                || statements[3].kind() != "return_statement"
+                || statements[3].named_child(0).and_then(|n| text(n, source))
+                    != statements[2]
+                        .named_child(0)
+                        .and_then(declaration)
+                        .and_then(|(name, _)| text(name, source)))
+        {
+            continue;
+        }
+        if encoded && ctx.tables[table].base64_strings.is_none() {
+            continue;
+        }
         let table_object = Object {
             visible: (f.start_byte(), f.end_byte()),
             declaration: table_binding.start_byte(),
@@ -1508,6 +1550,9 @@ pub(crate) fn decode(ast: filefacts::SourceAst<'_>) -> Option<String> {
                 table,
                 offset,
                 rc4,
+                plain,
+                alias_value: None,
+                available_at: 0,
             });
         }
     }
@@ -1517,6 +1562,62 @@ pub(crate) fn decode(ast: filefacts::SourceAst<'_>) -> Option<String> {
         .retain(|d| !identifier_writes(&all, &d.name, d.visible, source, d.binding, &ctx.bindings));
     if ctx.decoders.len() > 8 || ctx.proxies.len() > 4096 {
         return None;
+    }
+    // Follow immutable, lexical aliases only. Each alias is audited below as
+    // another decoder: passing it to unknown code is still an escape.
+    for _ in 0..8 {
+        let mut changed = false;
+        for &node in &all {
+            let Some((name, value)) = declaration(node) else {
+                continue;
+            };
+            if value.kind() != "identifier"
+                || !node.parent().is_some_and(|p| {
+                    p.kind() == "lexical_declaration"
+                        && text(p, source).is_some_and(|s| s.trim_start().starts_with("const "))
+                })
+                || ctx.decoders.iter().any(|d| d.binding == name.start_byte())
+            {
+                continue;
+            }
+            let Some(target_name) = text(value, source) else {
+                continue;
+            };
+            let target = ctx.decoders.iter().find(|d| {
+                d.name == target_name
+                    && covers(d.visible, value.start_byte())
+                    && value.start_byte() >= d.available_at
+                    && ctx.resolves(target_name, value.start_byte(), d.binding)
+            });
+            if let Some(target) = target.cloned() {
+                let Some(alias_name) = text(name, source) else {
+                    continue;
+                };
+                let mut alias = target;
+                alias.name = alias_name.to_owned();
+                alias.binding = name.start_byte();
+                alias.visible = visible_scope(node);
+                alias.alias_value = Some((value.start_byte(), value.end_byte()));
+                alias.available_at = node.end_byte();
+                if !identifier_writes(
+                    &all,
+                    &alias.name,
+                    alias.visible,
+                    source,
+                    alias.binding,
+                    &ctx.bindings,
+                ) {
+                    ctx.decoders.push(alias);
+                    changed = true;
+                    if ctx.decoders.len() > 64 {
+                        return None;
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
     }
     let mut attempts = 0;
     for active in 0..ctx.decoders.len() {
@@ -1696,6 +1797,63 @@ mod tests {
             source.as_bytes(),
         );
         decode(ctx.source_ast()?)
+    }
+    #[test]
+    fn reduces_proved_plain_string_table_without_executing_code() {
+        let source = r#"
+function table() {
+  const values = ['11a', '22b', 'Chrome', 'User Data', 'chrome.e', 'x5', 'x6', 'x7', 'x8', 'x9', 'x10', 'x11', 'x12', 'x13', 'x14', 'x15', 'x16', 'x17', 'x18', 'x19'];
+  table = function() { return values; };
+  return table();
+}
+function decode(i) { i = i - 16; const values = table(); let value = values[i]; return value; }
+(function(t, expected) {
+  const values = t();
+  while (!![]) { try { const result = parseInt(decode(16)); if (result === expected) break; else values.push(values.shift()); } catch (e) { values.push(values.shift()); } }
+})(table, 22);
+console.log(decode(17), decode(18), decode(19));
+"#;
+        let out = reduce(source).expect("proved literal table rotation");
+        assert!(out.contains("console.log(\"Chrome\", \"User Data\", \"chrome.e\")"));
+        assert!(reduce(&source.replace("return value;", "return value + 'changed';")).is_none());
+        assert!(
+            reduce(&source.replace(
+                "let value = values[i];",
+                "let value = values[i], ignored = mutate();"
+            ))
+            .is_none()
+        );
+        assert!(
+            reduce(&source.replace("const values = table();", "const values = table(mutate());"))
+                .is_none()
+        );
+        assert!(reduce(&source.replace("})(table, 22);", "})(table, 999);")).is_none());
+        let aliased = source
+            .replace(
+                "const values = t();",
+                "const reader = decode, values = t();",
+            )
+            .replace("parseInt(decode(16))", "parseInt(reader(16))")
+            .replace(
+                "console.log(decode(17), decode(18), decode(19));",
+                "const read = decode; console.log(read(17), read(18), read(19));",
+            );
+        let out = reduce(&aliased).expect("immutable decoder aliases");
+        assert!(out.contains("console.log(\"Chrome\", \"User Data\", \"chrome.e\")"));
+        assert!(reduce(&aliased.replace("const read = decode;", "let read = decode;")).is_none());
+        assert!(
+            reduce(&aliased.replace(
+                "const read = decode;",
+                "const read = decode; unknown(read);"
+            ))
+            .is_none()
+        );
+        let nested = aliased.replace(
+            "const read = decode; console.log(read(17), read(18), read(19));",
+            "const read = decode; function invoke() { const nested = read; console.log(nested(17), nested(18), nested(19)); }",
+        );
+        let out = reduce(&nested).expect("nested immutable decoder aliases");
+        assert!(out.contains("console.log(\"Chrome\", \"User Data\", \"chrome.e\")"));
     }
     #[test]
     fn coerces_radix_strings_without_parse_int_prefix_truncation() {

@@ -291,6 +291,140 @@ pub(crate) fn extract_encoded_payloads(
     payloads
 }
 
+/// Recover bounded, contiguous Base64 PE images embedded in image bytes.
+/// String decoders return text, so binary output otherwise disappears before
+/// recursive analysis. Validate the DOS, COFF and optional headers before
+/// retaining a candidate; the caller limits this search to media files.
+pub(crate) fn extract_media_base64_pes(data: &[u8]) -> Vec<ExtractedPayload> {
+    use base64::{Engine as _, engine::general_purpose};
+
+    const MAX_INPUT: usize = 64 * 1024 * 1024;
+    const MAX_ENCODED: usize = 16 * 1024 * 1024;
+    const MAX_CANDIDATES: usize = 32;
+    const MIN_ENCODED: usize = 512;
+    if data.len() > MAX_INPUT {
+        return Vec::new();
+    }
+    let is_base64 = |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/');
+    let mut out = Vec::new();
+    for offset in memchr::memmem::find_iter(data, b"TV")
+        .filter(|&offset| {
+            (offset == 0 || !is_base64(data[offset - 1]))
+                && data
+                    .get(offset + 2)
+                    .is_some_and(|b| matches!(b, b'o' | b'p' | b'q' | b'r'))
+        })
+        .take(MAX_CANDIDATES)
+    {
+        let mut end = offset;
+        while end < data.len() && end - offset <= MAX_ENCODED && is_base64(data[end]) {
+            end += 1;
+        }
+        while end < data.len() && end - offset <= MAX_ENCODED && data[end] == b'=' {
+            end += 1;
+        }
+        let candidate = &data[offset..end];
+        if candidate.len() < MIN_ENCODED || candidate.len() > MAX_ENCODED {
+            continue;
+        }
+        // Check a bounded prefix first, avoiding multi-megabyte allocations
+        // for ordinary text that merely begins with a PE-like Base64 prefix.
+        let prefix_len = candidate.len().min(8192) / 4 * 4;
+        let Ok(prefix) = general_purpose::STANDARD.decode(&candidate[..prefix_len]) else {
+            continue;
+        };
+        if !plausible_pe_header(&prefix) {
+            continue;
+        }
+        let decoded = general_purpose::STANDARD
+            .decode(candidate)
+            .or_else(|_| general_purpose::STANDARD_NO_PAD.decode(candidate));
+        let Ok(decoded) = decoded else { continue };
+        if !plausible_pe_header(&decoded) {
+            continue;
+        }
+        out.push(ExtractedPayload {
+            preview: generate_preview(&decoded),
+            data: decoded,
+            encoding_chain: vec!["media-base64-pe".to_string()],
+            detected_type: FileType::Pe,
+            original_offset: offset,
+        });
+    }
+    out
+}
+
+/// Recover single-byte-XOR PE data inside an image. A candidate must have a
+/// standard DOS prefix and a structurally plausible PE header before any
+/// larger suffix is decoded. The retained bytes are capped to bound memory.
+pub(crate) fn extract_media_xor_pes(data: &[u8]) -> Vec<ExtractedPayload> {
+    const MAX_INPUT: usize = 64 * 1024 * 1024;
+    const MAX_OUTPUT: usize = 16 * 1024 * 1024;
+    const MAX_CANDIDATES: usize = 32;
+    if data.len() > MAX_INPUT {
+        return Vec::new();
+    }
+    let candidates = data.windows(4).enumerate().filter_map(|(offset, bytes)| {
+        let key = bytes[0] ^ b'M';
+        (key != 0
+            && bytes[1] ^ key == b'Z'
+            && matches!(bytes[2] ^ key, 0x90 | 0x00)
+            && bytes[3] ^ key == 0)
+            .then_some((offset, key))
+    });
+    let mut out = Vec::new();
+    for (offset, key) in candidates.take(MAX_CANDIDATES) {
+        let source = &data[offset..];
+        if source.len() > MAX_OUTPUT {
+            continue;
+        }
+        let prefix: Vec<u8> = source.iter().take(8192).map(|byte| byte ^ key).collect();
+        if !plausible_pe_header(&prefix) {
+            continue;
+        }
+        let decoded: Vec<u8> = source.iter().map(|byte| byte ^ key).collect();
+        if !plausible_pe_header(&decoded) {
+            continue;
+        }
+        out.push(ExtractedPayload {
+            preview: generate_preview(&decoded),
+            data: decoded,
+            encoding_chain: vec!["media-xor-pe".to_string()],
+            detected_type: FileType::Pe,
+            original_offset: offset,
+        });
+    }
+    out
+}
+
+fn plausible_pe_header(data: &[u8]) -> bool {
+    if !data.starts_with(b"MZ") || data.len() < 64 {
+        return false;
+    }
+    let offset = u32::from_le_bytes(data[60..64].try_into().unwrap()) as usize;
+    if !(64..=4096).contains(&offset) || data.get(offset..offset + 4) != Some(b"PE\0\0") {
+        return false;
+    }
+    let Some(coff) = data.get(offset + 4..offset + 24) else {
+        return false;
+    };
+    let machine = u16::from_le_bytes([coff[0], coff[1]]);
+    let sections = u16::from_le_bytes([coff[2], coff[3]]);
+    let optional_size = u16::from_le_bytes([coff[16], coff[17]]) as usize;
+    if !matches!(machine, 0x014c | 0x8664 | 0xaa64)
+        || !(1..=96).contains(&sections)
+        || optional_size < 96
+    {
+        return false;
+    }
+    let optional = offset + 24;
+    let Some(magic) = data.get(optional..optional + 2) else {
+        return false;
+    };
+    matches!(magic, [0x0b, 0x01] | [0x0b, 0x02])
+        && data.len() >= optional + optional_size + usize::from(sections) * 40
+}
+
 /// Decode MIME attachment bodies using only their declared transfer encoding.
 /// Keep the supported binary formats bounded; no attachment is executed.
 pub(crate) fn extract_mime_attachments(data: &[u8]) -> Vec<ExtractedPayload> {

@@ -16,7 +16,102 @@ pub(crate) fn decode(data: &[u8]) -> Option<(usize, Vec<u8>)> {
     }
     let jump = i16::from_le_bytes([*data.get(1)?, *data.get(2)?]) as isize;
     let entry = usize::try_from(3isize.checked_add(jump)?).ok()?;
-    decode_patched_entry(data, entry).or_else(|| decode_fallthrough(data, entry))
+    decode_patched_entry(data, entry)
+        .or_else(|| decode_fallthrough(data, entry))
+        .or_else(|| decode_byte_fallthrough(data, entry))
+        .or_else(|| decode_byte_subtract(data, entry))
+}
+
+/// Decode a literal byte-XOR loop that falls through into its payload.
+fn decode_byte_fallthrough(data: &[u8], entry: usize) -> Option<(usize, Vec<u8>)> {
+    let stub = data.get(entry..entry.checked_add(14)?)?;
+    if stub[0] != 0xb2
+        || stub[1] == 0
+        || stub[2] != 0xbe
+        || stub[5] != 0xb9
+        || stub.get(8..14)? != [0x2e, 0x30, 0x14, 0x46, 0xe2, 0xfa]
+    {
+        return None;
+    }
+    let start = usize::from(u16::from_le_bytes([stub[3], stub[4]])).checked_sub(0x100)?;
+    let length = usize::from(u16::from_le_bytes([stub[6], stub[7]]));
+    let body_end = start.checked_add(length)?;
+    let after_stub = entry.checked_add(14)?;
+    if length == 0
+        || start < after_stub
+        || start > after_stub.checked_add(4)?
+        || body_end > data.len()
+        || body_end > 0xff00
+        || !data
+            .get(after_stub..start)?
+            .iter()
+            .all(|byte| *byte == 0x90)
+    {
+        return None;
+    }
+    let mut decoded = data.to_vec();
+    for byte in decoded.get_mut(start..body_end)? {
+        *byte ^= stub[1];
+    }
+    Some((entry, decoded))
+}
+
+/// Recognize a forward subtract-byte recipe reached by a near CALL. This
+/// reconstructs under the conventional DOS clear-direction-flag entry state.
+fn decode_byte_subtract(data: &[u8], entry: usize) -> Option<(usize, Vec<u8>)> {
+    let limit = entry.checked_add(64)?.min(data.len());
+    for stub in entry..limit {
+        let Some(end_stub) = stub.checked_add(26) else {
+            continue;
+        };
+        let Some(body) = data.get(stub..end_stub) else {
+            continue;
+        };
+        if body.get(..4) != Some(&[0xfa, 0x5f, 0x00, 0xfb])
+            || body[4] != 0xb9
+            || body[7..9] != [0xfa, 0xbe]
+            || body[11..14] != [0x23, 0xff, 0xb2]
+            || body[14] == 0
+            || body[15..21] != [0x23, 0xff, 0x90, 0x2e, 0x28, 0x94]
+            || body[23..26] != [0xa6, 0xe2, 0xf7]
+        {
+            continue;
+        }
+        let linked = (entry..stub.saturating_sub(2)).any(|at| {
+            if data.get(at) != Some(&0xe8) {
+                return false;
+            }
+            let Some(bytes) = data.get(at + 1..at + 3) else {
+                return false;
+            };
+            let rel = i16::from_le_bytes([bytes[0], bytes[1]]) as isize;
+            (at as isize)
+                .checked_add(3)
+                .and_then(|x| x.checked_add(rel))
+                == Some(stub as isize)
+        });
+        if !linked {
+            continue;
+        }
+        let si = u16::from_le_bytes([body[9], body[10]]);
+        let disp = u16::from_le_bytes([body[21], body[22]]);
+        let Some(start) = usize::from(si.wrapping_add(disp)).checked_sub(0x100) else {
+            continue;
+        };
+        let count = usize::from(u16::from_le_bytes([body[5], body[6]]));
+        let Some(end) = start.checked_add(count) else {
+            continue;
+        };
+        if count == 0 || start != end_stub || end > data.len() || end > 0xff00 {
+            continue;
+        }
+        let mut decoded = data.to_vec();
+        for byte in decoded.get_mut(start..end)? {
+            *byte = byte.wrapping_sub(body[14]);
+        }
+        return Some((stub, decoded));
+    }
+    None
 }
 
 /// Recognize a COM entry that calls a bounded subtract/XOR/rotate decoder,
@@ -74,7 +169,7 @@ fn decode_call_rotate_xor(data: &[u8]) -> Option<(usize, Vec<u8>)> {
     }
     let key = u16::from_le_bytes([*data.get(key_at)?, *data.get(key_at.checked_add(1)?)?]);
     let mut decoded = data.to_vec();
-    for chunk in decoded.get_mut(start..end)?.chunks_exact_mut(2) {
+    for chunk in decoded.get_mut(start..end)?.as_chunks_mut::<2>().0 {
         let word = u16::from_le_bytes([chunk[0], chunk[1]]).wrapping_sub(key) ^ key;
         chunk.copy_from_slice(&word.rotate_left(u32::from(key & 0xff)).to_le_bytes());
     }
@@ -103,7 +198,7 @@ fn decode_patched_entry(data: &[u8], entry: usize) -> Option<(usize, Vec<u8>)> {
     decoded[..2].copy_from_slice(&stub[9..11]);
     decoded[2] = stub[14];
     let key = [stub[17], stub[18]];
-    for chunk in decoded[..length].chunks_exact_mut(2) {
+    for chunk in decoded[..length].as_chunks_mut::<2>().0 {
         chunk[0] ^= key[0];
         chunk[1] ^= key[1];
     }
@@ -146,7 +241,7 @@ fn decode_fallthrough(data: &[u8], entry: usize) -> Option<(usize, Vec<u8>)> {
     }
     let key = [stub[9], stub[10]];
     let mut decoded = data.to_vec();
-    for chunk in decoded.get_mut(start..end)?.chunks_exact_mut(2) {
+    for chunk in decoded.get_mut(start..end)?.as_chunks_mut::<2>().0 {
         chunk[0] ^= key[0];
         chunk[1] ^= key[1];
     }
@@ -154,11 +249,12 @@ fn decode_fallthrough(data: &[u8], entry: usize) -> Option<(usize, Vec<u8>)> {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, reason = "invalid fixtures should fail the test")]
 mod tests {
     use super::*;
     fn fixture() -> Vec<u8> {
         let key = [0x16, 0x44];
-        let mut decoded = vec![0x90; 64];
+        let mut decoded = [0x90; 64];
         decoded[..3].copy_from_slice(&[0xe9, 0x0d, 0x00]);
         let patch = [
             decoded[0] ^ key[0],
@@ -219,6 +315,101 @@ mod tests {
         assert!(decode(&input[..input.len() - 1]).is_none());
     }
     #[test]
+    fn decodes_call_linked_byte_subtract_and_rejects_bad_links() {
+        let stub = 16usize;
+        let start = stub + 26;
+        let mut input = vec![0x90u8; 80];
+        input[..3].copy_from_slice(&[0xe9, 0, 0]);
+        input[5..8].copy_from_slice(&[0xe8, 8, 0]);
+        let si = 0x2000u16;
+        let displacement = (0x100u16 + start as u16).wrapping_sub(si).to_le_bytes();
+        input[stub..stub + 26].copy_from_slice(&[
+            0xfa,
+            0x5f,
+            0x00,
+            0xfb,
+            0xb9,
+            12,
+            0,
+            0xfa,
+            0xbe,
+            0x00,
+            0x20,
+            0x23,
+            0xff,
+            0xb2,
+            0x31,
+            0x23,
+            0xff,
+            0x90,
+            0x2e,
+            0x28,
+            0x94,
+            displacement[0],
+            displacement[1],
+            0xa6,
+            0xe2,
+            0xf7,
+        ]);
+        let plain = [
+            0x90u8, 0x90, 0xb4, 0x4e, 0xcd, 0x21, 0xb4, 0x40, 0xcd, 0x21, 0xcd, 0x20,
+        ];
+        for (dst, src) in input[start..start + plain.len()].iter_mut().zip(plain) {
+            *dst = src.wrapping_add(0x31);
+        }
+        let (offset, decoded) = decode(&input).expect("byte subtract recipe");
+        assert_eq!(offset, stub);
+        assert_eq!(&decoded[start..start + plain.len()], &plain);
+        for (offset, value) in [
+            (5, 0x90),
+            (stub + 5, 60),
+            (stub + 14, 0),
+            (stub + 21, displacement[0].wrapping_add(1)),
+            (stub + 25, 0xf6),
+        ] {
+            let mut changed = input.clone();
+            changed[offset] = value;
+            assert!(decode(&changed).is_none(), "offset {offset}");
+        }
+        assert!(decode(&input[..stub + 25]).is_none());
+    }
+
+    #[test]
+    fn decodes_byte_xor_fallthrough_and_rejects_bad_bounds() {
+        let entry = 16usize;
+        let start = entry + 15;
+        let mut input = vec![0x90; 64];
+        input[..3].copy_from_slice(&[0xe9, 13, 0]);
+        let address = (0x100u16 + start as u16).to_le_bytes();
+        input[entry..entry + 14].copy_from_slice(&[
+            0xb2, 0x0e, 0xbe, address[0], address[1], 0xb9, 16, 0, 0x2e, 0x30, 0x14, 0x46, 0xe2,
+            0xfa,
+        ]);
+        let plain = [
+            0x90u8, 0x90, 0xb4, 0x4e, 0xcd, 0x21, 0xb4, 0x40, 0xcd, 0x21, 0x90, 0x90, 0x90, 0x90,
+            0xcd, 0x20,
+        ];
+        for (dst, src) in input[start..start + plain.len()].iter_mut().zip(plain) {
+            *dst = src ^ 0x0e;
+        }
+        let (offset, decoded) = decode(&input).expect("byte XOR recipe");
+        assert_eq!(offset, entry);
+        assert_eq!(&decoded[start..start + plain.len()], &plain);
+        for (offset, value) in [
+            (entry + 1, 0),
+            (entry + 3, 0),
+            (entry + 6, 80),
+            (entry + 13, 0xf9),
+            (entry + 14, 0xcc),
+        ] {
+            let mut changed = input.clone();
+            changed[offset] = value;
+            assert!(decode(&changed).is_none(), "offset {offset}");
+        }
+        assert!(decode(&input[..entry + 13]).is_none());
+    }
+
+    #[test]
     fn call_rotate_xor_recovers_bounded_words_and_rejects_invalid_stubs() {
         let mut input = vec![0x90; 128];
         let start = 16usize;
@@ -265,7 +456,7 @@ mod tests {
             0x90u8, 0x90, 0xb4, 0x4e, 0xcd, 0x21, 0xb4, 0x40, 0xcd, 0x21, 0x90, 0x90, 0x90, 0x90,
             0xcd, 0x20,
         ];
-        for (i, bytes) in plain.chunks_exact(2).enumerate() {
+        for (i, bytes) in plain.as_chunks::<2>().0.iter().enumerate() {
             let word = u16::from_le_bytes([bytes[0], bytes[1]]);
             let encoded = (word.rotate_right(u32::from(key & 0xff)) ^ key).wrapping_add(key);
             input[start + i * 2..start + i * 2 + 2].copy_from_slice(&encoded.to_le_bytes());

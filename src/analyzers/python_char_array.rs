@@ -275,6 +275,11 @@ pub(crate) fn decode(source: &str) -> Option<(String, Vec<(usize, String)>)> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "invalid fixtures should fail the test"
+)]
 mod tests {
     use super::*;
     const EXPR: &str = "''.join(map(getattr(__builtins__, oct.__str__()[-3 << 0] + hex.__str__()[-1 << 2] + copyright.__str__()[4 << 0]), [(8 << 3) + 1, (5 << 4) + 2]))";

@@ -401,7 +401,7 @@ fn plausible_pe_header(data: &[u8]) -> bool {
     if !data.starts_with(b"MZ") || data.len() < 64 {
         return false;
     }
-    let offset = u32::from_le_bytes(data[60..64].try_into().unwrap()) as usize;
+    let offset = u32::from_le_bytes([data[60], data[61], data[62], data[63]]) as usize;
     if !(64..=4096).contains(&offset) || data.get(offset..offset + 4) != Some(b"PE\0\0") {
         return false;
     }

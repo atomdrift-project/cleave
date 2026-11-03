@@ -200,6 +200,11 @@ pub(super) fn expand(source: &str) -> Option<String> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "invalid fixtures should fail the test"
+)]
 mod tests {
     use super::*;
 

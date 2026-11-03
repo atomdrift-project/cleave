@@ -4245,7 +4245,9 @@ mod validator_wiring_tests {
 
     #[test]
     fn whole_number_provenance_requires_complete_numeric_value() {
-        use crate::composite_rules::{condition::ArgFilter, context::EvaluationContext, types::FileType};
+        use crate::composite_rules::{
+            condition::ArgFilter, context::EvaluationContext, types::FileType,
+        };
         use crate::types::{AnalysisReport, FilefactsView, TargetInfo};
         let arg: ArgFilter = crate::yaml::from_str("index: 1\nfrom: {whole_number: 0}\n").unwrap();
         for (source, expected) in [
@@ -4254,14 +4256,39 @@ mod validator_wiring_tests {
             ("const HIDE = 1; ShowWindow(hwnd, HIDE)", false),
             ("ShowWindow(hwnd, unknown)", false),
         ] {
-            let parsed = filefacts::OpenOptions::new().path(std::path::Path::new("fixture.js")).open(source.as_bytes());
+            let parsed = filefacts::OpenOptions::new()
+                .path(std::path::Path::new("fixture.js"))
+                .open(source.as_bytes());
             let mut report = AnalysisReport::new(TargetInfo {
-                path: "fixture.js".into(), file_type: "javascript".into(), size_bytes: source.len() as u64,
-                sha256: String::new(), architectures: None,
+                path: "fixture.js".into(),
+                file_type: "javascript".into(),
+                size_bytes: source.len() as u64,
+                sha256: String::new(),
+                architectures: None,
             });
-            report.filefacts = Some(FilefactsView { flow: parsed.flow().cloned(), symbols: parsed.symbols().iter().cloned().collect(), ..Default::default() });
-            let ctx = EvaluationContext::new(&report, source.as_bytes(), FileType::JavaScript, &[], None, None);
-            let matched = super::eval_call(Some(&"ShowWindow".into()), None, None, Some(&arg), None, super::CallSite::default(), &ctx).matched;
+            report.filefacts = Some(FilefactsView {
+                flow: parsed.flow().cloned(),
+                symbols: parsed.symbols().iter().cloned().collect(),
+                ..Default::default()
+            });
+            let ctx = EvaluationContext::new(
+                &report,
+                source.as_bytes(),
+                FileType::JavaScript,
+                &[],
+                None,
+                None,
+            );
+            let matched = super::eval_call(
+                Some(&"ShowWindow".into()),
+                None,
+                None,
+                Some(&arg),
+                None,
+                super::CallSite::default(),
+                &ctx,
+            )
+            .matched;
             assert_eq!(matched, expected, "{source}");
         }
     }
@@ -4434,7 +4461,10 @@ mod validator_wiring_tests {
             ("{whole_number: 0, whole_value: x}", false),
             ("{whole_number: 0, value: x}", false),
             ("{whole_number: 0, call: f}", false),
-            ("{whole_number: 0, through: [{call: f, arguments: [0]}]}", false),
+            (
+                "{whole_number: 0, through: [{call: f, arguments: [0]}]}",
+                false,
+            ),
             ("{whole_value: '['}", false),
             ("{whole_value: x, value: x}", false),
             ("{whole_value: x, member: x}", false),

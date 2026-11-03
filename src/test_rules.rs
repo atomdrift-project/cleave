@@ -1475,7 +1475,9 @@ impl<'a> RuleDebugger<'a> {
             }
             if fallback.is_none() {
                 let mut result = ConditionDebugResult::new(desc, false);
-                result.details.push("✗ Inline YARA rule failed to compile".to_string());
+                result
+                    .details
+                    .push("✗ Inline YARA rule failed to compile".to_string());
                 return result;
             }
         }
@@ -2770,12 +2772,22 @@ composite_rules:
         let source = r#"rule test { strings: $a = "needle" condition: $a }"#;
         for (data, expected) in [(b"needle".as_slice(), true), (b"nothing".as_slice(), false)] {
             let debugger = RuleDebugger::new(&mapper, &report, data, vec![Platform::All], None);
-            assert_eq!(debugger.debug_yara_inline_condition(source, None, None).matched, expected);
+            assert_eq!(
+                debugger
+                    .debug_yara_inline_condition(source, None, None)
+                    .matched,
+                expected
+            );
         }
         let debugger = RuleDebugger::new(&mapper, &report, b"needle", vec![Platform::All], None);
         let invalid = debugger.debug_yara_inline_condition("not a YARA rule", None, None);
         assert!(!invalid.matched);
-        assert!(invalid.details.iter().any(|detail| detail.contains("failed to compile")));
+        assert!(
+            invalid
+                .details
+                .iter()
+                .any(|detail| detail.contains("failed to compile"))
+        );
     }
 
     #[test]
@@ -2783,10 +2795,21 @@ composite_rules:
         let mapper = CapabilityMapper::empty();
         let report = create_test_report_with_findings(vec![]);
         let results = HashMap::new();
-        let debugger = RuleDebugger::new(&mapper, &report, b"needle", vec![Platform::All], Some(&results));
+        let debugger = RuleDebugger::new(
+            &mapper,
+            &report,
+            b"needle",
+            vec![Platform::All],
+            Some(&results),
+        );
         let result = debugger.debug_yara_inline_condition("not a YARA rule", Some("test"), None);
         assert!(!result.matched);
-        assert!(result.details.iter().any(|detail| detail.contains("did not match")));
+        assert!(
+            result
+                .details
+                .iter()
+                .any(|detail| detail.contains("did not match"))
+        );
     }
 
     fn create_test_finding(id: &str) -> Finding {

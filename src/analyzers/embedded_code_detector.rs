@@ -2389,7 +2389,10 @@ traits:
     fn wide_encoded_layer_emits_registered_metadata() {
         let findings = generate_encoded_layer_traits(&["wide".to_string()], 0x40);
         assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].id.as_ref(), "metadata/lang/encoding/layer::wide");
+        assert_eq!(
+            findings[0].id.as_ref(),
+            "metadata/lang/encoding/layer::wide"
+        );
         assert_eq!(findings[0].evidence[0].location.as_deref(), Some("0x40"));
     }
 
@@ -2563,7 +2566,8 @@ composite_rules:
             layer
                 .findings
                 .iter()
-                .filter(|finding| finding.id == "metadata/lang/encoding/layer::powershell-literal-program")
+                .filter(|finding| finding.id
+                    == "metadata/lang/encoding/layer::powershell-literal-program")
                 .count(),
             1
         );
@@ -3343,7 +3347,9 @@ IAAAAAAAsDyZDwU=";
     fn windows_inline_python_is_not_heuristic_quoted_source() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("traits.yaml");
-        std::fs::write(&path, r#"
+        std::fs::write(
+            &path,
+            r#"
 defaults:
   for: [python]
   platforms: [unix, windows]
@@ -3360,17 +3366,43 @@ traits:
         from: {call: '(^|\.)b64decode$'}
     unless:
       - id: metadata/lang/source/origin::heuristic-quoted-source
-"#).unwrap();
+"#,
+        )
+        .unwrap();
         let mapper = crate::capabilities::CapabilityMapper::from_yaml(&path).unwrap();
         let engine = crate::Engine::from_rules(std::sync::Arc::new(mapper));
         let host = r#"@echo off
 python.exe -c "import base64; exec(base64.b64decode(open('x').read()))"
 "#;
-        let (_, findings) = process_all_strings_with_host("launcher.bat", &[], &engine, 0, Some(&FileType::Batch), None, true, Some(host));
-        assert!(findings.iter().any(|f| f.id == "test/source::base64-exec"), "{findings:?}");
-        let extracted = make_string_info(r#"python.exe -c "import base64; exec(base64.b64decode(open('x').read()))""#);
-        let (_, findings) = process_all_strings("launcher.bat", &[extracted], &engine, 0, Some(&FileType::Batch), None);
-        assert!(findings.iter().any(|f| f.id == "test/source::base64-exec"), "extracted: {findings:?}");
+        let (_, findings) = process_all_strings_with_host(
+            "launcher.bat",
+            &[],
+            &engine,
+            0,
+            Some(&FileType::Batch),
+            None,
+            true,
+            Some(host),
+        );
+        assert!(
+            findings.iter().any(|f| f.id == "test/source::base64-exec"),
+            "{findings:?}"
+        );
+        let extracted = make_string_info(
+            r#"python.exe -c "import base64; exec(base64.b64decode(open('x').read()))""#,
+        );
+        let (_, findings) = process_all_strings(
+            "launcher.bat",
+            &[extracted],
+            &engine,
+            0,
+            Some(&FileType::Batch),
+            None,
+        );
+        assert!(
+            findings.iter().any(|f| f.id == "test/source::base64-exec"),
+            "extracted: {findings:?}"
+        );
     }
 
     #[test]

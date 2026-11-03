@@ -817,6 +817,10 @@ impl Analyzer for GenericAnalyzer {
         {
             let encoding = vec![if input.data.first() == Some(&0xe8) {
                 "dos-word-sub-xor-rotate".to_owned()
+            } else if input.data.get(offset) == Some(&0xb2) {
+                "dos-byte-xor".to_owned()
+            } else if input.data.get(offset) == Some(&0xfa) {
+                "dos-byte-subtract".to_owned()
             } else {
                 "dos-word-xor".to_owned()
             }];

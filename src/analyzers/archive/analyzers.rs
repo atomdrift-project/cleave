@@ -1652,6 +1652,19 @@ impl ArchiveAnalyzer {
         crate::analyzers::unified::UnifiedSourceAnalyzer::for_file_type(file_type).is_some()
     }
 
+    fn has_wrapped_binary(&self, file_type: &FileType, data: &[u8]) -> bool {
+        *file_type == FileType::Unknown
+            && data.len() <= 32 * 1024 * 1024
+            && (memchr::memmem::find(data, b"MZ").is_some()
+                || memchr::memmem::find(data, b"\x7fELF").is_some()
+                || memchr::memmem::find(data, b"TVq").is_some())
+            && !crate::analyzers::embedded_binary_detector::scan_for_embedded_binaries(
+                data,
+                self.cancelled.as_deref(),
+            )
+            .is_empty()
+    }
+
     fn archive_member_analysis_skip_reason(
         &self,
         file_type: &FileType,
@@ -1886,7 +1899,12 @@ impl ArchiveAnalyzer {
             default_options = crate::AnalysisOptions::default();
             &default_options
         };
-        if let Some(reason) = self.archive_member_analysis_skip_reason(file_type, relative_path) {
+        // Unknown members are normally skipped, but a validated embedded PE or
+        // ELF is executable content even when a wrapper obscures its file ID.
+        let wrapped_binary = self.has_wrapped_binary(file_type, data);
+        if let Some(reason) = self.archive_member_analysis_skip_reason(file_type, relative_path)
+            && !wrapped_binary
+        {
             tracing::debug!(
                 relative_path,
                 file_type = %file_type.report_file_type(),
@@ -2293,7 +2311,10 @@ impl ArchiveAnalyzer {
         // archive's members — fanned across the whole rayon pool — are all named.
         let _breadcrumb = crate::breadcrumb::scope("member", relative_path);
 
-        if let Some(reason) = self.archive_member_analysis_skip_reason(file_type, relative_path) {
+        let wrapped_binary = self.has_wrapped_binary(file_type, data);
+        if let Some(reason) = self.archive_member_analysis_skip_reason(file_type, relative_path)
+            && !wrapped_binary
+        {
             tracing::debug!(
                 relative_path,
                 file_type = %file_type.report_file_type(),
@@ -2416,7 +2437,12 @@ impl ArchiveAnalyzer {
             // request's archive settings so an installer nested inside a ZIP
             // inherits --all-files, memory limits, YARA,
             // and cancellation for its own payloads.
-            if *file_type == FileType::Pe {
+            if wrapped_binary {
+                Some(Box::new(
+                    crate::analyzers::generic::GenericAnalyzer::new(FileType::Unknown)
+                        .with_engine(self.engine.clone()),
+                ) as Box<dyn crate::analyzers::Analyzer>)
+            } else if *file_type == FileType::Pe {
                 let mut pe = crate::analyzers::pe::PEAnalyzer::new()
                     .with_engine(self.engine.clone())
                     .with_cancellation(self.cancelled.clone())
@@ -2474,6 +2500,15 @@ impl ArchiveAnalyzer {
             payloads.extend(member_ctx.as_ref().and_then(|ctx| {
                 crate::extractors::encoded_payload::xor_encoded_pe(ctx.parsed.fileid(), data)
             }));
+            if matches!(
+                file_type,
+                FileType::Gif | FileType::Jpeg | FileType::Png | FileType::Bmp | FileType::Webp
+            ) {
+                payloads.extend(crate::extractors::encoded_payload::extract_media_base64_pes(data));
+                payloads.extend(crate::extractors::encoded_payload::extract_media_xor_pes(
+                    data,
+                ));
+            }
             // Binary recovery must not depend on the source/string-decoding
             // gate: a packed PE needs the same child analysis in an archive.
             if *file_type == FileType::Pe {
@@ -5607,6 +5642,52 @@ mod tests {
         assert_eq!(
             all_files_analyzer.archive_member_analysis_skip_reason(&FileType::Html, "member"),
             None
+        );
+    }
+
+    #[test]
+    fn unknown_archive_member_with_embedded_pe_is_analyzed_by_default() {
+        let mut data = vec![0u8; 4106];
+        data[..2].copy_from_slice(b"MZ");
+        let offset = 10;
+        data[offset..offset + 2].copy_from_slice(b"MZ");
+        data[offset + 0x3c..offset + 0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        let pe = offset + 0x80;
+        data[pe..pe + 4].copy_from_slice(b"PE\0\0");
+        data[pe + 4..pe + 6].copy_from_slice(&0x14cu16.to_le_bytes());
+        data[pe + 6..pe + 8].copy_from_slice(&1u16.to_le_bytes());
+        data[pe + 20..pe + 22].copy_from_slice(&0xe0u16.to_le_bytes());
+        data[pe + 24..pe + 26].copy_from_slice(&0x10bu16.to_le_bytes());
+        let section = pe + 24 + 0xe0;
+        data[section + 16..section + 20].copy_from_slice(&512u32.to_le_bytes());
+        data[section + 20..section + 24].copy_from_slice(&512u32.to_le_bytes());
+        let analyzer = ArchiveAnalyzer::new();
+        let hash = crate::analyzers::utils::calculate_sha256(&data);
+        let report = analyzer
+            .analyze_extracted_member_on_current_pool(
+                std::path::Path::new("wrapper.bin"),
+                "wrapper.bin",
+                &data,
+                &FileType::Unknown,
+                &hash,
+            )
+            .unwrap()
+            .unwrap();
+        assert!(report.files.iter().any(|file| file.file_type == "pe"));
+
+        data[pe] = 0;
+        let hash = crate::analyzers::utils::calculate_sha256(&data);
+        assert!(
+            analyzer
+                .analyze_extracted_member_on_current_pool(
+                    std::path::Path::new("wrapper.bin"),
+                    "wrapper.bin",
+                    &data,
+                    &FileType::Unknown,
+                    &hash,
+                )
+                .unwrap()
+                .is_none()
         );
     }
 

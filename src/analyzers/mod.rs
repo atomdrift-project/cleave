@@ -52,6 +52,7 @@ pub(crate) mod pe_extractors;
 
 // Dedicated analyzers for binary/bytecode/manifest formats
 pub(crate) mod chrome_manifest;
+pub(crate) mod dos_word_xor;
 pub(crate) mod elf;
 pub(crate) mod embedded_binary_detector;
 pub(crate) mod font;
@@ -74,6 +75,7 @@ pub mod pe;
 pub(crate) mod php_blocks;
 pub(crate) mod pickle;
 mod png;
+pub(crate) mod python_char_array;
 pub(crate) mod python_encoded_command;
 pub(crate) mod python_literal_catalog;
 pub(crate) mod rtf;
@@ -454,6 +456,13 @@ const SCRIPT_SNIFF_MAX_BYTES: usize = 4 << 20;
 /// was built to catch, and both the magic and extension paths still see it.
 fn sniff_script_type_from_content(data: &[u8]) -> Option<FileType> {
     if data.len() > SCRIPT_SNIFF_MAX_BYTES {
+        return None;
+    }
+
+    // Compiled YARA-X databases contain fragments from many unrelated scripts.
+    // Their binary header is not script source, even when those fragments
+    // satisfy the fallback VBScript marker threshold.
+    if data.starts_with(b"YARA-X\0\0") {
         return None;
     }
 
@@ -1126,6 +1135,10 @@ mod tests {
             .flat_map(u16::to_le_bytes)
             .collect();
         assert_eq!(sniff_script_type_from_content(&wide), Some(FileType::Vbs));
+
+        let mut compiled_rules = b"YARA-X\0\0\x02\0\0\0".to_vec();
+        compiled_rules.extend_from_slice(vbs);
+        assert_eq!(sniff_script_type_from_content(&compiled_rules), None);
 
         // One marker repeated is one marker, not three.
         assert_eq!(

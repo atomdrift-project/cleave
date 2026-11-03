@@ -110,6 +110,41 @@ fn base64_encoded_payload_detected_in_archive_member_same_as_standalone() -> any
 }
 
 #[test]
+fn media_encoded_pe_keeps_child_attribution_inside_and_outside_archive() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let pe = include_bytes!("../fixtures/test.exe");
+    let mut base64_gif = b"GIF89a\x01\x00\x01\x00\x00\x00\x00;<<payload>>".to_vec();
+    base64_gif.extend(base64::engine::general_purpose::STANDARD.encode(pe).bytes());
+    base64_gif.extend_from_slice(b"<<end>>");
+    let mut xor_gif = b"GIF89a\x01\x00\x01\x00\x00\x00\x00;".to_vec();
+    xor_gif.extend(pe.iter().map(|b| b ^ 0x2f));
+
+    for (kind, bytes) in [("media-base64-pe", base64_gif), ("media-xor-pe", xor_gif)] {
+        let gif_path = dir.path().join(format!("{kind}.gif"));
+        std::fs::write(&gif_path, &bytes)?;
+        let standalone = analyze_file(&gif_path, &opts())?;
+        assert!(
+            standalone
+                .files
+                .iter()
+                .any(|f| f.path.contains(&format!("##{kind}@"))),
+            "missing standalone {kind} child"
+        );
+        let archive_path = dir.path().join(format!("{kind}.tar.gz"));
+        write_tar_gz(&archive_path, "package/image.gif", &bytes)?;
+        let archive = analyze_file(&archive_path, &opts())?;
+        assert!(
+            archive
+                .files
+                .iter()
+                .any(|f| f.path.contains(&format!("##{kind}@"))),
+            "missing archive-member {kind} child"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn archive_member_max_criticality_matches_standalone() -> anyhow::Result<()> {
     // Beyond the encoded-payload finding itself, the recursive decoded-payload
     // analysis contributes traits/findings that raise the member's peak

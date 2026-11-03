@@ -1664,6 +1664,49 @@ pub(crate) fn report_from_file_analysis(
     report
 }
 
+/// Rebase a decoded child's absolute or basename-relative temporary path.
+fn rebase_decoded_child_path(path: &str, temporary: &std::path::Path, decoded: &str) -> String {
+    let full = temporary.to_string_lossy();
+    let name = temporary
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    let suffix = path.strip_prefix(full.as_ref()).or_else(|| {
+        if name.is_empty() {
+            None
+        } else {
+            path.strip_prefix(name)
+        }
+    });
+    match suffix {
+        Some(suffix)
+            if suffix.is_empty() || suffix.starts_with("!!") || suffix.starts_with("##") =>
+        {
+            format!("{decoded}{suffix}")
+        }
+        _ => path.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod decoded_child_path_tests {
+    #[test]
+    fn rebases_temporary_children_without_touching_unrelated_names() {
+        let temp = std::path::Path::new("/tmp/.tmp123");
+        let decoded = "/sample.gif##media-base64-pe@42";
+        for input in ["/tmp/.tmp123!!embedded.dll", ".tmp123!!embedded.dll"] {
+            assert_eq!(
+                super::rebase_decoded_child_path(input, temp, decoded),
+                format!("{decoded}!!embedded.dll")
+            );
+        }
+        assert_eq!(
+            super::rebase_decoded_child_path(".tmp123-other!!file", temp, decoded),
+            ".tmp123-other!!file"
+        );
+    }
+}
+
 /// Process encoded payloads discovered during string extraction: emit the
 /// `metadata/encoded-payload/*` finding for each and recursively analyze the
 /// decoded bytes (depth-limited), merging the decoded traits/findings back.
@@ -1742,6 +1785,14 @@ pub(crate) fn process_encoded_payloads(
             && payload.encoding_chain.as_slice() == ["xor"]
         {
             "XOR-encoded PE image recovered".to_string()
+        } else if payload.detected_type == FileType::Pe
+            && payload.encoding_chain.as_slice() == ["media-xor-pe"]
+        {
+            "XOR-encoded PE recovered from image".to_string()
+        } else if payload.detected_type == FileType::Pe
+            && payload.encoding_chain.as_slice() == ["media-base64-pe"]
+        {
+            "Base64-encoded PE recovered from image".to_string()
         } else if payload.encoding_chain.as_slice() == ["url"] {
             "Percent-encoded content decoded".to_string()
         } else if payload.detected_type == FileType::Unknown {
@@ -1844,11 +1895,13 @@ pub(crate) fn process_encoded_payloads(
                 None,
                 analysis_depth + 1,
             ) {
-                // MIME attachments are real child files. Retain their archive
-                // members and attribution rather than flattening PE properties
-                // into the enclosing mail's own findings.
-                if payload.encoding_chain.as_slice() == ["mime-base64"] {
-                    let temporary_path = temp_file.path().display().to_string();
+                // MIME attachments and recovered media executables are real
+                // child files. Keep their attribution rather than claiming the
+                // enclosing mail or image directly implements PE behavior.
+                if payload.encoding_chain.as_slice() == ["mime-base64"]
+                    || payload.encoding_chain.as_slice() == ["media-base64-pe"]
+                    || payload.encoding_chain.as_slice() == ["media-xor-pe"]
+                {
                     let virtual_path = types::encode_decoded_path(
                         &path.display().to_string(),
                         &payload.encoding_chain,
@@ -1860,17 +1913,23 @@ pub(crate) fn process_encoded_payloads(
                     entry.depth = 1;
                     entry.encoding = Some(payload.encoding_chain.clone());
                     for child in &mut children {
-                        child.path = child.path.replace(&temporary_path, &virtual_path);
+                        child.path =
+                            rebase_decoded_child_path(&child.path, temp_file.path(), &virtual_path);
                         child.depth += 1;
                         for finding in &mut child.findings {
                             if let Some(source) = &mut finding.source_file {
-                                *source = source.replace(&temporary_path, &virtual_path);
+                                *source = rebase_decoded_child_path(
+                                    source,
+                                    temp_file.path(),
+                                    &virtual_path,
+                                );
                             }
                         }
                     }
                     for finding in &mut entry.findings {
                         if let Some(source) = &mut finding.source_file {
-                            *source = source.replace(&temporary_path, &virtual_path);
+                            *source =
+                                rebase_decoded_child_path(source, temp_file.path(), &virtual_path);
                         }
                     }
                     report.files.push(entry);
@@ -2315,6 +2374,17 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     encoded_payloads.extend(extractors::encoded_payload::extract_mime_attachments(
         file_data,
     ));
+    if matches!(
+        file_type,
+        FileType::Gif | FileType::Jpeg | FileType::Png | FileType::Bmp | FileType::Webp
+    ) {
+        encoded_payloads.extend(extractors::encoded_payload::extract_media_base64_pes(
+            file_data,
+        ));
+        encoded_payloads.extend(extractors::encoded_payload::extract_media_xor_pes(
+            file_data,
+        ));
+    }
     encoded_payloads.extend(file_ctx.as_ref().and_then(|ctx| {
         extractors::encoded_payload::xor_encoded_pe(ctx.parsed.fileid(), file_data)
     }));

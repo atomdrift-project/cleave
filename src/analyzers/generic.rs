@@ -164,6 +164,74 @@ impl GenericAnalyzer {
         // opened once and threaded in, or one the caller opened on `eval_bytes`.
         let source_ast = source_ctx.and_then(crate::analysis_context::AnalysisContext::source_ast);
 
+        // Unknown binary carriers can wrap an otherwise valid executable. Use
+        // the same bounded header validation as PE/ELF hosts, and analyze the
+        // carved bytes as a child rather than treating a wrapper as a PE.
+        if self.detect_embedded
+            && matches!(self.file_type, FileType::Unknown | FileType::Data)
+            && eval_bytes.len() <= 32 * 1024 * 1024
+        {
+            let host = file_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("data");
+            for binary in crate::analyzers::embedded_binary_detector::scan_for_embedded_binaries(
+                eval_bytes,
+                cancellation.map(AsRef::as_ref),
+            ) {
+                let decoded;
+                let bytes = if binary.encoding == Some("base64") {
+                    let Some(rest) = eval_bytes.get(binary.offset..) else {
+                        continue;
+                    };
+                    let len = rest
+                        .iter()
+                        .take_while(|&&b| {
+                            b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'='
+                        })
+                        .count()
+                        & !3;
+                    match base64::Engine::decode(
+                        &base64::engine::general_purpose::STANDARD,
+                        &rest[..len],
+                    ) {
+                        Ok(value) => {
+                            decoded = value;
+                            decoded.as_slice()
+                        }
+                        Err(_) => continue,
+                    }
+                } else {
+                    let end = binary
+                        .offset
+                        .saturating_add(binary.estimated_size)
+                        .min(eval_bytes.len());
+                    let Some(value) = eval_bytes.get(binary.offset..end) else {
+                        continue;
+                    };
+                    value
+                };
+                report
+                    .findings
+                    .push(crate::analyzers::embedded_binary_detector::finding_for(
+                        &binary,
+                        &report.target.path,
+                    ));
+                if let Some(files) = crate::analyzers::utils::analyze_embedded_as_child(
+                    bytes,
+                    host,
+                    binary.kind.as_str(),
+                    &binary.display_kind(),
+                    binary.offset,
+                    self.engine.clone(),
+                    None,
+                    &[],
+                ) {
+                    report.files.extend(files);
+                }
+            }
+        }
+
         // `pyc.*` kv comes from filefacts's dual emission in the
         // capability mapper — no synthesis needed here.
 
@@ -732,7 +800,7 @@ impl Analyzer for GenericAnalyzer {
         let content = String::from_utf8_lossy(input.data);
         let fallback = input.open_ctx_fallback();
         let source_ctx = input.parsed_ctx.as_ref().or(fallback.as_ref());
-        let report = self.analyze_source_internal(
+        let mut report = self.analyze_source_internal(
             input.path,
             &content,
             Some(input.strings),
@@ -743,6 +811,53 @@ impl Analyzer for GenericAnalyzer {
             source_ctx,
             input.cancellation.as_ref(),
         );
+        if self.detect_embedded
+            && self.file_type == FileType::DosCom
+            && let Some((offset, decoded)) = super::dos_word_xor::decode(input.data)
+        {
+            let encoding = vec![if input.data.first() == Some(&0xe8) {
+                "dos-word-sub-xor-rotate".to_owned()
+            } else if input.data.get(offset) == Some(&0xb2) {
+                "dos-byte-xor".to_owned()
+            } else if input.data.get(offset) == Some(&0xfa) {
+                "dos-byte-subtract".to_owned()
+            } else {
+                "dos-word-xor".to_owned()
+            }];
+            let name = crate::types::encode_decoded_path(
+                &input.path.display().to_string(),
+                &encoding,
+                offset,
+            );
+            let path = Path::new(&name);
+            let child_ctx = crate::analysis_context::AnalysisContext::open_with(
+                filefacts::OpenOptions::new().file_type(filefacts::FileType::DosCom),
+                path,
+                &decoded,
+            );
+            let child = GenericAnalyzer::new(FileType::DosCom)
+                .with_engine(self.engine.clone())
+                .without_embedded_detection();
+            let text = String::from_utf8_lossy(&decoded);
+            let child_strings = child_ctx.text_rows();
+            let child_report = child.analyze_source_internal(
+                path,
+                &text,
+                Some(child_strings.as_ref()),
+                Some(&decoded),
+                Some(&decoded),
+                None,
+                self.engine.compact_members(),
+                Some(&child_ctx),
+                input.cancellation.as_ref(),
+            );
+            let (mut entry, _, _) = child_report.into_file_analysis(0, &self.engine);
+            entry.path = name;
+            entry.depth = input.depth.saturating_add(1);
+            entry.encoding = Some(encoding);
+            entry.compute_summary();
+            report.files.push(entry);
+        }
         Ok(report)
     }
 
@@ -1039,6 +1154,50 @@ test.c $(distdir)/runsuite.c | GZIP=$(GZIP_ENV) gzip -c >`echo "$(distdir)" | sh
                 .iter()
                 .any(|f| f.id == "metadata/lang/embedded::shell")
         );
+    }
+
+    #[test]
+    fn unknown_binary_carrier_exposes_validated_embedded_pe() {
+        let mut data = vec![0u8; 4096 + 10];
+        data[..2].copy_from_slice(b"MZ");
+        let offset = 10;
+        data[offset..offset + 2].copy_from_slice(b"MZ");
+        data[offset + 0x3c..offset + 0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        let pe = offset + 0x80;
+        data[pe..pe + 4].copy_from_slice(b"PE\0\0");
+        data[pe + 4..pe + 6].copy_from_slice(&0x14cu16.to_le_bytes());
+        data[pe + 6..pe + 8].copy_from_slice(&1u16.to_le_bytes());
+        data[pe + 20..pe + 22].copy_from_slice(&0xe0u16.to_le_bytes());
+        data[pe + 24..pe + 26].copy_from_slice(&0x10bu16.to_le_bytes());
+        let section = pe + 24 + 0xe0;
+        data[section + 16..section + 20].copy_from_slice(&512u32.to_le_bytes());
+        data[section + 20..section + 24].copy_from_slice(&512u32.to_le_bytes());
+        let path = PathBuf::from("wrapper.bin");
+        let input = AnalysisInput::new(&path, &data, FileType::Unknown);
+        let report = GenericAnalyzer::new(FileType::Unknown)
+            .analyze_input(&input)
+            .unwrap();
+        assert!(report.findings.iter().any(|f| f.id == "binary/embedded/pe"));
+        assert!(report.files.iter().any(|f| f.file_type == "pe"));
+
+        let disabled = GenericAnalyzer::new(FileType::Unknown)
+            .without_embedded_detection()
+            .analyze_input(&input)
+            .unwrap();
+        assert!(disabled.files.is_empty());
+
+        data[pe] = 0;
+        let input = AnalysisInput::new(&path, &data, FileType::Unknown);
+        let invalid = GenericAnalyzer::new(FileType::Unknown)
+            .analyze_input(&input)
+            .unwrap();
+        assert!(
+            !invalid
+                .findings
+                .iter()
+                .any(|f| f.id == "binary/embedded/pe")
+        );
+        assert!(invalid.files.is_empty());
     }
 
     #[test]

@@ -2803,10 +2803,10 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // Shared XOR AST productions are portable across the explicitly scoped
     // grammars. Lua exponentiation and other grammars are excluded; Swift has
     // its own production. One canonical predicate avoids per-language copies.
-    "tree-sitter:micro-behaviors/data/bitwise/xor-forms/expression/xor-split-parsed-xor.yaml",
+    "tree-sitter:micro-behaviors/data/bitwise/xor/expression/xor-split-parsed-xor.yaml",
     // Normalized call names describe the same XOR-named helper observation
     // across script/source frontends, without claiming a particular algorithm.
-    "symbol:micro-behaviors/data/bitwise/xor-forms/expression/xor-split-parsed-xor.yaml",
+    "symbol:micro-behaviors/data/bitwise/xor/expression/xor-split-parsed-xor.yaml",
     // Named-call references use the normalized call-symbol namespace across
     // script frontends. The printenv reference currently matches 13 script
     // types; narrowing it to seven would discard existing call facts. This

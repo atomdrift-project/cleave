@@ -4467,6 +4467,519 @@ fn is_reviewed_installer_tool_fact(t: &TraitDefinition) -> bool {
     }
 }
 
+// Reviewed product-name and tool-reference observations. These exact matchers
+// report the cited name, path, API or diagnostic, not the identity or size of
+// their containing binary. Pin the matchers so changes do not inherit an allowance.
+fn reviewed_unbounded_reference(t: &TraitDefinition, for_section: bool) -> bool {
+    let (kind, mode, expected, section, path, size_ok, section_ok, crit) = match t.id.as_str() {
+        r###"well-known/app/communication/aol-desktop::registry-path-aol"### => (
+            r###"text"###,
+            r###"regex"###,
+            r###"(?i)Software\\AOL\\Desktop"###,
+            r###".text"###,
+            r###""###,
+            true,
+            false,
+            Criticality::Notable,
+        ),
+        r###"well-known/app/communication/compuserve::registry-path-compuserve"### => (
+            r###"text"###,
+            r###"regex"###,
+            r###"(?i)Software\\Compuserve"###,
+            r###".text"###,
+            r###""###,
+            true,
+            false,
+            Criticality::Notable,
+        ),
+        r###"well-known/app/development/code-forge/gitlab::gitlab-generic-package-upload"### => (
+            r###"text"###,
+            r###"regex"###,
+            r###"/api/v4/projects/.{0,160}/packages/generic/"###,
+            r###""###,
+            r###""###,
+            true,
+            false,
+            Criticality::Notable,
+        ),
+        r###"well-known/app/enterprise/symantec-act::registry-path-symantec-act"### => (
+            r###"text"###,
+            r###"regex"###,
+            r###"(?i)Software\\Symantec\\ACT!"###,
+            r###".text"###,
+            r###""###,
+            true,
+            false,
+            Criticality::Notable,
+        ),
+        r###"well-known/app/productivity/lotus-approach::lotus-approach-name-reference"### => (
+            r###"text"###,
+            r###"regex"###,
+            r###"(?i)Lotus Approach"###,
+            r###".text"###,
+            r###""###,
+            true,
+            false,
+            Criticality::Notable,
+        ),
+        r###"well-known/app/productivity/lotus-approach::registry-path-lotus"### => (
+            r###"text"###,
+            r###"regex"###,
+            r###"(?i)Software\\Lotus\\Approach"###,
+            r###".text"###,
+            r###""###,
+            true,
+            false,
+            Criticality::Notable,
+        ),
+        r###"well-known/app/productivity/microsoft-office::ensure-vsto-component-text"### => (
+            r###"text"###,
+            r###"exact"###,
+            r###"EnsureVSTOComponent"###,
+            r###""###,
+            r###""###,
+            true,
+            true,
+            Criticality::Notable,
+        ),
+        r###"well-known/app/productivity/microsoft-office::msoxmled-pdb"### => (
+            r###"text"###,
+            r###"substr"###,
+            r###"msoxmled.pdb"###,
+            r###""###,
+            r###""###,
+            true,
+            true,
+            Criticality::Notable,
+        ),
+        r###"well-known/app/productivity/microsoft-office::office-help-path"### => (
+            r###"text"###,
+            r###"exact"###,
+            r###"/MsOfficeHelp16/"###,
+            r###""###,
+            r###""###,
+            true,
+            true,
+            Criticality::Notable,
+        ),
+        r###"well-known/app/productivity/microsoft-office::office-help-user-agent-text"### => (
+            r###"text"###,
+            r###"exact"###,
+            r###"User-Agent: %s%sX-OfApp: %s%sX-OfVer: %s%sX-Office-Version: %d.%d.%04d.0%sX-OfHelpLcid: %s%sX-OfUILcid: %s%sX-OfSysLcid: %s%s"###,
+            r###""###,
+            r###""###,
+            true,
+            true,
+            Criticality::Notable,
+        ),
+        r###"well-known/app/productivity/microsoft-office::office-help-viewer-name"### => (
+            r###"text"###,
+            r###"exact"###,
+            r###"Microsoft Office Help Viewer"###,
+            r###""###,
+            r###""###,
+            true,
+            true,
+            Criticality::Notable,
+        ),
+        r###"well-known/app/productivity/microsoft-office::officecompleted-text"### => (
+            r###"text"###,
+            r###"exact"###,
+            r###"OfficeCompleted"###,
+            r###""###,
+            r###""###,
+            true,
+            true,
+            Criticality::Component,
+        ),
+        r###"well-known/app/productivity/microsoft-office::vsto-installer-pdb-reference"### => (
+            r###"text"###,
+            r###"exact"###,
+            r###"VSTOInstaller.pdb"###,
+            r###""###,
+            r###""###,
+            true,
+            true,
+            Criticality::Notable,
+        ),
+        r###"well-known/app/productivity/sumatrapdf::sumatrapdf-encryption-sentinel"### => (
+            r###"text"###,
+            r###"regex"###,
+            r###"This document is encrypted with sumatrapdf reader!{4,}"###,
+            r###""###,
+            r###""###,
+            true,
+            false,
+            Criticality::Notable,
+        ),
+        r###"well-known/app/security/defender::defender-mpservice-alpc"### => (
+            r###"text"###,
+            r###"substr"###,
+            r###"IMpService77BDAF73-B396-481F-9042-AD358843EC24"###,
+            r###""###,
+            r###""###,
+            true,
+            false,
+            Criticality::Notable,
+        ),
+        r###"well-known/app/security/defender::defender-rpc-uuid"### => (
+            r###"text"###,
+            r###"regex"###,
+            r###"(?i)c503f532-443a-4c69-8300-ccd1fbdb3839"###,
+            r###""###,
+            r###""###,
+            true,
+            false,
+            Criticality::Notable,
+        ),
+        r###"well-known/app/system/apple/launch-services::apple-like-cache-service-name"### => (
+            r###"text"###,
+            r###"regex"###,
+            r###"(?i)(com\.apple\.(verified|homeenergyd)|/com\.apple\.softwareupdate/SoftwareUpdate)\b"###,
+            r###""###,
+            r###""###,
+            true,
+            false,
+            Criticality::Notable,
+        ),
+        r###"well-known/app/system/windows-platform::appinfo-elevation-interface-uuid"### => (
+            r###"text"###,
+            r###"regex"###,
+            r###"(?i)\{?201ef99a[-, ]+7fa0[-, ]+444c[-, ]+9399[-, ]+19ba84f12a1a\}?"###,
+            r###""###,
+            r###""###,
+            true,
+            false,
+            Criticality::Notable,
+        ),
+        r###"well-known/app/system/windows-telemetry::diagtrack-dll-name"### => (
+            r###"text"###,
+            r###"exact"###,
+            r###"diagtrack.dll"###,
+            r###""###,
+            r###""###,
+            true,
+            true,
+            Criticality::Notable,
+        ),
+        r###"well-known/app/system/windows-telemetry::diagtrackrunner-pdb"### => (
+            r###"text"###,
+            r###"exact"###,
+            r###"diagtrackrunner.pdb"###,
+            r###""###,
+            r###""###,
+            true,
+            true,
+            Criticality::Notable,
+        ),
+        r###"well-known/app/utility/getrighttogo::getrighttogo-manifest"### => (
+            r###"value"###,
+            r###"exact"###,
+            r###"GetRightToGo.com Downloader"###,
+            r###""###,
+            r###"pe.manifest.description"###,
+            true,
+            false,
+            Criticality::Notable,
+        ),
+        r###"well-known/dual-use/tunnel/localtunnel::localtunnel-client-error-text"### => (
+            r###"text"###,
+            r###"regex"###,
+            r###"Localtunnel (exited|timeout)|localtunnel server returned an error"###,
+            r###""###,
+            r###""###,
+            true,
+            false,
+            Criticality::Notable,
+        ),
+        r###"well-known/dual-use/tunnel/localtunnel::localtunnel-debug-namespace"### => (
+            r###"text"###,
+            r###"substr"###,
+            r###"localtunnel:client"###,
+            r###""###,
+            r###""###,
+            true,
+            false,
+            Criticality::Notable,
+        ),
+        r###"well-known/dual-use/tunnel/ngrok::go-ngrok-agent-type--rx-7"### => (
+            r###"text"###,
+            r###"regex"###,
+            r###"\*ngrok\.(Agent|Dialer)\b"###,
+            r###""###,
+            r###""###,
+            true,
+            false,
+            Criticality::Notable,
+        ),
+        r###"well-known/dual-use/tunnel/ngrok::go-ngrok-agent-type--rx-8"### => (
+            r###"text"###,
+            r###"regex"###,
+            r###"\*ngrok\.(Endpoint|Upstream)\b"###,
+            r###""###,
+            r###""###,
+            true,
+            false,
+            Criticality::Notable,
+        ),
+        r###"well-known/dual-use/tunnel/ngrok::go-ngrok-agent-type--rx-9"### => (
+            r###"text"###,
+            r###"regex"###,
+            r###"\*ngrok\.(AgentSession|EndpointListener)\b"###,
+            r###""###,
+            r###""###,
+            true,
+            false,
+            Criticality::Notable,
+        ),
+        r###"well-known/dual-use/tunnel/ngrok::go-ngrok-config-name"### => (
+            r###"text"###,
+            r###"regex"###,
+            r###"\bNgrok(Config|Account)\b"###,
+            r###""###,
+            r###""###,
+            true,
+            false,
+            Criticality::Notable,
+        ),
+        r###"well-known/dual-use/tunnel/ngrok::go-ngrok-config-type"### => (
+            r###"text"###,
+            r###"regex"###,
+            r###"\*config\.Ngrok(Config|Account)\b"###,
+            r###""###,
+            r###""###,
+            true,
+            false,
+            Criticality::Notable,
+        ),
+        r###"well-known/dual-use/tunnel/openconnect::openconnect-fortinet-command"### => (
+            r###"text"###,
+            r###"regex"###,
+            r###"(?s)\bopenconnect\b.{0,160}--protocol[= '"]+fortinet([\s,'";)]|$)"###,
+            r###""###,
+            r###""###,
+            true,
+            false,
+            Criticality::Notable,
+        ),
+        r###"well-known/dual-use/tunnel/tailscale::go-tsnet-vpn-startup-reference"### => (
+            r###"text"###,
+            r###"exact"###,
+            r###"tailscale.com/tsnet.(*Server).Up"###,
+            r###""###,
+            r###""###,
+            true,
+            true,
+            Criticality::Notable,
+        ),
+        r###"well-known/lib/crypto/jose-jwt::jwt-jwe-context--rx-6"### => (
+            r###"text"###,
+            r###"substr"###,
+            r###"jose-jwt"###,
+            r###""###,
+            r###""###,
+            true,
+            true,
+            Criticality::Notable,
+        ),
+        r###"well-known/lib/development/borland-delphi::borland-delphi-name-reference"### => (
+            r###"text"###,
+            r###"regex"###,
+            r###"(?i)Borland Delphi"###,
+            r###".text"###,
+            r###""###,
+            true,
+            false,
+            Criticality::Notable,
+        ),
+        r###"well-known/lib/network/proxy/go-socks5::armon-go-socks5"### => (
+            r###"text"###,
+            r###"substr"###,
+            r###"github.com/armon/go-socks5"###,
+            r###""###,
+            r###""###,
+            true,
+            false,
+            Criticality::Notable,
+        ),
+        r###"well-known/lib/network/proxy/go-socks5::armon-go-socks5-listen-and-serve"### => (
+            r###"text"###,
+            r###"substr"###,
+            r###"github.com/armon/go-socks5.(*Server).ListenAndServe"###,
+            r###""###,
+            r###""###,
+            true,
+            true,
+            Criticality::Notable,
+        ),
+        r###"well-known/lib/network/proxy/go-socks5::armon-go-socks5-serve-conn"### => (
+            r###"text"###,
+            r###"substr"###,
+            r###"github.com/armon/go-socks5.(*Server).ServeConn"###,
+            r###""###,
+            r###""###,
+            true,
+            true,
+            Criticality::Notable,
+        ),
+        r###"well-known/lib/network/yamux::go-yamux-multiplexed-transport"### => (
+            r###"text"###,
+            r###"substr"###,
+            r###"github.com/hashicorp/yamux"###,
+            r###""###,
+            r###""###,
+            true,
+            false,
+            Criticality::Notable,
+        ),
+        r###"well-known/lib/runtime/managed/dotnet-runtime::jwt-jwe-context--rx-2"### => (
+            r###"text"###,
+            r###"substr"###,
+            r###"System.Security.Cryptography.Pkcs"###,
+            r###""###,
+            r###""###,
+            true,
+            true,
+            Criticality::Notable,
+        ),
+        r###"well-known/lib/runtime/scripted/gentee::gentee-runtime-call"### => (
+            r###"text"###,
+            r###"exact"###,
+            r###"gentee_call"###,
+            r###""###,
+            r###""###,
+            true,
+            true,
+            Criticality::Notable,
+        ),
+        r###"well-known/lib/runtime/scripted/gentee::gentee-runtime-deinit"### => (
+            r###"text"###,
+            r###"exact"###,
+            r###"gentee_deinit"###,
+            r###""###,
+            r###""###,
+            true,
+            true,
+            Criticality::Notable,
+        ),
+        r###"well-known/lib/runtime/scripted/gentee::gentee-runtime-dll-name"### => (
+            r###"text"###,
+            r###"substr"###,
+            r###"genteert.dll"###,
+            r###""###,
+            r###""###,
+            true,
+            true,
+            Criticality::Notable,
+        ),
+        r###"well-known/lib/runtime/scripted/gentee::gentee-runtime-init"### => (
+            r###"text"###,
+            r###"exact"###,
+            r###"gentee_init"###,
+            r###""###,
+            r###""###,
+            true,
+            true,
+            Criticality::Notable,
+        ),
+        r###"well-known/lib/runtime/scripted/gentee::gentee-runtime-load"### => (
+            r###"text"###,
+            r###"exact"###,
+            r###"gentee_load"###,
+            r###""###,
+            r###""###,
+            true,
+            true,
+            Criticality::Notable,
+        ),
+        r###"well-known/lib/runtime/scripted/gentee::gentee-runtime-set"### => (
+            r###"text"###,
+            r###"exact"###,
+            r###"gentee_set"###,
+            r###""###,
+            r###""###,
+            true,
+            true,
+            Criticality::Notable,
+        ),
+        r###"well-known/tool/packaging/crypter::dotnet-named-builder-token"### => (
+            r###"text"###,
+            r###"regex"###,
+            r###"MORPHEOUS|#KILLAMUVZ#"###,
+            r###""###,
+            r###""###,
+            true,
+            true,
+            Criticality::Component,
+        ),
+        r###"well-known/tool/packaging/crypter::dotnet-named-crypter-title-text"### => (
+            r###"text"###,
+            r###"regex"###,
+            r###"(?i)\b(Morpheous|Morpheus|Eladitos)\s+Crypter\b|Morpheous Crypter Cracked"###,
+            r###""###,
+            r###""###,
+            true,
+            true,
+            Criticality::Notable,
+        ),
+        r###"well-known/app/system/windows-error-reporting::windows-error-reporter-manifest-reference"### => {
+            (
+                r###"text"###,
+                r###"exact"###,
+                r###"name="Microsoft.Windows.ErrorReporter""###,
+                r###""###,
+                r###""###,
+                false,
+                true,
+                Criticality::Notable,
+            )
+        }
+        r###"well-known/game/mahjong-titans::mahjong-titans-name-reference"### => (
+            r###"text"###,
+            r###"substr"###,
+            r###"Mahjong Titans"###,
+            r###""###,
+            r###""###,
+            false,
+            true,
+            Criticality::Notable,
+        ),
+        _ => return false,
+    };
+    if t.crit != crit || if for_section { !section_ok } else { !size_ok } {
+        return false;
+    }
+    match &t.r#if {
+        Condition::Text(q) if kind == "text" => {
+            let value_matches = match mode {
+                "exact" => {
+                    q.exact.as_deref() == Some(expected) && q.substr.is_none() && q.regex.is_none()
+                }
+                "substr" => {
+                    q.substr.as_deref() == Some(expected) && q.exact.is_none() && q.regex.is_none()
+                }
+                "regex" => {
+                    q.regex.as_deref() == Some(expected) && q.exact.is_none() && q.substr.is_none()
+                }
+                _ => false,
+            };
+            value_matches
+                && q.word.is_none()
+                && !q.case_insensitive
+                && q.section.as_deref().unwrap_or("") == section
+        }
+        Condition::Kv(q) if kind == "value" => {
+            q.path == path
+                && mode == "exact"
+                && q.exact.as_deref() == Some(expected)
+                && q.substr.is_none()
+                && q.regex.is_none()
+                && !q.case_insensitive
+        }
+        _ => false,
+    }
+}
+
 /// Find well-known/ atomic traits targeting binaries without any file size filter.
 ///
 /// Binary identity signatures normally need a size bound. Low-tier basename,
@@ -4756,6 +5269,7 @@ pub(crate) fn find_wellknown_missing_size_filter(
                 && !(is_basename_fact(t)
                     && matches!(t.crit, Criticality::Component | Criticality::Notable))
                 && !is_low_tier_named_binary_fact(t)
+                && !reviewed_unbounded_reference(t, false)
                 && !is_reviewed_installer_tool_fact(t)
                 && !is_nvidia_nvml_reference(t)
                 && !is_poolpartybof_reference(t)
@@ -5170,6 +5684,7 @@ pub(crate) fn find_wellknown_missing_section_filter(
                 && trait_targets_only_binaries(t)
                 && !is_jwe_library_reference(t)
                 && !is_windows_product_name_reference(t)
+                && !reviewed_unbounded_reference(t, true)
                 && !is_poolpartybof_reference(t)
                 && !is_mixcloud_warning_reference(t)
                 && !is_sms_provider_endpoint_reference(t)

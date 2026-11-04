@@ -5,7 +5,7 @@ fn default_facts_json_preserves_control_characters() {
     let path = temp.path().join("probe.js");
     std::fs::write(&path, "const marker = \"a\u{7f}\u{85}\u{202e}z\";\n").unwrap();
     let result = std::process::Command::new(env!("CARGO_BIN_EXE_cleave"))
-        .args(["--disable", "yara,radare2,third-party", "facts"])
+        .args(["--disable", "yara,third-party", "facts"])
         .arg(&path)
         .output()
         .unwrap();

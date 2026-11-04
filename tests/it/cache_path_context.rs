@@ -57,7 +57,7 @@ fn cache_preserves_filename_and_negative_path_conditions() {
                 .env("STNG_STRING_CACHE", "0")
                 .env("CLEAVE_TRAITS_DIR", dir.path().join("rules"))
                 .env("CLEAVE_NO_UPDATE_CHECK", "1")
-                .args(["--disable", "yara,radare2,upx", "--json"])
+                .args(["--disable", "yara,upx", "--json"])
                 .args(order.iter().map(|i| &paths[*i]))
                 .output()
                 .unwrap();

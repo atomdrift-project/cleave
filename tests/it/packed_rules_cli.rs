@@ -46,7 +46,7 @@ fn run_scan(rules: &Path, cache: &Path, sample: &Path) -> Output {
         .env_remove("CLEAVE_SKIP_YARA")
         .env_remove("CLEAVE_BUILTIN_YARA_ONLY")
         .env("CLEAVE_NO_UPDATE_CHECK", "1")
-        .args(["--format", "json", "--disable", "radare2,upx"])
+        .args(["--format", "json", "--disable", "upx"])
         .arg("analyze")
         .arg(sample)
         .output()

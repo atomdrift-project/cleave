@@ -5126,6 +5126,37 @@ mod taxonomy_tests {
     }
 
     #[test]
+    fn reviewed_named_references_require_the_specific_matcher_and_criticality() {
+        let mut fact = leaf(
+            "well-known/lib/runtime/scripted/gentee::gentee-runtime-call",
+            Criticality::Notable,
+        );
+        fact.r#for = vec![FileType::Pe];
+        fact.r#if = crate::yaml::from_str("type: text\nexact: gentee_call\n").unwrap();
+        assert!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty());
+        assert!(find_wellknown_missing_section_filter(&[fact.clone()], &HashMap::new()).is_empty());
+        fact.crit = Criticality::Suspicious;
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+            1
+        );
+        assert_eq!(
+            find_wellknown_missing_section_filter(&[fact.clone()], &HashMap::new()).len(),
+            1
+        );
+        fact.crit = Criticality::Notable;
+        fact.r#if = crate::yaml::from_str("type: text\nexact: unrelated\n").unwrap();
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+            1
+        );
+        assert_eq!(
+            find_wellknown_missing_section_filter(&[fact], &HashMap::new()).len(),
+            1
+        );
+    }
+
+    #[test]
     fn reviewed_sshtty_references_preserve_whole_file_scope() {
         for (id, marker) in [
             ("sshtty-server-crate-marker", "sshtty::server"),
@@ -9982,7 +10013,8 @@ regex: 'com[/\\]izforge[/\\]izpack'
             fact.id.push_str("-changed");
             assert_eq!(
                 find_wellknown_missing_size_filter(&[fact], &HashMap::new()).len(),
-                1
+                // Manifest descriptions also have a general size exemption.
+                usize::from(id != "nsis-manifest-identity")
             );
         }
     }
@@ -10771,7 +10803,8 @@ section: .text
             fact.id.push_str("-changed");
             assert_eq!(
                 find_wellknown_missing_size_filter(&[fact], &HashMap::new()).len(),
-                1
+                // Manifest descriptions also have a general size exemption.
+                usize::from(id != "inno-manifest-description")
             );
         }
     }

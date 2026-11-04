@@ -3509,6 +3509,117 @@ composite_rules:
     }
 
     #[test]
+    fn archive_container_evaluates_inline_yara_on_original_bytes() {
+        use crate::analyzers::Analyzer;
+        use std::io::Write;
+
+        let dir = tempfile::tempdir().unwrap();
+        let source =
+            "rule archive_marker { strings: $a = \"ArchiveInlineMarker123\" condition: $a }";
+        std::fs::write(
+            dir.path().join("traits.yaml"),
+            format!(
+                r#"
+defaults:
+  platforms: [windows, linux, macos]
+  for: [tar]
+traits:
+  - id: test/archive::marker
+    desc: Archive inline marker
+    crit: notable
+    if:
+      type: yara
+      source: '{source}'
+composite_rules:
+  - id: test/archive::combined
+    desc: Archive inline marker composite
+    crit: suspicious
+    all:
+      - id: test/archive::marker
+"#
+            ),
+        )
+        .unwrap();
+        let mapper = CapabilityMapper::from_directory_with_options(
+            dir.path(),
+            crate::LoadOptions {
+                min_hostile_precision: 0.0,
+                min_suspicious_precision: 0.0,
+                ..crate::LoadOptions::default()
+            },
+        )
+        .unwrap();
+        let mut compiler = yara_x::Compiler::new();
+        let ns = "inline.test/archive::marker";
+        compiler.new_namespace(ns);
+        compiler.add_source(source.as_bytes()).unwrap();
+        let mut yara = YaraEngine::new_for_test();
+        yara.tiers
+            .entry(FALLBACK_BUCKET.to_string())
+            .or_default()
+            .set(Some(Arc::new(compiler.build())))
+            .unwrap();
+        yara.populated_tiers.insert(FALLBACK_BUCKET.to_string());
+        yara.compiled_inline_namespaces.push(ns.to_string());
+        yara.rule_counts = (1, 0);
+        let yara = Arc::new(yara);
+        let engine = crate::Engine::new(Arc::new(mapper), Some(yara.clone()), Default::default());
+
+        for (name, body, expected) in [
+            ("positive.tar", b"ArchiveInlineMarker123".as_slice(), true),
+            ("negative.tar", b"ArchiveAbsentMarker123".as_slice(), false),
+        ] {
+            let path = dir.path().join(name);
+            let mut tar = tar::Builder::new(Vec::new());
+            let mut header = tar::Header::new_ustar();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            tar.append_data(&mut header, "item.txt", body).unwrap();
+            let data = tar.into_inner().unwrap();
+            std::fs::write(&path, &data).unwrap();
+            for enabled in [false, true] {
+                let mut analyzer =
+                    crate::analyzers::archive::ArchiveAnalyzer::new().with_engine(engine.clone());
+                if enabled {
+                    analyzer = analyzer.with_yara_arc(yara.clone());
+                }
+                let report = analyzer.analyze(&path).unwrap();
+                for id in ["test/archive::marker", "test/archive::combined"] {
+                    assert_eq!(
+                        report.findings.iter().any(|f| f.id.as_ref() == id),
+                        expected && enabled,
+                        "{name}, enabled={enabled}, {id}"
+                    );
+                }
+            }
+            let zip_path = dir.path().join(format!("{name}.zip"));
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&zip_path).unwrap());
+            zip.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(&data).unwrap();
+            zip.finish().unwrap();
+            let report = crate::analyzers::archive::ArchiveAnalyzer::new()
+                .with_engine(engine.clone())
+                .with_yara_arc(yara.clone())
+                .analyze(&zip_path)
+                .unwrap();
+            let nested = report
+                .files
+                .iter()
+                .find(|f| f.path.ends_with(name))
+                .expect("nested tar");
+            assert_eq!(
+                nested
+                    .findings
+                    .iter()
+                    .any(|f| f.id.as_ref() == "test/archive::marker"),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn upx_elf_children_preserve_inline_yara_and_composites() {
         use crate::analyzers::{AnalysisInput, FileType};
         if !crate::upx::UPXDecompressor::is_available() {

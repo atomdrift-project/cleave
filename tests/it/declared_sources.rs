@@ -67,7 +67,7 @@ composite_rules:
             .env("FILEFACTS_CACHE", "0")
             .env("STNG_STRING_CACHE", "0")
             .env("CLEAVE_NO_UPDATE_CHECK", "1")
-            .args(["--disable", "yara,radare2,upx", "--json"])
+            .args(["--disable", "yara,upx", "--json"])
             .args([
                 dir.path().join("separate/action.yml"),
                 dir.path().join("together/action.yml"),

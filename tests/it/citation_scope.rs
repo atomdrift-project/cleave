@@ -90,13 +90,7 @@ fn analyze(members: &[(&str, &str)]) -> Vec<(String, Vec<String>)> {
         .env("FILEFACTS_CACHE", "0")
         .env("STNG_STRING_CACHE", "0")
         .env("CLEAVE_NO_UPDATE_CHECK", "1")
-        .args([
-            "--disable",
-            "yara,radare2,upx",
-            "--format",
-            "json",
-            "analyze",
-        ])
+        .args(["--disable", "yara,upx", "--format", "json", "analyze"])
         .arg(&archive_path)
         .output()
         .unwrap();

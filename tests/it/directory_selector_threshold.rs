@@ -70,7 +70,7 @@ composite_rules:
                 "--traits-dir",
                 root.to_str().unwrap(),
                 "--disable",
-                "yara,radare2,upx",
+                "yara,upx",
                 "--format",
                 "json",
                 "analyze",

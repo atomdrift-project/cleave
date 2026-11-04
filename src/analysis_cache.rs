@@ -1315,16 +1315,11 @@ fn yara_degraded() -> bool {
 /// machine was), or a source parse was cut short.
 /// Caching it would serve the shortfall to every later run.
 pub(crate) fn evaluation_incomplete(report: &AnalysisReport) -> bool {
-    use crate::types::AnalysisGap::{
-        EvaluationDeadline, SourceParseIncomplete,
-    };
+    use crate::types::AnalysisGap::{EvaluationDeadline, SourceParseIncomplete};
     let incomplete = |gaps: &crate::types::AnalysisGaps| {
-        [
-            EvaluationDeadline,
-            SourceParseIncomplete,
-        ]
-        .into_iter()
-        .any(|gap| gaps.contains(gap))
+        [EvaluationDeadline, SourceParseIncomplete]
+            .into_iter()
+            .any(|gap| gaps.contains(gap))
     };
     incomplete(&report.analysis_gaps) || report.files.iter().any(|f| incomplete(&f.analysis_gaps))
 }
@@ -1786,9 +1781,7 @@ mod tests {
     /// holding such a member.
     #[test]
     fn incomplete_reports_are_not_cached() {
-        use crate::types::AnalysisGap::{
-            EvaluationDeadline, SourceParseIncomplete,
-        };
+        use crate::types::AnalysisGap::{EvaluationDeadline, SourceParseIncomplete};
         let opts = AnalysisOptions::default();
         let settings = settings_of(&opts);
         let revision = ambient_traits_revision();
@@ -1796,12 +1789,9 @@ mod tests {
             report_cache_lookup(sha, "elf", &opts, &settings, &report.target.path, None)
         };
 
-        for (n, gap) in [
-            EvaluationDeadline,
-            SourceParseIncomplete,
-        ]
-        .into_iter()
-        .enumerate()
+        for (n, gap) in [EvaluationDeadline, SourceParseIncomplete]
+            .into_iter()
+            .enumerate()
         {
             let sha = format!("6e1d00de{:056x}", 2 * n + 1);
             let cut_short = test_report(&sha);

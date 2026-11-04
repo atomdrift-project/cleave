@@ -133,7 +133,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["raw_value"] }
 serde-saphyr = "1.3"
 simd-json = "0.17"
-toml = "1.1"
+toml = "1.2"
 bincode = { package = "cu-bincode", git = "https://github.com/copper-project/cu-bincode", rev = "3c3041a3278cafb1c73701eeecb7961b7ecf6814", features = ["serde", "alloc", "std"] }
 
 # CLI

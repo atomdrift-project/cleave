@@ -306,11 +306,11 @@ const ALLOWED_MB_CRYPTO: &[&str] = &[
     "hash",
     "hybrid", // Symmetric payload encryption combined with asymmetric key wrapping
     "kdf",
-    "key",      // Key generation, import/export, exchange and representation
-    "mnemonic", // Mnemonic representations of cryptographic seed material
+    "key",       // Key generation, import/export, exchange and representation
+    "mnemonic",  // Mnemonic representations of cryptographic seed material
     "primitive", // Evidence spanning distinct cryptographic primitive families
-    "provider", // Provider acquisition/release with no narrower operation
-    "sign",     // Signing operations, algorithm may be unknown
+    "provider",  // Provider acquisition/release with no narrower operation
+    "sign",      // Signing operations, algorithm may be unknown
     "symmetric",
     "verify", // Signature verification operations, algorithm may be unknown
 ];
@@ -1075,6 +1075,7 @@ const ALLOWED_METADATA_DOCUMENT: &[&str] = &[
 /// These are primarily component traits used as building blocks in composite rules.
 const ALLOWED_METADATA_FILE: &[&str] = &[
     "archive",           // Member counts of the archive itself
+    "attribution",       // Source authorship and license declarations
     "catalog",           // File/catalog identity and generated registries
     "comment",           // Comment volume and span
     "encoding",          // Encoded content representation without a decoding operation
@@ -1087,7 +1088,7 @@ const ALLOWED_METADATA_FILE: &[&str] = &[
     "line",              // Line geometry: one-liners, very long lines, line counts
     "literal",           // Literal collections, such as long numeric arrays
     "magic",             // Magic byte signatures
-    "metrics",           // Text/file-level measurements
+    "text-distribution", // Whole-file character, token, and text distributions
     "naming",            // How names are formed (numeric suffixes, single-char ratio)
     "padding",           // Runs of repeated filler: whitespace, uppercase, blank lines
     "policy",            // Policy/config text identities
@@ -1919,6 +1920,7 @@ mod tests {
         std::fs::create_dir_all(traits_path.join("micro-behaviors/data/retrieve")).unwrap();
         std::fs::create_dir_all(traits_path.join("well-known/malware")).unwrap();
         std::fs::create_dir_all(traits_path.join("metadata/binary")).unwrap();
+        std::fs::create_dir_all(traits_path.join("metadata/file/attribution")).unwrap();
         std::fs::create_dir_all(traits_path.join("metadata/installer/layout")).unwrap();
         std::fs::create_dir_all(traits_path.join("metadata/lang/charset/alphabet")).unwrap();
         std::fs::create_dir_all(traits_path.join("metadata/vendor")).unwrap();
@@ -1993,6 +1995,7 @@ mod tests {
             "micro-behaviors/process/fiber",
             "objectives/credential-access/memory",
             "metadata/file/entropy",
+            "metadata/file/text-distribution",
             "metadata/signed/script",
         ] {
             std::fs::create_dir_all(traits_path.join(new)).unwrap();

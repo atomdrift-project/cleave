@@ -308,7 +308,7 @@ const ALLOWED_MB_CRYPTO: &[&str] = &[
     "kdf",
     "key",      // Key generation, import/export, exchange and representation
     "mnemonic", // Mnemonic representations of cryptographic seed material
-    "primitive", // Evidence spanning cryptographic primitive families
+    "primitive", // Evidence spanning distinct cryptographic primitive families
     "provider", // Provider acquisition/release with no narrower operation
     "sign",     // Signing operations, algorithm may be unknown
     "symmetric",
@@ -439,6 +439,7 @@ const ALLOWED_MB_MEM: &[&str] = &[
     // Required spray layout; generic allocation alone does not qualify.
     "heap-spray",
     "inline-asm",
+    "load", // Loading code or data where a more specific memory operation is unknown.
     "lock",
     "local-storage", // Thread/fiber-local allocation and access, not execution control.
     // Address-space mappings and their removal, independent of backing store.
@@ -491,7 +492,7 @@ const ALLOWED_MB_OS: &[&str] = &[
     "exception",
     "firewall",
     "group",
-    "handler", // OS-associated application and document handlers
+    "handler", // OS dispatch to an associated handler for a file or other target
     "kernel",
     "linker",
     "message",

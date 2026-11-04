@@ -5174,6 +5174,166 @@ mod taxonomy_tests {
     }
 
     #[test]
+    fn sms_provider_exceptions_require_exact_notable_references() {
+        for (id, endpoint) in [
+            (
+                "well-known/app/communication/weimi::weimi-cc-api",
+                "api.weimi.cc/",
+            ),
+            (
+                "well-known/app/communication/weimi::weimi-cc-admin",
+                "www.weimi.cc/sms.html",
+            ),
+            (
+                "well-known/app/communication/juhe::juhe-cn-sms-send",
+                "v.juhe.cn/sms/",
+            ),
+        ] {
+            let mut fact = leaf(id, Criticality::Notable);
+            fact.r#for = vec![FileType::Pe];
+            fact.r#if =
+                crate::yaml::from_str(&format!("type: text\nsubstr: {endpoint}\n")).unwrap();
+            assert!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty()
+            );
+            fact.crit = Criticality::Suspicious;
+            assert_eq!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+                1
+            );
+            fact.crit = Criticality::Notable;
+            fact.r#if = crate::yaml::from_str("type: text\nsubstr: unrelated\n").unwrap();
+            assert_eq!(
+                find_wellknown_missing_size_filter(&[fact], &HashMap::new()).len(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn mixcloud_warning_exception_requires_exact_notable_reference() {
+        let mut fact = leaf(
+            "well-known/app/media/mixcloud::mixcloud-download-warning",
+            Criticality::Notable,
+        );
+        fact.r#for = vec![FileType::Pe];
+        fact.r#if = crate::yaml::from_str(
+            "type: text\nsubstr: IFYOUWANTTHEARTISTSTOGETPAIDDONOTDOWNLOADFROMMIXCLOUD\n",
+        )
+        .unwrap();
+        assert!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty());
+        assert!(find_wellknown_missing_section_filter(&[fact.clone()], &HashMap::new()).is_empty());
+        fact.crit = Criticality::Suspicious;
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+            1
+        );
+        assert_eq!(
+            find_wellknown_missing_section_filter(&[fact.clone()], &HashMap::new()).len(),
+            1
+        );
+        fact.crit = Criticality::Notable;
+        fact.r#if = crate::yaml::from_str("type: text\nsubstr: unrelated\n").unwrap();
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+            1
+        );
+        assert_eq!(
+            find_wellknown_missing_section_filter(&[fact], &HashMap::new()).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn minicap_size_exception_requires_exact_notable_path() {
+        let mut fact = leaf(
+            "well-known/tool/development/automation/minicap::android-staged-minicap-path",
+            Criticality::Notable,
+        );
+        fact.r#for = vec![FileType::Pe];
+        fact.r#if =
+            crate::yaml::from_str("type: text\nregex: '/data/local/tmp/minicap\\b'\n").unwrap();
+        assert!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty());
+        fact.crit = Criticality::Suspicious;
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+            1
+        );
+        fact.crit = Criticality::Notable;
+        fact.r#if = crate::yaml::from_str("type: text\nregex: unrelated\n").unwrap();
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[fact], &HashMap::new()).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn poolpartybof_size_exception_requires_exact_notable_reference() {
+        let mut fact = leaf(
+            "well-known/tool/offensive/poolpartybof::poolparty-bof-name",
+            Criticality::Notable,
+        );
+        fact.r#for = vec![FileType::Pe];
+        fact.r#if = crate::yaml::from_str("type: text\nsubstr: PoolPartyBof\n").unwrap();
+        assert!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty());
+        assert!(find_wellknown_missing_section_filter(&[fact.clone()], &HashMap::new()).is_empty());
+        fact.crit = Criticality::Suspicious;
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+            1
+        );
+        assert_eq!(
+            find_wellknown_missing_section_filter(&[fact.clone()], &HashMap::new()).len(),
+            1
+        );
+        fact.crit = Criticality::Notable;
+        fact.r#if = crate::yaml::from_str("type: text\nsubstr: unrelated\n").unwrap();
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+            1
+        );
+        assert_eq!(
+            find_wellknown_missing_section_filter(&[fact], &HashMap::new()).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn nvidia_nvml_size_exception_requires_reviewed_section_scoped_reference() {
+        for (id, marker) in [
+            ("nvml-wrapper-rust-crate", "nvml-wrapper-sys"),
+            (
+                "nvidia-gpu-classifier-token",
+                "NvidiaQuadroTeslaNVSGRIDGeForceTitanV",
+            ),
+        ] {
+            let mut fact = leaf(
+                &format!("well-known/lib/runtime/native-platform/nvidia-nvml::{id}"),
+                Criticality::Notable,
+            );
+            fact.r#for = vec![FileType::Pe];
+            fact.r#if =
+                crate::yaml::from_str(&format!("type: text\nsubstr: {marker}\nsection: rdata\n"))
+                    .unwrap();
+            assert!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty()
+            );
+            fact.crit = Criticality::Suspicious;
+            assert_eq!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+                1
+            );
+            fact.crit = Criticality::Notable;
+            fact.r#if =
+                crate::yaml::from_str("type: text\nsubstr: unrelated\nsection: rdata\n").unwrap();
+            assert_eq!(
+                find_wellknown_missing_size_filter(&[fact], &HashMap::new()).len(),
+                1
+            );
+        }
+    }
+
+    #[test]
     fn reviewed_dotnet_tool_references_do_not_need_size_bounds() {
         for (id, yaml) in [
             (

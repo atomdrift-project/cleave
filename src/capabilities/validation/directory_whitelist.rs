@@ -1075,7 +1075,7 @@ const ALLOWED_METADATA_DOCUMENT: &[&str] = &[
 /// These are primarily component traits used as building blocks in composite rules.
 const ALLOWED_METADATA_FILE: &[&str] = &[
     "archive",           // Member counts of the archive itself
-    "attribution",       // Source authorship and license declarations
+    "attribution",       // Source authorship, attribution, and license observations
     "catalog",           // File/catalog identity and generated registries
     "comment",           // Comment volume and span
     "encoding",          // Encoded content representation without a decoding operation
@@ -1096,6 +1096,7 @@ const ALLOWED_METADATA_FILE: &[&str] = &[
     "size",              // Degenerate file size and shape: tiny scripts, sparse strings
     "string",            // Neutral string identities
     "system-info",       // System-information field-name vocabulary in file content
+    "text-distribution", // Whole-file character and token distributions
 ];
 
 /// Allowed subdirectories in metadata/image/

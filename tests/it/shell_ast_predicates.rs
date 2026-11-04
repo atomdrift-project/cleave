@@ -79,7 +79,7 @@ fn shell_compound_predicates_are_checked_after_structure_in_scan_and_validation(
                 "--traits-dir",
                 root.to_str().unwrap(),
                 "--disable",
-                "yara,radare2,upx",
+                "yara,upx",
                 "--json",
                 "analyze",
                 input.to_str().unwrap(),

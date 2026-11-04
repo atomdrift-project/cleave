@@ -84,6 +84,15 @@ fn jar_class_triage_score(data: &[u8]) -> usize {
         b"java/nio/file/Files",
         b"javax/crypto/Cipher",
         b"java/lang/invoke/ConstantCallSite",
+        // Memory-only staging and credential handoff must compete with
+        // ordinary file/process APIs in the bounded archive class sample.
+        b"java/util/jar/JarInputStream",
+        b"java/lang/reflect/Method",
+        b"getAccessToken",
+        b"javax/net/ssl/SSLSocket",
+        b"javax/net/ssl/SNIHostName",
+        b"/dns-query?name=",
+        b"Content-Length:",
     ];
 
     static MATCHER: std::sync::OnceLock<Option<aho_corasick::AhoCorasick>> =
@@ -5520,6 +5529,13 @@ mod tests {
         assert_eq!(jar_class_triage_score(padding), 0);
         assert_eq!(jar_class_triage_score(payload), 3);
         assert!(jar_class_triage_score(payload) > jar_class_triage_score(padding));
+
+        let session_stage = b"getAccessToken java/util/jar/JarInputStream java/lang/reflect/Method";
+        let ordinary_io = b"java/io/FileOutputStream java/nio/file/Files";
+        let raw_tls =
+            b"javax/net/ssl/SSLSocket javax/net/ssl/SNIHostName /dns-query?name= Content-Length:";
+        assert!(jar_class_triage_score(session_stage) > jar_class_triage_score(ordinary_io));
+        assert!(jar_class_triage_score(raw_tls) > jar_class_triage_score(ordinary_io));
 
         let mut ranked = vec![1, 5, 2, 4, 3];
         keep_top_ranked(&mut ranked, 3, |left, right| right.cmp(left));

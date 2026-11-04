@@ -2597,8 +2597,27 @@ impl ArchiveAnalyzer {
         // Attach it before either pass (library callers need not re-evaluate).
         source_context::attach(report);
         let mapper = self.engine.rules();
+        // Archive-level inline YARA rules describe the original container
+        // bytes (for example, relationships between tar headers). Member
+        // analysis cannot supply those matches. Feed the same pre-scanned
+        // inline evidence used by other analyzers into the atomic pass.
+        let inline_yara = self
+            .yara_engine
+            .as_ref()
+            .filter(|engine| engine.is_loaded())
+            .and_then(|engine| {
+                let filetypes = archive_type.yara_filetypes();
+                match engine.scan_bytes(archive_data, Some(&filetypes)) {
+                    Ok(scan) => Some(scan.inline_traits),
+                    Err(error) => {
+                        tracing::warn!(%error, "archive inline YARA scan failed");
+                        report.metadata.errors.push(format!("yara: {error:#}"));
+                        None
+                    }
+                }
+            });
         let mut archive_atomic_findings =
-            mapper.evaluate_traits_with_ast(report, archive_data, None, None);
+            mapper.evaluate_traits_with_ast(report, archive_data, None, inline_yara.as_ref());
         locate_archive_root_findings(&mut archive_atomic_findings);
         report
             .findings

@@ -40,7 +40,7 @@ fn partial_archive_reports_parsing_property_and_retains_readable_members() {
                 "--traits-dir",
                 root.to_str().unwrap(),
                 "--disable",
-                "yara,radare2,upx",
+                "yara,upx",
                 "--format",
                 "json",
                 "analyze",

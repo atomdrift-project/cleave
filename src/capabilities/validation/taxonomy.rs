@@ -2803,10 +2803,10 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // Shared XOR AST productions are portable across the explicitly scoped
     // grammars. Lua exponentiation and other grammars are excluded; Swift has
     // its own production. One canonical predicate avoids per-language copies.
-    "tree-sitter:micro-behaviors/data/bitwise/xor/expression/xor-split-parsed-xor.yaml",
+    "tree-sitter:micro-behaviors/data/bitwise/xor-forms/expression/xor-split-parsed-xor.yaml",
     // Normalized call names describe the same XOR-named helper observation
     // across script/source frontends, without claiming a particular algorithm.
-    "symbol:micro-behaviors/data/bitwise/xor/expression/xor-split-parsed-xor.yaml",
+    "symbol:micro-behaviors/data/bitwise/xor-forms/expression/xor-split-parsed-xor.yaml",
     // Named-call references use the normalized call-symbol namespace across
     // script frontends. The printenv reference currently matches 13 script
     // types; narrowing it to seven would discard existing call facts. This
@@ -4488,6 +4488,11 @@ pub(crate) fn find_wellknown_missing_size_filter(
                     && matches!(t.crit, Criticality::Component | Criticality::Notable))
                 && !is_low_tier_named_binary_fact(t)
                 && !is_reviewed_installer_tool_fact(t)
+                && !is_nvidia_nvml_reference(t)
+                && !is_poolpartybof_reference(t)
+                && !is_mixcloud_warning_reference(t)
+                && !is_minicap_path_reference(t)
+                && !is_sms_provider_endpoint_reference(t)
                 && !is_reviewed_dotnet_tool_name_reference(t)
                 && !is_reviewed_remote_tool_reference(t)
                 && !is_reviewed_nping_command_reference(t)
@@ -4522,6 +4527,70 @@ pub(crate) fn find_wellknown_missing_size_filter(
             (t.id.clone(), source)
         })
         .collect()
+}
+
+// Section-scoped NVIDIA library and product-name references describe what a
+// binary mentions, rather than asserting the identity or size of the binary.
+fn is_nvidia_nvml_reference(t: &TraitDefinition) -> bool {
+    if t.crit != Criticality::Notable {
+        return false;
+    }
+    let expected = match t.id.as_str() {
+        "well-known/lib/runtime/native-platform/nvidia-nvml::nvml-wrapper-rust-crate" => {
+            "nvml-wrapper-sys"
+        }
+        "well-known/lib/runtime/native-platform/nvidia-nvml::nvidia-gpu-classifier-token" => {
+            "NvidiaQuadroTeslaNVSGRIDGeForceTitanV"
+        }
+        _ => return false,
+    };
+    matches!(&t.r#if, Condition::Text(q)
+        if q.substr.as_deref() == Some(expected)
+            && q.section.as_deref() == Some("rdata")
+            && q.word.is_none() && q.exact.is_none() && q.regex.is_none())
+}
+
+// These provider URL references can appear in binaries of any size.
+fn is_sms_provider_endpoint_reference(t: &TraitDefinition) -> bool {
+    if t.crit != Criticality::Notable {
+        return false;
+    }
+    let expected = match t.id.as_str() {
+        "well-known/app/communication/weimi::weimi-cc-api" => "api.weimi.cc/",
+        "well-known/app/communication/weimi::weimi-cc-admin" => "www.weimi.cc/sms.html",
+        "well-known/app/communication/juhe::juhe-cn-sms-send" => "v.juhe.cn/sms/",
+        _ => return false,
+    };
+    matches!(&t.r#if, Condition::Text(q)
+        if q.substr.as_deref() == Some(expected)
+            && q.word.is_none() && q.exact.is_none() && q.regex.is_none())
+}
+
+// A literal tool-name reference does not identify or bound the enclosing binary.
+fn is_poolpartybof_reference(t: &TraitDefinition) -> bool {
+    t.id == "well-known/tool/offensive/poolpartybof::poolparty-bof-name"
+        && t.crit == Criticality::Notable
+        && matches!(&t.r#if, Condition::Text(q)
+            if q.substr.as_deref() == Some("PoolPartyBof")
+                && q.word.is_none() && q.exact.is_none() && q.regex.is_none())
+}
+
+// A staged minicap path is a tool reference, not an identity or file-size claim.
+fn is_minicap_path_reference(t: &TraitDefinition) -> bool {
+    t.id == "well-known/tool/development/automation/minicap::android-staged-minicap-path"
+        && t.crit == Criticality::Notable
+        && matches!(&t.r#if, Condition::Text(q)
+            if q.regex.as_deref() == Some(r"/data/local/tmp/minicap\b")
+                && q.word.is_none() && q.exact.is_none() && q.substr.is_none())
+}
+
+// A quoted Mixcloud warning is product-related text, not a size-bounded identity.
+fn is_mixcloud_warning_reference(t: &TraitDefinition) -> bool {
+    t.id == "well-known/app/media/mixcloud::mixcloud-download-warning"
+        && t.crit == Criticality::Notable
+        && matches!(&t.r#if, Condition::Text(q)
+            if q.substr.as_deref() == Some("IFYOUWANTTHEARTISTSTOGETPAIDDONOTDOWNLOADFROMMIXCLOUD")
+                && q.word.is_none() && q.exact.is_none() && q.regex.is_none())
 }
 
 // Registry key text refers to another product, not the containing binary.
@@ -4797,6 +4866,9 @@ pub(crate) fn find_wellknown_missing_section_filter(
         .filter(|t| {
             extract_trait_tier(&t.id) == "well-known"
                 && trait_targets_only_binaries(t)
+                && !is_poolpartybof_reference(t)
+                && !is_mixcloud_warning_reference(t)
+                && !is_sms_provider_endpoint_reference(t)
                 && !(t.id == "well-known/lib/runtime/scripted/python-runtime::python-launcher-banner-marker"
                     && is_reviewed_installer_tool_fact(t))
                 && !(matches!(t.id.as_str(),

@@ -2916,7 +2916,7 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     "text:metadata/file/format/",
     "text:metadata/file/profile/",
     // Ordered character alphabets can occur in source or compiled artifacts.
-    "text:metadata/lang/charset/alphabet/review-literal-charset.yaml",
+    "text:metadata/lang/encoding/shape/alphabet/review-literal-charset.yaml",
     "text:metadata/lang/natural/",
     "text:metadata/lang/locale/",
     "text:metadata/file/extension/",

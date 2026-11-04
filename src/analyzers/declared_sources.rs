@@ -1,6 +1,9 @@
-//! Analyze format-declared script bodies as independent logical source units.
-//! filefacts selects the bodies and languages; this adapter owns traversal and
-//! budgets. No extra YAML parser, interpreter process or security heuristic.
+//! Analyze format-declared script bodies as logical source units: each
+//! independent body (a workflow step) as its own `!!` member, and a layer (a
+//! page's inline scripts, which run in the page's scope) as a `##` layer of
+//! its file. filefacts selects the bodies and languages; this adapter owns
+//! traversal and budgets. No extra YAML parser, interpreter process or
+//! security heuristic.
 use super::unified::UnifiedSourceAnalyzer;
 use crate::types::{AnalysisGap, AnalysisReport};
 use std::borrow::Cow;
@@ -26,7 +29,14 @@ pub(super) fn append(
                 .record(AnalysisGap::EmbeddedSourceIncomplete);
             break;
         }
-        if script.source.len() > MAX_SCRIPT_BYTES || script.source.len() > MAX_TOTAL_BYTES - total {
+        // A layer is the host's length, mostly blank, so only the total
+        // budget bounds it; an independent body also has its own cap.
+        let body_cap = if script.layer {
+            MAX_TOTAL_BYTES
+        } else {
+            MAX_SCRIPT_BYTES
+        };
+        if script.source.len() > body_cap || script.source.len() > MAX_TOTAL_BYTES - total {
             report
                 .analysis_gaps
                 .record(AnalysisGap::EmbeddedSourceIncomplete);
@@ -50,25 +60,38 @@ pub(super) fn append(
             report
                 .analysis_gaps
                 .record(AnalysisGap::EmbeddedSourceIncomplete);
-            Cow::Owned(neutralize_expressions(script.source))
+            Cow::Owned(neutralize_expressions(&script.source))
         } else {
-            Cow::Borrowed(script.source)
+            script.source
         };
-        // JSON Pointer identifies the decoded scalar. Escape container/path
-        // delimiters from untrusted keys; retain the pointer's slash structure.
-        // `!!`, not `##`: different run steps must not share file-scope facts.
-        let locator: String = script
-            .pointer
-            .bytes()
-            .map(|b| {
-                if b.is_ascii_alphanumeric() || b"/_-~".contains(&b) {
-                    char::from(b).to_string()
-                } else {
-                    format!("%{b:02X}")
-                }
-            })
-            .collect();
-        let path = format!("{}!!{locator}", report.target.path);
+        let path = if script.layer {
+            // A layer is part of this file: `##` files it as one of this
+            // file's decoded layers, so this file's composites see what it
+            // holds and `scope: file` pools it. The pointer is filefacts' own
+            // constant, not file content.
+            format!(
+                "{}{}{}",
+                report.target.path,
+                crate::types::file_analysis::ENCODING_DELIMITER,
+                script.pointer.trim_start_matches('/').replace('/', "-")
+            )
+        } else {
+            // JSON Pointer identifies the decoded scalar. Escape container/path
+            // delimiters from untrusted keys; retain the pointer's slash structure.
+            // `!!`, not `##`: different run steps must not share file-scope facts.
+            let locator: String = script
+                .pointer
+                .bytes()
+                .map(|b| {
+                    if b.is_ascii_alphanumeric() || b"/_-~".contains(&b) {
+                        char::from(b).to_string()
+                    } else {
+                        format!("%{b:02X}")
+                    }
+                })
+                .collect();
+            format!("{}!!{locator}", report.target.path)
+        };
         let mut child = analyzer
             .with_engine(engine.clone())
             .without_embedded_detection()
@@ -114,7 +137,11 @@ pub(super) fn append(
         // Embedded detection is deliberately disabled here: one declared body
         // is one independent source scope, not an unbounded recursive container.
         debug_assert!(nested.is_empty());
+        file.path = path;
         file.depth = 1;
+        // Plaintext in another language, like the other `##` views: nothing
+        // was decoded, so it carries no encoding chain.
+        file.encoding = None;
         file.compute_summary();
         report.files.push(file);
     }
@@ -186,6 +213,44 @@ mod tests {
         assert_eq!(report.files[1].file_type, "python");
         assert!(report.files.iter().all(|f| f.encoding.is_none()));
         assert!(report.analysis_gaps.is_empty());
+    }
+
+    #[test]
+    fn inline_page_scripts_are_one_javascript_layer_of_the_page() {
+        let page = "<html><body>\n<script>var ua = navigator.userAgent;</script>\n\
+            <script type=\"application/json\">{}</script>\n\
+            <script>if (ua.includes('FBAN')) { leave(); }</script>\n</body></html>";
+        let report = GenericAnalyzer::new(FileType::Html)
+            .analyze_input(&AnalysisInput::new(
+                Path::new("page.html"),
+                page.as_bytes(),
+                FileType::Html,
+            ))
+            .unwrap();
+        let layers: Vec<_> = report
+            .files
+            .iter()
+            .filter(|f| f.depth == 1)
+            .map(|f| (f.path.as_str(), f.file_type.as_str(), f.encoding.is_none()))
+            .collect();
+        // One `##` layer, so the page's own composites see what it holds.
+        assert_eq!(
+            layers,
+            vec![("page.html##html-scripts", "javascript", true)]
+        );
+        assert!(report.analysis_gaps.is_empty());
+    }
+
+    #[test]
+    fn a_page_without_inline_script_has_no_layer() {
+        let report = GenericAnalyzer::new(FileType::Html)
+            .analyze_input(&AnalysisInput::new(
+                Path::new("page.html"),
+                b"<html><script src=\"x.js\"></script><p>hi</p></html>",
+                FileType::Html,
+            ))
+            .unwrap();
+        assert!(report.files.iter().all(|f| f.depth == 0));
     }
 
     #[test]

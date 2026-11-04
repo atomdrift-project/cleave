@@ -408,6 +408,7 @@ fn test_evaluate_composite_rules_empty() {
         None,
         None,
         &[],
+        &[],
     );
     assert_eq!(findings.len(), 0);
 }
@@ -2735,7 +2736,15 @@ composite_rules:
       - id: "test/layer::fetch-call"
 "#;
 
+/// A decoded layer: it carries an encoding chain, as the decoders set.
 fn layer_record(path: &str, ids: &[&str]) -> crate::types::FileAnalysis {
+    let mut layer = view_record(path, ids);
+    layer.encoding = Some(vec!["unicode-escape".to_string()]);
+    layer
+}
+
+/// A plaintext view of the file's own text: no encoding chain.
+fn view_record(path: &str, ids: &[&str]) -> crate::types::FileAnalysis {
     let mut layer =
         crate::types::FileAnalysis::new(1, path.to_string(), "text".into(), "def456".into(), 64);
     layer.findings = ids
@@ -2814,6 +2823,22 @@ fn file_composites_do_not_repeat_a_layers_own() {
     assert!(
         !ids.iter().any(|id| id == "test/layer::js-fetch"),
         "{ids:?}"
+    );
+}
+
+/// A plaintext view is the file's own text, so a composite the view fired is
+/// still the file's to evaluate: the file may hold closer or different
+/// evidence for it (a page's markup, not only its inline script).
+#[test]
+fn file_composites_still_judge_what_a_view_fired() {
+    let ids = evaluate_with_layer(view_record(
+        "app.js##html-scripts",
+        &["test/layer::fetch-call", "test/layer::js-fetch"],
+    ));
+    assert!(ids.iter().any(|id| id == "test/layer::js-fetch"), "{ids:?}");
+    assert!(
+        !ids.iter().any(|id| id == "test/layer::fetch-call"),
+        "the view's own atom is not re-emitted on the parent: {ids:?}"
     );
 }
 

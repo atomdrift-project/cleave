@@ -414,6 +414,14 @@ impl super::CapabilityMapper {
     /// file's type has to see what was decoded out of it; the layer, analyzed
     /// on its own, is not of that type.
     ///
+    /// `view_findings` are the findings of the file's plaintext views (`##`
+    /// records with no encoding chain: a page's inline scripts, a PHP block in
+    /// JavaScript). They supply legs the same way, but a composite a view
+    /// fired is still evaluated here: a view is the file's own text, so the
+    /// file may hold closer or different evidence for the same rule (a
+    /// password field in the page's markup, not only in its script), and a
+    /// composite taking the view's copy as a leg would lose it.
+    ///
     /// Platform filtering is controlled by the `platform` field set via `with_platform()`.
     #[must_use]
     #[allow(clippy::too_many_arguments)]
@@ -427,6 +435,7 @@ impl super::CapabilityMapper {
         arch_ranges: Option<&[(Arch, std::ops::Range<usize>)]>,
         suppressions: Option<&crate::types::SuppressionSink>,
         layer_findings: &[Finding],
+        view_findings: &[Finding],
     ) -> Vec<Finding> {
         // Determine file type from report (platform comes from self.platform)
         let file_type = self.evaluation_file_type(report, binary_data.len());
@@ -475,9 +484,10 @@ impl super::CapabilityMapper {
         // The layer findings lead the accumulated set, so every context below
         // sees them alongside the composites found so far; they are split off
         // again before returning.
-        let layer_count = layer_findings.len();
+        let layer_count = layer_findings.len() + view_findings.len();
         let mut all_findings: Vec<Finding> = Vec::with_capacity(layer_count + 100);
         all_findings.extend_from_slice(layer_findings);
+        all_findings.extend_from_slice(view_findings);
 
         // Track which composite IDs have already matched (including original findings)
         let mut matched_bits = TraitBitSet::with_capacity(self.trait_definitions.len());
@@ -490,6 +500,12 @@ impl super::CapabilityMapper {
             if let Some(&pos) = composite_by_id.get(finding.id.as_str()) {
                 seen_rules[pos] = true;
             }
+            if let Some(&idx) = self.trait_id_map.get(finding.id.as_str()) {
+                matched_bits.insert(idx);
+            }
+        }
+        // A view's findings gate rules in, but do not mark them produced.
+        for finding in view_findings {
             if let Some(&idx) = self.trait_id_map.get(finding.id.as_str()) {
                 matched_bits.insert(idx);
             }

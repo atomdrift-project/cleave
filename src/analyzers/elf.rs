@@ -390,8 +390,8 @@ impl ElfAnalyzer {
         } else {
             // Filefacts's ELF parse failed (or it didn't identify the bytes
             // as ELF at all). Emit the structural finding, salvage
-            // architecture from the raw header, and fall back to rizin
-            // via the shared cached path.
+            // architecture from the raw header, and take what binform
+            // recovered via the shared cached path.
             let err_msg = ctx
                 .parsed
                 .errors()
@@ -438,11 +438,10 @@ impl ElfAnalyzer {
                 },
             ));
 
-            // Rizin recovery is owned by `filefacts::open` now: when
-            // goblin's ELF parse comes back empty, filefacts's internal
-            // fallback re-runs through rizin and fills the unified
-            // `Symbols` view with Function records (plus Imports /
-            // Exports) before we ever look at them. Projecting from
+            // Recovery is owned by `filefacts::open`: when goblin's ELF
+            // parse comes back empty, binform fills the unified `Symbols`
+            // view with Function records (plus Imports / Exports) before
+            // we ever look at them. Projecting from
             // `ctx.parsed.symbols()` here mirrors the happy path
             // and avoids duplicating the cache-key plumbing.
             report.functions = ctx
@@ -1116,9 +1115,9 @@ impl Analyzer for ElfAnalyzer {
         // read structural data straight from filefacts — including its
         // byte-scan `text()`, the single string-extraction authority. When
         // filefacts can't open the bytes, we still produce a report so tamper
-        // findings and rizin disassembly surface for triage. Reuse the parse a
-        // caller threaded in (an archive member's, extracted under its rizin
-        // setting): opening again repeats the whole extraction.
+        // findings and recovered functions surface for triage. Reuse the parse
+        // a caller threaded in (an archive member's): opening again repeats
+        // the whole extraction.
         let opened;
         let ctx = match &input.parsed_ctx {
             Some(ctx) => ctx,

@@ -94,7 +94,7 @@ impl MachOAnalyzer {
         self
     }
 
-    /// Set pre-extracted strings (avoids redundant stng/rizin extraction)
+    /// Set pre-extracted strings (avoids a redundant stng extraction)
     #[must_use]
     pub(crate) fn with_preextracted_strings(mut self, strings: Vec<StringInfo>) -> Self {
         self.preextracted_strings = Some(strings);
@@ -383,7 +383,7 @@ impl MachOAnalyzer {
         // filefacts marks unparseable bytes with `macho.parse_failed` or
         // `macho.parse_panicked` metrics. When neither the parse
         // succeeded nor a fat-slice cpu_type was observed, fall back
-        // to the rizin path so the binary still gets baseline metrics
+        // to the recovery path so the binary still gets baseline metrics
         // and a malformed-structure signal.
         let m = ctx.parsed.metrics();
         let parse_failed = m.get("macho.parse_failed").is_some();
@@ -451,11 +451,11 @@ impl MachOAnalyzer {
         // has_debug_info, code-signature details) flow through
         // `filefacts.values.macho.*` and `filefacts.metrics` now.
 
-        // Functions come from filefacts's typed `Functions` view —
-        // `aflj`-derived CFG fields ride along when filefacts's rizin
-        // recovery fired (stripped binaries / packed bodies); symbol-
-        // table-only entries leave the cleave CFG mirror `None`.
-        let _t_r2 = std::time::Instant::now();
+        // Functions come from filefacts's typed `Functions` view — CFG
+        // fields ride along when binform recovered them (stripped binaries
+        // / packed bodies); symbol-table-only entries leave the cleave CFG
+        // mirror `None`.
+        let _t_functions = std::time::Instant::now();
         report.functions = ctx
             .parsed
             .symbols()
@@ -463,7 +463,7 @@ impl MachOAnalyzer {
             .filter_map(crate::analysis_context::project_filefacts_function)
             .collect();
 
-        let r2_total_ms = _t_r2.elapsed().as_millis();
+        let functions_ms = _t_functions.elapsed().as_millis();
 
         // Strings: the caller's extraction, then pre-extracted strings, then
         // filefacts.
@@ -598,7 +598,7 @@ impl MachOAnalyzer {
 
         tracing::info!(
             path = %logical_path.display(),
-            r2_total_ms,
+            functions_ms,
             strings_ms,
             string_count,
             embedded_ms,
@@ -1184,7 +1184,7 @@ impl FatSlices {
     /// The slice table of `data`, read from `whole` (a parse of exactly
     /// `data`) when the caller has one, else from a parse opened here under
     /// `options`. Reading a fat binary's values runs its whole extraction —
-    /// rizin on every slice — so each helper reopening it, as they once did,
+    /// recovery on every slice — so each helper reopening it, as they once did,
     /// repeated that up to four more times per file. Thin binaries have no
     /// table and skip the parse.
     pub(crate) fn of(
@@ -1880,7 +1880,7 @@ impl MachOAnalyzer {
     /// Build a minimal Mach-O analysis report when filefacts couldn't
     /// parse the binary cleanly (the parse failed or panicked, or
     /// no `macho.cpu_type` was emitted). Any functions, imports or sections
-    /// filefacts recovered with rizin reach the report through
+    /// filefacts recovered reach the report through
     /// `analyze_structural_with_ctx` instead.
     fn analyze_macho_fallback(
         &self,
@@ -1921,12 +1921,11 @@ impl MachOAnalyzer {
             });
         }
 
-        // Filefacts's rizin recovery already populated the typed
-        // `Functions` view (if rizin was usable) by the time the
-        // fallback path runs — the analysis context here is built
-        // by the caller and projected through `open_with_path`.
-        // A caller that needs rizin data here should pass an
-        // `AnalysisContext` instead of bytes.
+        // Filefacts's recovery already populated the typed `Functions`
+        // view by the time the fallback path runs — the analysis context
+        // here is built by the caller and projected through
+        // `open_with_path`. A caller that needs recovered functions here
+        // should pass an `AnalysisContext` instead of bytes.
         report
     }
 }
@@ -1958,14 +1957,14 @@ impl Analyzer for MachOAnalyzer {
         };
         // Open filefacts-side parse so downstream helpers source structural
         // data from filefacts's typed views. When filefacts can't open the
-        // bytes the fallback path (rizin-based metrics + malformed
+        // bytes the fallback path (recovery-based metrics + malformed
         // signal) is taken by `analyze_structural_with_strings` via
         // `analyze_structural` synthesising a fresh ctx; either way
         // we never re-walk with goblin from here.
         // Archive and unified entry points already opened a context over the
         // full member. A thin Mach-O's preferred slice is that exact member,
         // so reuse it; reopening used to repeat every filefacts pass,
-        // including Rizin. Fat slices still need their own slice-relative
+        // recovery included. Fat slices still need their own slice-relative
         // context so offsets can be rebased correctly below.
         let opened_preferred_ctx = if preferred_is_full_file && input.parsed_ctx.is_some() {
             None
@@ -2149,7 +2148,7 @@ mod tests {
 
     /// A fat binary's slice table comes from the parse the caller already
     /// holds. Each range helper used to reopen the file, and reading a fat
-    /// binary's values runs its whole extraction (rizin on every slice).
+    /// binary's values runs its whole extraction (recovery on every slice).
     #[test]
     fn fat_slices_come_from_the_callers_parse() {
         let data = crate::test_samples::read("testdata/xor/gapi-update.macho");

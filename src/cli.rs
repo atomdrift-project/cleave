@@ -12,8 +12,6 @@
 //!
 //! cleave supports disabling expensive analysis components:
 //! - `--disable yara` - Skip YARA pattern matching
-//! - `--disable rizin` - Accepted for compatibility; binary disassembly is now
-//!   unconditional in-process recovery and cannot be turned off
 //! - `--disable upx` - Skip UPX unpacking attempts
 //! - `--disable third-party` - Skip third-party YARA rules
 
@@ -34,9 +32,6 @@ pub const DEFAULT_ZIP_PASSWORDS: &[&str] = &[
 pub struct DisabledComponents {
     /// Whether YARA scanning is disabled
     pub yara: bool,
-    /// Accepted for compatibility; disassembly is now always-on and this has
-    /// no effect.
-    pub rizin: bool,
     /// Whether UPX unpacking is disabled
     pub upx: bool,
     /// Whether third-party YARA rules are disabled
@@ -48,9 +43,6 @@ pub struct DisabledComponents {
 pub enum Component {
     /// YARA pattern matching
     Yara,
-    /// Accepted for compatibility; disassembly is always-on and cannot be disabled.
-    #[value(alias = "radare2")]
-    Rizin,
     /// UPX unpacking
     Upx,
     /// Third-party YARA rules
@@ -63,7 +55,6 @@ impl DisabledComponents {
     pub fn from_components(components: &[Component]) -> Self {
         Self {
             yara: components.contains(&Component::Yara),
-            rizin: components.contains(&Component::Rizin),
             upx: components.contains(&Component::Upx),
             third_party: components.contains(&Component::ThirdParty),
         }
@@ -1224,17 +1215,15 @@ mod tests {
         // Nothing is disabled by default
         assert!(!disabled.third_party);
         assert!(!disabled.yara);
-        assert!(!disabled.rizin);
         assert!(!disabled.upx);
     }
 
     #[test]
     fn test_disabled_components_custom() {
         let args =
-            Args::try_parse_from(["cleave", "--disable", "yara,radare2", "file.bin"]).unwrap();
+            Args::try_parse_from(["cleave", "--disable", "yara", "file.bin"]).unwrap();
         let disabled = args.disabled_components();
         assert!(disabled.yara);
-        assert!(disabled.rizin);
         assert!(!disabled.upx);
         assert!(!disabled.third_party);
     }
@@ -1244,13 +1233,12 @@ mod tests {
         let args = Args::try_parse_from([
             "cleave",
             "--disable",
-            "yara,radare2,upx,third-party",
+            "yara,upx,third-party",
             "file.bin",
         ])
         .unwrap();
         let disabled = args.disabled_components();
         assert!(disabled.yara);
-        assert!(disabled.rizin);
         assert!(disabled.upx);
         assert!(disabled.third_party);
     }
@@ -1262,17 +1250,15 @@ mod tests {
             .disabled_components();
         assert!(disabled.yara);
         assert!(disabled.upx);
-        assert!(!disabled.rizin);
         assert!(!disabled.third_party);
     }
 
     #[test]
     fn test_disabled_components_from_str_with_spaces() {
-        let disabled = Args::try_parse_from(["cleave", "--disable", "yara,radare2,upx", "f"])
+        let disabled = Args::try_parse_from(["cleave", "--disable", "yara,upx", "f"])
             .unwrap()
             .disabled_components();
         assert!(disabled.yara);
-        assert!(disabled.rizin);
         assert!(disabled.upx);
         assert!(!disabled.third_party);
     }
@@ -1280,6 +1266,8 @@ mod tests {
     #[test]
     fn test_disable_rejects_unknown_components() {
         assert!(Args::try_parse_from(["cleave", "--disable", "yarra", "f"]).is_err());
+        // rizin is gone; binary recovery cannot be turned off.
+        assert!(Args::try_parse_from(["cleave", "--disable", "rizin", "f"]).is_err());
     }
 
     #[test]
@@ -1287,7 +1275,6 @@ mod tests {
         let args = Args::try_parse_from(["cleave", "file.bin"]).unwrap();
         let disabled = args.disabled_components();
         assert!(!disabled.yara);
-        assert!(!disabled.rizin);
         assert!(!disabled.upx);
         assert!(!disabled.third_party);
     }

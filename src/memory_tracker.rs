@@ -9,12 +9,12 @@ use tracing::{debug, info, warn};
 
 /// Global tracker for the currently-running analysis phase.
 ///
-/// Set this before slow operations (rizin, stng, YARA) so the periodic
+/// Set this before slow operations (stng, YARA) so the periodic
 /// memory-check log line can tell you exactly what cleave is doing instead
 /// of silently incrementing a counter.
 static CURRENT_PHASE: parking_lot::Mutex<Option<String>> = parking_lot::const_mutex(None);
 
-/// Record what the current analysis phase is (e.g. "rizin: aa; aflj on foo.exe").
+/// Record what the current analysis phase is (e.g. "yara: foo.exe").
 /// The string is included in every subsequent periodic memory-check log line.
 pub(crate) fn set_current_phase(phase: impl Into<String>) {
     *CURRENT_PHASE.lock() = Some(phase.into());

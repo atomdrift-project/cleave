@@ -26,8 +26,8 @@ pipelines.
 change between minor releases, so pin a version or commit. The JSON
 `AnalysisReport` is stable within a major version.
 
-**Operational requirements** for the library: 8 MB rayon stack,
-`kill_all_rizin_groups()` at shutdown, cooperative cancellation via
+**Operational requirements** for the library: 8 MB rayon stack and
+cooperative cancellation via
 `AnalysisOptions::cancellation`. See
 [RUST_API.md#operational-notes](RUST_API.md#operational-notes).
 

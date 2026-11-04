@@ -12,7 +12,7 @@ use std::path::Path;
 use crate::types::{ArchiveEntry, Export, Function, Import, Section};
 
 /// Isolate large native fact extraction from unrelated archive/AST jobs.
-/// stng's nested joins otherwise steal those jobs before starting Rizin,
+/// stng's nested joins otherwise steal those jobs before starting recovery,
 /// stretching a short string pass across most of a directory scan.
 /// Opt-in while measuring throughput and detection parity.
 fn native_facts_threads() -> Option<usize> {
@@ -50,7 +50,7 @@ fn run_native_facts(threads: usize, f: impl FnOnce() + Send) {
     if crate::rayon_nest::on_isolated_leaf_pool() {
         f();
     } else if crate::env::flag("CLEAVE_NATIVE_FACTS_ISOLATED") {
-        // A shared native pool can still nest one binary's long Rizin call
+        // A shared native pool can still nest one binary's long recovery
         // inside another's string pass. Keep each pool exclusive, and wait
         // off Rayon so the scan caller cannot bury its return under a bundle.
         std::thread::scope(|scope| {
@@ -96,7 +96,7 @@ pub struct AnalysisContext<'a> {
 impl<'a> AnalysisContext<'a> {
     /// Open `content` through filefacts under `options`, identifying it from
     /// `path` and the bytes unless `options` forces a type or a `FileId`.
-    /// Every filefacts setting (rizin, disk cache, cancellation) belongs to
+    /// Every filefacts setting (disk cache, cancellation) belongs to
     /// the parse it is given to, so engines with different settings can parse
     /// side by side; see [`crate::Engine`] for the options an analysis uses.
     #[must_use]
@@ -137,7 +137,7 @@ impl<'a> AnalysisContext<'a> {
         }
     }
 
-    /// Open with filefacts' defaults: rizin on, the disk cache as
+    /// Open with filefacts' defaults: the disk cache as
     /// `FILEFACTS_CACHE` says, no cancellation.
     #[must_use]
     pub fn open(path: &'a Path, content: &'a [u8]) -> Self {

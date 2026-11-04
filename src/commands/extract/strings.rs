@@ -96,7 +96,7 @@ fn run_direct(
     }
 
     // One parse serves the symbols and the strings: for a native binary it
-    // runs rizin.
+    // runs binform's recovery.
     let parsed = engine.filefacts_options().path(path).open(&data);
     let mut imports = std::collections::HashSet::new();
     let mut import_libraries = std::collections::HashMap::new();
@@ -141,10 +141,9 @@ fn run_direct(
                     }
                 }
 
-                // filefacts owns rizin — imports / exports / functions come
-                // from its typed views regardless of whether the binary
-                // parsed cleanly with goblin or fell back through the rizin
-                // recovery path.
+                // Imports / exports / functions come from filefacts's typed
+                // views whether goblin parsed the binary or binform
+                // recovered them.
                 // Realize the parse so the typed views are populated.
                 let _ = parsed.values();
                 populate_symbols_from_filefacts(

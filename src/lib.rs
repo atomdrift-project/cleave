@@ -1994,8 +1994,8 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
 ) -> Result<AnalysisReport> {
     let capability_mapper = engine.rules();
     let yara_engine = engine.yara();
-    // Every file this analysis parses goes through these: the engine's rizin
-    // and cache settings, and the request's cancellation flag.
+    // Every file this analysis parses goes through these: the engine's cache
+    // settings, and the request's cancellation flag.
     let facts_options = match options.cancellation.as_deref() {
         Some(flag) => engine.filefacts_options().cancellation(flag),
         None => engine.filefacts_options(),
@@ -2253,7 +2253,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
 
     // For binary types (PE, ELF, MachO) run the YARA scan concurrently with stng extraction.
     // Both only need file_data and are independent of each other, so they can overlap.
-    // On production runs where rizin output is cached, YARA (~270ms) otherwise sits between
+    // On production runs where recovery output is cached, YARA (~270ms) otherwise sits between
     // stng (~290ms) and structural (~50ms), adding to the critical path.  Running them in
     // parallel eliminates that 270ms from the wall-clock total.
     let binary_yara_ftypes: Option<&[&str]> = if yara_engine.is_none() {
@@ -2590,7 +2590,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             // bytes-only entry point so the malformed signal still surfaces.
             // Borrow (don't consume) the full-file context opened above: it is
             // reused by the identity/filefacts fallback after the match so the
-            // file's extraction — including rizin recovery — runs exactly once.
+            // file's extraction — recovery included — runs exactly once.
             let ctx = file_ctx.as_ref();
             let struct_result: Result<AnalysisReport, anyhow::Error> = if let Some(ctx) = ctx {
                 Ok(analyzer.analyze_structural_with_ctx(
@@ -2662,7 +2662,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             // can't open is unanalyzable, so surface the error.
             // Borrow (don't consume) the full-file context so the identity/
             // filefacts fallback after the match reuses it — one extraction
-            // per file, never a second rizin pass to re-derive identity.
+            // per file, never a second recovery to re-derive identity.
             let ctx = file_ctx
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("filefacts open failed for PE"))?;
@@ -2762,10 +2762,10 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // already attached pays nothing, and the single open serves both.
     if report.identity.is_none() || report.filefacts.is_none() {
         // Reuse the context already opened for this file (binary/source/generic
-        // paths all opened one above). Its extraction — including any rizin
-        // disassembly — is cached on the `ParsedFile`, so deriving identity here
-        // is free. Re-`open`ing instead, as this used to, re-ran the *entire*
-        // extraction pipeline (a second rizin pass per binary) just to recompute
+        // paths all opened one above). Its extraction — recovery included — is
+        // cached on the `ParsedFile`, so deriving identity here is free.
+        // Re-`open`ing instead, as this used to, re-ran the *entire*
+        // extraction pipeline (a second recovery per binary) just to recompute
         // an identity that is empty for stripped/unsigned files. Only open a
         // fresh context only for paths that never opened one (archives).
         let fresh = if file_ctx.is_none() && input.parsed_ctx.is_none() {
@@ -3422,7 +3422,7 @@ fn analyze_one_path<F>(
 
     // Cancellation fast path: once SIGINT has flipped the flag, every remaining
     // slot returns instantly so the scan drains work already in-flight rather
-    // than starting new files. Inner analyzers (rizin, YARA, tree-sitter) also
+    // than starting new files. Inner analyzers (YARA, tree-sitter) also
     // observe the flag via options.cancellation for sub-file granularity.
     if options
         .cancellation
@@ -3568,7 +3568,7 @@ where
         anyhow::bail!("path is not a directory: {}", path.display());
     }
 
-    // Maintain the filefacts disk cache (which now owns rizin recovery) in
+    // Maintain the filefacts disk cache (which holds binform's recovery) in
     // the background: prune old schema versions, evict past the item cap,
     // and retire the legacy `re/` tree. Self-detaching, so it never blocks
     // startup.

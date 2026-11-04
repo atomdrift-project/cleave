@@ -1312,16 +1312,15 @@ fn yara_degraded() -> bool {
 
 /// Whether `report` or any file in it is missing results a later run may
 /// produce: rule evaluation ran out of time (findings depend on how loaded the
-/// machine was), rizin did not finish, or a source parse was cut short.
+/// machine was), or a source parse was cut short.
 /// Caching it would serve the shortfall to every later run.
 pub(crate) fn evaluation_incomplete(report: &AnalysisReport) -> bool {
     use crate::types::AnalysisGap::{
-        DisassemblyIncomplete, EvaluationDeadline, SourceParseIncomplete,
+        EvaluationDeadline, SourceParseIncomplete,
     };
     let incomplete = |gaps: &crate::types::AnalysisGaps| {
         [
             EvaluationDeadline,
-            DisassemblyIncomplete,
             SourceParseIncomplete,
         ]
         .into_iter()
@@ -1781,14 +1780,14 @@ mod tests {
         );
     }
 
-    /// A report whose rule evaluation ran out of time, whose rizin run did not
-    /// finish, or whose source parse was cut short lacks results a later run
+    /// A report whose rule evaluation ran out of time, or whose source parse
+    /// was cut short, lacks results a later run
     /// would have, so it must not be served to later runs — nor a container
     /// holding such a member.
     #[test]
     fn incomplete_reports_are_not_cached() {
         use crate::types::AnalysisGap::{
-            DisassemblyIncomplete, EvaluationDeadline, SourceParseIncomplete,
+            EvaluationDeadline, SourceParseIncomplete,
         };
         let opts = AnalysisOptions::default();
         let settings = settings_of(&opts);
@@ -1799,7 +1798,6 @@ mod tests {
 
         for (n, gap) in [
             EvaluationDeadline,
-            DisassemblyIncomplete,
             SourceParseIncomplete,
         ]
         .into_iter()

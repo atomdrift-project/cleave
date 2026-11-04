@@ -152,8 +152,9 @@ fn run_direct(
         match file_type {
             FileType::Elf | FileType::MachO | FileType::Pe => {
                 // Binary file — filefacts's typed Imports/Exports/Functions
-                // views feed `analyze_binary_report`; fall back to rizin
-                // if the static parse found no exports (stripped binaries).
+                // views feed `analyze_binary_report`; binform's recovery
+                // fills them when the static parse found none (stripped
+                // binaries).
                 let report = analyze_binary_report(path, &file_type, engine)?;
 
                 for import in &report.imports {
@@ -184,10 +185,9 @@ fn run_direct(
                     });
                 }
 
-                // filefacts owns the rizin fallback now: when goblin's
-                // PE/ELF/Mach-O view comes back empty, `filefacts::open`
-                // re-runs through rizin internally and fills imports /
-                // exports / functions with `source: "rizin"`. The
+                // When goblin's PE/ELF/Mach-O view comes back empty,
+                // `filefacts::open` fills imports / exports / functions
+                // from binform. The
                 // `analyze_binary_report` path above already projected
                 // those entries into `report.imports` / `report.exports`
                 // / `report.functions`, so there is nothing extra to do

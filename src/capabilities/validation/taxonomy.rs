@@ -2781,6 +2781,10 @@ fn broad_filetype_category(cond: &Condition) -> &'static str {
 /// `text` matcher in an allowlisted `text:` directory passes; the same directory
 /// does **not** license a broad `value`/`symbol`/etc. matcher.
 pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
+    // Ethereum RPC method names and JSON fields occur across source and binary
+    // carriers; preserve the reviewed scope of these protocol observations.
+    "text:micro-behaviors/communications/blockchain/ethereum/blockchain-rpc-review-ethereum.yaml",
+    "literal:micro-behaviors/communications/blockchain/ethereum/blockchain-rpc-review-ethereum.yaml",
     // Plex's plugin route is a neutral text reference in every original carrier.
     "text:well-known/app/media/plex/network-function-route.yaml",
     // Raw GitHub URL references apply across source, script, and binary

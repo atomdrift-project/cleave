@@ -558,6 +558,7 @@ mod envelope_tests {
             layers[1].1,
             vec!["scrypt", "aes-256-cbc", "base64", "scrypt", "aes-256-cbc"]
         );
+        crate::analyzers::embedded_code_detector::generate_encoded_layer_traits(&layers[1].1, 0);
     }
     #[test]
     fn rejects_wrong_password_and_unrelated_module_argument() {

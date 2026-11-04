@@ -524,6 +524,10 @@ mod tests {
                 _ => vec!["scpt", suffix],
             };
             assert_eq!(row.encoding_chain, expected, "{suffix}");
+            crate::analyzers::embedded_code_detector::generate_encoded_layer_traits(
+                &row.encoding_chain,
+                73,
+            );
             assert_eq!(row.value, literal.value);
             assert_eq!(row.offset, Some(73));
             assert_eq!(row.section.as_deref(), Some("literal"));
@@ -532,6 +536,26 @@ mod tests {
                 _ => "utf8",
             };
             assert_eq!(row.encoding, expected_encoding);
+        }
+    }
+
+    #[test]
+    fn stng_construction_methods_have_registered_layers() {
+        for method in [
+            StringMethod::StackString,
+            StringMethod::XorDecode,
+            StringMethod::Base64Decode,
+            StringMethod::Base64ObfuscatedDecode,
+            StringMethod::HexDecode,
+            StringMethod::UrlDecode,
+            StringMethod::UnicodeEscapeDecode,
+            StringMethod::WideString,
+        ] {
+            let name = stng_method_to_string(method);
+            assert!(
+                crate::analyzers::embedded_code_detector::ENCODED_LAYER_NAMES.contains(&name),
+                "{method:?} -> {name}"
+            );
         }
     }
 

@@ -308,6 +308,7 @@ const ALLOWED_MB_CRYPTO: &[&str] = &[
     "kdf",
     "key",      // Key generation, import/export, exchange and representation
     "mnemonic", // Mnemonic representations of cryptographic seed material
+    "primitive", // Evidence spanning cryptographic primitive families
     "provider", // Provider acquisition/release with no narrower operation
     "sign",     // Signing operations, algorithm may be unknown
     "symmetric",
@@ -490,6 +491,7 @@ const ALLOWED_MB_OS: &[&str] = &[
     "exception",
     "firewall",
     "group",
+    "handler", // OS-associated application and document handlers
     "kernel",
     "linker",
     "message",

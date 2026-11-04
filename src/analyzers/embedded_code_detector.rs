@@ -2401,7 +2401,12 @@ traits:
             .with_engine(engine.clone())
             .without_embedded_detection()
             .analyze_source_as_configured(Path::new("snippet.sh"), &code);
-        assert!(standalone.findings.iter().any(|f| f.id == "test/snippet::many-lines"));
+        assert!(
+            standalone
+                .findings
+                .iter()
+                .any(|f| f.id == "test/snippet::many-lines")
+        );
 
         let result = analyze_embedded_haystack(
             "carrier.py",

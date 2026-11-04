@@ -110,50 +110,59 @@ pub(crate) fn merge_filefacts_context(
     }
 }
 
-/// The findings of `report`'s own decoded layers: the `##` records filed
-/// under its path (an escaped or encoded blob it carries, analyzed as code),
-/// at any depth. Members of an archive report are not layers of it.
-fn decoded_layer_findings(report: &AnalysisReport) -> Vec<Finding> {
+/// The findings of `report`'s own `##` records, filed under its path at any
+/// depth, split by kind: decoded layers (an escaped or encoded blob it
+/// carries, analyzed as code; they have an encoding chain) and plaintext
+/// views of its own text (no chain). Members of an archive report are not
+/// layers of it. See [`super::CapabilityMapper::evaluate_composite_rules`] for
+/// why the two are told apart.
+fn decoded_layer_findings(report: &AnalysisReport) -> (Vec<Finding>, Vec<Finding>) {
     let prefix = format!(
         "{}{}",
         report.target.path,
         crate::types::file_analysis::ENCODING_DELIMITER
     );
-    report
+    let (decoded, views): (Vec<_>, Vec<_>) = report
         .files
         .iter()
         .filter(|file| file.path.starts_with(&prefix))
-        .flat_map(|file| {
-            file.findings.iter().cloned().map(|mut finding| {
-                // The subfile dispatcher uses decoded@/embedded@ labels whose
-                // offsets belong to its child buffer. Borrowed copies need
-                // member provenance; existing encoding_chain locations already
-                // have their own host-relative scope and must stay unchanged.
-                let dispatched = |location: Option<&str>| {
-                    location.is_some_and(|loc| {
-                        loc.starts_with("decoded@") || loc.starts_with("embedded@")
-                    })
-                };
-                if finding
-                    .evidence
-                    .iter()
-                    .any(|e| dispatched(e.location.as_deref()))
-                {
-                    finding.precomputed_spans = None;
-                    for evidence in &mut finding.evidence {
-                        if dispatched(evidence.location.as_deref()) {
-                            evidence.location = Some(format!(
-                                "archive:{}:{}",
-                                file.path,
-                                evidence.location.as_deref().unwrap_or_default()
-                            ));
+        .partition(|file| file.encoding.is_some());
+    let findings = |files: Vec<&crate::types::FileAnalysis>| -> Vec<Finding> {
+        files
+            .into_iter()
+            .flat_map(|file| {
+                file.findings.iter().cloned().map(|mut finding| {
+                    // The subfile dispatcher uses decoded@/embedded@ labels whose
+                    // offsets belong to its child buffer. Borrowed copies need
+                    // member provenance; existing encoding_chain locations already
+                    // have their own host-relative scope and must stay unchanged.
+                    let dispatched = |location: Option<&str>| {
+                        location.is_some_and(|loc| {
+                            loc.starts_with("decoded@") || loc.starts_with("embedded@")
+                        })
+                    };
+                    if finding
+                        .evidence
+                        .iter()
+                        .any(|e| dispatched(e.location.as_deref()))
+                    {
+                        finding.precomputed_spans = None;
+                        for evidence in &mut finding.evidence {
+                            if dispatched(evidence.location.as_deref()) {
+                                evidence.location = Some(format!(
+                                    "archive:{}:{}",
+                                    file.path,
+                                    evidence.location.as_deref().unwrap_or_default()
+                                ));
+                            }
                         }
                     }
-                }
-                finding
+                    finding
+                })
             })
-        })
-        .collect()
+            .collect()
+    };
+    (findings(decoded), findings(views))
 }
 
 /// Full raw-content gate with offset recording (windowed `eval_raw`) for
@@ -577,7 +586,7 @@ impl super::CapabilityMapper {
         // file carries was analyzed as its own `##` record, but it is part of
         // this file, so this file's composites must see what it holds.
         let t_comp = std::time::Instant::now();
-        let layer_findings = decoded_layer_findings(report);
+        let (layer_findings, view_findings) = decoded_layer_findings(report);
         let composite_findings = self.evaluate_composite_rules(
             report,
             binary_data,
@@ -587,6 +596,7 @@ impl super::CapabilityMapper {
             arch_ranges,
             Some(&sink),
             &layer_findings,
+            &view_findings,
         );
 
         // Merge composite findings into report

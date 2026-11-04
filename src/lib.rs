@@ -1329,6 +1329,7 @@ fn reference_outcome_findings(
         None,
         None,
         &[],
+        &[],
     );
     found.extend(local);
     Some(found)

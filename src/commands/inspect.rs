@@ -5,7 +5,9 @@
 //!   filefacts extracts (`fileid`, `values`, `text`, `literals`,
 //!   `comments`, `metrics`, `sections`, `symbols`, `flow`, `identity`,
 //!   `references`, `archive_members`, `errors`). `flow` is `null` when
-//!   the file has no flow producer, which is not an empty graph.
+//!   the file has no flow producer, which is not an empty graph. A file
+//!   with layers (a page's inline scripts) adds `layers`: each layer's own
+//!   full bundle, with its `path` and `file_type`, as the engine analyzes it.
 //! - **One target, view filter** → pretty JSON of that one view.
 //! - **Multiple targets** → JSONL, one line per file with a `"path"`
 //!   field plus either the full bundle or the single filtered tree.
@@ -88,21 +90,35 @@ fn inspect_one(
         )?)
     };
     Ok(match tree {
-        None => json!({
-            "fileid": parsed.fileid(),
-            "values": parsed.values(),
-            "text": parsed.text(),
-            "literals": parsed.literals(),
-            "comments": parsed.comments(),
-            "metrics": parsed.metrics(),
-            "sections": parsed.sections(),
-            "symbols": parsed.symbols(),
-            "flow": parsed.flow(),
-            "identity": parsed.identity(),
-            "references": parsed.references(),
-            "archive_members": parsed.archive_members(),
-            "errors": parsed.errors(),
-        }),
+        None => {
+            let mut facts = bundle(&parsed);
+            let layers: Vec<Value> = parsed
+                .embedded_sources()
+                .filter(|source| source.layer)
+                .filter_map(|source| {
+                    let file_type = source.file_type?;
+                    // Named and typed as the analyzer names and types it.
+                    let name = format!(
+                        "{target}##{}",
+                        source.pointer.trim_start_matches('/').replace('/', "-")
+                    );
+                    let layer = options
+                        .clone()
+                        .path(Path::new(&name))
+                        .file_type(file_type)
+                        .open(source.source.as_bytes());
+                    let mut facts = bundle(&layer);
+                    if let Value::Object(map) = &mut facts {
+                        map.insert("path".into(), json!(name));
+                    }
+                    Some(facts)
+                })
+                .collect();
+            if let (Value::Object(map), false) = (&mut facts, layers.is_empty()) {
+                map.insert("layers".into(), Value::Array(layers));
+            }
+            facts
+        }
         Some(cli::InspectTree::Fileid { .. }) => serde_json::to_value(parsed.fileid())?,
         Some(cli::InspectTree::Values { .. }) => serde_json::to_value(parsed.values())?,
         Some(cli::InspectTree::Text { .. }) => serde_json::to_value(parsed.text())?,
@@ -125,6 +141,25 @@ fn inspect_one(
         Some(cli::InspectTree::ArchiveMembers { .. }) => {
             serde_json::to_value(parsed.archive_members())?
         }
+    })
+}
+
+/// Every view filefacts extracts from `parsed`.
+fn bundle(parsed: &filefacts::ParsedFile<'_>) -> Value {
+    json!({
+        "fileid": parsed.fileid(),
+        "values": parsed.values(),
+        "text": parsed.text(),
+        "literals": parsed.literals(),
+        "comments": parsed.comments(),
+        "metrics": parsed.metrics(),
+        "sections": parsed.sections(),
+        "symbols": parsed.symbols(),
+        "flow": parsed.flow(),
+        "identity": parsed.identity(),
+        "references": parsed.references(),
+        "archive_members": parsed.archive_members(),
+        "errors": parsed.errors(),
     })
 }
 
@@ -169,6 +204,27 @@ mod tests {
         ] {
             assert!(keys.contains(&view), "missing `{view}` in {keys:?}");
         }
+    }
+
+    /// A page's inline scripts get no symbols of their own: the dump shows
+    /// them as the layer the engine analyzes, with that layer's facts.
+    #[test]
+    fn a_pages_inline_scripts_dump_as_a_layer() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("page.html");
+        fs::write(
+            &path,
+            "<html><body><script>if (navigator.userAgent.includes('FBAN')) leave();</script></body></html>",
+        )
+        .unwrap();
+        let target = path.to_str().unwrap();
+        let facts = inspect_one(target, None, &filefacts::OpenOptions::new()).unwrap();
+        let layers = facts["layers"].as_array().unwrap();
+        assert_eq!(layers.len(), 1);
+        assert_eq!(layers[0]["path"], json!(format!("{target}##html-scripts")));
+        let calls = layers[0]["symbols"].to_string();
+        assert!(calls.contains("navigator.userAgent.includes"), "{calls}");
+        assert!(calls.contains("FBAN"), "{calls}");
     }
 
     /// The flow view shows what provenance can follow: a method call's

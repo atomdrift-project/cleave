@@ -1220,8 +1220,7 @@ mod tests {
 
     #[test]
     fn test_disabled_components_custom() {
-        let args =
-            Args::try_parse_from(["cleave", "--disable", "yara", "file.bin"]).unwrap();
+        let args = Args::try_parse_from(["cleave", "--disable", "yara", "file.bin"]).unwrap();
         let disabled = args.disabled_components();
         assert!(disabled.yara);
         assert!(!disabled.upx);
@@ -1230,13 +1229,9 @@ mod tests {
 
     #[test]
     fn test_disabled_components_all() {
-        let args = Args::try_parse_from([
-            "cleave",
-            "--disable",
-            "yara,upx,third-party",
-            "file.bin",
-        ])
-        .unwrap();
+        let args =
+            Args::try_parse_from(["cleave", "--disable", "yara,upx,third-party", "file.bin"])
+                .unwrap();
         let disabled = args.disabled_components();
         assert!(disabled.yara);
         assert!(disabled.upx);

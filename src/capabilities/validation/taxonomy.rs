@@ -3458,6 +3458,7 @@ fn is_low_tier_named_binary_fact(t: &TraitDefinition) -> bool {
                     | "pe.version.original_filename"
                     | "pe.version.description"
                     | "pe.manifest.assembly_identity.name"
+                    | "pe.manifest.description"
                     | "pe.signatures[0].subject"
                     | "pe.signatures[*].subject"
             ) && [q.exact.as_deref(), q.substr.as_deref(), q.regex.as_deref()]
@@ -4475,6 +4476,274 @@ fn is_reviewed_installer_tool_fact(t: &TraitDefinition) -> bool {
 ///
 /// Returns `Vec<(trait_id, source_file)>` for violations.
 #[must_use]
+fn is_go_socks5_library_reference(t: &TraitDefinition) -> bool {
+    let expected = match t.id.as_str() {
+        "well-known/lib/network/proxy/go-socks5::armon-go-socks5" => "github.com/armon/go-socks5",
+        "well-known/lib/network/proxy/go-socks5::armon-go-socks5-listen-and-serve" => {
+            "github.com/armon/go-socks5.(*Server).ListenAndServe"
+        }
+        "well-known/lib/network/proxy/go-socks5::armon-go-socks5-serve-conn" => {
+            "github.com/armon/go-socks5.(*Server).ServeConn"
+        }
+        _ => return false,
+    };
+    t.crit == Criticality::Notable
+        && matches!(&t.r#if, Condition::Text(q)
+            if q.substr.as_deref() == Some(expected)
+                && q.exact.is_none() && q.regex.is_none() && q.word.is_none())
+}
+
+// These named builder labels are references, not identity claims about the
+// containing binary. Preserve their whole-file scope and original size range.
+fn is_named_crypter_label_reference(t: &TraitDefinition) -> bool {
+    let (expected, crit) = match t.id.as_str() {
+        "well-known/tool/packaging/crypter::dotnet-named-crypter-title-text" => (
+            r"(?i)\b(Morpheous|Morpheus|Eladitos)\s+Crypter\b|Morpheous Crypter Cracked",
+            Criticality::Notable,
+        ),
+        "well-known/tool/packaging/crypter::dotnet-named-builder-token" => {
+            (r"MORPHEOUS|#KILLAMUVZ#", Criticality::Component)
+        }
+        _ => return false,
+    };
+    t.crit == crit
+        && matches!(&t.r#if, Condition::Text(q)
+        if q.regex.as_deref() == Some(expected)
+            && q.exact.is_none() && q.substr.is_none() && q.word.is_none())
+}
+
+// Go ngrok type-name references can occur in any section and do not identify
+// the containing binary; keep these reviewed matchers at whole-file scope.
+fn is_ngrok_go_type_reference(t: &TraitDefinition) -> bool {
+    let expected = match t.id.as_str() {
+        "well-known/dual-use/tunnel/ngrok::go-ngrok-agent-type--rx-7" => {
+            r"\*ngrok\.(Agent|Dialer)\b"
+        }
+        "well-known/dual-use/tunnel/ngrok::go-ngrok-agent-type--rx-8" => {
+            r"\*ngrok\.(Endpoint|Upstream)\b"
+        }
+        "well-known/dual-use/tunnel/ngrok::go-ngrok-agent-type--rx-9" => {
+            r"\*ngrok\.(AgentSession|EndpointListener)\b"
+        }
+        "well-known/dual-use/tunnel/ngrok::go-ngrok-config-type" => {
+            r"\*config\.Ngrok(Config|Account)\b"
+        }
+        "well-known/dual-use/tunnel/ngrok::go-ngrok-config-name" => r"\bNgrok(Config|Account)\b",
+        _ => return false,
+    };
+    t.crit == Criticality::Notable
+        && matches!(&t.r#if, Condition::Text(q)
+        if q.regex.as_deref() == Some(expected)
+            && q.exact.is_none() && q.substr.is_none() && q.word.is_none())
+}
+
+// Named client and runtime references need no assumptions about the size or
+// section layout of a binary that happens to contain them.
+fn is_tunnel_client_reference(t: &TraitDefinition) -> bool {
+    let (kind, expected) = match t.id.as_str() {
+        "well-known/dual-use/tunnel/tailscale::go-tsnet-vpn-startup-reference" => {
+            ("exact", "tailscale.com/tsnet.(*Server).Up")
+        }
+        "well-known/dual-use/tunnel/localtunnel::localtunnel-client-error-text" => (
+            "regex",
+            "Localtunnel (exited|timeout)|localtunnel server returned an error",
+        ),
+        "well-known/dual-use/tunnel/localtunnel::localtunnel-debug-namespace" => {
+            ("substr", "localtunnel:client")
+        }
+        _ => return false,
+    };
+    t.crit == Criticality::Notable
+        && matches!(&t.r#if, Condition::Text(q)
+        if q.word.is_none() && match kind {
+            "exact" => q.exact.as_deref() == Some(expected) && q.substr.is_none() && q.regex.is_none(),
+            "regex" => q.regex.as_deref() == Some(expected) && q.exact.is_none() && q.substr.is_none(),
+            "substr" => q.substr.as_deref() == Some(expected) && q.exact.is_none() && q.regex.is_none(),
+            _ => false,
+        })
+}
+
+// A yamux package-path reference does not describe the containing binary's
+// size or section layout.
+fn is_yamux_library_reference(t: &TraitDefinition) -> bool {
+    t.id == "well-known/lib/network/yamux::go-yamux-multiplexed-transport"
+        && t.crit == Criticality::Notable
+        && matches!(&t.r#if, Condition::Text(q)
+            if q.substr.as_deref() == Some("github.com/hashicorp/yamux")
+                && q.exact.is_none() && q.regex.is_none() && q.word.is_none())
+}
+
+// A named OpenConnect command can appear in binaries of arbitrary size; the
+// command text is a reference, not an identity claim about the containing file.
+fn is_openconnect_command_reference(t: &TraitDefinition) -> bool {
+    t.id == "well-known/dual-use/tunnel/openconnect::openconnect-fortinet-command"
+        && t.crit == Criticality::Notable
+        && matches!(&t.r#if, Condition::Text(q)
+            if q.regex.as_deref() == Some(r#"(?s)\bopenconnect\b.{0,160}--protocol[= '"]+fortinet([\s,'";)]|$)"#)
+                && q.exact.is_none() && q.substr.is_none() && q.word.is_none())
+}
+
+// Gentee API and DLL names can occur in any PE section and in binaries of
+// any size; these are references to the runtime, not whole-file identity.
+fn is_gentee_runtime_reference(t: &TraitDefinition) -> bool {
+    let (expected, exact) = match t.id.as_str() {
+        "well-known/lib/runtime/scripted/gentee::gentee-runtime-init" => ("gentee_init", true),
+        "well-known/lib/runtime/scripted/gentee::gentee-runtime-deinit" => ("gentee_deinit", true),
+        "well-known/lib/runtime/scripted/gentee::gentee-runtime-load" => ("gentee_load", true),
+        "well-known/lib/runtime/scripted/gentee::gentee-runtime-set" => ("gentee_set", true),
+        "well-known/lib/runtime/scripted/gentee::gentee-runtime-call" => ("gentee_call", true),
+        "well-known/lib/runtime/scripted/gentee::gentee-runtime-dll-name" => {
+            ("genteert.dll", false)
+        }
+        _ => return false,
+    };
+    t.crit == Criticality::Notable
+        && matches!(&t.r#if, Condition::Text(q)
+            if q.regex.is_none() && q.word.is_none()
+                && if exact { q.exact.as_deref() == Some(expected) && q.substr.is_none() }
+                   else { q.substr.as_deref() == Some(expected) && q.exact.is_none() })
+}
+
+// These RPC interface references identify named Windows services, not the
+// file containing them; their presence is independent of the file's size.
+fn is_windows_rpc_service_reference(t: &TraitDefinition) -> bool {
+    let (expected, regex) = match t.id.as_str() {
+        "well-known/app/security/defender::defender-rpc-uuid" => {
+            ("(?i)c503f532-443a-4c69-8300-ccd1fbdb3839", true)
+        }
+        "well-known/app/security/defender::defender-mpservice-alpc" => {
+            ("IMpService77BDAF73-B396-481F-9042-AD358843EC24", false)
+        }
+        "well-known/app/system/windows-platform::appinfo-elevation-interface-uuid" => (
+            r"(?i)\{?201ef99a[-, ]+7fa0[-, ]+444c[-, ]+9399[-, ]+19ba84f12a1a\}?",
+            true,
+        ),
+        _ => return false,
+    };
+    t.crit == Criticality::Notable
+        && matches!(&t.r#if, Condition::Text(q)
+            if q.exact.is_none() && q.word.is_none()
+                && if regex { q.regex.as_deref() == Some(expected) && q.substr.is_none() }
+                   else { q.substr.as_deref() == Some(expected) && q.regex.is_none() })
+}
+
+// This is a quoted claim about SumatraPDF, not a whole-file identity.
+fn is_sumatrapdf_encryption_claim(t: &TraitDefinition) -> bool {
+    t.id == "well-known/app/productivity/sumatrapdf::sumatrapdf-encryption-sentinel"
+        && t.crit == Criticality::Notable
+        && matches!(&t.r#if, Condition::Text(q)
+            if q.regex.as_deref() == Some("This document is encrypted with sumatrapdf reader!{4,}")
+                && q.exact.is_none() && q.substr.is_none() && q.word.is_none())
+}
+
+// Managed library names may be embedded in any section of any sized binary.
+fn is_jwe_library_reference(t: &TraitDefinition) -> bool {
+    let expected = match t.id.as_str() {
+        "well-known/lib/runtime/managed/dotnet-runtime::jwt-jwe-context--rx-2" => {
+            "System.Security.Cryptography.Pkcs"
+        }
+        "well-known/lib/crypto/jose-jwt::jwt-jwe-context--rx-6" => "jose-jwt",
+        _ => return false,
+    };
+    t.crit == Criticality::Notable
+        && matches!(&t.r#if, Condition::Text(q)
+            if q.substr.as_deref() == Some(expected)
+                && q.exact.is_none() && q.regex.is_none() && q.word.is_none())
+}
+
+// Apple service/path references can occur in containing files of any size.
+fn is_apple_cache_service_reference(t: &TraitDefinition) -> bool {
+    t.id == "well-known/app/system/apple/launch-services::apple-like-cache-service-name"
+        && t.crit == Criticality::Notable
+        && matches!(&t.r#if, Condition::Text(q)
+            if q.regex.as_deref() == Some(r"(?i)(com\.apple\.(verified|homeenergyd)|/com\.apple\.softwareupdate/SoftwareUpdate)\b")
+                && q.exact.is_none() && q.substr.is_none() && q.word.is_none())
+}
+
+// These product and debug-name strings describe references in the containing
+// file. Their meaning does not depend on the file's size or PE section.
+fn is_windows_product_name_reference(t: &TraitDefinition) -> bool {
+    let (expected, kind, crit) = match t.id.as_str() {
+        "well-known/app/system/windows-error-reporting::windows-error-reporter-manifest-reference" => {
+            (
+                "name=\"Microsoft.Windows.ErrorReporter\"",
+                "exact",
+                Criticality::Notable,
+            )
+        }
+        "well-known/game/mahjong-titans::mahjong-titans-name-reference" => {
+            ("Mahjong Titans", "substr", Criticality::Notable)
+        }
+        "well-known/app/productivity/microsoft-office::officecompleted-text" => {
+            ("OfficeCompleted", "exact", Criticality::Component)
+        }
+        "well-known/app/productivity/microsoft-office::office-help-viewer-name" => (
+            "Microsoft Office Help Viewer",
+            "exact",
+            Criticality::Notable,
+        ),
+        "well-known/app/productivity/microsoft-office::office-help-path" => {
+            ("/MsOfficeHelp16/", "exact", Criticality::Notable)
+        }
+        "well-known/app/productivity/microsoft-office::msoxmled-pdb" => {
+            ("msoxmled.pdb", "substr", Criticality::Notable)
+        }
+        "well-known/app/productivity/microsoft-office::vsto-installer-pdb-reference" => {
+            ("VSTOInstaller.pdb", "exact", Criticality::Notable)
+        }
+        "well-known/app/productivity/microsoft-office::ensure-vsto-component-text" => {
+            ("EnsureVSTOComponent", "exact", Criticality::Notable)
+        }
+        "well-known/app/productivity/microsoft-office::office-help-user-agent-text" => (
+            "User-Agent: %s%sX-OfApp: %s%sX-OfVer: %s%sX-Office-Version: %d.%d.%04d.0%sX-OfHelpLcid: %s%sX-OfUILcid: %s%sX-OfSysLcid: %s%s",
+            "exact",
+            Criticality::Notable,
+        ),
+        "well-known/app/system/windows-telemetry::diagtrackrunner-pdb" => {
+            ("diagtrackrunner.pdb", "exact", Criticality::Notable)
+        }
+        "well-known/app/system/windows-telemetry::diagtrack-dll-name" => {
+            ("diagtrack.dll", "exact", Criticality::Notable)
+        }
+        _ => return false,
+    };
+    t.crit == crit
+        && matches!(&t.r#if, Condition::Text(q)
+        if q.regex.is_none() && q.word.is_none()
+            && match kind {
+                "exact" => q.exact.as_deref() == Some(expected) && q.substr.is_none(),
+                "substr" => q.substr.as_deref() == Some(expected) && q.exact.is_none(),
+                _ => false,
+            })
+}
+
+// These are product-name references, not whole-file product identities.
+fn is_legacy_product_name_reference(t: &TraitDefinition) -> bool {
+    let expected = match t.id.as_str() {
+        "well-known/app/productivity/lotus-approach::lotus-approach-name-reference" => {
+            "(?i)Lotus Approach"
+        }
+        "well-known/lib/development/borland-delphi::borland-delphi-name-reference" => {
+            "(?i)Borland Delphi"
+        }
+        _ => return false,
+    };
+    t.crit == Criticality::Notable
+        && matches!(&t.r#if, Condition::Text(q)
+            if q.regex.as_deref() == Some(expected)
+                && q.exact.is_none() && q.substr.is_none() && q.word.is_none())
+}
+
+// Repeated product-name text is a reference, not the containing file's identity.
+fn is_trezor_name_reference(t: &TraitDefinition) -> bool {
+    t.id == "well-known/app/finance/trezor::repeated-trezor-token"
+        && t.crit == Criticality::Notable
+        && t.count_min.is_some_and(|n| n >= 4)
+        && matches!(&t.r#if, Condition::Text(q)
+            if q.substr.as_deref() == Some("trezor")
+                && q.exact.is_none() && q.regex.is_none() && q.word.is_none())
+}
+
 pub(crate) fn find_wellknown_missing_size_filter(
     trait_definitions: &[TraitDefinition],
     rule_source_files: &HashMap<String, String>,
@@ -4500,6 +4769,27 @@ pub(crate) fn find_wellknown_missing_size_filter(
                 && !is_reviewed_linfeng_marker(t)
                 && !is_reviewed_redshell_injection_menu(t)
                 && !is_reviewed_stagecomp_marker(t)
+                && !is_go_socks5_library_reference(t)
+                && !is_gentee_runtime_reference(t)
+                && !is_named_crypter_label_reference(t)
+                && !is_ngrok_go_type_reference(t)
+                && !is_tunnel_client_reference(t)
+                && !is_yamux_library_reference(t)
+                && !is_openconnect_command_reference(t)
+                && !is_jwe_library_reference(t)
+                && !is_apple_cache_service_reference(t)
+                && !is_windows_product_name_reference(t)
+                && !is_legacy_product_name_reference(t)
+                && !is_trezor_name_reference(t)
+                && !is_windows_rpc_service_reference(t)
+                && !is_sumatrapdf_encryption_claim(t)
+                // A GitLab registry path is a service reference regardless of
+                // the size of a binary containing it, not a file identity.
+                && !(t.id == "well-known/app/development/code-forge/gitlab::gitlab-generic-package-upload"
+                    && t.crit == Criticality::Notable
+                    && matches!(&t.r#if, Condition::Text(q)
+                        if q.regex.as_deref() == Some(r"/api/v4/projects/.{0,160}/packages/generic/")
+                            && q.exact.is_none() && q.substr.is_none() && q.word.is_none()))
                 // The Tauri plugin string is a section-scoped product reference,
                 // not an identity or a size-bounded signature of the file.
                 && !(t.id == "well-known/lib/development/tauri::tauri-shell-open-plugin"
@@ -4616,6 +4906,18 @@ fn is_reviewed_product_registry_reference(t: &TraitDefinition) -> bool {
             "substr",
             r"Symantec\pcAnywhere\CurrentVersion\System\TCPIPDataPort",
         ),
+        "well-known/app/productivity/lotus-approach::registry-path-lotus" => {
+            ("regex", r"(?i)Software\\Lotus\\Approach")
+        }
+        "well-known/app/communication/aol-desktop::registry-path-aol" => {
+            ("regex", r"(?i)Software\\AOL\\Desktop")
+        }
+        "well-known/app/enterprise/symantec-act::registry-path-symantec-act" => {
+            ("regex", r"(?i)Software\\Symantec\\ACT!")
+        }
+        "well-known/app/communication/compuserve::registry-path-compuserve" => {
+            ("regex", r"(?i)Software\\Compuserve")
+        }
         _ => return false,
     };
     matches!(&t.r#if, Condition::Text(q)
@@ -4866,9 +5168,18 @@ pub(crate) fn find_wellknown_missing_section_filter(
         .filter(|t| {
             extract_trait_tier(&t.id) == "well-known"
                 && trait_targets_only_binaries(t)
+                && !is_jwe_library_reference(t)
+                && !is_windows_product_name_reference(t)
                 && !is_poolpartybof_reference(t)
                 && !is_mixcloud_warning_reference(t)
                 && !is_sms_provider_endpoint_reference(t)
+                && !is_go_socks5_library_reference(t)
+                && !is_gentee_runtime_reference(t)
+                && !is_named_crypter_label_reference(t)
+                && !is_ngrok_go_type_reference(t)
+                && !is_tunnel_client_reference(t)
+                && !is_yamux_library_reference(t)
+                && !is_openconnect_command_reference(t)
                 && !(t.id == "well-known/lib/runtime/scripted/python-runtime::python-launcher-banner-marker"
                     && is_reviewed_installer_tool_fact(t))
                 && !(matches!(t.id.as_str(),

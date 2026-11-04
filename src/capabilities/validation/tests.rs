@@ -5038,6 +5038,35 @@ mod taxonomy_tests {
     }
 
     #[test]
+    fn repeated_trezor_reference_size_exception_is_matcher_specific() {
+        let mut fact = leaf(
+            "well-known/app/finance/trezor::repeated-trezor-token",
+            Criticality::Notable,
+        );
+        fact.r#for = vec![FileType::Pe];
+        fact.r#if = crate::yaml::from_str("type: text\nsubstr: trezor\n").unwrap();
+        fact.count_min = Some(4);
+        assert!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty());
+        let mut weaker = fact.clone();
+        weaker.count_min = Some(3);
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[weaker], &HashMap::new()).len(),
+            1
+        );
+        let mut different = fact.clone();
+        different.r#if = crate::yaml::from_str("type: text\nsubstr: other\n").unwrap();
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[different], &HashMap::new()).len(),
+            1
+        );
+        fact.crit = Criticality::Suspicious;
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[fact], &HashMap::new()).len(),
+            1
+        );
+    }
+
+    #[test]
     fn reviewed_netscape_name_reference_needs_no_size_bound() {
         let mut fact = leaf(
             "well-known/app/browser/netscape::netscape-name-text-reference",
@@ -5389,6 +5418,339 @@ mod taxonomy_tests {
     }
 
     #[test]
+    fn gentee_runtime_reference_exceptions_are_matcher_specific() {
+        let cases = [
+            ("gentee-runtime-init", "exact", "gentee_init"),
+            ("gentee-runtime-deinit", "exact", "gentee_deinit"),
+            ("gentee-runtime-load", "exact", "gentee_load"),
+            ("gentee-runtime-set", "exact", "gentee_set"),
+            ("gentee-runtime-call", "exact", "gentee_call"),
+            ("gentee-runtime-dll-name", "substr", "genteert.dll"),
+        ];
+        for (name, kind, pattern) in cases {
+            let id = format!("well-known/lib/runtime/scripted/gentee::{name}");
+            let mut fact = leaf(&id, Criticality::Notable);
+            fact.r#for = vec![FileType::Pe];
+            fact.r#if = crate::yaml::from_str(&format!("type: text\n{kind}: {pattern}\n")).unwrap();
+            assert!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty()
+            );
+            assert!(
+                find_wellknown_missing_section_filter(&[fact.clone()], &HashMap::new()).is_empty()
+            );
+            fact.crit = Criticality::Suspicious;
+            assert_eq!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+                1
+            );
+            assert_eq!(
+                find_wellknown_missing_section_filter(&[fact.clone()], &HashMap::new()).len(),
+                1
+            );
+            fact.crit = Criticality::Notable;
+            fact.r#if = crate::yaml::from_str("type: text\nsubstr: unrelated\n").unwrap();
+            assert_eq!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+                1
+            );
+            assert_eq!(
+                find_wellknown_missing_section_filter(&[fact], &HashMap::new()).len(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn windows_rpc_service_size_exceptions_are_matcher_specific() {
+        let cases = [
+            (
+                "well-known/app/security/defender::defender-rpc-uuid",
+                "regex",
+                r"(?i)c503f532-443a-4c69-8300-ccd1fbdb3839",
+            ),
+            (
+                "well-known/app/security/defender::defender-mpservice-alpc",
+                "substr",
+                "IMpService77BDAF73-B396-481F-9042-AD358843EC24",
+            ),
+            (
+                "well-known/app/system/windows-platform::appinfo-elevation-interface-uuid",
+                "regex",
+                r"(?i)\{?201ef99a[-, ]+7fa0[-, ]+444c[-, ]+9399[-, ]+19ba84f12a1a\}?",
+            ),
+        ];
+        for (id, kind, pattern) in cases {
+            let mut fact = leaf(id, Criticality::Notable);
+            fact.r#for = vec![FileType::Pe];
+            fact.r#if =
+                crate::yaml::from_str(&format!("type: text\n{kind}: '{pattern}'\n")).unwrap();
+            assert!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty()
+            );
+            fact.crit = Criticality::Suspicious;
+            assert_eq!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+                1
+            );
+            fact.crit = Criticality::Notable;
+            fact.r#if = crate::yaml::from_str("type: text\nsubstr: unrelated\n").unwrap();
+            assert_eq!(
+                find_wellknown_missing_size_filter(&[fact], &HashMap::new()).len(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn sumatrapdf_claim_size_exception_is_matcher_specific() {
+        let mut fact = leaf(
+            "well-known/app/productivity/sumatrapdf::sumatrapdf-encryption-sentinel",
+            Criticality::Notable,
+        );
+        fact.r#for = vec![FileType::Pe];
+        fact.r#if = crate::yaml::from_str(
+            "type: text\nregex: 'This document is encrypted with sumatrapdf reader!{4,}'\n",
+        )
+        .unwrap();
+        assert!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty());
+        fact.crit = Criticality::Suspicious;
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+            1
+        );
+        fact.crit = Criticality::Notable;
+        fact.r#if = crate::yaml::from_str("type: text\nsubstr: unrelated\n").unwrap();
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[fact], &HashMap::new()).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn jwe_library_reference_exceptions_are_matcher_specific() {
+        let cases = [
+            (
+                "well-known/lib/runtime/managed/dotnet-runtime::jwt-jwe-context--rx-2",
+                "System.Security.Cryptography.Pkcs",
+            ),
+            (
+                "well-known/lib/crypto/jose-jwt::jwt-jwe-context--rx-6",
+                "jose-jwt",
+            ),
+        ];
+        for (id, pattern) in cases {
+            let mut fact = leaf(id, Criticality::Notable);
+            fact.r#for = vec![FileType::Pe];
+            fact.r#if =
+                crate::yaml::from_str(&format!("type: text\nsubstr: '{pattern}'\n")).unwrap();
+            assert!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty()
+            );
+            assert!(
+                find_wellknown_missing_section_filter(&[fact.clone()], &HashMap::new()).is_empty()
+            );
+            fact.crit = Criticality::Suspicious;
+            assert_eq!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+                1
+            );
+            assert_eq!(
+                find_wellknown_missing_section_filter(&[fact.clone()], &HashMap::new()).len(),
+                1
+            );
+            fact.crit = Criticality::Notable;
+            fact.r#if = crate::yaml::from_str("type: text\nsubstr: unrelated\n").unwrap();
+            assert_eq!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+                1
+            );
+            assert_eq!(
+                find_wellknown_missing_section_filter(&[fact], &HashMap::new()).len(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn apple_cache_service_size_exception_is_matcher_specific() {
+        let mut fact = leaf(
+            "well-known/app/system/apple/launch-services::apple-like-cache-service-name",
+            Criticality::Notable,
+        );
+        fact.r#for = vec![FileType::Macho];
+        fact.r#if = crate::yaml::from_str(
+            r"type: text
+regex: '(?i)(com\.apple\.(verified|homeenergyd)|/com\.apple\.softwareupdate/SoftwareUpdate)\b'
+",
+        )
+        .unwrap();
+        assert!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty());
+        fact.crit = Criticality::Suspicious;
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+            1
+        );
+        fact.crit = Criticality::Notable;
+        fact.r#if = crate::yaml::from_str("type: text\nsubstr: unrelated\n").unwrap();
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[fact], &HashMap::new()).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn windows_product_name_exceptions_are_matcher_specific() {
+        let cases = [
+            (
+                "well-known/app/system/windows-error-reporting::windows-error-reporter-manifest-reference",
+                "exact",
+                "name=\"Microsoft.Windows.ErrorReporter\"",
+                Criticality::Notable,
+            ),
+            (
+                "well-known/game/mahjong-titans::mahjong-titans-name-reference",
+                "substr",
+                "Mahjong Titans",
+                Criticality::Notable,
+            ),
+            (
+                "well-known/app/productivity/microsoft-office::officecompleted-text",
+                "exact",
+                "OfficeCompleted",
+                Criticality::Component,
+            ),
+            (
+                "well-known/app/productivity/microsoft-office::office-help-viewer-name",
+                "exact",
+                "Microsoft Office Help Viewer",
+                Criticality::Notable,
+            ),
+            (
+                "well-known/app/productivity/microsoft-office::office-help-path",
+                "exact",
+                "/MsOfficeHelp16/",
+                Criticality::Notable,
+            ),
+            (
+                "well-known/app/productivity/microsoft-office::msoxmled-pdb",
+                "substr",
+                "msoxmled.pdb",
+                Criticality::Notable,
+            ),
+            (
+                "well-known/app/productivity/microsoft-office::vsto-installer-pdb-reference",
+                "exact",
+                "VSTOInstaller.pdb",
+                Criticality::Notable,
+            ),
+            (
+                "well-known/app/productivity/microsoft-office::ensure-vsto-component-text",
+                "exact",
+                "EnsureVSTOComponent",
+                Criticality::Notable,
+            ),
+            (
+                "well-known/app/productivity/microsoft-office::office-help-user-agent-text",
+                "exact",
+                "User-Agent: %s%sX-OfApp: %s%sX-OfVer: %s%sX-Office-Version: %d.%d.%04d.0%sX-OfHelpLcid: %s%sX-OfUILcid: %s%sX-OfSysLcid: %s%s",
+                Criticality::Notable,
+            ),
+            (
+                "well-known/app/system/windows-telemetry::diagtrackrunner-pdb",
+                "exact",
+                "diagtrackrunner.pdb",
+                Criticality::Notable,
+            ),
+            (
+                "well-known/app/system/windows-telemetry::diagtrack-dll-name",
+                "exact",
+                "diagtrack.dll",
+                Criticality::Notable,
+            ),
+        ];
+        for (id, kind, pattern, crit) in cases {
+            let mut fact = leaf(id, crit);
+            fact.r#for = vec![FileType::Pe];
+            fact.r#if = crate::yaml::from_str(&format!(
+                "type: text\n{kind}: {}\n",
+                serde_json::to_string(pattern).unwrap()
+            ))
+            .unwrap();
+            assert!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty(),
+                "{id}"
+            );
+            assert!(
+                find_wellknown_missing_section_filter(&[fact.clone()], &HashMap::new()).is_empty(),
+                "{id}"
+            );
+            fact.crit = Criticality::Suspicious;
+            assert_eq!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+                1,
+                "{id}"
+            );
+            assert_eq!(
+                find_wellknown_missing_section_filter(&[fact.clone()], &HashMap::new()).len(),
+                1,
+                "{id}"
+            );
+            fact.crit = crit;
+            fact.r#if = crate::yaml::from_str("type: text\nsubstr: unrelated\n").unwrap();
+            assert_eq!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+                1,
+                "{id}"
+            );
+            assert_eq!(
+                find_wellknown_missing_section_filter(&[fact], &HashMap::new()).len(),
+                1,
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_product_name_size_exceptions_are_matcher_specific() {
+        let cases = [
+            (
+                "well-known/app/productivity/lotus-approach::lotus-approach-name-reference",
+                "(?i)Lotus Approach",
+            ),
+            (
+                "well-known/lib/development/borland-delphi::borland-delphi-name-reference",
+                "(?i)Borland Delphi",
+            ),
+        ];
+        for (id, pattern) in cases {
+            let mut fact = leaf(id, Criticality::Notable);
+            fact.r#for = vec![FileType::Pe];
+            fact.r#if = crate::yaml::from_str(&format!(
+                "type: text\nregex: {}\n",
+                serde_json::to_string(pattern).unwrap()
+            ))
+            .unwrap();
+            assert!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty(),
+                "{id}"
+            );
+            fact.crit = Criticality::Suspicious;
+            assert_eq!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+                1,
+                "{id}"
+            );
+            fact.crit = Criticality::Notable;
+            fact.r#if = crate::yaml::from_str("type: text\nsubstr: unrelated\n").unwrap();
+            assert_eq!(
+                find_wellknown_missing_size_filter(&[fact], &HashMap::new()).len(),
+                1,
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
     fn product_registry_reference_exceptions_are_matcher_specific() {
         let cases = [
             (
@@ -5415,6 +5777,26 @@ mod taxonomy_tests {
                 "well-known/app/system/pcanywhere::pcanywhere-data-port-reference",
                 "substr",
                 r"Symantec\pcAnywhere\CurrentVersion\System\TCPIPDataPort",
+            ),
+            (
+                "well-known/app/productivity/lotus-approach::registry-path-lotus",
+                "regex",
+                r"(?i)Software\\Lotus\\Approach",
+            ),
+            (
+                "well-known/app/communication/aol-desktop::registry-path-aol",
+                "regex",
+                r"(?i)Software\\AOL\\Desktop",
+            ),
+            (
+                "well-known/app/enterprise/symantec-act::registry-path-symantec-act",
+                "regex",
+                r"(?i)Software\\Symantec\\ACT!",
+            ),
+            (
+                "well-known/app/communication/compuserve::registry-path-compuserve",
+                "regex",
+                r"(?i)Software\\Compuserve",
             ),
         ];
         for (id, kind, pattern) in cases {
@@ -5457,6 +5839,25 @@ mod taxonomy_tests {
                 "{id}"
             );
         }
+    }
+
+    #[test]
+    fn named_manifest_description_does_not_need_file_size() {
+        let mut fact = leaf(
+            "well-known/app/utility/getrighttogo::getrighttogo-manifest",
+            Criticality::Notable,
+        );
+        fact.r#for = vec![FileType::Pe];
+        fact.r#if = crate::yaml::from_str(
+            "type: value\npath: pe.manifest.description\nexact: GetRightToGo.com Downloader\n",
+        )
+        .unwrap();
+        assert!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty());
+        fact.crit = Criticality::Suspicious;
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[fact], &HashMap::new()).len(),
+            1
+        );
     }
 
     #[test]
@@ -10934,6 +11335,85 @@ offset_range: [6291456, null]
             find_wellknown_missing_section_filter(&[fact], &HashMap::new()).len(),
             1
         );
+    }
+
+    #[test]
+    fn gitlab_registry_reference_size_exception_is_exact() {
+        let mut fact = text_trait(
+            "well-known/app/development/code-forge/gitlab::gitlab-generic-package-upload",
+            vec![FileType::Elf],
+        );
+        fact.crit = crate::types::Criticality::Notable;
+        fact.r#if = crate::yaml::from_str(
+            "type: text\nregex: '/api/v4/projects/.{0,160}/packages/generic/'\n",
+        )
+        .unwrap();
+        assert!(find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty());
+        let mut wrong_id = fact.clone();
+        wrong_id.id.push_str("-other");
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[wrong_id], &HashMap::new()).len(),
+            1
+        );
+        let mut wrong_crit = fact.clone();
+        wrong_crit.crit = crate::types::Criticality::Suspicious;
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[wrong_crit], &HashMap::new()).len(),
+            1
+        );
+        fact.r#if = crate::yaml::from_str("type: text\nregex: '/api/v4/projects/.*'\n").unwrap();
+        assert_eq!(
+            find_wellknown_missing_size_filter(&[fact], &HashMap::new()).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn go_socks5_references_keep_whole_file_scope_only_for_exact_matches() {
+        for (id, marker) in [
+            ("armon-go-socks5", "github.com/armon/go-socks5"),
+            (
+                "armon-go-socks5-listen-and-serve",
+                "github.com/armon/go-socks5.(*Server).ListenAndServe",
+            ),
+            (
+                "armon-go-socks5-serve-conn",
+                "github.com/armon/go-socks5.(*Server).ServeConn",
+            ),
+        ] {
+            let mut fact = text_trait(
+                &format!("well-known/lib/network/proxy/go-socks5::{id}"),
+                vec![FileType::Elf],
+            );
+            fact.crit = crate::types::Criticality::Notable;
+            fact.r#if =
+                crate::yaml::from_str(&format!("type: text\nsubstr: '{marker}'\n")).unwrap();
+            assert!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).is_empty()
+            );
+            assert!(
+                find_wellknown_missing_section_filter(&[fact.clone()], &HashMap::new()).is_empty()
+            );
+            let mut other = fact.clone();
+            other.id.push_str("-other");
+            assert_eq!(
+                find_wellknown_missing_size_filter(&[other.clone()], &HashMap::new()).len(),
+                1
+            );
+            assert_eq!(
+                find_wellknown_missing_section_filter(&[other], &HashMap::new()).len(),
+                1
+            );
+            fact.r#if = crate::yaml::from_str("type: text\nsubstr: 'github.com/armon'\n").unwrap();
+            assert_eq!(
+                find_wellknown_missing_size_filter(&[fact.clone()], &HashMap::new()).len(),
+                1
+            );
+            assert_eq!(
+                find_wellknown_missing_section_filter(&[fact], &HashMap::new()).len(),
+                1
+            );
+        }
     }
 
     #[test]

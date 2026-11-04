@@ -303,7 +303,7 @@ fn report_unanchored(finding: &Finding, by_id: &FxHashMap<&str, &Finding>, file_
 /// Anchor symbol matches that carry a name but no byte offset.
 ///
 /// Most formats hand each import/export/function the file offset of its name —
-/// but degraded extraction can't: rizin recovery with no PLT address, forwarded
+/// but degraded extraction can't: recovery with no PLT address, forwarded
 /// PE exports, a future format gap. The matched value is still the symbol *name*,
 /// literal bytes present in the file, so locate it directly. Symbol-table names
 /// are NUL-terminated, so searching `name\0` lands on the real table entry
@@ -1102,7 +1102,7 @@ mod tests {
     #[test]
     fn orphan_symbol_match_anchors_at_name_in_file() {
         // A symbol matched with a name but no offset — the shape degraded
-        // extraction produces (rizin recovery with no PLT address, a forwarded
+        // extraction produces (recovery with no PLT address, a forwarded
         // PE export). It must anchor at the name's bytes in the file, not float
         // at byte 0, and the recovered offset must land on the evidence so a
         // referencing composite inherits it.

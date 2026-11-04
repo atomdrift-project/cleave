@@ -41,7 +41,7 @@ fn binary_in(path_list: &OsStr, name: &str) -> Option<PathBuf> {
     std::env::split_paths(path_list)
         // An empty or relative entry resolves against the working
         // directory, which for a scanner is often the sample tree itself:
-        // a planted `./rizin` must not be what runs.
+        // a planted `./7z` must not be what runs.
         .filter(|dir| dir.is_absolute())
         .find_map(|dir| {
             names
@@ -114,17 +114,8 @@ fn fallback_roots() -> Vec<PathBuf> {
 
     #[cfg(windows)]
     {
-        for variable in ["ProgramFiles", "ProgramFiles(x86)"] {
-            if let Some(base) = windows_env_path(variable) {
-                roots.extend([base.join("Rizin"), base.join("Rizin/bin")]);
-            }
-        }
         if let Some(local) = windows_env_path("LOCALAPPDATA") {
-            roots.extend([
-                local.join("Programs/Rizin"),
-                local.join("Programs/Rizin/bin"),
-                local.join("Microsoft/WinGet/Links"),
-            ]);
+            roots.push(local.join("Microsoft/WinGet/Links"));
         }
     }
 

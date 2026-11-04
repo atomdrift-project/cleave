@@ -20,25 +20,16 @@ fn load(path: &str) -> Option<Vec<u8>> {
     std::fs::read(path).ok()
 }
 
-/// Options with YARA and radare2 disabled for focused CPU profiling of the analysis core.
+/// Options with YARA disabled for focused CPU profiling of the analysis core.
 fn fast_options() -> cleave::AnalysisOptions {
     cleave::AnalysisOptions {
         yara: false,
-        rizin: false,
         ..Default::default()
     }
 }
 
-/// Options with radare2 disabled but YARA enabled.
+/// The full pipeline, YARA included.
 fn yara_options() -> cleave::AnalysisOptions {
-    cleave::AnalysisOptions {
-        rizin: false,
-        ..Default::default()
-    }
-}
-
-/// Full pipeline options (YARA + radare2 enabled).
-fn full_options() -> cleave::AnalysisOptions {
     cleave::AnalysisOptions::default()
 }
 
@@ -95,7 +86,7 @@ fn bench_analyze_bytes(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
-// With YARA scanning but no radare2 — uncached
+// Full pipeline, with YARA scanning — uncached
 // ---------------------------------------------------------------------------
 
 fn bench_analyze_yara(c: &mut Criterion) {
@@ -124,41 +115,7 @@ fn bench_analyze_yara(c: &mut Criterion) {
         let len = data.len() as u64;
 
         g.throughput(Throughput::Bytes(len));
-        g.bench_with_input(BenchmarkId::new("yara_no_r2", name), &data, |b, data| {
-            b.iter(|| cleave::analyze_bytes(black_box(data), black_box(path), black_box(&opts)));
-        });
-    }
-
-    g.finish();
-}
-
-// ---------------------------------------------------------------------------
-// Full pipeline (YARA + radare2) — uncached
-// ---------------------------------------------------------------------------
-
-fn bench_analyze_full(c: &mut Criterion) {
-    cleave::cache::set_skip_cache_override(Some(true));
-
-    let mut g = c.benchmark_group("analyze_full");
-    g.sample_size(10);
-    g.measurement_time(Duration::from_secs(30));
-
-    let samples: &[(&str, &str)] = &[
-        ("pe_test_exe_10kb", "tests/fixtures/test.exe"),
-        (
-            "go_linux_amd64_2.3mb",
-            "tests/fixtures/lang_strings/go_linux_amd64",
-        ),
-    ];
-
-    let opts = full_options();
-
-    for (name, path) in samples {
-        let Some(data) = load(path) else { continue };
-        let len = data.len() as u64;
-
-        g.throughput(Throughput::Bytes(len));
-        g.bench_with_input(BenchmarkId::new("yara_and_r2", name), &data, |b, data| {
+        g.bench_with_input(BenchmarkId::new("yara", name), &data, |b, data| {
             b.iter(|| cleave::analyze_bytes(black_box(data), black_box(path), black_box(&opts)));
         });
     }
@@ -349,7 +306,6 @@ criterion_group!(
     benches,
     bench_analyze_bytes,
     bench_analyze_yara,
-    bench_analyze_full,
     bench_analyze_file_cached,
     bench_analyze_file_uncached,
     bench_analyze_lnk,

@@ -109,8 +109,8 @@ impl ResultCache {
         }
         let traits_dir = std::fs::canonicalize(traits_dir).ok()?;
         // Every variable that can change a result: cleave's and filefacts' own
-        // knobs, and PATH, which decides which external tools (rizin, 7-Zip,
-        // UPX) analysis can use.
+        // knobs, and PATH, which decides which external tools (7-Zip, UPX)
+        // analysis can use.
         let mut env: Vec<_> = std::env::vars_os()
             .filter(|(k, _)| {
                 k.to_str().is_some_and(|k| {

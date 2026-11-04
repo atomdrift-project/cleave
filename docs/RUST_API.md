@@ -63,17 +63,9 @@ each. Call them from a non-rayon thread.
 
 ### Disabling expensive components
 
-Per call, via `AnalysisOptions` (`yara`, `rizin`, `upx`). rizin and UPX are
-the only subprocesses; a host that forbids subprocess execution sets
-`rizin: false` and `upx: false` on every call.
-
-### Shutdown
-
-    cleave::kill_all_rizin_groups();
-
-Cleave spawns rizin as a child process group for ELF, PE, and Mach-O
-disassembly. Call this at shutdown so stuck disassemblers do not
-outlive the parent.
+Per call, via `AnalysisOptions` (`yara`, `upx`); `upx: false` stops cleave
+running UPX. Function recovery (binform) runs in-process and cannot be
+turned off.
 
 ## `AnalysisOptions`
 
@@ -85,11 +77,6 @@ positive: `true` turns the component on.
 | --------------------------- | ------------------------- | -------------- | ------------------------------------------------------ |
 | `yara`                      | bool                      | true           | Scan with YARA.                                        |
 | `third_party_yara`          | bool                      | true           | Load the third-party YARA rules too.                   |
-| `rizin`                     | bool                      | true           | Disassemble native binaries (functions, syscalls).     |
-| `rizin_timeout`             | `Option<Duration>`        | filefacts'     | Wall-clock budget for one rizin run.                   |
-| `rizin_retry_timeout`       | `Option<Duration>`        | none           | Larger deadline for one retry of a timed-out binary.   |
-| `rizin_max_bytes`           | `Option<usize>`           | none           | Skip rizin for native binaries larger than this.       |
-| `rizin_native_arch_only`    | bool                      | false          | Disassemble only the host-native slice of a fat Mach-O.|
 | `upx`                       | bool                      | true           | Unpack UPX-packed binaries.                            |
 | `compact_members`           | bool                      | false          | Fold archive members keeping only the compact projection. |
 | `zip_passwords`             | `Vec<String>`             | malware list   | Passwords tried on encrypted archives.                 |
@@ -159,9 +146,6 @@ crate, a git dependency.
   2 MB stack is exhausted by recursive archive extraction on
   adversarial inputs; library consumers must configure their pool the
   same way.
-- **Rizin subprocesses.** Cleave runs rizin in a separate process
-  group. Stuck disassemblers are killed by group, not just by pid.
-  Always call `kill_all_rizin_groups()` at shutdown.
 - **Panic policy.** The workspace denies `panic!`, `unwrap`, and
   `expect` at lint level. Library code returns `Result`; do not catch
   panics defensively.
@@ -179,7 +163,6 @@ crate, a git dependency.
 
     let opts = AnalysisOptions {
         platforms: vec![Platform::Linux],
-        rizin: false,
         ..AnalysisOptions::default()
     };
 

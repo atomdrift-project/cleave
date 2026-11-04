@@ -78,11 +78,6 @@ pub(crate) fn merge_filefacts_context(
     ctx: &crate::analysis_context::AnalysisContext<'_>,
 ) {
     super::CapabilityMapper::generate_import_findings(report, &ctx.parsed);
-    if ctx.parsed.recovery_incomplete() {
-        report
-            .analysis_gaps
-            .record(crate::types::AnalysisGap::DisassemblyIncomplete);
-    }
     if ctx.parsed.source_parse_incomplete() {
         report
             .analysis_gaps
@@ -278,8 +273,7 @@ impl super::CapabilityMapper {
     ///
     /// This is the standalone entry point for a mapper used without an
     /// [`crate::Engine`]: it parses `binary_data` itself with filefacts'
-    /// default options, so a native binary is disassembled with rizin whatever
-    /// any engine's settings say. Analyses run through an engine pass the
+    /// default options, whatever any engine's settings say. Analyses run through an engine pass the
     /// engine's parse instead.
     ///
     /// Platform filtering is controlled by the `platform` field set via `with_platform()`.

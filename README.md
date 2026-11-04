@@ -49,9 +49,10 @@ cd cleave
 make install
 ```
 
-For deeper binary analysis, install
-[Rizin](https://github.com/rizinorg/rizin). [UPX](https://upx.github.io/) is
-optional and adds runtime unpacking for supported files.
+Binary function recovery is built in
+([binform](https://github.com/atomdrift-project/binform), in-process).
+[UPX](https://upx.github.io/) is optional and adds runtime unpacking for
+supported files.
 
 For archive and disk-image extraction, install upstream
 [7-Zip](https://7-zip.org/) (`brew install sevenzip`, `apt install 7zip`)
@@ -148,7 +149,7 @@ See [FILE_FORMATS.md](FILE_FORMATS.md) for the maintained coverage reference.
 1. [filefacts](https://github.com/atomdrift-project/filefacts) identifies and
    parses the input into reusable structural views.
 2. cleave recursively opens supported containers and enriches executable facts
-   with optional Rizin and UPX analysis.
+   with in-process function recovery and optional UPX unpacking.
 3. YAML, YARA-X, and composite traits turn those facts into named capabilities
    aligned broadly with MBC and MITRE ATT&CK.
 4. Results are ranked from `baseline` through `hostile` and emitted for a human

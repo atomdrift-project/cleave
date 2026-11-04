@@ -228,8 +228,7 @@ impl Engine {
 ///
 /// Every `analyze_*` method takes the per-call inputs from `options`: zip
 /// passwords, cancellation, size limits, and phase
-/// tracking. What the engine was built with (rules, YARA, UPX, rizin and its
-/// limits, platforms, precision thresholds, member folding) comes from the
+/// tracking. What the engine was built with (rules, YARA, UPX, platforms, precision thresholds, member folding) comes from the
 /// engine, and the fields of `options` that describe it are not consulted.
 impl Engine {
     /// The engine `options` describe: the process's shared rules and YARA

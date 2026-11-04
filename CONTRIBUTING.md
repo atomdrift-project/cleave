@@ -14,7 +14,6 @@ make test
 ```
 
 Optional tools that make life easier:
-- [rizin](https://github.com/rizinorg/rizin) — binary reverse engineering support
 - [cargo-nextest](https://nexte.st/) — faster parallel test runs
 
 If you run into trouble building, open an issue and we'll help you sort it out.

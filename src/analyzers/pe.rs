@@ -813,10 +813,10 @@ impl PEAnalyzer {
 
     /// Unified PE analysis driven by an `AnalysisContext`. Structure,
     /// imports, exports, sections, and per-format metrics all flow
-    /// from filefacts's typed views. Rizin runs in parallel for
-    /// disassembly-derived metrics (function counts, complexity,
-    /// strings) and as a fallback when filefacts surfaces no sections
-    /// or imports (e.g. corrupted import directories).
+    /// from filefacts's typed views, including the functions and
+    /// disassembly-derived metrics (function counts, complexity) binform
+    /// recovers, and the sections and imports it reads when goblin cannot
+    /// (e.g. corrupted import directories).
     ///
     /// `pe_data` is the post-tamper-strip slice; `original_data` is
     /// the caller's bytes verbatim. The two diverge only when
@@ -839,7 +839,7 @@ impl PEAnalyzer {
         // `filefacts_ok` is true whenever filefacts identified the bytes as
         // PE and emitted at least the COFF header. The fallback path
         // (no PE values present) still produces a report so that
-        // tamper findings and rizin disassembly surface for triage.
+        // tamper findings and recovered functions surface for triage.
         let filefacts_ok = ctx.parsed.values().get("pe.machine").is_some();
         let lazy_walker_panicked = ctx
             .parsed
@@ -873,11 +873,10 @@ impl PEAnalyzer {
         // Add any tampering findings detected during preprocessing
         report.findings.append(&mut tamper_findings);
 
-        // Project structural views from filefacts's typed accessors. The
-        // rizin recovery (for stripped / packed PEs) already ran
-        // inside `filefacts::open` — `ctx.parsed.symbols()` /
-        // `imports()` / `sections()` already carry the rizin-recovered
-        // entries with `source: "rizin"`.
+        // Project structural views from filefacts's typed accessors.
+        // Recovery (for stripped / packed PEs) already ran inside
+        // `filefacts::open` — `ctx.parsed.symbols()` / `imports()` /
+        // `sections()` already carry what binform recovered.
         let scope_start = std::time::Instant::now();
         let mut struct_ms = 0u128;
         if filefacts_ok {
@@ -905,8 +904,7 @@ impl PEAnalyzer {
         }
 
         // Functions come straight from filefacts: goblin-extracted entries
-        // for symbols, plus rizin-recovered ones (with CFG fields) when
-        // filefacts's rizin fallback fired during `open`.
+        // for symbols, plus binform-recovered ones (with CFG fields).
         report.functions = ctx
             .parsed
             .symbols()
@@ -920,16 +918,16 @@ impl PEAnalyzer {
         // `pe.machine` or presence of `pe.partial_parse` IS the
         // signal.
         if !filefacts_ok || partial_parse {
-            let rizin_found_hidden_content =
+            let recovery_found_hidden_content =
                 !report.sections.is_empty() || !report.imports.is_empty();
             let is_dos_executable = looks_like_dos_executable(pe_data);
             // Partial parse (header-only fallback) means the COFF
             // header was readable but a downstream walker failed;
             // resource-only DLLs and resource-table errors land
-            // here. Treat as informational unless rizin found
+            // here. Treat as informational unless recovery found
             // something the parse missed.
             let (crit, conf) = if !filefacts_ok && !is_dos_executable {
-                if rizin_found_hidden_content {
+                if recovery_found_hidden_content {
                     (Criticality::Suspicious, 0.8)
                 } else {
                     (Criticality::Suspicious, 0.85)
@@ -2152,9 +2150,8 @@ impl Analyzer for PEAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
         // Structural helpers (sections, imports, exports, signature
         // verification) and strings all source from filefacts's typed view.
-        // Reuse the parse a caller threaded in (an archive member's, extracted
-        // under its rizin setting): opening again repeats the whole
-        // extraction, rizin included.
+        // Reuse the parse a caller threaded in (an archive member's): opening
+        // again repeats the whole extraction, recovery included.
         let opened;
         let ctx = match &input.parsed_ctx {
             Some(ctx) => ctx,

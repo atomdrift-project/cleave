@@ -258,8 +258,8 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
     // about partial-update consistency.
     let mut augment = serde_json::Map::new();
 
-    // Top unnamed functions by cyclomatic complexity. rizin labels
-    // discovered-but-unnamed functions as `fcn.<addr>`; named ones
+    // Top unnamed functions by cyclomatic complexity. Recovery labels
+    // discovered-but-unnamed functions as `fcn.<addr>` (rizin's spelling); named ones
     // are `sym.X`, `entry0`, `main`, etc. A high-complexity unnamed
     // function in a stripped library is interesting in its own right
     // — it carries the bulk of internal logic without any ABI tie.

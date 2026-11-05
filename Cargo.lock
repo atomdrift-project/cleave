@@ -448,7 +448,7 @@ dependencies = [
 [[package]]
 name = "binform"
 version = "0.9.0"
-source = "git+https://github.com/atomdrift-project/binform.git#4211c34c06adbed883caf73542cfa76f12130d8b"
+source = "git+https://github.com/atomdrift-project/binform.git#2e9ad27fbc2c39b046b91a56ff093f3f98506b35"
 dependencies = [
  "gimli 0.32.3",
  "iced-x86",
@@ -1931,6 +1931,7 @@ checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 [[package]]
 name = "filefacts"
 version = "2.0.1"
+source = "git+https://github.com/atomdrift-project/filefacts.git#fed4b36b57d023f683f901e0b01aa14fb97c237d"
 dependencies = [
  "aes 0.9.4",
  "aho-corasick",
@@ -3934,9 +3935,9 @@ dependencies = [
 
 [[package]]
 name = "psl"
-version = "2.1.246"
+version = "2.1.247"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27d58bd13c235442118460335daf360f0fefaa9035ec4ad957f851d738e7b7d6"
+checksum = "bcf03dc0cd8c65e109a7848e3b4adf06236a181d937af94bff66966e3876b1aa"
 dependencies = [
  "psl-types",
 ]
@@ -5114,7 +5115,7 @@ dependencies = [
 [[package]]
 name = "stng"
 version = "3.0.0"
-source = "git+https://github.com/atomdrift-project/stng.git#72e68eaa3b583fd2e1d75baff6e08ef87c68b0b6"
+source = "git+https://github.com/atomdrift-project/stng.git#0cdf49e6471366209d200f38375eb5502bb7c698"
 dependencies = [
  "aho-corasick",
  "base64 0.22.1",
@@ -5140,7 +5141,7 @@ dependencies = [
 [[package]]
 name = "stng-process"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/stng.git#72e68eaa3b583fd2e1d75baff6e08ef87c68b0b6"
+source = "git+https://github.com/atomdrift-project/stng.git#0cdf49e6471366209d200f38375eb5502bb7c698"
 dependencies = [
  "libc",
 ]
@@ -5697,6 +5698,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
+source = "git+https://github.com/atomdrift-project/filefacts.git#fed4b36b57d023f683f901e0b01aa14fb97c237d"
 dependencies = [
  "cc",
  "tree-sitter",
@@ -6749,9 +6751,9 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 
 [[package]]
 name = "winnow"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
+checksum = "8c3b93199df0ab874cdf0c6a94f0a0dc3423fe41f1cafb62b8bd7b1deb277aef"
 dependencies = [
  "memchr",
 ]
@@ -6883,9 +6885,9 @@ version = "0.1.0"
 
 [[package]]
 name = "yara-x"
-version = "1.22.1"
+version = "1.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ea1eb044521a2f137fa2d1fecb32ff1a793e0b7c970abc2c9039c4f45e28718"
+checksum = "e8a5ff1e1bb43734cc68f3ddc94646c9740c8c559d38fae559f0c79076f801db"
 dependencies = [
  "annotate-snippets",
  "anyhow",
@@ -6955,9 +6957,9 @@ dependencies = [
 
 [[package]]
 name = "yara-x-macros"
-version = "1.22.1"
+version = "1.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93ff19170998bdac0b63353f9fbffcfa8d0e265938f22cd36299d950a352a4db"
+checksum = "dc0df20854de457fdeaa3207e6fa08e439d22c63628e37e5608ae4113ebd8a2a"
 dependencies = [
  "darling 0.24.1",
  "proc-macro2",
@@ -6967,9 +6969,9 @@ dependencies = [
 
 [[package]]
 name = "yara-x-parser"
-version = "1.22.1"
+version = "1.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40a5e3122d3c9a19fc2cfb71a79d32dfdc8bcc271659a285dd3fec5d461ac7f7"
+checksum = "336c1ef292d1d554526b10908198b71920f64dd58e56f39c8689b298fe858a1d"
 dependencies = [
  "ascii_tree",
  "bitflags",
@@ -6985,9 +6987,9 @@ dependencies = [
 
 [[package]]
 name = "yara-x-proto"
-version = "1.22.1"
+version = "1.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "895559af8dee4bb4a3e190d75f84ed1ad16f80a37bfc219429135fa1323c0fcd"
+checksum = "75487c3a21c7d7e0150b6c598513e1cbf8293e221cd697bf6722ab2c78503b80"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -7195,7 +7197,3 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
-
-[[patch.unused]]
-name = "binform"
-version = "0.1.0"

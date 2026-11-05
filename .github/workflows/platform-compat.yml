@@ -91,7 +91,7 @@ jobs:
             --dir compat
 
       - name: Smoke test on Tribblix
-        uses: vmactions/tribblix-vm@036967a9232db5edb0432ca7970d771d3a3c2853 # v1.0.6
+        uses: vmactions/tribblix-vm@3420c87b5986fc95c5cc53a6ab8926a7e7acf6be # v1.0.7
         with:
           release: "0m40"
           usesh: true
@@ -122,7 +122,7 @@ jobs:
             --dir compat
 
       - name: Smoke test on GhostBSD
-        uses: vmactions/ghostbsd-vm@496abbca512422d79455fa3a21eaca6977485420 # v1.0.4
+        uses: vmactions/ghostbsd-vm@d223228c76e4b31b3cd534b66d58e8bb7ca9d1a7 # v1.0.5
         with:
           release: "26.1"
           usesh: true

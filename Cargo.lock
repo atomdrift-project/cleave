@@ -1931,7 +1931,6 @@ checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 [[package]]
 name = "filefacts"
 version = "2.0.1"
-source = "git+https://github.com/atomdrift-project/filefacts.git#977d9cc8fd261f935003988cfbe8654872d11d36"
 dependencies = [
  "aes 0.9.4",
  "aho-corasick",
@@ -5698,7 +5697,6 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#977d9cc8fd261f935003988cfbe8654872d11d36"
 dependencies = [
  "cc",
  "tree-sitter",
@@ -7197,3 +7195,7 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
+
+[[patch.unused]]
+name = "binform"
+version = "0.1.0"

@@ -1484,3 +1484,35 @@ regex: '^node\s+\S+\.[a-z]+$'
         "not: must leave non-excluded values matching"
     );
 }
+
+#[test]
+fn test_s390_does_not_match_x86_64_trait() {
+    let condition = Condition::Symbol(SymbolQuery {
+        exact: Some("test".to_string()),
+        substr: None,
+        regex: None,
+        platforms: None,
+        is_check: None,
+        kind: None,
+        arg: None,
+        args: None,
+        alias: None,
+        not: None,
+        module_level: false,
+        receiver: None,
+    });
+    let mut trait_def = create_test_trait("test/arch::x86_only", condition);
+    trait_def.arch = vec![Arch::X86_64];
+    let mut report = create_report_with_size(1024);
+    report.target.architectures = Some(vec!["s390".to_string()]);
+    report.imports.push(Import {
+        symbol: "test".to_string(),
+        library: None,
+        offset: None,
+        alias: None,
+    });
+    let mut ctx = create_test_context(report, vec![]);
+    ctx.arch = vec![Arch::from_report_str("s390")].into();
+    assert_eq!(Arch::parse("s390x"), Some(Arch::S390));
+    assert!(trait_def.evaluate(&ctx).is_none());
+}

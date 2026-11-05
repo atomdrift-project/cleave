@@ -133,6 +133,30 @@ pub(super) fn retained_dependency_values(tree: &serde_json::Value) -> serde_json
         }
     }
     let mut retained = serde_json::Map::new();
+    // Workspace ownership is needed after compaction to avoid resolving local
+    // Yarn packages against unrelated registry records. Retain only a bounded,
+    // complete string list; truncated or malformed declarations prove nothing.
+    if tree.get("private").and_then(serde_json::Value::as_bool) == Some(true)
+        && let Some(workspaces) = tree.get("workspaces").and_then(serde_json::Value::as_array)
+        && workspaces.len() <= 512
+        && workspaces
+            .iter()
+            .all(|v| v.as_str().is_some_and(|s| s.len() <= 512))
+        && tree
+            .get("packageManager")
+            .is_none_or(|v| v.as_str().is_some_and(|s| s.len() <= 512))
+    {
+        retained.insert("private".into(), serde_json::Value::Bool(true));
+        // Preserve the manager claim when present so consumers do not
+        // mistake an unsupported manager for absence.
+        if let Some(manager) = tree.get("packageManager") {
+            retained.insert("packageManager".into(), manager.clone());
+        }
+        retained.insert(
+            "workspaces".into(),
+            serde_json::Value::Array(workspaces.clone()),
+        );
+    }
     // Typed references carry resolved declarations; unsupported POM model
     // operations must also survive compact archive reports as coverage gaps.
     if let Some(gaps) = tree.pointer("/jar/pom/dependency_gaps") {
@@ -341,5 +365,40 @@ mod tests {
         assert!(json.get("flow").is_some());
         let decoded: FilefactsView = serde_json::from_value(json).expect("deserialize flow");
         assert_eq!(decoded.flow.unwrap().values.len(), flow.values.len());
+    }
+}
+
+#[cfg(test)]
+mod workspace_compaction_tests {
+    use super::retained_dependency_values;
+    use serde_json::json;
+
+    #[test]
+    fn compact_preserves_only_complete_private_workspace_declarations() {
+        let input = json!({"private":true,"workspaces":["app","lib"],"unrelated":"discard"});
+        assert_eq!(
+            retained_dependency_values(&input),
+            json!({"private":true,"workspaces":["app","lib"]})
+        );
+        assert_eq!(
+            retained_dependency_values(
+                &json!({"private":true,"workspaces":["app"],"packageManager":"npm@10"})
+            ),
+            json!({"private":true,"workspaces":["app"],"packageManager":"npm@10"})
+        );
+        assert_eq!(
+            retained_dependency_values(
+                &json!({"private":true,"workspaces":["app"],"packageManager":7,"npm":{"name":"fixture"}})
+            ),
+            json!({"npm":{"name":"fixture"}})
+        );
+        assert!(retained_dependency_values(&json!({"workspaces":["app"]})).is_null());
+        assert!(
+            retained_dependency_values(&json!({"private":true,"workspaces":["app", 1]})).is_null()
+        );
+        assert!(
+            retained_dependency_values(&json!({"private":true,"workspaces":vec!["x"; 513]}))
+                .is_null()
+        );
     }
 }

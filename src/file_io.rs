@@ -114,6 +114,11 @@ fn mislabelled_bom_payload(data: &[u8]) -> Option<&[u8]> {
 /// away from binaries, which have NULs in both halves and control bytes
 /// between them.
 fn bomless_utf16_encoding(data: &[u8]) -> Option<&'static Encoding> {
+    // An sfnt font can have a large, mostly ASCII UTF-16BE name table near
+    // its start. Its leading version is binary, not text to transcode.
+    if data.starts_with(&[0x00, 0x01, 0x00, 0x00]) {
+        return None;
+    }
     // Two bytes per character, and short runs are too easy to hit by accident.
     const MIN_LEN: usize = 32;
     const SAMPLE: usize = 4096;
@@ -538,6 +543,14 @@ mod bomless_utf16_tests {
         pe.extend_from_slice(&[0u8; 64]);
         let out = normalize_text_encoding(&pe);
         assert_eq!(&*out, pe.as_slice());
+    }
+
+    #[test]
+    fn leaves_truetype_with_utf16_name_table_alone() {
+        let mut font = vec![0, 1, 0, 0];
+        font.extend(utf16be(&"Font name ".repeat(300)));
+        let out = normalize_text_encoding(&font);
+        assert_eq!(&*out, font.as_slice());
     }
 
     #[test]

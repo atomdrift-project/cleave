@@ -2781,6 +2781,14 @@ fn broad_filetype_category(cond: &Condition) -> &'static str {
 /// `text` matcher in an allowlisted `text:` directory passes; the same directory
 /// does **not** license a broad `value`/`symbol`/etc. matcher.
 pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
+    // Exact protocol and source-text references are meaningful across carriers.
+    "text:metadata/lang/source/literal/string/label/quoted-cuckoo-word-reference.yaml",
+    "text:micro-behaviors/os/container/orchestration/system-call-kubectl-parenthesized-text.yaml",
+    "text:micro-behaviors/os/handler/open/node-spawn-explorer-argument-text.yaml",
+    "text:well-known/app/enterprise/microsoft-graph/graph-application-credential-add-path.yaml",
+    "text:well-known/app/enterprise/microsoft-graph/graph-service-principal-credential-add-path.yaml",
+    "text:well-known/app/media/plex/timeline-subscribe.yaml",
+    "text:well-known/app/media/plex/universal-transcode.yaml",
     // Ethereum RPC method names and JSON fields occur across source and binary
     // carriers; preserve the reviewed scope of these protocol observations.
     "text:micro-behaviors/communications/blockchain/ethereum/blockchain-rpc-review-ethereum.yaml",
@@ -2918,7 +2926,6 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // profiles, catalog strings, generic string identities) appear broadly.
     "text:metadata/file/catalog/",
     "text:metadata/file/format/",
-    "text:metadata/file/profile/",
     // Ordered character alphabets can occur in source or compiled artifacts.
     "text:metadata/lang/encoding/shape/alphabet/review-literal-charset.yaml",
     "text:metadata/lang/natural/",
@@ -2973,13 +2980,12 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // of every language. Same cross-language rationale, different matcher type.
     "literal:micro-behaviors/communications/ip/",
     // Preserve the reviewed cross-carrier scope of this PHP upload URL literal.
-    "literal:micro-behaviors/communications/url/http-path/resource/php-upload-url-reference.yaml",
+    "literal:micro-behaviors/communications/url/resource-path/file/php-upload-url-reference.yaml",
     "literal:micro-behaviors/communications/http/url/",
     "literal:objectives/command-and-control/infrastructure/",
     "literal:metadata/file/catalog/",
     "literal:metadata/file/extension/",
     "literal:metadata/file/format/",
-    "literal:metadata/file/profile/",
     "literal:objectives/impact/destroy/keywords/",
     "literal:objectives/command-and-control/remote-command/llm/",
     // Archive-member structural matchers (a vim-swap file, go.mod, .go source,

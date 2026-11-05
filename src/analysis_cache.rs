@@ -947,11 +947,12 @@ fn options_hash_with(
     // v=23: context windows store bytes as byte text (`s`) and no notes; notes
     // are derived from findings when a report renders.
     // v=27: combine the context-byte schema with packed binary extraction.
+    // v=29: compact members retain bounded Yarn workspace declarations.
     // v=28: rizin severed — recovery is now unconditional binform, so the
     // standalone `rizin` on/off flag is gone and `recovery=` carries the policy.
     let zip_passwords = Sha256::digest(options.zip_passwords.join("\0").as_bytes());
     let key = format!(
-        "v=28,cm={},3p={},yara={},yskip={},ybuiltin={},zpw={},upx={},plat={},hp={},sp={},ps={},fv={},recovery={}",
+        "v=29,cm={},3p={},yara={},yskip={},ybuiltin={},zpw={},upx={},plat={},hp={},sp={},ps={},fv={},recovery={}",
         settings.compact_members,
         settings.third_party_yara,
         settings.yara,

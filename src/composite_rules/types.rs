@@ -20,6 +20,7 @@ pub(crate) enum Arch {
     Sparc,
     M68k,
     Superh,
+    S390,
 }
 
 /// Default architectures for rules (all architectures)
@@ -30,8 +31,7 @@ pub(crate) fn default_architectures() -> Vec<Arch> {
 
 impl Arch {
     /// Names [`Self::parse`] accepts, for error messages.
-    pub(crate) const RULE_NAMES: &'static str =
-        "all, x86, x86-64, aarch64, arm, riscv, mips, powerpc, powerpc64, sparc, m68k, superh";
+    pub(crate) const RULE_NAMES: &'static str = "all, x86, x86-64, aarch64, arm, riscv, mips, powerpc, powerpc64, sparc, m68k, superh, s390";
 
     /// Parse an architecture name from a YAML trait definition (kebab-case).
     /// `None` for a name it does not know: callers report it rather than read
@@ -51,6 +51,7 @@ impl Arch {
             "sparc" | "sparc64" => Arch::Sparc,
             "m68k" => Arch::M68k,
             "superh" | "sh" => Arch::Superh,
+            "s390" | "s390x" => Arch::S390,
             _ => return None,
         })
     }
@@ -71,6 +72,7 @@ impl Arch {
             "sparc" | "sparc64" => Arch::Sparc,
             "m68k" => Arch::M68k,
             "superh" | "sh" | "sh4" => Arch::Superh,
+            "s390" | "s390x" => Arch::S390,
             _ => Arch::All,
         }
     }
@@ -91,6 +93,7 @@ impl std::fmt::Display for Arch {
             Arch::Sparc => write!(f, "sparc"),
             Arch::M68k => write!(f, "m68k"),
             Arch::Superh => write!(f, "superh"),
+            Arch::S390 => write!(f, "s390"),
         }
     }
 }

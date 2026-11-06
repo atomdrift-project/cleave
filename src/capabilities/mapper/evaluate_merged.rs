@@ -1065,7 +1065,7 @@ impl super::CapabilityMapper {
     /// The retroactive-suppression tables, built on first use (see
     /// [`super::UnlessIndex`]). Definition IDs are qualified at load time
     /// (e.g. "well-known/foo::bar-id") and cover both traits and composites.
-    fn unless_index(&self) -> &super::UnlessIndex {
+    pub(super) fn unless_index(&self) -> &super::UnlessIndex {
         self.unless_index.get_or_init(|| {
             let mut index = super::UnlessIndex::default();
             let traits = self

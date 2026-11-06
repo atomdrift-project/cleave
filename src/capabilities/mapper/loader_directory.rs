@@ -1208,7 +1208,6 @@ impl super::CapabilityMapper {
         } = options;
         let _span = tracing::info_span!("load_capabilities").entered();
         let dir_path = dir_path.as_ref();
-        let sources = crate::rule_sources::shared(dir_path)?;
         let (enable_full_validation, clean_mark) = resolve_full_validation(
             dir_path,
             enable_full_validation,
@@ -1245,6 +1244,9 @@ impl super::CapabilityMapper {
             return Ok(mapper);
         }
 
+        // Read only on a miss: a cache hit needs no rule text, and reading
+        // all of it costs more than the rest of a warm load.
+        let sources = crate::rule_sources::shared(dir_path)?;
         let yaml_files = find_trait_files(&sources, dir_path)?;
         let discovery_ms = load_started.elapsed().as_millis();
         let parse_started = std::time::Instant::now();
@@ -1451,15 +1453,19 @@ impl super::CapabilityMapper {
         dir_path: &Path,
     ) -> Self {
         // Populate trait_id_map
-        let mut trait_id_map = std::collections::HashMap::with_capacity(trait_definitions.len());
+        let mut trait_id_map = super::TraitIdMap::with_capacity_and_hasher(
+            trait_definitions.len(),
+            Default::default(),
+        );
         for (idx, trait_def) in trait_definitions.iter().enumerate() {
             trait_id_map.insert(trait_def.id.clone(), idx);
         }
 
-        // Initialize composite rule dependencies
-        for rule in &mut composite_rules {
-            rule.populate_required_traits(&trait_id_map);
-        }
+        // Initialize composite rule dependencies: ~50k independent lookups
+        // into the finished map, ~15 ms of every warm load done serially.
+        composite_rules
+            .par_iter_mut()
+            .for_each(|rule| rule.populate_required_traits(&trait_id_map));
 
         Self {
             trait_definitions,

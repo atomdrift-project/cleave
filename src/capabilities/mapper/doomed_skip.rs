@@ -43,7 +43,7 @@ impl DoomedSkipIndex {
     pub(super) fn build(
         traits: &[TraitDefinition],
         composites: &[CompositeTrait],
-        trait_id_map: &std::collections::HashMap<String, usize>,
+        trait_id_map: &super::TraitIdMap,
     ) -> Self {
         let n = traits.len();
         let mut never_skip = vec![false; n];
@@ -264,7 +264,7 @@ fn trait_leaf(id: &str) -> &str {
 /// id, or a bare short name that is a single trait's leaf.
 fn resolve_unique(
     id: &str,
-    exact: &std::collections::HashMap<String, usize>,
+    exact: &super::TraitIdMap,
     leaf_hits: &FxHashMap<&str, Vec<usize>>,
 ) -> Option<usize> {
     let id = id.trim_end_matches('/');
@@ -316,11 +316,7 @@ impl<'a> IdIndex<'a> {
     /// Same contract as the old `resolve_all`: an exact `ns::leaf` id, a
     /// directory prefix (`ns/` — itself, `ns/…` legacy ids and `ns::…`), or a
     /// bare short name matching by leaf.
-    fn resolve_all(
-        &self,
-        id: &str,
-        exact: &std::collections::HashMap<String, usize>,
-    ) -> Vec<usize> {
+    fn resolve_all(&self, id: &str, exact: &super::TraitIdMap) -> Vec<usize> {
         let id = id.trim_end_matches('/');
         if id.contains("::") {
             return exact.get(id).copied().into_iter().collect();

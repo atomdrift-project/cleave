@@ -969,6 +969,7 @@ pub(crate) fn analyze_path_under(
         (None, None)
     };
     let engine = source.engine(options)?;
+    engine.rules().warm_for_analysis();
     analyze_file_with_engine(path, options, &engine, preloaded, precomputed_sha)
 }
 

@@ -316,7 +316,7 @@ pub fn most_recent_yar_file() -> Result<(SystemTime, PathBuf)> {
         .context("No .yar/.yara files found")
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct RuleFilesRevision {
     pub newest_mtime: SystemTime,
     pub fingerprint: u64,
@@ -428,7 +428,7 @@ static TRAITS_WALK_COUNT: AtomicU64 = AtomicU64::new(0);
 /// traits checkout four times before it could even consult a cache. This bundles
 /// all of those into one traversal (see [`scan_traits_dir`]); [`traits_scan_for`]
 /// memoizes it for the process.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct TraitsScan {
     /// Newest `.yaml`/`.yml` trait file (third-party excluded) and its path.
     newest_yaml: Option<(SystemTime, PathBuf)>,
@@ -445,7 +445,7 @@ struct TraitsScan {
 }
 
 /// Content digests of a traits tree.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct TraitsContent {
     /// SHA-256 over every rule and trait file's path, length and contents, in
     /// path order: what `rule_revision` truncates.
@@ -464,8 +464,9 @@ pub(crate) struct TraitsContent {
 /// Stat keys (path, size, mtime) looked cheaper but could not be trusted: `git
 /// archive` and checkouts stamp every file with one commit time at one-second
 /// resolution, so two trees differing by a same-length edit shared a key and
-/// served each other's mapper and analysis results. Reading the ~63 MB of rule
-/// sources is spread across rayon and done once per process.
+/// served each other's mapper and analysis results. Reading the rule sources
+/// is spread across rayon, and a later process skips it only when
+/// [`indexed_scan`] proves, by ctime and inode, that no file has changed since.
 ///
 /// Entries are visited in file-name order, so the digests are a function of
 /// the tree alone, not of the filesystem's directory order.
@@ -839,8 +840,14 @@ fn traits_scan_for(traits_dir: &Path) -> Arc<TraitsScan> {
             return Arc::clone(scan);
         }
     }
-    let sources = crate::rule_sources::shared(traits_dir).ok();
-    let scan = Arc::new(scan_traits_dir_with_sources(traits_dir, sources.as_deref()));
+    let scan = Arc::new(indexed_scan(traits_dir, &key).unwrap_or_else(|| {
+        let sources = crate::rule_sources::shared(traits_dir).ok();
+        let scan = scan_traits_dir_with_sources(traits_dir, sources.as_deref());
+        if let Some(stamp) = sources.as_deref().and_then(|s| s.tree_stamp()) {
+            store_tree_index(traits_dir, stamp, &scan);
+        }
+        scan
+    }));
     let mut scans = TRAITS_SCANS.write();
     if let Some((_, existing)) = scans.iter().find(|(dir, _)| *dir == key) {
         return Arc::clone(existing);
@@ -850,6 +857,98 @@ fn traits_scan_for(traits_dir: &Path) -> Arc<TraitsScan> {
     }
     scans.push((key, Arc::clone(&scan)));
     scan
+}
+
+/// Bumped whenever [`TraitsScan`] or the index layout changes shape.
+const TREE_INDEX_VERSION: u32 = 1;
+
+/// What a tree index file holds before its [`crate::rule_sources::TreeStamp`].
+#[derive(serde::Serialize, serde::Deserialize)]
+struct TreeIndexHeader<S> {
+    version: u32,
+    /// The build that scanned: scanning is code, and new code may scan
+    /// differently.
+    build: String,
+    traits_dir: Vec<u8>,
+    scan: S,
+}
+
+/// The cached scan of `traits_dir`, one file per directory as given (the
+/// scan's paths are built from it, not from `canonical`).
+fn tree_index_path(traits_dir: &Path) -> Option<PathBuf> {
+    let tag = digest_bytes(traits_dir.as_os_str().as_encoded_bytes());
+    Some(cache_dir().ok()?.join(format!("traits-index-{tag:016x}")))
+}
+
+/// The scan a previous process stored for `traits_dir`, if the tree under
+/// `canonical` provably has not changed since: every directory and rule file
+/// still has the stamp it had when the scan read it. Replaces reading
+/// every rule file (~0.6 s for 52k files) with a `stat` of each (~30 ms).
+///
+/// The analysis, mapper and YARA keys all derive from this scan; contents
+/// are still read whenever one of those misses, and anything that stamps a
+/// tag into an artifact for others ([`rules_source_tag_uncached`]) hashes
+/// the bytes regardless.
+fn indexed_scan(traits_dir: &Path, canonical: &Path) -> Option<TraitsScan> {
+    if skip_cache() {
+        return None;
+    }
+    read_tree_index(&tree_index_path(traits_dir)?, traits_dir, canonical)
+}
+
+fn read_tree_index(path: &Path, traits_dir: &Path, canonical: &Path) -> Option<TraitsScan> {
+    let started = Instant::now();
+    let bytes = fs::read(path).ok()?;
+    let (len, rest) = bytes.split_first_chunk::<4>()?;
+    let (header, stamp) = rest.split_at_checked(usize::try_from(u32::from_le_bytes(*len)).ok()?)?;
+    let (header, _): (TreeIndexHeader<TraitsScan>, usize) =
+        bincode::serde::decode_from_slice(header, bincode::config::standard()).ok()?;
+    if header.version != TREE_INDEX_VERSION
+        || header.build != crate::traits_fingerprint::binary_identity()
+        || header.traits_dir != traits_dir.as_os_str().as_encoded_bytes()
+    {
+        tracing::debug!(path = %path.display(), "traits index is for another build or directory");
+        return None;
+    }
+    let unchanged = crate::rule_sources::TreeStamp::decode(stamp)?.matches(canonical);
+    tracing::info!(dir = %traits_dir.display(), unchanged,
+        elapsed_ms = started.elapsed().as_millis(), "checked traits index");
+    unchanged.then_some(header.scan)
+}
+
+/// Record `scan` as what the tree `stamp` describes. Best effort: an index
+/// that fails to write costs the next run a full read.
+fn store_tree_index(traits_dir: &Path, stamp: &crate::rule_sources::TreeStamp, scan: &TraitsScan) {
+    if skip_cache() {
+        return;
+    }
+    if let Some(path) = tree_index_path(traits_dir) {
+        write_tree_index(&path, traits_dir, stamp, scan);
+    }
+}
+
+fn write_tree_index(
+    path: &Path,
+    traits_dir: &Path,
+    stamp: &crate::rule_sources::TreeStamp,
+    scan: &TraitsScan,
+) {
+    let header = TreeIndexHeader {
+        version: TREE_INDEX_VERSION,
+        build: crate::traits_fingerprint::binary_identity().to_string(),
+        traits_dir: traits_dir.as_os_str().as_encoded_bytes().to_vec(),
+        scan,
+    };
+    let Ok(header) = bincode::serde::encode_to_vec(&header, bincode::config::standard()) else {
+        return; // A path serde cannot spell; the next run reads the tree.
+    };
+    let Ok(len) = u32::try_from(header.len()) else {
+        return;
+    };
+    let bytes = [&len.to_le_bytes()[..], &header, &stamp.encode()].concat();
+    if let Err(error) = atomic_write(path, &bytes) {
+        tracing::debug!(path = %path.display(), %error, "could not save the traits index");
+    }
 }
 
 /// The memoized scan of the process's [`traits_path`].

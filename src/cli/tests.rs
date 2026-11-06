@@ -14,12 +14,12 @@ fn render_accepts_local_format_and_output_options() {
         "render",
         "before.json",
         "--format",
-        "toc",
+        "index",
         "-o",
         "view.txt",
     ])
     .unwrap();
-    assert_eq!(args.format(), OutputFormat::Toc);
+    assert_eq!(args.format(), OutputFormat::Index);
     assert_eq!(args.output.as_deref(), Some("view.txt"));
     assert!(matches!(args.command, Some(Command::Render { args })
         if args.input == "before.json"));
@@ -221,16 +221,16 @@ fn format_shorthands_last_one_wins() {
         argv.push("file.bin");
         Args::try_parse_from(argv).unwrap().format()
     };
-    assert_eq!(parse(&["--toc"]), OutputFormat::Toc);
+    assert_eq!(parse(&["--index"]), OutputFormat::Index);
     assert_eq!(parse(&["--annotate"]), OutputFormat::Annotate);
     assert_eq!(parse(&["--json"]), OutputFormat::Json);
-    assert_eq!(parse(&["--format", "toc", "--json"]), OutputFormat::Json);
-    assert_eq!(parse(&["--json", "--format", "toc"]), OutputFormat::Toc);
+    assert_eq!(parse(&["--format", "index", "--json"]), OutputFormat::Json);
+    assert_eq!(parse(&["--json", "--format", "index"]), OutputFormat::Index);
     assert_eq!(parse(&["--json", "--annotate"]), OutputFormat::Annotate);
-    assert_eq!(parse(&["--toc", "--json"]), OutputFormat::Json);
+    assert_eq!(parse(&["--index", "--json"]), OutputFormat::Json);
     // Global: accepted after a subcommand too.
-    let args = Args::try_parse_from(["cleave", "render", "r.json", "--toc"]).unwrap();
-    assert_eq!(args.format(), OutputFormat::Toc);
+    let args = Args::try_parse_from(["cleave", "render", "r.json", "--index"]).unwrap();
+    assert_eq!(args.format(), OutputFormat::Index);
 }
 
 #[test]

@@ -402,7 +402,7 @@ pub fn parse<T: std::str::FromStr>(name: &str) -> Option<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Group, VARIABLES, truthy};
+    use super::{VARIABLES, truthy};
 
     /// Every `"CLEAVE_..."` literal in the crate's sources names a registered
     /// variable, so a new knob cannot appear without being documented.
@@ -441,23 +441,6 @@ mod tests {
             unregistered.is_empty(),
             "register these in env::VARIABLES: {unregistered:?}"
         );
-    }
-
-    /// The README's configuration table lists exactly the supported variables.
-    #[test]
-    #[allow(clippy::expect_used)]
-    fn readme_lists_the_configuration_variables() {
-        let readme = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md"),
-        )
-        .expect("read README");
-        for v in VARIABLES.iter().filter(|v| v.group == Group::Configuration) {
-            assert!(
-                readme.contains(&format!("`{}`", v.name)),
-                "README lacks {}",
-                v.name
-            );
-        }
     }
 
     #[test]

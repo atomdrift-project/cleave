@@ -391,6 +391,47 @@ impl SymbolMatchIndex {
         // Pattern-major verification of the nominated (trait, symbol) pairs.
         // Stable sort keeps each trait's symbols in sweep order.
         regex_candidates.sort_by_key(|&(trait_idx, _)| trait_idx);
+        let fallback_nominated = |fi: usize| -> &[(u32, u32)] {
+            let start = fallback_candidates.partition_point(|&(f, _)| (f as usize) < fi);
+            let end = fallback_candidates.partition_point(|&(f, _)| (f as usize) <= fi);
+            &fallback_candidates[start..end]
+        };
+        let fallback_gated =
+            |fi: usize| self.regex_fallback_gated.get(fi).copied().unwrap_or(false);
+
+        // First-use compiles are most of a cold verification, and each is
+        // independent: ~30 ms serially on a first Mach-O. A caller allowed
+        // inner parallelism compiles the ones this sweep needs across the
+        // pool, and the loops below find them compiled.
+        if crate::rayon_nest::inner_work_parallel() {
+            let traits: Vec<usize> = regex_candidates
+                .chunk_by(|a, b| a.0 == b.0)
+                .map(|group| group[0].0)
+                .filter(|&t| matches!(self.trait_regex.get(t), Some(Some((_, slot))) if slot.get().is_none()))
+                .collect();
+            let fallbacks: Vec<usize> = if symbols.is_empty() {
+                Vec::new()
+            } else {
+                (0..self.regex_fallback_regexes.len())
+                    .filter(|&fi| self.regex_fallback_regexes[fi].get().is_none())
+                    .filter(|&fi| !fallback_gated(fi) || !fallback_nominated(fi).is_empty())
+                    .collect()
+            };
+            if traits.len() + fallbacks.len() > 1 {
+                rayon::join(
+                    || {
+                        traits.par_iter().for_each(|&t| {
+                            self.trait_regex(t);
+                        });
+                    },
+                    || {
+                        fallbacks.par_iter().for_each(|&fi| {
+                            self.fallback_regex(fi);
+                        });
+                    },
+                );
+            }
+        }
         let mut i = 0;
         while i < regex_candidates.len() {
             let trait_idx = regex_candidates[i].0;
@@ -398,9 +439,7 @@ impl SymbolMatchIndex {
             while j < regex_candidates.len() && regex_candidates[j].0 == trait_idx {
                 j += 1;
             }
-            if let Some(Some((pattern, slot))) = self.trait_regex.get(trait_idx)
-                && let Some(re) = compile_once(slot, || cached_regex(pattern))
-            {
+            if let Some(re) = self.trait_regex(trait_idx) {
                 re.with_scratch(|cache| {
                     for &(_, pos) in &regex_candidates[i..j] {
                         let symbol = symbols[pos as usize];
@@ -418,29 +457,18 @@ impl SymbolMatchIndex {
         // lazy-DFA cache stays hot across the whole symbol list instead of
         // being re-entered per symbol.
         if !symbols.is_empty() {
-            for (fi, ((slot, pattern), &trait_idx)) in self
-                .regex_fallback_regexes
-                .iter()
-                .zip(&self.regex_fallback_patterns)
-                .zip(&self.regex_fallback_traits)
-                .enumerate()
-            {
-                let gated = self.regex_fallback_gated.get(fi).copied().unwrap_or(false);
+            for (fi, &trait_idx) in self.regex_fallback_traits.iter().enumerate() {
+                let gated = fallback_gated(fi);
                 let nominated: &[(u32, u32)] = if gated {
-                    let start = fallback_candidates.partition_point(|&(f, _)| (f as usize) < fi);
-                    let end = fallback_candidates.partition_point(|&(f, _)| (f as usize) <= fi);
-                    if start == end {
+                    let nominated = fallback_nominated(fi);
+                    if nominated.is_empty() {
                         continue;
                     }
-                    &fallback_candidates[start..end]
+                    nominated
                 } else {
                     &[]
                 };
-                let Some(re) = compile_once(slot, || {
-                    ScratchRegex::new(pattern)
-                        .inspect_err(|e| tracing::warn!(pattern, error = %e, "symbol fallback pattern failed to compile; skipping"))
-                        .ok()
-                }) else {
+                let Some(re) = self.fallback_regex(fi) else {
                     continue;
                 };
                 re.with_matcher(|is_match| {
@@ -470,6 +498,22 @@ impl SymbolMatchIndex {
             .collect();
 
         (matched, evidence)
+    }
+
+    /// The verifier for regex trait `trait_idx`, compiled on first use.
+    fn trait_regex(&self, trait_idx: usize) -> Option<&Arc<TraitRegex>> {
+        let (pattern, slot) = self.trait_regex.get(trait_idx)?.as_ref()?;
+        compile_once(slot, || cached_regex(pattern))
+    }
+
+    /// Fallback pattern `fi`, compiled on first use.
+    fn fallback_regex(&self, fi: usize) -> Option<&ScratchRegex> {
+        let pattern = self.regex_fallback_patterns.get(fi)?;
+        compile_once(self.regex_fallback_regexes.get(fi)?, || {
+            ScratchRegex::new(pattern)
+                .inspect_err(|e| tracing::warn!(pattern, error = %e, "symbol fallback pattern failed to compile; skipping"))
+                .ok()
+        })
     }
 
     /// Parallel scan: chunks the symbol list across rayon workers and merges

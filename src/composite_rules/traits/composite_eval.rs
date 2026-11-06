@@ -155,7 +155,7 @@ impl CompositeTrait {
     /// needs to run, or valid `any:` + `needs:` rules get skipped before evaluation.
     pub(crate) fn populate_required_traits(
         &mut self,
-        trait_id_map: &std::collections::HashMap<String, usize>,
+        trait_id_map: &crate::capabilities::TraitIdMap,
     ) {
         let dependent_ids = self.required_trait_ids();
         self.required_trait_indices = dependent_ids

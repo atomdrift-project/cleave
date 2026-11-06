@@ -77,21 +77,21 @@ pub struct Args {
     #[arg(value_name = "PATH")]
     pub paths: Vec<String>,
 
-    /// Output format: annotate (default), toc, or json. The last of --format,
-    /// --annotate, --toc, and --json wins.
-    #[arg(long, value_enum, global = true, overrides_with_all = ["annotate", "toc", "json"])]
+    /// Output format: annotate (default), index, or json. The last of --format,
+    /// --annotate, --index, and --json wins.
+    #[arg(long, value_enum, global = true, overrides_with_all = ["annotate", "index", "json"])]
     pub format: Option<OutputFormat>,
 
     /// Shorthand for --format annotate.
-    #[arg(long, global = true, overrides_with_all = ["format", "toc", "json"])]
+    #[arg(long, global = true, overrides_with_all = ["format", "index", "json"])]
     pub annotate: bool,
 
-    /// Shorthand for --format toc.
+    /// Shorthand for --format index.
     #[arg(long, global = true, overrides_with_all = ["format", "annotate", "json"])]
-    pub toc: bool,
+    pub index: bool,
 
     /// Shorthand for --format json.
-    #[arg(long, global = true, overrides_with_all = ["format", "annotate", "toc"])]
+    #[arg(long, global = true, overrides_with_all = ["format", "annotate", "index"])]
     pub json: bool,
 
     /// Write output to file
@@ -127,8 +127,9 @@ pub struct Args {
     /// holds none is connected — a terminal shows a code to approve at
     /// dash.isotope13.io — and a refused token stops the run instead of
     /// falling back to the open-source rules. Env: ATOMDRIFT_UPLINK=1; =0
-    /// keeps the open-source rules.
-    #[arg(long)]
+    /// keeps the open-source rules. Hidden from `--help` until Uplink is
+    /// generally available.
+    #[arg(long, hide = true)]
     pub uplink: bool,
 
     /// Warn when a single rule takes longer than this many milliseconds to evaluate.
@@ -158,7 +159,7 @@ impl Args {
 
     /// The output format from --format or its shorthands, else the
     /// CLEAVE_FORMAT env var, else annotate. Clap keeps only the last of
-    /// --format, --annotate, --toc, and --json.
+    /// --format, --annotate, --index, and --json.
     #[must_use]
     pub fn format(&self) -> OutputFormat {
         if let Some(format) = self.format {
@@ -167,8 +168,8 @@ impl Args {
         if self.json {
             return OutputFormat::Json;
         }
-        if self.toc {
-            return OutputFormat::Toc;
+        if self.index {
+            return OutputFormat::Index;
         }
         if self.annotate {
             return OutputFormat::Annotate;
@@ -578,7 +579,7 @@ fn parse_criticality(s: &str) -> Result<crate::types::Criticality, String> {
     s.parse()
 }
 
-/// Parse an offset range like "0,4096" or "-1024," into (start, Option<end>)
+/// Parse an offset range like "0,4096" or "-1024," into `(start, Option<end>)`.
 fn parse_offset_range(s: &str) -> Result<(i64, Option<i64>), String> {
     let parts: Vec<&str> = s.split(',').collect();
     if parts.len() != 2 {
@@ -888,8 +889,8 @@ pub enum OutputFormat {
     /// Source context around each finding, annotated with what matched
     #[value(alias("terminal"))]
     Annotate,
-    /// Table of contents: one row per finding, grouped by namespace
-    Toc,
+    /// Index of findings: one row per finding, grouped by namespace
+    Index,
     /// One JSON object per line, one line per file target
     #[value(alias("jsonl"))]
     Json,

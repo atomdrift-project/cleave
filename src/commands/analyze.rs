@@ -285,7 +285,7 @@ fn format_report_output(report: &mut types::AnalysisReport, out: &Output) -> Res
             Ok(line)
         }
         cli::OutputFormat::Annotate => Ok(output::format_terminal_ctx(report)),
-        cli::OutputFormat::Toc => Ok(output::format_toc(report)),
+        cli::OutputFormat::Index => Ok(output::format_index(report)),
     }
 }
 

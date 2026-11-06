@@ -344,25 +344,52 @@ impl StringMatchIndex {
             ci_min_pattern_length = 0;
         }
 
-        // Build Aho-Corasick automaton for substr patterns (Experiment 4)
-        // Use Standard match kind to support find_overlapping_iter.
-        // This ensures ALL matching patterns are found, even when a shorter
-        // pattern (e.g., "output") is embedded within a longer one
-        // (e.g., "set volume output muted true").
-        let substr_automaton = if !substr_patterns.is_empty() {
-            build_index_automaton(&substr_patterns, false)
-        } else {
-            None
-        };
+        // Source raw-haystack prefilter: exact needles as substring ACs.
+        // HashMap iteration order only has to match `*_ac_to_traits`.
+        let (exact_needles, exact_ac_to_traits): (Vec<&str>, Vec<Vec<usize>>) = exact_patterns
+            .iter()
+            .filter(|(pat, _)| !pat.is_empty())
+            .map(|(pat, traits)| (pat.as_str(), traits.clone()))
+            .unzip();
+        let (ci_exact_needles, ci_exact_ac_to_traits): (Vec<&str>, Vec<Vec<usize>>) =
+            ci_exact_patterns
+                .iter()
+                .filter(|(lower, _)| !lower.is_empty())
+                .map(|(lower, (_orig, traits))| (lower.as_str(), traits.clone()))
+                .unzip();
 
-        let ci_substr_automaton = if !ci_substr_patterns.is_empty() {
-            build_index_automaton(&ci_substr_patterns, true)
-        } else {
-            None
-        };
-
-        let mut atom_cs_automaton = build_index_automaton(&atom_cs_patterns, false);
-        let mut atom_ci_automaton = build_index_automaton(&atom_ci_patterns, true);
+        // The six automata are independent; built one after another they
+        // were ~0.1 s of every one-file run. The substr automata use the
+        // Standard match kind to support find_overlapping_iter, so every
+        // matching pattern is found even when a shorter one ("output") is
+        // embedded in a longer one ("set volume output muted true").
+        let (
+            (substr_automaton, ci_substr_automaton),
+            ((mut atom_cs_automaton, mut atom_ci_automaton), (exact_automaton, ci_exact_automaton)),
+        ) = rayon::join(
+            || {
+                rayon::join(
+                    || build_index_automaton(&substr_patterns, false),
+                    || build_index_automaton(&ci_substr_patterns, true),
+                )
+            },
+            || {
+                rayon::join(
+                    || {
+                        rayon::join(
+                            || build_index_automaton(&atom_cs_patterns, false),
+                            || build_index_automaton(&atom_ci_patterns, true),
+                        )
+                    },
+                    || {
+                        rayon::join(
+                            || build_index_automaton(&exact_needles, false),
+                            || build_index_automaton(&ci_exact_needles, true),
+                        )
+                    },
+                )
+            },
+        );
         // A failed automaton must not silence its traits: without both
         // automata, no trait is atom-gated and every regex sweeps in full.
         if (atom_cs_automaton.is_none() && !atom_cs_patterns.is_empty())
@@ -379,43 +406,6 @@ impl StringMatchIndex {
             .copied()
             .filter(|idx| !atom_traits.contains(idx))
             .collect();
-
-        // Source raw-haystack prefilter: exact needles as substring ACs.
-        // HashMap iteration order only has to match `*_ac_to_traits`.
-        let (exact_automaton, exact_ac_to_traits) = {
-            let mut patterns = Vec::with_capacity(exact_patterns.len());
-            let mut to_traits = Vec::with_capacity(exact_patterns.len());
-            for (pat, traits) in &exact_patterns {
-                if pat.is_empty() {
-                    continue;
-                }
-                patterns.push(pat.as_str());
-                to_traits.push(traits.clone());
-            }
-            let automaton = if patterns.is_empty() {
-                None
-            } else {
-                build_index_automaton(&patterns, false)
-            };
-            (automaton, to_traits)
-        };
-        let (ci_exact_automaton, ci_exact_ac_to_traits) = {
-            let mut patterns = Vec::with_capacity(ci_exact_patterns.len());
-            let mut to_traits = Vec::with_capacity(ci_exact_patterns.len());
-            for (lower, (_orig, traits)) in &ci_exact_patterns {
-                if lower.is_empty() {
-                    continue;
-                }
-                patterns.push(lower.as_str());
-                to_traits.push(traits.clone());
-            }
-            let automaton = if patterns.is_empty() {
-                None
-            } else {
-                build_index_automaton(&patterns, true)
-            };
-            (automaton, to_traits)
-        };
 
         let index = Self {
             exact_patterns,

@@ -44,11 +44,22 @@ fn build_index_automaton<P: AsRef<[u8]>>(
     if patterns.is_empty() {
         return None;
     }
+    let started = std::time::Instant::now();
     match AhoCorasick::builder()
         .ascii_case_insensitive(ascii_case_insensitive)
         .build(patterns)
     {
-        Ok(automaton) => Some(automaton),
+        Ok(automaton) => {
+            tracing::debug!(
+                patterns = patterns.len(),
+                bytes = patterns.iter().map(|p| p.as_ref().len()).sum::<usize>(),
+                ascii_case_insensitive,
+                kind = ?automaton.kind(),
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "index automaton built"
+            );
+            Some(automaton)
+        }
         Err(err) => {
             tracing::error!(
                 patterns = patterns.len(),

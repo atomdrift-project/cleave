@@ -229,7 +229,7 @@ pub fn run_with_options(
     // through the chosen output format.
     cleave::validation_controls::set_validation_output_format(Some(match format {
         OutputFormat::Json => cleave::validation_controls::ValidationOutputFormat::Json,
-        OutputFormat::Annotate | OutputFormat::Toc => {
+        OutputFormat::Annotate | OutputFormat::Index => {
             cleave::validation_controls::ValidationOutputFormat::Terminal
         }
     }));
@@ -548,7 +548,7 @@ fn print_slow_rules(audit: &slow_rules::Audit, format: &OutputFormat) {
             Ok(json) => println!("{json}"),
             Err(error) => eprintln!("slow-rule audit not encoded: {error}"),
         },
-        OutputFormat::Annotate | OutputFormat::Toc => print!("{}", audit.table()),
+        OutputFormat::Annotate | OutputFormat::Index => print!("{}", audit.table()),
     }
 }
 
@@ -561,7 +561,7 @@ fn print_performance_issues(
     }
     let rendered = match format {
         OutputFormat::Json => validation_controls::format_validation_issues_json(issues),
-        OutputFormat::Annotate | OutputFormat::Toc => {
+        OutputFormat::Annotate | OutputFormat::Index => {
             validation_controls::format_validation_issues_terminal(issues)
         }
     };
@@ -624,7 +624,7 @@ fn format_validate_output(report: &ValidateOutput, format: &OutputFormat) -> Str
 "
             )
         }
-        OutputFormat::Annotate | OutputFormat::Toc => format_validate_terminal(report),
+        OutputFormat::Annotate | OutputFormat::Index => format_validate_terminal(report),
     }
 }
 

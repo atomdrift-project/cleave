@@ -162,7 +162,7 @@ fn run() -> Result<()> {
                     report,
                     &cleave::output::TinyOpts::terminal(),
                 )),
-                cli::OutputFormat::Toc => Ok(cleave::output::format_toc(report)),
+                cli::OutputFormat::Index => Ok(cleave::output::format_index(report)),
             }
         })?;
         return write_output(&rendered, args.output, format);

@@ -39,6 +39,7 @@ pub(crate) mod validation;
 // Re-export public API (allow unreachable_pub: accessible via lib crate)
 #[allow(unreachable_pub)]
 pub(crate) use mapper::AnalysisBorrow;
+pub(crate) use mapper::TraitIdMap;
 pub(crate) use mapper::evaluate_merged::merge_filefacts_context;
 pub(crate) use mapper::evaluate_traits::log_raw_gate_stats;
 pub(crate) use mapper::evaluate_traits::record_ast_kind_node;

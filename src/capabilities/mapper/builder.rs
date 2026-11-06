@@ -66,7 +66,7 @@ impl super::CapabilityMapper {
             trait_eval_flags: std::sync::Arc::default(),
             boolean_ast_queries: std::sync::Arc::default(),
             trait_ref_ids_memo: std::sync::Arc::default(),
-            trait_id_map: std::collections::HashMap::new(),
+            trait_id_map: super::TraitIdMap::default(),
             platforms: vec![Platform::All],
             slow_rule_ms: Self::DEFAULT_SLOW_RULE_MS,
             // No traits loaded: a revision distinct from every real tree, so

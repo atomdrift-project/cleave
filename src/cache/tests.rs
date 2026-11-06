@@ -39,6 +39,35 @@ fn traits_tree(dir: &Path) -> (PathBuf, PathBuf) {
     (rule, trait_file)
 }
 
+/// The stored scan serves until the tree changes, and only for the build,
+/// version and directory that stored it.
+#[cfg(unix)]
+#[test]
+fn traits_index_serves_the_scan_until_the_tree_changes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let traits = tmp.path().join("traits");
+    let (rule, _) = traits_tree(&traits);
+    let canonical = fs::canonicalize(&traits).unwrap();
+    let index = tmp.path().join("index");
+    // As if the tree's last change were long past (see `RuleSources::read`).
+    let later = SystemTime::now() + Duration::from_secs(10);
+    let sources = crate::rule_sources::RuleSources::read(&traits, later).unwrap();
+    let scan = scan_traits_dir_with_sources(&traits, Some(&sources));
+    write_tree_index(&index, &traits, sources.tree_stamp().unwrap(), &scan);
+    // Later changes get timestamps of their own (Linux ticks every few ms).
+    std::thread::sleep(Duration::from_millis(30));
+
+    let served = read_tree_index(&index, &traits, &canonical).expect("an untouched tree is served");
+    assert_eq!(served.content, scan.content);
+    assert_eq!(served.rule_revision, scan.rule_revision);
+    assert!(read_tree_index(&index, &tmp.path().join("other"), &canonical).is_none());
+
+    fs::write(&rule, b"rule a { strings: $s = \"abd\" condition: $s }\n").unwrap();
+    assert!(read_tree_index(&index, &traits, &canonical).is_none());
+    fs::write(&index, b"\xff\xff\xff\xff").unwrap();
+    assert!(read_tree_index(&index, &traits, &canonical).is_none());
+}
+
 /// Hash the rule sources under `traits_dir` as they stand on disk.
 fn compute_rules_source_tag(traits_dir: &Path) -> Option<u64> {
     let sources = crate::rule_sources::RuleSources::fresh(traits_dir).ok()?;

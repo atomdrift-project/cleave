@@ -209,8 +209,8 @@ fn isolated_module_list_matches_makefile() {
 
 /// A shared-process run must skip every [`ISOLATED_MODULES`] module.
 ///
-/// `make test` passes `--skip <module>::` for each one (Phase 1) and runs them
-/// one-process-each under nextest (Phase 2). A bare `cargo test --test it`
+/// `make test` passes `--skip <module>::` for each one (Phase 2) and runs them
+/// one-process-each under nextest (Phase 3). A bare `cargo test --test it`
 /// passes no skips, so the isolated modules run as threads beside everything
 /// else: whichever loads traits first wins the process-global mapper and cache
 /// fingerprint, and the rest evaluate against the wrong rules. The resulting

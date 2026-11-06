@@ -386,7 +386,11 @@ fn git_rule_tree_dirty_cached(dir: &Path, head: &str, rules_digest: [u8; 32]) ->
         hex::encode(Sha256::digest(dir.as_os_str().as_encoded_bytes())),
         hex::encode(rules_digest)
     );
-    let memo = if crate::cache::skip_cache() {
+    // Gated like the mapper cache: the key pins the checkout, HEAD and rule
+    // contents, so a stale memo can only miss. `make test` sets
+    // CLEAVE_SKIP_CACHE=1, and a `git status` of the traits tree in every
+    // test process was most of their kernel time.
+    let memo = if crate::cache::skip_mapper_cache() {
         None
     } else {
         crate::cache::cache_dir()

@@ -46,7 +46,7 @@ fn test_version_command() {
 ///
 /// Both halves are required for silence — a traits dir with no `.yar` under it
 /// makes the engine warn "No YARA rules loaded", which is exactly the kind of
-/// operational complaint [`test_self_analysis_is_silent`] exists to catch.
+/// operational complaint [`test_rust_binary_analysis_is_silent`] exists to catch.
 fn write_minimal_traits(dir: &std::path::Path) {
     const TRAIT_YAML: &str = r#"
 defaults:
@@ -76,9 +76,13 @@ rule fx_probe_yara {
     fs::write(dir.join("probe.yar"), YARA_RULE).unwrap();
 }
 
-/// An ordinary self-analysis should be silent on stderr. `RUST_LOG=error`
-/// suppresses only the intentional debug-build startup notice; operational
-/// errors still reach stderr and fail this assertion.
+/// An ordinary analysis of a Rust binary should be silent on stderr.
+/// `RUST_LOG=error` suppresses only the intentional debug-build startup
+/// notice; operational errors still reach stderr and fail this assertion.
+///
+/// The subject is a small native Rust Mach-O, not cleave's own binary: the
+/// 150 MB debug build took 30 s alone and over 120 s under the suite's load,
+/// and its size exercises nothing about output discipline.
 ///
 /// Runs against a fixture traits directory rather than the machine's installed
 /// one. The installed tree is developer-mutable data from a *different* repo —
@@ -86,14 +90,13 @@ rule fx_probe_yara {
 /// skipped a trait file, which would fail this test for a defect cleave does
 /// not have. What is under test here is cleave's own output discipline.
 #[test]
-fn test_self_analysis_is_silent() {
-    let cleave = env!("CARGO_BIN_EXE_cleave");
+fn test_rust_binary_analysis_is_silent() {
     let traits = TempDir::new().unwrap();
     write_minimal_traits(traits.path());
     let output = assert_cmd::cargo_bin_cmd!("cleave")
         .env("RUST_LOG", "error")
         .env("CLEAVE_TRAITS_DIR", traits.path())
-        .args(["--json", "analyze", cleave])
+        .args(["--json", "analyze", "tests/fixtures/lang_strings/rust_native"])
         .output()
         .unwrap();
 
@@ -101,7 +104,7 @@ fn test_self_analysis_is_silent() {
     assert_eq!(
         String::from_utf8_lossy(&output.stderr),
         "",
-        "self-analysis wrote to stderr"
+        "analysis wrote to stderr"
     );
 }
 

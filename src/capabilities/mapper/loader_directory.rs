@@ -1237,12 +1237,23 @@ impl super::CapabilityMapper {
         // pure function of the traits dir, mtime-invalidated, and safe to
         // share across test invocations that set CLEAVE_SKIP_CACHE=1.
         let skip_cache = crate::cache::skip_mapper_cache();
-        if !enable_full_validation
-            && !skip_cache
-            && let Some(mapper) = Self::from_mapper_cache(dir_path)
-        {
+        let use_cache = !enable_full_validation && !skip_cache;
+        if use_cache && let Some(mapper) = Self::from_mapper_cache(dir_path) {
             return Ok(mapper);
         }
+        // A miss builds once across processes: held until this load returns,
+        // so whoever waited loads the cache the holder saved below.
+        let _build_lock = if use_cache {
+            let lock = crate::cache::mapper_build_lock(dir_path);
+            if lock.is_some()
+                && let Some(mapper) = Self::from_mapper_cache(dir_path)
+            {
+                return Ok(mapper);
+            }
+            lock
+        } else {
+            None
+        };
 
         // Read only on a miss: a cache hit needs no rule text, and reading
         // all of it costs more than the rest of a warm load.
@@ -1315,9 +1326,7 @@ impl super::CapabilityMapper {
         super::drop_unreferenced_support_rules(&mut trait_definitions, &composite_rules);
 
         // Save to cache for future runs (only if not in validation mode)
-        if !enable_full_validation
-            && !skip_cache
-            && let Ok(cache_path) = crate::cache::mapper_cache_path_for(dir_path)
+        if use_cache && let Ok(cache_path) = crate::cache::mapper_cache_path_for(dir_path)
         {
             save_mapper_cache(
                 &cache_path,

@@ -1023,7 +1023,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
 
       - name: Build in OmniOS VM
-        uses: vmactions/omnios-vm@9576f0b6d15e7696548409baa533bc0a339caf42 # v1.3.7
+        uses: vmactions/omnios-vm@aeee92416495d9685b2997d954f6b063ae5b832d # v1.3.8
         with:
           usesh: true
           # Newest image the builder publishes. Unlike the FreeBSD pin, newer

@@ -71,7 +71,8 @@ fn walk_directory<W: Write>(root: &Path, config: &IterFilesConfig<'_>, out: &mut
     for entry in WalkDir::new(root)
         .follow_links(false)
         .into_iter()
-        .filter_entry(|e| !e.file_name().to_string_lossy().starts_with(".git"))
+        // Only the object store: a `.git` prefix would hide `.github/workflows`.
+        .filter_entry(|e| !(e.file_type().is_dir() && e.file_name() == ".git"))
         .filter_map(std::result::Result::ok)
         .filter(|e| e.file_type().is_file())
     {

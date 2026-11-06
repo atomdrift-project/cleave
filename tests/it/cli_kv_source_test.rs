@@ -96,13 +96,12 @@ fn cleave_kv_path_filter_works_on_source_files() {
         "--json",
         "value",
         path.to_str().unwrap(),
-        "--path",
         "source.language",
     ]);
     let output = cmd.output().expect("run cleave value");
     assert!(
         output.status.success(),
-        "cleave value with --path exited {}: stderr={}",
+        "cleave value with a path filter exited {}: stderr={}",
         output.status,
         String::from_utf8_lossy(&output.stderr)
     );

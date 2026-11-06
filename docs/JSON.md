@@ -35,7 +35,7 @@ cleave render after.json > after.txt
 diff -u before.txt after.txt
 ```
 
-`atomscan render` reads the same documents. A compact report keeps finding
+Renderers can read the same documents. A compact report keeps finding
 spans, not evidence values, so `--format toc` shows the context bytes a span
 covers and leaves evidence outside every context window blank. An
 intermediate analysis-cache report is finalized first, and says so on stderr.
@@ -144,7 +144,7 @@ because the most common suppressors are `crit: exception` composites, stripped
 from the report before anything could resolve them; the span is enough to pull
 the bytes from the file.
 
-cleave's LLM view (the payload `atomscan --format interpret` prints verbatim)
+cleave's LLM view
 renders each as a `withheld`/`downgraded` line naming the trait, the legs, and
 their spans. A file is never skipped from that output for having nothing but
 withheld traits to report, and a per-file cap on how many are listed still ends
@@ -153,7 +153,7 @@ reported is only as good as its account of what it withheld.
 
 ### Compact reference (`refs[]`)
 
-Byte-anchored file→target edges (consumed by prism's galaxy view):
+Byte-anchored file→target edges, for graph views:
 
 | JSON | Type | Meaning |
 | ---- | ---- | ------- |

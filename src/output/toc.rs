@@ -104,7 +104,8 @@ fn evidence_values(finding: &Finding, context: &[ContextLine]) -> Vec<String> {
 }
 
 /// Up to five distinct evidence values with blank lines dropped. Comma-joined,
-/// unless a value spans lines: then one value per line.
+/// unless a value spans lines: then one value per line. Evidence is sample
+/// text, so each line's controls are made visible.
 fn format_evidence(finding: &Finding, context: &[ContextLine]) -> String {
     let mut seen = HashSet::new();
     let values: Vec<String> = evidence_values(finding, context)
@@ -112,6 +113,7 @@ fn format_evidence(finding: &Finding, context: &[ContextLine]) -> String {
         .map(|v| {
             v.lines()
                 .filter(|l| !l.trim().is_empty())
+                .map(|l| super::sample_text(l).into_owned())
                 .collect::<Vec<_>>()
                 .join("\n")
         })
@@ -211,7 +213,9 @@ pub fn format_toc(report: &AnalysisReport) -> String {
 
             for finding in findings {
                 let bullet = bullet(finding.crit);
-                let trait_id = short_trait_id(&finding.id);
+                // Engine ids can carry sample text (an entitlement key, an
+                // import name).
+                let trait_id = super::sample_text(short_trait_id(&finding.id));
                 let evidence = format_evidence(finding, &file.context);
                 let lines: Vec<&str> = evidence.lines().collect();
                 if lines.is_empty() {
@@ -237,7 +241,10 @@ pub fn format_toc(report: &AnalysisReport) -> String {
         // A blank line separates this file from the next.
         output.push('\n');
     }
-    output
+    // Paths, descriptions and evidence are sample text. Directory scans stream
+    // this straight to stdout, past `write_output`, so it is made safe here:
+    // renderer SGR survives, every other control sequence becomes visible.
+    super::sanitize_terminal_output(&output).into_owned()
 }
 
 #[cfg(test)]
@@ -315,6 +322,42 @@ mod tests {
             },
         ];
         assert_eq!(format_evidence(&f, &context), "eval, 8B 44 00");
+    }
+
+    /// A member path and evidence carrying colors or a line break render as
+    /// visible text: they cannot hide the rows after them or forge one.
+    #[test]
+    fn sample_colors_and_line_breaks_stay_inert() {
+        let mut r = report(vec![finding(
+            "objectives/c2/http/beacon",
+            Criticality::Suspicious,
+            &["GET /x\u{1b}[30;40m"],
+        )]);
+        r.files[0].path = "pkg.tgz!!index.js\n\u{1b}[32m✓ no findings".into();
+        let output = format_toc(&r);
+        assert!(!output.contains("\u{1b}[30;40m"), "{output:?}");
+        assert!(!output.contains("\u{1b}[32m✓"), "{output:?}");
+        assert!(
+            !output
+                .lines()
+                .any(|l| l.contains("✓ no findings") && !l.contains("index.js")),
+            "a sample line break must not start a row: {output:?}"
+        );
+    }
+
+    /// Directory scans stream this format to stdout without passing through
+    /// `write_output`, so sample text must not reach the terminal raw.
+    #[test]
+    fn sample_text_cannot_inject_terminal_controls() {
+        let osc52 = "\x1b]52;c;ZXZpbA==\x07";
+        let output = format_toc(&report(vec![finding(
+            "objectives/c2/http/beacon",
+            Criticality::Suspicious,
+            &[&format!("GET /x{osc52}\x1b[2J")],
+        )]));
+        assert!(!output.contains('\x07'), "{output:?}");
+        assert!(!output.contains("\x1b]"), "{output:?}");
+        assert!(!output.contains("\x1b[2J"), "{output:?}");
     }
 
     #[test]

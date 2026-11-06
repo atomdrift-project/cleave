@@ -22,6 +22,8 @@ use std::sync::Arc;
 
 type Ctx<'a> = crate::analysis_context::AnalysisContext<'a>;
 
+mod recovered;
+
 /// Analyzer for Windows PE binaries (executables, DLLs, drivers).
 ///
 /// All deep-binary signal — function CFG fields, sections recovered
@@ -192,6 +194,152 @@ fn layout_metrics(ctx: &Ctx<'_>, pe_data: &[u8], report: &mut AnalysisReport) {
     flat.set_u("pe.executable_prose_section_count", prose_exec);
 }
 
+/// The host's file name, which members it carries are filed under.
+fn host_file_name(report: &AnalysisReport) -> String {
+    std::path::Path::new(&report.target.path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("binary.exe")
+        .to_string()
+}
+
+/// File an inner archive's member inventory under the host PE, which is the
+/// members' immediate provenance parent. The complete inventory is kept,
+/// including data files not promoted to separate analyses.
+fn adopt_member_inventory(report: &mut AnalysisReport, entries: Vec<crate::types::ArchiveEntry>) {
+    use crate::types::file_analysis::{ARCHIVE_DELIMITER, encode_archive_path};
+    let host = host_file_name(report);
+    for mut entry in entries {
+        if !entry.path.contains(ARCHIVE_DELIMITER) {
+            entry.path = encode_archive_path(&host, &entry.path);
+        }
+        report.archive_contents.push(entry);
+    }
+}
+
+fn adopt_tools(tools_used: &mut Vec<String>, tools: Vec<String>) {
+    for tool in tools {
+        if !tools_used.contains(&tool) {
+            tools_used.push(tool);
+        }
+    }
+}
+
+/// Merge the analysis of an archive appended to the PE (an SFX overlay) into
+/// the host report, its evidence locations rewritten to name the host.
+fn adopt_overlay(
+    report: &mut AnalysisReport,
+    tools_used: &mut Vec<String>,
+    overlay: crate::analyzers::overlay::OverlayAnalysis,
+) {
+    use crate::types::file_analysis::ARCHIVE_DELIMITER;
+    let host = host_file_name(report);
+    report.findings.push(overlay.sfx_finding);
+    let archive = overlay.archive_report;
+    for mut finding in archive.findings {
+        for evidence in &mut finding.evidence {
+            if let Some(loc) = &evidence.location {
+                let member = loc.strip_prefix("archive:");
+                if member.is_some() || !loc.contains(ARCHIVE_DELIMITER) {
+                    evidence.location = Some(format!(
+                        "archive:{host}{ARCHIVE_DELIMITER}{}",
+                        member.unwrap_or(loc)
+                    ));
+                }
+            }
+        }
+        report.findings.push(finding);
+    }
+    adopt_member_inventory(report, archive.archive_contents);
+    report.files.extend(archive.files);
+    report.strings.extend(archive.strings);
+    adopt_tools(tools_used, archive.metadata.tools_used);
+}
+
+/// Report a PE that filefacts could not identify, or parsed only down to its
+/// headers. The exact failure is not surfaced by filefacts's metrics; the
+/// absence of `pe.machine` or presence of `pe.partial_parse` is the signal.
+///
+/// A header-only parse means the COFF header was readable but a downstream
+/// walker failed (resource-only DLLs and resource-table errors land there),
+/// so it is informational. An unidentifiable PE that is not a plain DOS
+/// executable is suspicious, more surely when nothing was recovered from it.
+fn report_corrupted_header(report: &mut AnalysisReport, pe_data: &[u8], filefacts_ok: bool) {
+    let (crit, conf) = if !filefacts_ok && !looks_like_dos_executable(pe_data) {
+        let recovered_hidden_content = !report.sections.is_empty() || !report.imports.is_empty();
+        (
+            Criticality::Suspicious,
+            if recovered_hidden_content { 0.8 } else { 0.85 },
+        )
+    } else {
+        (Criticality::Baseline, 0.3)
+    };
+    let msg = if filefacts_ok {
+        "PE parsed with header-only fallback (downstream walker failed)"
+    } else {
+        "PE could not be identified by filefacts"
+    };
+    let evidence = || Evidence {
+        method: "parse-failure".to_string(),
+        source: "filefacts".to_string(),
+        value: msg.to_string(),
+        location: Some("0x0".to_string()),
+        ..Default::default()
+    };
+    report.findings.push(Finding {
+        precomputed_spans: None,
+        src: None,
+        id: "objectives/anti-analysis/pe-tampering/corrupted-header"
+            .to_string()
+            .into(),
+        kind: FindingKind::Structural,
+        desc: msg.to_string().into(),
+        conf,
+        crit,
+        mbc: Some("B0001".into()),
+        attack: Some("T1027".into()),
+        trait_refs: vec![],
+        evidence: vec![evidence()],
+        match_count: 1,
+        source_file: None,
+        downgraded: false,
+    });
+    report.structure.push(StructuralFeature {
+        id: "pe/corrupted".to_string(),
+        desc: "Corrupted/tampered PE binary (header parsing failed)".to_string(),
+        evidence: vec![evidence()],
+    });
+    report.metadata.errors.push(msg.to_string());
+}
+
+/// The bytes of an embedded image: its estimated extent, or for a base64
+/// image the decoded run starting at its offset (trimmed to whole quads), so
+/// the child analyzer reads the binary rather than its encoding. `None` when
+/// the offset is past the data or the base64 does not decode.
+fn embedded_image<'d>(
+    pe_data: &'d [u8],
+    binary: &crate::analyzers::embedded_binary_detector::EmbeddedBinary,
+) -> Option<std::borrow::Cow<'d, [u8]>> {
+    let rest = pe_data
+        .get(binary.offset..)
+        .filter(|rest| !rest.is_empty())?;
+    if binary.encoding == Some("base64") {
+        let run = rest
+            .iter()
+            .take_while(|&&b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'='))
+            .count();
+        let encoded = rest.get(..run & !3).unwrap_or_default();
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
+            .ok()
+            .map(std::borrow::Cow::Owned)
+    } else {
+        Some(std::borrow::Cow::Borrowed(
+            rest.get(..binary.estimated_size.min(rest.len()))
+                .unwrap_or_default(),
+        ))
+    }
+}
+
 /// Read the certificate-table range `(offset, end)` from filefacts's
 /// emitted `pe.data_directories[]`. Returns `None` when the
 /// directory is absent, empty, or extends past the file end.
@@ -265,80 +413,6 @@ fn looks_like_dos_executable(data: &[u8]) -> bool {
     declared_size >= header_size
         && declared_size <= data.len().saturating_add(512)
         && header_size < data.len()
-}
-
-/// Split a distinguished name into its RDN segments, honouring RFC 4514
-/// escapes and resolving them in the returned values.
-///
-/// A comma inside an attribute value is encoded `\,`, so splitting on every
-/// comma truncates the value and strands the escape character: `O=Postman\,
-/// Inc.` yielded `Postman\`, which reached analysts as the signer name
-/// "Postman\" and as the finding id `metadata/signed/leaf::postman\`.
-fn dn_split(dn: &str) -> Vec<String> {
-    let mut segments = Vec::new();
-    let mut current = String::new();
-    let mut chars = dn.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            ',' => segments.push(std::mem::take(&mut current)),
-            '\\' => match chars.next() {
-                // `\XX`: a two-digit hex escape.
-                Some(hi)
-                    if hi.is_ascii_hexdigit()
-                        && chars.peek().is_some_and(char::is_ascii_hexdigit) =>
-                {
-                    let lo = chars.next().unwrap_or('0');
-                    let byte = hi
-                        .to_digit(16)
-                        .unwrap_or(0)
-                        .saturating_mul(16)
-                        .saturating_add(lo.to_digit(16).unwrap_or(0));
-                    current.push(char::from_u32(byte).unwrap_or('?'));
-                }
-                // `\<char>`: the character stands for itself.
-                Some(escaped) => current.push(escaped),
-                None => {}
-            },
-            _ => current.push(c),
-        }
-    }
-    segments.push(current);
-    segments
-}
-
-/// Pull the first value of `attr` from a DN. Attribute names are matched
-/// case-insensitively — RFC 4514 names are case-insensitive and x509-cert
-/// canonicalises to upper-case, but we don't rely on the canonicalisation.
-fn dn_extract(dn: &str, attr: &str) -> Option<String> {
-    for raw in dn_split(dn) {
-        let seg = raw.trim();
-        let Some((name, value)) = seg.split_once('=') else {
-            continue;
-        };
-        if name.eq_ignore_ascii_case(attr) {
-            return Some(value.trim().to_string());
-        }
-    }
-    None
-}
-
-/// The leaf of a `metadata/signed/unknown::` or `metadata/signed/leaf::` id:
-/// the signer name lowercased, spaces as `-`, commas and parentheses dropped.
-/// Reference validation checks YAML refs against this same function, so a
-/// ref spelled any other way is reported instead of silently matching nothing.
-pub(crate) fn normalize_signer_name(name: &str) -> String {
-    name.to_lowercase()
-        .replace(' ', "-")
-        .replace([',', '(', ')'], "")
-}
-
-fn dn_extract_cn(dn: &str) -> Option<String> {
-    dn_extract(dn, "CN")
-}
-
-/// Pull the first O attribute from a DN string; `None` when absent.
-fn dn_extract_o(dn: &str) -> Option<String> {
-    dn_extract(dn, "O")
 }
 
 impl PEAnalyzer {
@@ -541,6 +615,56 @@ impl PEAnalyzer {
     /// becomes a separate `FileAnalysis` entry in `report.files`
     /// with `encoding: ["upx"]`. The unpacked layer opens its own
     /// `AnalysisContext` against the decompressed bytes.
+    /// Analyze each embedded PE/ELF image as a child and report a Notable
+    /// marker for it; trait rules decide what the marker means in context.
+    /// Images inside the certificate table are signature data, not payloads.
+    /// Returns how many were found.
+    fn analyze_embedded_binaries(
+        &self,
+        report: &mut AnalysisReport,
+        pe_data: &[u8],
+        embedded: &[crate::analyzers::embedded_binary_detector::EmbeddedBinary],
+        cert_range: Option<(usize, usize)>,
+    ) -> u32 {
+        let host_name = std::path::Path::new(&report.target.path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("binary.exe")
+            .to_string();
+        let mut count: u32 = 0;
+        for binary in embedded {
+            if self.is_cancelled() {
+                break;
+            }
+            if cert_range.is_some_and(|(start, end)| binary.offset >= start && binary.offset < end)
+            {
+                continue;
+            }
+            count = count.saturating_add(1);
+            let finding = crate::analyzers::embedded_binary_detector::finding_for(
+                binary,
+                &report.target.path,
+            );
+            let Some(embedded_bytes) = embedded_image(pe_data, binary) else {
+                report.findings.push(finding);
+                continue;
+            };
+            if let Some(files) = crate::analyzers::utils::analyze_embedded_as_child(
+                &embedded_bytes,
+                &host_name,
+                binary.kind.as_str(),
+                &binary.display_kind(),
+                binary.offset,
+                self.engine.clone(),
+                self.yara_engine.clone(),
+            ) {
+                report.files.extend(files);
+            }
+            report.findings.push(finding);
+        }
+        count
+    }
+
     pub(crate) fn analyze_structural_with_ctx<'a>(
         &self,
         file_path: &'a Path,
@@ -918,67 +1042,7 @@ impl PEAnalyzer {
         // `pe.machine` or presence of `pe.partial_parse` IS the
         // signal.
         if !filefacts_ok || partial_parse {
-            let recovery_found_hidden_content =
-                !report.sections.is_empty() || !report.imports.is_empty();
-            let is_dos_executable = looks_like_dos_executable(pe_data);
-            // Partial parse (header-only fallback) means the COFF
-            // header was readable but a downstream walker failed;
-            // resource-only DLLs and resource-table errors land
-            // here. Treat as informational unless recovery found
-            // something the parse missed.
-            let (crit, conf) = if !filefacts_ok && !is_dos_executable {
-                if recovery_found_hidden_content {
-                    (Criticality::Suspicious, 0.8)
-                } else {
-                    (Criticality::Suspicious, 0.85)
-                }
-            } else {
-                (Criticality::Baseline, 0.3)
-            };
-
-            let msg = if !filefacts_ok {
-                "PE could not be identified by filefacts"
-            } else {
-                "PE parsed with header-only fallback (downstream walker failed)"
-            };
-            report.findings.push(Finding {
-                precomputed_spans: None,
-                src: None,
-                id: "objectives/anti-analysis/pe-tampering/corrupted-header"
-                    .to_string()
-                    .into(),
-                kind: FindingKind::Structural,
-                desc: msg.to_string().into(),
-                conf,
-                crit,
-                mbc: Some("B0001".into()),
-                attack: Some("T1027".into()),
-                trait_refs: vec![],
-                evidence: vec![Evidence {
-                    method: "parse-failure".to_string(),
-                    source: "filefacts".to_string(),
-                    value: msg.to_string(),
-                    location: Some("0x0".to_string()),
-                    ..Default::default()
-                }],
-                match_count: 1,
-                source_file: None,
-                downgraded: false,
-            });
-
-            report.structure.push(StructuralFeature {
-                id: "pe/corrupted".to_string(),
-                desc: "Corrupted/tampered PE binary (header parsing failed)".to_string(),
-                evidence: vec![Evidence {
-                    method: "parse-failure".to_string(),
-                    source: "filefacts".to_string(),
-                    value: msg.to_string(),
-                    location: Some("0x0".to_string()),
-                    ..Default::default()
-                }],
-            });
-
-            report.metadata.errors.push(msg.to_string());
+            report_corrupted_header(&mut report, pe_data, filefacts_ok);
         }
 
         // Surface "filefacts couldn't be trusted on this binary" via
@@ -1047,529 +1111,39 @@ impl PEAnalyzer {
         report.files.extend(encoded_layers);
         report.findings.extend(plain_findings);
 
-        // Recover MPRESS resources using bounded LZMA decoding, never native
-        // execution. Each child is analyzed on its own bytes and evidence is
-        // attributed to that resource before findings are lifted to the wrapper.
-        // The same embedded-scan guard used for ordinary carved PEs prevents
-        // resource-inside-resource recursion from resetting the depth budget.
-        if !self.skip_embedded_scan && !self.is_cancelled() {
-            match crate::extractors::mpress::recover(pe_data) {
-                Ok(resources) => {
-                    for resource in resources {
-                        if self.is_cancelled() {
-                            break;
-                        }
-                        let kind = if resource.executable {
-                            crate::FileType::Pe
-                        } else {
-                            crate::FileType::Text
-                        };
-                        let suffix = if resource.executable { "exe" } else { "txt" };
-                        let member_path = format!("mpress/resource-{:x}.{suffix}", resource.rva);
-                        let virtual_path = format!("{}!{member_path}", logical_path.display());
-                        let temp = match tempfile::Builder::new()
-                            .suffix(&format!(".{suffix}"))
-                            .tempfile()
-                        {
-                            Ok(t) => t,
-                            Err(e) => {
-                                report
-                                    .metadata
-                                    .errors
-                                    .push(format!("MPRESS temporary file: {e}"));
-                                break;
-                            }
-                        };
-                        if let Err(e) = fs::write(temp.path(), &resource.data) {
-                            report
-                                .metadata
-                                .errors
-                                .push(format!("MPRESS temporary file: {e}"));
-                            break;
-                        }
-                        let input =
-                            AnalysisInput::new(Path::new(&virtual_path), &resource.data, kind)
-                                .with_backing_path(temp.path())
-                                .at_depth(1);
-                        let child = if resource.executable {
-                            let mut analyzer = PEAnalyzer::new()
-                                .with_engine(self.engine.clone())
-                                .without_embedded_scan();
-                            if let Some(yara) = &self.yara_engine {
-                                analyzer = analyzer.with_yara_arc(yara.clone());
-                            }
-                            analyzer.analyze_input(&input)
-                        } else {
-                            crate::analyzers::generic::GenericAnalyzer::new(kind)
-                                .with_engine(self.engine.clone())
-                                .analyze_input(&input)
-                        };
-                        match child {
-                            Ok(child) => {
-                                let first = report.files.len();
-                                crate::analyzers::subfile::attach_member(
-                                    &mut report,
-                                    child,
-                                    &resource.data,
-                                    kind,
-                                    &member_path,
-                                    &virtual_path,
-                                    &self.engine,
-                                );
-                                if let Some(file) = report.files.get_mut(first) {
-                                    file.encoding = Some(vec!["mpress-lzma".to_string()]);
-                                }
-                            }
-                            Err(e) => report
-                                .metadata
-                                .errors
-                                .push(format!("MPRESS resource analysis: {e:#}")),
-                        }
-                    }
-                }
-                Err(error) => report.findings.push(
-                    Finding::structural(
-                        "metadata/binary/layout/compression::mpress-recovery-failed".to_string(),
-                        error.to_string(),
-                        1.0,
-                    )
-                    .with_criticality(Criticality::Notable),
-                ),
-            }
-        }
+        self.analyze_recovered_payloads(&mut report, pe_data, ctx, logical_path);
 
-        // Node's SEA resource carries source and assets, not merely runtime
-        // code. Recover bounded members without running Node or the payload.
-        if !self.skip_embedded_scan
-            && !self.is_cancelled()
-            && let Some(members) = crate::extractors::node_sea::recover(pe_data)
-        {
-            for member in members {
-                if self.is_cancelled() {
-                    break;
-                }
-                let kind = if member.javascript {
-                    crate::FileType::JavaScript
-                } else if member.data.starts_with(b"MZ") {
-                    crate::FileType::Pe
-                } else {
-                    crate::FileType::Data
-                };
-                let member_path = format!("node-sea/{}", member.name);
-                let virtual_path = format!("{}!{}", logical_path.display(), member_path);
-                let child = (|| -> Result<AnalysisReport> {
-                    let suffix = if member.javascript {
-                        ".cjs"
-                    } else if kind == crate::FileType::Pe {
-                        ".dll"
-                    } else {
-                        ".bin"
-                    };
-                    let temp = tempfile::Builder::new().suffix(suffix).tempfile()?;
-                    fs::write(temp.path(), &member.data)?;
-                    let input = AnalysisInput::new(Path::new(&virtual_path), &member.data, kind)
-                        .with_backing_path(temp.path())
-                        .at_depth(1);
-                    if kind == crate::FileType::Pe {
-                        let mut analyzer = PEAnalyzer::new()
-                            .with_engine(self.engine.clone())
-                            .with_cancellation(self.cancellation.clone())
-                            .without_embedded_scan();
-                        if let Some(yara) = &self.yara_engine {
-                            analyzer = analyzer.with_yara_arc(yara.clone());
-                        }
-                        analyzer.analyze_input(&input)
-                    } else {
-                        crate::analyzers::generic::GenericAnalyzer::new(kind)
-                            .with_engine(self.engine.clone())
-                            .analyze_input(&input)
-                    }
-                })();
-                match child {
-                    Ok(child) => {
-                        let first = report.files.len();
-                        crate::analyzers::subfile::attach_member(
-                            &mut report,
-                            child,
-                            &member.data,
-                            kind,
-                            &member_path,
-                            &virtual_path,
-                            &self.engine,
-                        );
-                        if let Some(file) = report.files.get_mut(first) {
-                            file.encoding = Some(vec!["node-sea-resource".to_string()]);
-                        }
-                    }
-                    Err(e) => report
-                        .metadata
-                        .errors
-                        .push(format!("Node SEA member analysis: {e:#}")),
-                }
-            }
+        // Signer findings, filed under how far the signature is trusted
+        // (see `signature`). filefacts already folds the image-digest check
+        // into its trust tier; `pe.signature_integrity` says which way a
+        // signature that does not verify failed.
+        if let Some(identity) = ctx.identity() {
+            let failure = match ctx
+                .parsed
+                .values()
+                .get("pe.signature_integrity")
+                .and_then(|v| v.as_str())
+            {
+                Some("tampered") => Some(super::signature::Failure::Tampered),
+                Some("invalid") => Some(super::signature::Failure::BadSignature),
+                _ => None,
+            };
+            // The pinned CA that signed the leaf of the signature identity
+            // was read from (`pe.signatures[0]`), if one did.
+            let issuer = ctx
+                .parsed
+                .values()
+                .get("pe.signatures")
+                .and_then(|sigs| sigs.get(0))
+                .and_then(super::signature::pinned_issuer);
+            report.findings.extend(super::signature::findings(
+                &identity,
+                failure,
+                issuer,
+                "authenticode",
+                None,
+            ));
         }
-
-        // Recover the recognized x86 NRV2B stub without invoking its code.
-        // The child is explicitly a memory-layout analysis image: imports are
-        // not resolved, and it is never executed or treated as a rebuilt file.
-        if !self.skip_embedded_scan && self.engine.upx() && !self.is_cancelled() {
-            match crate::extractors::nrv32::recover(pe_data) {
-                Ok(Some(data)) => {
-                    let member_path = "nrv2b/memory-image.dll";
-                    let virtual_path = format!("{}!{member_path}", logical_path.display());
-                    let recovered = (|| -> Result<AnalysisReport> {
-                        let temp = tempfile::Builder::new().suffix(".dll").tempfile()?;
-                        fs::write(temp.path(), &data)?;
-                        let input = AnalysisInput::new(
-                            Path::new(&virtual_path),
-                            &data,
-                            crate::FileType::Pe,
-                        )
-                        .with_backing_path(temp.path())
-                        .at_depth(1);
-                        let mut analyzer = PEAnalyzer::new()
-                            .with_engine(self.engine.clone())
-                            .with_cancellation(self.cancellation.clone())
-                            .without_embedded_scan();
-                        if let Some(yara) = &self.yara_engine {
-                            analyzer = analyzer.with_yara_arc(yara.clone());
-                        }
-                        analyzer.analyze_input(&input)
-                    })();
-                    match recovered {
-                        Ok(child) => {
-                            let first = report.files.len();
-                            crate::analyzers::subfile::attach_member(
-                                &mut report,
-                                child,
-                                &data,
-                                crate::FileType::Pe,
-                                member_path,
-                                &virtual_path,
-                                &self.engine,
-                            );
-                            if let Some(file) = report.files.get_mut(first) {
-                                file.encoding = Some(vec!["nrv2b-memory-image".to_string()]);
-                            }
-                        }
-                        Err(error) => report
-                            .metadata
-                            .errors
-                            .push(format!("NRV memory-image analysis: {error:#}")),
-                    }
-                }
-                Ok(None) => {}
-                Err(error) => report
-                    .metadata
-                    .errors
-                    .push(format!("NRV recovery diagnostic: {error}")),
-            }
-        }
-
-        // Recover the recognized feedback-stream/RC4 DLL envelope as data.
-        // Child behavioral findings describe the decrypted DLL; the container
-        // records encoding provenance, without inferring intent from packing.
-        if !self.skip_embedded_scan
-            && !self.is_cancelled()
-            && let Some(payload) = crate::extractors::metamorphic_graft::recover(pe_data)
-        {
-            let member_path = format!("feedback-rc4/payload-{}.dll", payload.offset);
-            let virtual_path = format!("{}!{}", logical_path.display(), member_path);
-            let child = (|| -> Result<AnalysisReport> {
-                let temp = tempfile::Builder::new().suffix(".dll").tempfile()?;
-                fs::write(temp.path(), &payload.data)?;
-                let input = AnalysisInput::new(
-                    Path::new(&virtual_path),
-                    &payload.data,
-                    crate::FileType::Pe,
-                )
-                .with_backing_path(temp.path())
-                .at_depth(1);
-                PEAnalyzer::new()
-                    .with_engine(self.engine.clone())
-                    .with_cancellation(self.cancellation.clone())
-                    .without_embedded_scan()
-                    .analyze_input(&input)
-            })();
-            match child {
-                Ok(child) => {
-                    let first = report.files.len();
-                    crate::analyzers::subfile::attach_member(
-                        &mut report,
-                        child,
-                        &payload.data,
-                        crate::FileType::Pe,
-                        &member_path,
-                        &virtual_path,
-                        &self.engine,
-                    );
-                    if let Some(file) = report.files.get_mut(first) {
-                        file.encoding = Some(vec!["feedback-stream-rc4".to_string()]);
-                    }
-                    report.structure.push(StructuralFeature {
-                        id: "encoding/feedback-rc4-dll".to_string(),
-                        desc: "DLL recovered from feedback-stream and RC4 envelope".to_string(),
-                        evidence: vec![Evidence {
-                            method: "crypto".to_string(),
-                            source: "metamorphic_graft".to_string(),
-                            value: "Code-relative stream parameters and trailer-derived RC4 key"
-                                .to_string(),
-                            location: Some(format!("offset:{}", payload.offset)),
-                            offsets: vec![payload.offset as u64],
-                            ..Evidence::default()
-                        }],
-                    });
-                }
-                Err(error) => report
-                    .metadata
-                    .errors
-                    .push(format!("Feedback/RC4 DLL: {error:#}")),
-            }
-        }
-
-        // A code-relative RC4 table can carry several independent PE files.
-        // Decode only the bounded envelope; each child owns its behavior.
-        if !self.skip_embedded_scan && !self.is_cancelled() {
-            for payload in crate::extractors::rc4_pe_table::recover(pe_data) {
-                if self.is_cancelled() {
-                    break;
-                }
-                let member = format!("rc4-table/payload-{}.exe", payload.offset);
-                let virtual_path = format!("{}!{}", logical_path.display(), member);
-                let child = (|| -> Result<AnalysisReport> {
-                    let temp = tempfile::Builder::new().suffix(".exe").tempfile()?;
-                    fs::write(temp.path(), &payload.data)?;
-                    let input = AnalysisInput::new(
-                        Path::new(&virtual_path),
-                        &payload.data,
-                        crate::FileType::Pe,
-                    )
-                    .with_backing_path(temp.path())
-                    .at_depth(1);
-                    PEAnalyzer::new()
-                        .with_engine(self.engine.clone())
-                        .with_cancellation(self.cancellation.clone())
-                        .without_embedded_scan()
-                        .analyze_input(&input)
-                })();
-                match child {
-                    Ok(child) => {
-                        let first = report.files.len();
-                        crate::analyzers::subfile::attach_member(
-                            &mut report,
-                            child,
-                            &payload.data,
-                            crate::FileType::Pe,
-                            &member,
-                            &virtual_path,
-                            &self.engine,
-                        );
-                        if let Some(file) = report.files.get_mut(first) {
-                            file.encoding = Some(vec!["rc4-table".to_string()]);
-                        }
-                    }
-                    Err(error) => report
-                        .metadata
-                        .errors
-                        .push(format!("RC4 table member: {error:#}")),
-                }
-            }
-        }
-
-        // Authenticated fragmented AES-GCM envelope: decode bytes, never execute.
-        // Decode only the bounded envelope; each child owns its behavior.
-        if !self.skip_embedded_scan && !self.is_cancelled() {
-            let mut recovered = crate::extractors::fragment_gcm_pe::recover_chain(pe_data);
-            if let Some(payload) = crate::extractors::hex_rc4_nextbyte::recover(pe_data) {
-                recovered.push((
-                    crate::extractors::fragment_gcm_pe::Member {
-                        offset: payload.offset,
-                        data: payload.data,
-                    },
-                    "hex-rc4-nextbyte",
-                ));
-            }
-            for (payload, encoding) in recovered {
-                if self.is_cancelled() {
-                    break;
-                }
-                let member = format!("{encoding}/payload-{}.exe", payload.offset);
-                let virtual_path = format!("{}!{}", logical_path.display(), member);
-                let child = (|| -> Result<AnalysisReport> {
-                    let temp = tempfile::Builder::new().suffix(".exe").tempfile()?;
-                    fs::write(temp.path(), &payload.data)?;
-                    let input = AnalysisInput::new(
-                        Path::new(&virtual_path),
-                        &payload.data,
-                        crate::FileType::Pe,
-                    )
-                    .with_backing_path(temp.path())
-                    .at_depth(1);
-                    PEAnalyzer::new()
-                        .with_engine(self.engine.clone())
-                        .with_cancellation(self.cancellation.clone())
-                        .without_embedded_scan()
-                        .analyze_input(&input)
-                })();
-                match child {
-                    Ok(child) => {
-                        let first = report.files.len();
-                        crate::analyzers::subfile::attach_member(
-                            &mut report,
-                            child,
-                            &payload.data,
-                            crate::FileType::Pe,
-                            &member,
-                            &virtual_path,
-                            &self.engine,
-                        );
-                        if let Some(file) = report.files.get_mut(first) {
-                            file.encoding = Some(encoding.split('/').map(str::to_string).collect());
-                        }
-                    }
-                    Err(error) => report
-                        .metadata
-                        .errors
-                        .push(format!("Fragmented GCM member: {error:#}")),
-                }
-            }
-        }
-
-        // Converter envelopes carry ordinary scripts: the decoded child owns
-        // behavioral findings, while the parent records only the encoding.
-        if !self.skip_embedded_scan {
-            for payload in crate::extractors::ps_to_exe::recover(pe_data, &ctx.parsed) {
-                if self
-                    .cancellation
-                    .as_ref()
-                    .is_some_and(|c| c.load(std::sync::atomic::Ordering::Acquire))
-                {
-                    break;
-                }
-                let member_path = format!("ps-to-exe/resource-{}.ps1", payload.offset);
-                let virtual_path = format!("{}!{}", logical_path.display(), member_path);
-                let input = AnalysisInput::new(
-                    Path::new(&virtual_path),
-                    &payload.data,
-                    crate::FileType::PowerShell,
-                )
-                .at_depth(1);
-                match crate::analyzers::unified::UnifiedSourceAnalyzer::for_file_type(
-                    &crate::FileType::PowerShell,
-                )
-                .map(|a| a.with_engine(self.engine.clone()).analyze_input(&input))
-                {
-                    Some(Ok(child)) => {
-                        crate::analyzers::subfile::attach_member(
-                            &mut report,
-                            child,
-                            &payload.data,
-                            crate::FileType::PowerShell,
-                            &member_path,
-                            &virtual_path,
-                            &self.engine,
-                        );
-                        report.structure.push(StructuralFeature {
-                            id: "encoding/rc4-script-resource".to_string(),
-                            desc: "PowerShell script recovered from converter RC4 resource"
-                                .to_string(),
-                            evidence: vec![Evidence {
-                                method: "crypto".to_string(),
-                                source: "ps_to_exe".to_string(),
-                                value: "MD5-derived RC4 key from code-referenced seed".to_string(),
-                                location: Some(format!("offset:{}", payload.offset)),
-                                offsets: vec![payload.offset as u64],
-                                ..Evidence::default()
-                            }],
-                        });
-                    }
-                    Some(Err(error)) => report
-                        .metadata
-                        .errors
-                        .push(format!("ps-to-exe resource: {error:#}")),
-                    None => {}
-                }
-            }
-        }
-
-        // Emit signature findings directly from filefacts's
-        // `pe.signatures[]` view. Each leaf cert subject CN becomes
-        // a `metadata/signed/<type>::<cn>` finding; the very first
-        // signature's CN is also emitted as a `metadata/signed/leaf::<cn>`
-        // Notable so "who signed this" stands out from the chain.
-        //
-        // Both are Notable, not Baseline: the signer is the *identity a
-        // binary claims*, which is first-class supply-chain signal an analyst
-        // reads in a diff (a swapped or revoked signer, a previously-Microsoft
-        // binary now signed by an unknown CA). Identity is promoted to Notable
-        // across all formats — see
-        // traits/metadata/signed/trust-level/traits.yaml for the shared
-        // rationale.
-        if let Some(sigs) = ctx
-            .parsed
-            .values()
-            .get("pe.signatures")
-            .and_then(|v| v.as_array())
-        {
-            for (idx, sig) in sigs.iter().enumerate() {
-                let Some(subject) = sig.get("subject").and_then(|v| v.as_str()) else {
-                    continue;
-                };
-                let Some(cn) = dn_extract_cn(subject) else {
-                    continue;
-                };
-                let normalized = normalize_signer_name(&cn);
-                report.findings.push(Finding {
-                    precomputed_spans: None,
-                    src: None,
-                    id: format!("metadata/signed/unknown::{}", normalized).into(),
-                    kind: FindingKind::Capability,
-                    desc: format!("Authenticode chain CN: {}", cn).into(),
-                    conf: 1.0,
-                    crit: Criticality::Notable,
-                    mbc: None,
-                    attack: None,
-                    trait_refs: vec![],
-                    evidence: vec![Evidence {
-                        method: "authenticode".to_string(),
-                        source: "filefacts".to_string(),
-                        value: cn.clone(),
-                        ..Default::default()
-                    }],
-                    match_count: 1,
-                    source_file: None,
-                    downgraded: false,
-                });
-                if idx == 0 {
-                    // Prefer the O attribute when present (organisation
-                    // signs more meaningfully than a person's CN).
-                    let primary = dn_extract_o(subject).unwrap_or_else(|| cn.clone());
-                    let primary_norm = normalize_signer_name(&primary);
-                    report.findings.push(Finding {
-                        precomputed_spans: None,
-                        src: None,
-                        id: format!("metadata/signed/leaf::{}", primary_norm).into(),
-                        kind: FindingKind::Capability,
-                        desc: format!("Signed by {}", primary).into(),
-                        conf: 1.0,
-                        crit: Criticality::Notable,
-                        mbc: None,
-                        attack: None,
-                        trait_refs: vec![],
-                        evidence: vec![Evidence {
-                            method: "authenticode".to_string(),
-                            source: "filefacts".to_string(),
-                            value: primary,
-                            ..Default::default()
-                        }],
-                        match_count: 1,
-                        source_file: None,
-                        downgraded: false,
-                    });
-                }
-            }
-        }
-        let _ = original_data;
 
         // Overlay analysis. The overlay extent comes from filefacts's
         // emitted `pe.overlay_offset` / `pe.overlay_end` metrics —
@@ -1599,63 +1173,10 @@ impl PEAnalyzer {
             )
         {
             embedded_archive_count = embedded_archive_count.saturating_add(1);
-            let pe_filename = std::path::Path::new(&report.target.path)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("binary.exe");
-
-            report.findings.push(overlay_analysis.sfx_finding);
-
-            for mut finding in overlay_analysis.archive_report.findings {
-                for evidence in &mut finding.evidence {
-                    if let Some(ref loc) = evidence.location {
-                        if let Some(rest) = loc.strip_prefix("archive:") {
-                            evidence.location = Some(format!(
-                                "archive:{}{}{}",
-                                pe_filename,
-                                crate::types::file_analysis::ARCHIVE_DELIMITER,
-                                rest
-                            ));
-                        } else if !loc.contains(crate::types::file_analysis::ARCHIVE_DELIMITER) {
-                            evidence.location = Some(format!(
-                                "archive:{}{}{}",
-                                pe_filename,
-                                crate::types::file_analysis::ARCHIVE_DELIMITER,
-                                loc
-                            ));
-                        }
-                    }
-                }
-                report.findings.push(finding);
-            }
-
-            for mut entry in overlay_analysis.archive_report.archive_contents {
-                if !entry
-                    .path
-                    .contains(crate::types::file_analysis::ARCHIVE_DELIMITER)
-                {
-                    entry.path =
-                        crate::types::file_analysis::encode_archive_path(pe_filename, &entry.path);
-                }
-                report.archive_contents.push(entry);
-            }
-
-            report.files.extend(overlay_analysis.archive_report.files);
-            report
-                .strings
-                .extend(overlay_analysis.archive_report.strings);
-            for tool in overlay_analysis.archive_report.metadata.tools_used {
-                if !tools_used.contains(&tool) {
-                    tools_used.push(tool);
-                }
-            }
+            adopt_overlay(&mut report, &mut tools_used, overlay_analysis);
         }
 
         // NSIS / Inno Setup detection
-        let pe_filename = std::path::Path::new(&report.target.path)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("binary.exe");
         // Discover embedded images once and use their validated spans when
         // identifying SFX markers. A nested Inno installer must be analyzed
         // as the embedded child; its marker must not make the host itself look
@@ -1689,18 +1210,7 @@ impl PEAnalyzer {
                 // data files that are not promoted to separate analyses unless
                 // --all-files is enabled. Prefixing here records the installer
                 // as the immediate provenance parent.
-                for mut entry in archive_report.archive_contents {
-                    if !entry
-                        .path
-                        .contains(crate::types::file_analysis::ARCHIVE_DELIMITER)
-                    {
-                        entry.path = crate::types::file_analysis::encode_archive_path(
-                            pe_filename,
-                            &entry.path,
-                        );
-                    }
-                    report.archive_contents.push(entry);
-                }
+                adopt_member_inventory(&mut report, archive_report.archive_contents);
                 // Merge per-format kv subtrees from the inner archive report
                 // (e.g. `pyinstaller.*`) into the host PE's values_tree so they
                 // surface in the host's `k` field at finalize time.
@@ -1711,11 +1221,7 @@ impl PEAnalyzer {
                         report.merge_kv_subtree(&ns, value);
                     }
                 }
-                for tool in archive_report.metadata.tools_used {
-                    if !tools_used.contains(&tool) {
-                        tools_used.push(tool);
-                    }
-                }
+                adopt_tools(&mut tools_used, archive_report.metadata.tools_used);
             }
         }
 
@@ -1733,145 +1239,12 @@ impl PEAnalyzer {
         }
 
         if !self.skip_embedded_scan {
-            let host_name = std::path::Path::new(&report.target.path)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("binary.exe")
-                .to_string();
-            let cert_range = pe_certificate_range_from_ctx(ctx, pe_data);
-            // Invariant across every embedded candidate — compute once, not per
-            // binary. `is_dotnet` scans the whole PE buffer; the platform-signed
-            // check rescans findings (the embedded-binary findings pushed in this
-            // loop never carry the `metadata/signed/platform::` prefix); the
-            // `.rsrc` byte range is fixed by the section table.
-            let is_dotnet = pe_data.windows(4).any(|w| w == b"BSJB");
-            let host_is_platform_signed = report
-                .findings
-                .iter()
-                .any(|f| f.id.starts_with("metadata/signed/platform::"));
-            let rsrc_range: Option<(usize, usize)> = if filefacts_ok {
-                ctx.parsed.sections().iter().find_map(|s| {
-                    (s.name == ".rsrc").then(|| {
-                        let start = s.file_offset as usize;
-                        (start, start.saturating_add(s.file_size as usize))
-                    })
-                })
-            } else {
-                None
-            };
-            for binary in &embedded {
-                if self.is_cancelled() {
-                    break;
-                }
-                if cert_range
-                    .is_some_and(|(start, end)| binary.offset >= start && binary.offset < end)
-                {
-                    continue;
-                }
-                embedded_binary_count = embedded_binary_count.saturating_add(1);
-                let mut finding = crate::analyzers::embedded_binary_detector::finding_for(
-                    binary,
-                    &report.target.path,
-                );
-                // Downgrade embedded binaries in .rsrc or .NET
-                // managed resources to Notable (legitimate use —
-                // e.g. resource-only DLLs, .NET assemblies bundling
-                // drivers). Section lookup runs over filefacts's typed
-                // Sections view.
-                if filefacts_ok {
-                    let in_rsrc = rsrc_range
-                        .is_some_and(|(start, end)| binary.offset >= start && binary.offset < end);
-                    let in_nsis_overlay =
-                        matches!(
-                            detected_sfx_kind,
-                            Some(crate::analyzers::sfx_detector::SfxKind::Nsis)
-                        ) && overlay_bounds.is_some_and(|(overlay_start, overlay_end)| {
-                            binary.offset >= overlay_start && binary.offset < overlay_end
-                        });
-                    // NSIS installers legitimately carry native
-                    // plugin DLLs inside the overlay; those child
-                    // binaries are still extracted and analyzed, so
-                    // the host-level embedded-PE marker should be
-                    // informational rather than suspicious.
-                    //
-                    // Platform-signed PEs (e.g. Microsoft Windows drivers)
-                    // legitimately carry firmware blobs (Intel microcode, etc.)
-                    // formatted as ELF inside non-standard sections like .drt.
-                    if in_rsrc || is_dotnet || in_nsis_overlay || host_is_platform_signed {
-                        finding.crit = Criticality::Notable;
-                    }
-                }
-
-                if binary.offset >= pe_data.len() {
-                    report.findings.push(finding);
-                    continue;
-                }
-                // Decode base64-encoded payloads before recursing —
-                // otherwise the child analyzer reads encoded text
-                // and reports the dropper as a malformed binary.
-                let decoded_storage: Vec<u8>;
-                let embedded_bytes: &[u8] = if binary.encoding == Some("base64") {
-                    // The base64 run starting at the offset, trimmed to whole
-                    // 4-character quads.
-                    let encoded = pe_data
-                        .get(binary.offset..)
-                        .and_then(|rest| {
-                            let run = rest
-                                .iter()
-                                .take_while(|&&b| {
-                                    b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'='
-                                })
-                                .count();
-                            rest.get(..run & !3)
-                        })
-                        .unwrap_or_default();
-                    match base64::Engine::decode(
-                        &base64::engine::general_purpose::STANDARD,
-                        encoded,
-                    ) {
-                        Ok(b) => {
-                            decoded_storage = b;
-                            decoded_storage.as_slice()
-                        }
-                        Err(_) => {
-                            report.findings.push(finding);
-                            continue;
-                        }
-                    }
-                } else {
-                    let slice_end = binary
-                        .offset
-                        .saturating_add(binary.estimated_size)
-                        .min(pe_data.len());
-                    pe_data.get(binary.offset..slice_end).unwrap_or_default()
-                };
-                let kind_str = binary.kind.as_str();
-                let display_kind = binary.display_kind();
-                if let Some(files) = crate::analyzers::utils::analyze_embedded_as_child(
-                    embedded_bytes,
-                    &host_name,
-                    kind_str,
-                    &display_kind,
-                    binary.offset,
-                    self.engine.clone(),
-                    self.yara_engine.clone(),
-                    &raw_stng_strings,
-                ) {
-                    if finding.crit == Criticality::Suspicious
-                        && files
-                            .iter()
-                            .flat_map(|file| &file.findings)
-                            .any(|child_finding| {
-                                child_finding.crit <= Criticality::Notable
-                                    && child_finding.id.starts_with("metadata/signed/")
-                            })
-                    {
-                        finding.crit = Criticality::Notable;
-                    }
-                    report.files.extend(files);
-                }
-                report.findings.push(finding);
-            }
+            embedded_binary_count = self.analyze_embedded_binaries(
+                &mut report,
+                pe_data,
+                &embedded,
+                pe_certificate_range_from_ctx(ctx, pe_data),
+            );
         }
 
         // Container-shape metrics, on the same flat map for the same reason:
@@ -1935,12 +1308,15 @@ impl PEAnalyzer {
             return (data, findings);
         }
 
-        // Search for MZ header within first 64 bytes
-        let mz_offset = self.find_mz_offset(data, 64);
+        // Search for an MZ header within the first 64 bytes.
+        let mz_offset = data
+            .get(..64)
+            .unwrap_or(data)
+            .windows(2)
+            .position(|pair| pair == b"MZ");
 
         if let Some(offset) = mz_offset {
-            // Found MZ at non-zero offset - junk prefix detected
-            // `find_mz_offset` returns an offset inside `data`.
+            // Found MZ at a non-zero offset inside `data`: junk prefix.
             let prefix = data.get(..offset).unwrap_or_default();
             let prefix_display = if prefix.len() <= 32 {
                 String::from_utf8_lossy(prefix).to_string()
@@ -2130,14 +1506,6 @@ impl PEAnalyzer {
         // .NET BSJB CLR metadata signature is detected by the YAML trait
         // metadata/binary/framework::dotnet-metadata (raw "BSJB" scan).
     }
-
-    /// Find MZ header within first max_offset bytes
-    fn find_mz_offset(&self, data: &[u8], max_offset: usize) -> Option<usize> {
-        data.get(..max_offset)
-            .unwrap_or(data)
-            .windows(2)
-            .position(|pair| pair == b"MZ")
-    }
 }
 
 impl Default for PEAnalyzer {
@@ -2216,666 +1584,4 @@ impl Analyzer for PEAnalyzer {
     clippy::indexing_slicing,
     clippy::arithmetic_side_effects
 )]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
-
-    /// The signer-id leaf format that YAML refs are validated against; it
-    /// must stay byte-for-byte what the pre-refactor inline code produced.
-    #[test]
-    fn normalize_signer_name_matches_the_emitted_id_format() {
-        for (name, id) in [
-            ("Microsoft Corporation", "microsoft-corporation"),
-            (
-                "Tencent Technology(Shenzhen) Company Limited",
-                "tencent-technologyshenzhen-company-limited",
-            ),
-            (
-                "Open Source Developer, Martin Tofall",
-                "open-source-developer-martin-tofall",
-            ),
-            ("Valve Corp.", "valve-corp."),
-            (
-                "Sectigo RSA Time Stamping Signer #3",
-                "sectigo-rsa-time-stamping-signer-#3",
-            ),
-            ("ООО Яндекс", "ооо-яндекс"),
-            ("", ""),
-        ] {
-            assert_eq!(normalize_signer_name(name), id, "{name}");
-            // Idempotent: a normalized leaf is its own normal form, which is
-            // what reference validation relies on.
-            assert_eq!(normalize_signer_name(id), id);
-        }
-    }
-
-    fn test_pe_path() -> PathBuf {
-        PathBuf::from("tests/fixtures/test.exe")
-    }
-
-    /// A section name reserved for one directory identifies that directory;
-    /// the general-purpose names and any invented name claim nothing, which
-    /// is what keeps `pe.directory_section_mismatch_count` from firing on
-    /// ordinary packers.
-    #[test]
-    fn reserved_section_names_only_cover_single_purpose_sections() {
-        assert_eq!(section_name_reserved_for(".rsrc"), Some("resource"));
-        assert_eq!(section_name_reserved_for(".reloc"), Some("base_relocation"));
-        assert_eq!(section_name_reserved_for(".tls"), Some("tls"));
-        for shared in [".text", ".rdata", ".data", "UPX1", ".vmp0", ""] {
-            assert_eq!(
-                section_name_reserved_for(shared),
-                None,
-                "{shared} must claim no directory"
-            );
-        }
-    }
-
-    /// Prose vs. code, at the ratios measured on the sample that motivated
-    /// the metric: its stuffed sections ran ~0.99 printable / ~0.15 space /
-    /// ~0.80 letters, its real code section 0.32 / 0.005 / 0.19.
-    #[test]
-    fn prose_sections_separate_from_code_and_padding() {
-        let prose = b"You may make a single copy of the software for backup purposes, and use \
-            that backup copy as described in this agreement. If you are seeking a refund, and \
-            you cannot obtain one where you acquired the software, contact the manufacturer. "
-            .repeat(4);
-        assert!(section_is_prose(&prose));
-
-        // Alignment padding must not drag the ratios down: same content, then
-        // zeroes out to a 4 KiB page.
-        let mut padded = prose.clone();
-        padded.resize(4096, 0);
-        assert!(section_is_prose(&padded));
-
-        // x86 opcode soup: printable-ish bytes but almost no spaces.
-        let code: Vec<u8> = (0..2048u32)
-            .map(|i| (i.wrapping_mul(37) % 251) as u8)
-            .collect();
-        assert!(!section_is_prose(&code));
-
-        // An all-zero section trims to nothing rather than scoring as text.
-        assert!(!section_is_prose(&[0u8; 4096]));
-
-        // Too short to judge: a lone string, not a document.
-        assert!(!section_is_prose(
-            b"the quick brown fox jumps over the lazy dog"
-        ));
-    }
-
-    #[test]
-    fn test_can_analyze_pe() {
-        let analyzer = PEAnalyzer::new();
-        let test_file = test_pe_path();
-
-        if test_file.exists() {
-            assert!(analyzer.can_analyze(&test_file));
-        }
-    }
-
-    #[test]
-    fn test_cannot_analyze_non_pe() {
-        let analyzer = PEAnalyzer::new();
-        assert!(!analyzer.can_analyze(&PathBuf::from("/dev/null")));
-        assert!(!analyzer.can_analyze(&PathBuf::from("tests/fixtures/test.elf")));
-    }
-
-    #[test]
-    fn test_analyze_pe_file() {
-        let analyzer = PEAnalyzer::new();
-        let test_file = test_pe_path();
-
-        if !test_file.exists() {
-            return;
-        }
-
-        let result = analyzer.analyze(&test_file);
-        assert!(result.is_ok());
-
-        let report = result.unwrap();
-        assert_eq!(report.target.file_type, "pe");
-        assert!(report.target.size_bytes > 0);
-        assert!(!report.target.sha256.is_empty());
-    }
-
-    #[test]
-    fn test_pe_has_structure() {
-        let analyzer = PEAnalyzer::new();
-        let test_file = test_pe_path();
-
-        if !test_file.exists() {
-            return;
-        }
-
-        let report = analyzer.analyze(&test_file).unwrap();
-        assert!(!report.structure.is_empty());
-    }
-
-    #[test]
-    fn test_pe_architecture_detected() {
-        let analyzer = PEAnalyzer::new();
-        let test_file = test_pe_path();
-
-        if !test_file.exists() {
-            return;
-        }
-
-        let report = analyzer.analyze(&test_file).unwrap();
-        let archs = report
-            .target
-            .architectures
-            .expect("PE analyzer should detect at least one architecture");
-        // test.exe is a 64-bit MSVC build. The canonical label is
-        // `"x86_64"` — what filefacts emits and what every analyst-facing
-        // tool (objdump, file(1), LIEF) reports. The ctx-fed path
-        // returns this verbatim; the legacy fallback maps 0x8664 to
-        // the same string.
-        assert_eq!(
-            archs,
-            vec!["x86_64".to_string()],
-            "test.exe arch label drifted from canonical x86_64",
-        );
-    }
-
-    /// Verify `arch_name` returns filefacts canonical lowercase label
-    /// (`"x86_64"`, `"i386"`, `"arm64"`).
-    #[test]
-    fn arch_name_returns_filefacts_canonical_label() {
-        let analyzer = PEAnalyzer::new();
-        let test_file = test_pe_path();
-        if !test_file.exists() {
-            return;
-        }
-        let bytes = std::fs::read(&test_file).unwrap();
-        let ctx = crate::analysis_context::AnalysisContext::open(&test_file, &bytes);
-        // test.exe is x86_64; filefacts surfaces it via `pe.machine`.
-        assert_eq!(analyzer.arch_name(&ctx), "x86_64");
-    }
-
-    #[test]
-    fn test_pe_sections_analyzed() {
-        let analyzer = PEAnalyzer::new();
-        let test_file = test_pe_path();
-
-        if !test_file.exists() {
-            return;
-        }
-
-        let report = analyzer.analyze(&test_file).unwrap();
-        assert!(!report.sections.is_empty());
-    }
-
-    #[test]
-    fn test_pe_has_imports() {
-        let analyzer = PEAnalyzer::new();
-        let test_file = test_pe_path();
-
-        if !test_file.exists() {
-            return;
-        }
-
-        let report = analyzer.analyze(&test_file).unwrap();
-        assert!(!report.imports.is_empty());
-    }
-
-    /// `analyze_structural_with_ctx` produces non-empty
-    /// imports / sections views for a standard MSVC fixture.
-    /// Source tags should land as `"pe"` (from filefacts's typed view).
-    #[test]
-    fn analyze_structural_populates_pe_views() {
-        let analyzer = PEAnalyzer::new();
-        let test_file = test_pe_path();
-        if !test_file.exists() {
-            return;
-        }
-        let bytes = std::fs::read(&test_file).unwrap();
-        let ctx = crate::analysis_context::AnalysisContext::open(&test_file, &bytes);
-        let report = analyzer.analyze_structural_with_ctx(&test_file, &bytes, None, &ctx);
-
-        assert!(!report.imports.is_empty());
-        // `test.exe` is an EXE rather than a DLL, so `exports` may
-        // legitimately be empty — assert the imports/sections lanes
-        // only.
-        assert!(!report.sections.is_empty());
-
-        // Imports come from filefacts's typed view.
-        assert!(!report.imports.is_empty(), "expected PE imports");
-    }
-
-    #[test]
-    fn test_pe_capabilities_detected() {
-        let analyzer = PEAnalyzer::new();
-        let test_file = test_pe_path();
-
-        if !test_file.exists() {
-            return;
-        }
-
-        let report = analyzer.analyze(&test_file).unwrap();
-        // Capabilities may or may not be detected depending on the binary
-        // Just verify the analysis completes successfully
-        let _ = &report.traits;
-    }
-
-    #[test]
-    fn test_pe_strings_extracted() {
-        let analyzer = PEAnalyzer::new();
-        let test_file = test_pe_path();
-
-        if !test_file.exists() {
-            return;
-        }
-
-        let report = analyzer.analyze(&test_file).unwrap();
-        assert!(!report.strings.is_empty());
-    }
-
-    #[test]
-    fn test_pe_tools_used() {
-        let analyzer = PEAnalyzer::new();
-        let test_file = test_pe_path();
-
-        if !test_file.exists() {
-            return;
-        }
-
-        let report = analyzer.analyze(&test_file).unwrap();
-        assert!(
-            report
-                .metadata
-                .tools_used
-                .contains(&"filefacts".to_string())
-        );
-    }
-
-    #[test]
-    fn test_pe_analysis_duration() {
-        let analyzer = PEAnalyzer::new();
-        let test_file = test_pe_path();
-
-        if !test_file.exists() {
-            return;
-        }
-
-        let report = analyzer.analyze(&test_file).unwrap();
-        // Duration may be 0 for very fast analysis (sub-millisecond).
-        // The important thing is that analysis completes and the field is set.
-        // Duration is a u64, so it's always >= 0.
-        assert!(
-            report.metadata.analysis_duration_ms < 60000,
-            "Analysis should complete in under a minute"
-        );
-    }
-
-    #[test]
-    fn test_analyze_self_extracting_7z() {
-        use std::fs;
-        use std::io::Write;
-
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("sfx.exe");
-
-        let Ok(mut host) = fs::read("tests/fixtures/test.exe") else {
-            eprintln!("skipping test_analyze_self_extracting_7z: missing tests/fixtures/test.exe");
-            return;
-        };
-
-        // Append a tiny ZIP archive as overlay so the PE behaves like a
-        // self-extracting archive without relying on developer-local samples.
-        let cursor = std::io::Cursor::new(Vec::new());
-        let mut zip = zip::ZipWriter::new(cursor);
-        let options = zip::write::SimpleFileOptions::default();
-        zip.start_file("hello.txt", options).unwrap();
-        zip.write_all(b"hello from overlay").unwrap();
-        let cursor = zip.finish().unwrap();
-        host.extend_from_slice(&cursor.into_inner());
-        fs::write(&path, &host).unwrap();
-
-        let analyzer = PEAnalyzer::new();
-        let report = analyzer.analyze(&path).unwrap();
-
-        // Should detect the self-extracting archive
-        assert!(
-            report
-                .findings
-                .iter()
-                .any(|f| f.id.contains("self-extracting")),
-            "Should detect self-extracting archive"
-        );
-
-        // Should have analyzed the embedded archive contents
-        assert!(
-            !report.archive_contents.is_empty(),
-            "Should have extracted archive contents"
-        );
-
-        // Should have findings from the embedded files
-        eprintln!(
-            "SFX analysis found {} files in archive",
-            report.archive_contents.len()
-        );
-        eprintln!(
-            "SFX analysis found {} total findings",
-            report.findings.len()
-        );
-
-        // All archive content paths should use standard archive delimiter
-        for entry in &report.archive_contents {
-            assert!(
-                entry
-                    .path
-                    .contains(crate::types::file_analysis::ARCHIVE_DELIMITER),
-                "Archive path should use '!!': {}",
-                entry.path
-            );
-            assert!(
-                entry.path.starts_with("sfx.exe!!"),
-                "Archive path should start with PE filename: {}",
-                entry.path
-            );
-        }
-    }
-
-    // =========================================================================
-    // UPX Integration Tests
-    // =========================================================================
-
-    #[test]
-    fn test_pe_upx_recovers_virtual_archive_member() {
-        if !crate::upx::UPXDecompressor::is_available() {
-            return;
-        }
-        let packed = include_bytes!("../../testdata/upx/activation-factory-packed.pe");
-        let directory = tempfile::tempdir().unwrap();
-        let virtual_path = directory.path().join("archive.zip!!library.dll");
-        assert!(!virtual_path.exists());
-
-        let report = PEAnalyzer::new().analyze_structural(&virtual_path, packed, None);
-        let unpacked = report
-            .files
-            .iter()
-            .find(|file| {
-                file.encoding
-                    .as_ref()
-                    .is_some_and(|encodings| encodings.iter().any(|encoding| encoding == "upx"))
-            })
-            .expect("UPX payload must be recovered without a real source path");
-        assert_eq!(unpacked.size, 4096);
-        assert_eq!(unpacked.file_type, "pe");
-        assert!(!report.findings.iter().any(|finding| {
-            finding.id == "metadata/binary/layout/compression::upx-decompression-failed"
-        }));
-    }
-
-    #[test]
-    fn test_pe_upx_detection_in_data() {
-        use crate::upx::UPXDecompressor;
-
-        // PE with UPX magic
-        let mut upx_data = vec![0u8; 256];
-        // MZ header
-        upx_data[0..2].copy_from_slice(b"MZ");
-        // UPX magic
-        upx_data[100..104].copy_from_slice(b"UPX!");
-        assert!(UPXDecompressor::is_upx_packed(&upx_data));
-
-        // PE without UPX magic
-        let mut normal_data = vec![0u8; 256];
-        normal_data[0..2].copy_from_slice(b"MZ");
-        assert!(!UPXDecompressor::is_upx_packed(&normal_data));
-    }
-
-    #[test]
-    fn test_pe_upx_packed_creates_finding() {
-        use crate::upx::UPXDecompressor;
-
-        let analyzer = PEAnalyzer::new();
-
-        // Create minimal UPX-packed PE-like data (won't actually decompress)
-        let mut upx_data = vec![0u8; 512];
-        // DOS header
-        upx_data[0..2].copy_from_slice(b"MZ");
-        // e_lfanew pointing to PE header
-        upx_data[0x3c..0x40].copy_from_slice(&[0x80, 0x00, 0x00, 0x00]);
-        // PE signature at offset 0x80
-        upx_data[0x80..0x84].copy_from_slice(b"PE\x00\x00");
-        // Machine type (x64)
-        upx_data[0x84..0x86].copy_from_slice(&[0x64, 0x86]);
-        // UPX magic
-        upx_data[200..204].copy_from_slice(b"UPX!");
-
-        assert!(UPXDecompressor::is_upx_packed(&upx_data));
-
-        let temp_file = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(temp_file.path(), &upx_data).unwrap();
-
-        let report = analyzer.analyze_structural(temp_file.path(), &upx_data, None);
-
-        // Should have UPX packer finding
-        assert!(
-            report
-                .findings
-                .iter()
-                .any(|f| f.id == "anti-static/packer/upx"),
-            "Should have UPX packer finding"
-        );
-    }
-
-    #[test]
-    fn test_pe_upx_tool_missing_creates_finding() {
-        use crate::upx::UPXDecompressor;
-
-        // An engine with UPX off reports the unpacked image as not analyzed,
-        // exactly as when the tool is missing.
-        let analyzer = PEAnalyzer::new().with_engine(crate::Engine::empty().with_settings(
-            crate::engine::Settings {
-                upx: false,
-                ..Default::default()
-            },
-        ));
-
-        // Create minimal UPX-packed PE-like data
-        let mut upx_data = vec![0u8; 512];
-        upx_data[0..2].copy_from_slice(b"MZ");
-        upx_data[0x3c..0x40].copy_from_slice(&[0x80, 0x00, 0x00, 0x00]);
-        upx_data[0x80..0x84].copy_from_slice(b"PE\x00\x00");
-        upx_data[0x84..0x86].copy_from_slice(&[0x64, 0x86]);
-        upx_data[200..204].copy_from_slice(b"UPX!");
-
-        assert!(UPXDecompressor::is_upx_packed(&upx_data));
-
-        let temp_file = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(temp_file.path(), &upx_data).unwrap();
-
-        let report = analyzer.analyze_structural(temp_file.path(), &upx_data, None);
-
-        // Should have both UPX finding and tool-missing finding
-        assert!(
-            report
-                .findings
-                .iter()
-                .any(|f| f.id == "anti-static/packer/upx"),
-            "Should have UPX packer finding"
-        );
-        assert!(
-            report
-                .findings
-                .iter()
-                .any(|f| f.id == "anti-static/packer/upx/tool-missing"),
-            "Should have tool-missing finding when UPX is disabled"
-        );
-
-        // Should NOT have unpacked file analysis
-        assert!(
-            report.files.is_empty(),
-            "Should not have unpacked FileAnalysis when tool is missing"
-        );
-    }
-
-    #[test]
-    fn test_pe_non_upx_data_no_upx_finding() {
-        let analyzer = PEAnalyzer::new();
-
-        // Create minimal PE-like data without UPX magic
-        let mut pe_data = vec![0u8; 512];
-        pe_data[0..2].copy_from_slice(b"MZ");
-        pe_data[0x3c..0x40].copy_from_slice(&[0x80, 0x00, 0x00, 0x00]);
-        pe_data[0x80..0x84].copy_from_slice(b"PE\x00\x00");
-        pe_data[0x84..0x86].copy_from_slice(&[0x64, 0x86]);
-
-        let temp_file = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(temp_file.path(), &pe_data).unwrap();
-
-        let report = analyzer.analyze_structural(temp_file.path(), &pe_data, None);
-
-        // Should NOT have UPX packer finding
-        assert!(
-            !report
-                .findings
-                .iter()
-                .any(|f| f.id == "anti-static/packer/upx"),
-            "Should not have UPX finding for non-UPX binary"
-        );
-
-        // Should NOT have unpacked file analysis
-        assert!(
-            report.files.is_empty(),
-            "Should not have unpacked FileAnalysis for non-UPX binary"
-        );
-    }
-
-    #[test]
-    fn test_pe_upx_finding_criticality() {
-        use crate::upx::UPXDecompressor;
-
-        let analyzer = PEAnalyzer::new();
-
-        let mut upx_data = vec![0u8; 512];
-        upx_data[0..2].copy_from_slice(b"MZ");
-        upx_data[0x3c..0x40].copy_from_slice(&[0x80, 0x00, 0x00, 0x00]);
-        upx_data[0x80..0x84].copy_from_slice(b"PE\x00\x00");
-        upx_data[0x84..0x86].copy_from_slice(&[0x64, 0x86]);
-        upx_data[200..204].copy_from_slice(b"UPX!");
-
-        assert!(UPXDecompressor::is_upx_packed(&upx_data));
-
-        let temp_file = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(temp_file.path(), &upx_data).unwrap();
-
-        let report = analyzer.analyze_structural(temp_file.path(), &upx_data, None);
-
-        // Find the UPX finding
-        let upx_finding = report
-            .findings
-            .iter()
-            .find(|f| f.id == "anti-static/packer/upx");
-
-        assert!(upx_finding.is_some(), "Should have UPX finding");
-        let finding = upx_finding.unwrap();
-
-        // A stock UPX marker records packing; it does not establish evasion intent.
-        assert_eq!(finding.crit, Criticality::Notable);
-        assert_eq!(finding.conf, 1.0);
-        assert_eq!(finding.desc, "Binary contains a UPX packing marker");
-    }
-
-    #[test]
-    fn pe_certificate_range_from_ctx_reads_security_directory() {
-        let mut pe_data = vec![0u8; 0x420];
-        pe_data[0..2].copy_from_slice(b"MZ");
-        pe_data[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
-        pe_data[0x80..0x84].copy_from_slice(b"PE\0\0");
-        pe_data[0x84..0x86].copy_from_slice(&0x014cu16.to_le_bytes());
-        pe_data[0x86..0x88].copy_from_slice(&1u16.to_le_bytes());
-        pe_data[0x94..0x96].copy_from_slice(&0xE0u16.to_le_bytes());
-        pe_data[0x98..0x9a].copy_from_slice(&0x010bu16.to_le_bytes());
-        pe_data[0x80 + 24 + 92..0x80 + 24 + 96].copy_from_slice(&16u32.to_le_bytes());
-
-        let data_directories = 0x80 + 24 + 96;
-        let security_dir = data_directories + (4 * 8);
-        pe_data[security_dir..security_dir + 4].copy_from_slice(&0x300u32.to_le_bytes());
-        pe_data[security_dir + 4..security_dir + 8].copy_from_slice(&0x120u32.to_le_bytes());
-
-        let section_table = 0x80 + 24 + 0xE0;
-        pe_data[section_table..section_table + 5].copy_from_slice(b".text");
-        pe_data[section_table + 16..section_table + 20].copy_from_slice(&0x200u32.to_le_bytes());
-        pe_data[section_table + 20..section_table + 24].copy_from_slice(&0x100u32.to_le_bytes());
-
-        // WIN_CERTIFICATE header at the certificate table offset (0x300)
-        pe_data[0x300..0x304].copy_from_slice(&0x120u32.to_le_bytes());
-        pe_data[0x304..0x306].copy_from_slice(&0x0200u16.to_le_bytes());
-        pe_data[0x306..0x308].copy_from_slice(&0x0002u16.to_le_bytes());
-
-        let path = std::path::Path::new("synthetic.exe");
-        let ctx = crate::analysis_context::AnalysisContext::open(path, &pe_data);
-        assert_eq!(
-            super::pe_certificate_range_from_ctx(&ctx, &pe_data),
-            Some((0x300, 0x420)),
-        );
-    }
-
-    // ──── Pure-function helpers ────────────────────────────────────
-
-    #[test]
-    fn dn_extract_cn_handles_canonical_dn() {
-        let dn = "CN=Microsoft Corporation,O=Microsoft Corporation,L=Redmond,ST=Washington,C=US";
-        assert_eq!(
-            super::dn_extract_cn(dn).as_deref(),
-            Some("Microsoft Corporation"),
-        );
-        assert_eq!(
-            super::dn_extract_o(dn).as_deref(),
-            Some("Microsoft Corporation"),
-        );
-        // Empty input → None, not a panic.
-        assert_eq!(super::dn_extract_cn(""), None);
-        // DN with no CN attribute returns None.
-        assert_eq!(super::dn_extract_cn("OU=Engineering"), None);
-        // RFC 4514 attributes are case-insensitive.
-        assert_eq!(
-            super::dn_extract_cn("cn=acme corp").as_deref(),
-            Some("acme corp"),
-        );
-    }
-
-    #[test]
-    fn dn_extract_honours_escaped_commas() {
-        // Real Authenticode subjects escape the comma in a company suffix.
-        // Splitting on every comma truncated these to "Postman\" / "RARE
-        // IDEAS\", which surfaced verbatim as the signer name and finding id.
-        let postman = r"CN=Postman\, Inc.,O=Postman\, Inc.,L=San Francisco,C=US";
-        assert_eq!(
-            super::dn_extract_o(postman).as_deref(),
-            Some("Postman, Inc.")
-        );
-        assert_eq!(
-            super::dn_extract_cn(postman).as_deref(),
-            Some("Postman, Inc."),
-        );
-        assert_eq!(
-            super::dn_extract_o(r"O=RARE IDEAS\, LLC,C=US").as_deref(),
-            Some("RARE IDEAS, LLC"),
-        );
-
-        // An *unescaped* comma still separates RDNs, so subjects that do not
-        // escape the suffix keep their existing (truncated) value and the
-        // finding ids built from them are unchanged.
-        assert_eq!(
-            super::dn_extract_o("O=CPUID, Inc.,C=FR").as_deref(),
-            Some("CPUID"),
-        );
-
-        // Other RFC 4514 escapes resolve to the literal character, and `\XX`
-        // hex pairs decode.
-        assert_eq!(
-            super::dn_extract_o(r"O=Widgets \+ Co\=Ltd").as_deref(),
-            Some("Widgets + Co=Ltd"),
-        );
-        assert_eq!(super::dn_extract_o(r"O=A\2CB").as_deref(), Some("A,B"));
-        // A trailing lone backslash must not panic.
-        assert_eq!(
-            super::dn_extract_o(r"O=Trailing\").as_deref(),
-            Some("Trailing")
-        );
-    }
-}
+mod tests;

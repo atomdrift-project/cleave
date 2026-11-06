@@ -11,7 +11,7 @@
 //! won the byte span, `dedup_notes` discarded every weaker note overlapping it
 //! ("two traits matching the same span are redundant"), and the filter then
 //! deleted the winner — so the location was left with no annotation at all,
-//! in the terminal view and in prism alike.
+//! in the terminal view and in any other renderer alike.
 //!
 //! Asserted here on the path that broke: the same source inside a tarball,
 //! where the member is captured before the container's filter runs.

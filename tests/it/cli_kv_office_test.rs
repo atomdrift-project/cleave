@@ -93,7 +93,7 @@ fn run_kv(path: &std::path::Path, filter: Option<&str>) -> serde_json::Value {
     cmd.env("CLEAVE_SKIP_YARA", "1")
         .args(["--json", "value", path.to_str().unwrap()]);
     if let Some(f) = filter {
-        cmd.args(["--path", f]);
+        cmd.arg(f);
     }
     let output = cmd.output().expect("run cleave value");
     if !output.status.success() {

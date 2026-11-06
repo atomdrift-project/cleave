@@ -13,9 +13,8 @@ use std::sync::{Arc, Mutex};
 // Archive Bomb Protection Constants
 // =============================================================================
 
-/// Maximum size of a single decompressed file (20 GB). Raised from 1 GB to admit
-/// members of full OS images (ISO/UDF, DMG, install.wim/squashfs), which the
-/// os-image feed acquires as good-baseline corpora.
+/// Maximum size of a single decompressed file (20 GB): large enough for the
+/// members of full OS images (ISO/UDF, DMG, install.wim/squashfs).
 pub(crate) const MAX_FILE_SIZE: u64 = 20 * 1024 * 1024 * 1024;
 
 /// Maximum total extraction size (20 GB). Raised from 7 GB for the same reason;
@@ -214,23 +213,26 @@ impl ExtractionGuard {
     /// ended early. The caller has already recovered; this only makes the gap
     /// visible in `report.metadata.errors`.
     pub(crate) fn add_extraction_note(&self, note: String) {
-        if let Ok(mut notes) = self.extraction_notes.lock() {
-            if notes.len() >= MAX_EXTRACTION_NOTES {
-                self.dropped_notes.fetch_add(1, Ordering::Relaxed);
-                return;
-            }
-            notes.push(note);
+        let mut notes = self
+            .extraction_notes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if notes.len() >= MAX_EXTRACTION_NOTES {
+            self.dropped_notes.fetch_add(1, Ordering::Relaxed);
+            return;
         }
+        notes.push(note);
     }
 
     /// Drain the extraction notes, appending a summary line when the cap
     /// dropped any.
     pub(crate) fn take_extraction_notes(&self) -> Vec<String> {
-        let mut notes = self
-            .extraction_notes
-            .lock()
-            .map(|mut n| std::mem::take(&mut *n))
-            .unwrap_or_default();
+        let mut notes = std::mem::take(
+            &mut *self
+                .extraction_notes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
         let dropped = self.dropped_notes.swap(0, Ordering::Relaxed);
         if dropped > 0 {
             notes.push(format!("archive extraction: {dropped} further problems"));
@@ -241,9 +243,10 @@ impl ExtractionGuard {
     /// Record forensic metadata for an archive entry. Called from per-format
     /// extractors (tar, zip, …) when the entry header is read.
     pub(crate) fn record_member_metadata(&self, metadata: ExtractedMemberMetadata) {
-        if let Ok(mut entries) = self.member_metadata.lock() {
-            entries.push(metadata);
-        }
+        self.member_metadata
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(metadata);
     }
 
     /// Drain accumulated per-member metadata for merging into the final report.
@@ -270,11 +273,10 @@ impl ExtractionGuard {
             path.to_string_lossy().to_lowercase()
         }
 
-        let Ok(mut claimed) = self.claimed_paths.lock() else {
-            // A poisoned lock must not stop extraction; the worst case is the
-            // pre-existing overwrite behaviour.
-            return path;
-        };
+        let mut claimed = self
+            .claimed_paths
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if claimed.insert(fold(&path)) {
             return path;
         }
@@ -302,10 +304,12 @@ impl ExtractionGuard {
     }
 
     pub(crate) fn take_member_metadata(&self) -> Vec<ExtractedMemberMetadata> {
-        self.member_metadata
-            .lock()
-            .map(|mut m| std::mem::take(&mut *m))
-            .unwrap_or_default()
+        std::mem::take(
+            &mut *self
+                .member_metadata
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
     }
 
     /// Check if we can extract another file, returns false if limits exceeded
@@ -716,22 +720,26 @@ impl<R> CancellableReader<R> {
 impl<R: Read> Read for CancellableReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         if self.cancelled.load(Ordering::Acquire) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Interrupted,
-                "cancelled",
-            ));
+            return Err(cancelled_error());
         }
         self.inner.read(buf)
     }
+}
+
+/// The error the cancellable adapters return once the flag is set. Not
+/// `ErrorKind::Interrupted`: that kind means "retry", and `io::copy`,
+/// `read_to_end` and `write_all` retry it forever.
+fn cancelled_error() -> std::io::Error {
+    std::io::Error::other("cancelled")
 }
 
 /// A `Write` adapter that checks a cancellation flag on every call.
 ///
 /// Wrapping an output file with `CancellableWriter` lets extraction routines
 /// that delegate all I/O to a C library (e.g. apple_xar) be interrupted
-/// cooperatively: the C library calls `write()`, which fails with
-/// `ErrorKind::Interrupted` when the flag is set, causing the library to
-/// return an error that propagates back through the extractor.
+/// cooperatively: the C library calls `write()`, which fails once the flag is
+/// set, causing the library to return an error that propagates back through
+/// the extractor.
 pub(crate) struct CancellableWriter<W: Write> {
     inner: W,
     cancelled: Arc<AtomicBool>,
@@ -746,10 +754,7 @@ impl<W: Write> CancellableWriter<W> {
 impl<W: Write> Write for CancellableWriter<W> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         if self.cancelled.load(Ordering::Acquire) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Interrupted,
-                "cancelled",
-            ));
+            return Err(cancelled_error());
         }
         self.inner.write(buf)
     }

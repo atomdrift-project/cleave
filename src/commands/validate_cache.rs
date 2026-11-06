@@ -103,7 +103,7 @@ impl ResultCache {
                 "CLEAVE_PHASE_STATS",
             ]
             .iter()
-            .any(|k| std::env::var(k).is_ok_and(|v| v == "1" || v == "true"))
+            .any(|k| crate::env::flag(k))
         {
             return None;
         }

@@ -181,6 +181,7 @@ mod tests {
         }
     }
     #[test]
+    #[ignore = "needs a private sample: set CLEAVE_RC4_TABLE_FIXTURE"]
     fn actual_envelope_and_key_variant() {
         let Ok(path) = std::env::var("CLEAVE_RC4_TABLE_FIXTURE") else {
             return;

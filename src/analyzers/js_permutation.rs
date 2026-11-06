@@ -169,9 +169,7 @@ fn signature_with_globals(
         }
         output.push('(');
         output.push_str(n.kind());
-        if Some(n.id()) == seed {
-            output.push_str(":SEED");
-        } else if n.kind() == "identifier" {
+        if n.kind() == "identifier" {
             let name = raw(n, source)?;
             if let Some(index) = locals.get(name) {
                 output.push_str(&format!(":local{index}"));
@@ -220,6 +218,34 @@ fn seed<'tree>(function: Node<'tree>, source: &str) -> Option<(Node<'tree>, u64)
     let value_number = number(value, source)?;
     (value_number < 5_578_712).then_some((value, value_number))
 }
+/// The signature of a fixed template, computed once per process rather than
+/// once per file. `variant` distinguishes the ways one template is read.
+fn once_per_template(
+    template: &'static str,
+    variant: &'static str,
+    compute: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    type Entry = (usize, &'static str, Option<String>);
+    static CACHE: std::sync::Mutex<Vec<Entry>> = std::sync::Mutex::new(Vec::new());
+    let key = template.as_ptr() as usize;
+    let mut cache = CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((_, _, signature)) = cache.iter().find(|(k, v, _)| *k == key && *v == variant) {
+        return signature.clone();
+    }
+    let signature = compute();
+    cache.push((key, variant, signature.clone()));
+    signature
+}
+
+fn constant_signature(template: &'static str, with_seed: bool) -> Option<String> {
+    let variant = if with_seed { "seed" } else { "" };
+    once_per_template(template, variant, || {
+        template_signature(template, with_seed)
+    })
+}
+
 fn template_signature(source: &str, with_seed: bool) -> Option<String> {
     let parsed = filefacts::OpenOptions::new()
         .file_type(filefacts::FileType::JavaScript)
@@ -235,11 +261,7 @@ fn template_signature(source: &str, with_seed: bool) -> Option<String> {
     signature(function, source, seed_id)
 }
 
-fn permute(input: &str, seed: u64) -> Option<String> {
-    permute_profile(input, seed, Profile::Legacy)
-}
-
-fn permute_profile(input: &str, mut seed: u64, profile: Profile) -> Option<String> {
+fn permute(input: &str, mut seed: u64, profile: Profile) -> Option<String> {
     if !input.is_ascii() || input.is_empty() || input.len() > MAX_PARTS {
         return None;
     }
@@ -259,11 +281,7 @@ fn permute_profile(input: &str, mut seed: u64, profile: Profile) -> Option<Strin
     String::from_utf8(bytes).ok()
 }
 
-fn dictionary(input: &str) -> Option<String> {
-    dictionary_profile(input, Profile::Legacy)
-}
-
-fn dictionary_profile(input: &str, profile: Profile) -> Option<String> {
+fn dictionary(input: &str, profile: Profile) -> Option<String> {
     let (codes, prefix): ([u8; 20], [u8; 6]) = match profile {
         Profile::Legacy => (
             [
@@ -352,7 +370,15 @@ fn evaluate(
     match node.kind() {
         "string" => Some(Value::Text(literal(node, source)?)),
         "number" => Some(Value::Number(number(node, source)?)),
-        "identifier" => env.get(raw(node, source)?).cloned(),
+        "identifier" => {
+            // Copying a value costs its size, so references to one large
+            // string cannot multiply work without spending fuel.
+            let value = env.get(raw(node, source)?)?;
+            if let Value::Text(text) | Value::Program(text) = value {
+                *fuel = fuel.checked_sub(text.len())?;
+            }
+            Some(value.clone())
+        }
         "binary_expression" => {
             let Value::Number(left) = evaluate(
                 node.child_by_field_name("left")?,
@@ -468,18 +494,22 @@ fn evaluate(
                 .into_iter()
                 .map(|arg| evaluate(arg, source, env, dictionary_signature, fuel, depth + 1))
                 .collect::<Option<Vec<_>>>()?;
+            // Every call below reads (and the constructor re-parses) its string
+            // arguments, so it costs their size.
+            let bytes: usize = values
+                .iter()
+                .map(|v| match v {
+                    Value::Text(t) | Value::Program(t) => t.len(),
+                    _ => 0,
+                })
+                .sum();
+            *fuel = fuel.checked_sub(bytes)?;
             match (function, values.as_slice()) {
                 (Value::Permutation(seed, profile), [Value::Text(input)]) => {
-                    Some(Value::Text(match profile {
-                        Profile::Legacy => permute(input, seed)?,
-                        Profile::Alternate => permute_profile(input, seed, profile)?,
-                    }))
+                    Some(Value::Text(permute(input, seed, profile)?))
                 }
                 (Value::Dictionary(profile), [Value::Text(input)]) => {
-                    Some(Value::Text(match profile {
-                        Profile::Legacy => dictionary(input)?,
-                        Profile::Alternate => dictionary_profile(input, profile)?,
-                    }))
+                    Some(Value::Text(dictionary(input, profile)?))
                 }
                 (Value::Constructor(profile), [Value::Text(parameters), Value::Text(body)])
                     if parameters.is_empty() && body.len() <= MAX_OUTPUT =>
@@ -678,7 +708,7 @@ fn literal_table(source: &str, root: Node<'_>, all: &[Node<'_>]) -> Option<Strin
         if label == "STRING" && blocked.contains("String") {
             continue;
         }
-        let expected = template_signature(template, false)?;
+        let expected = constant_signature(template, false)?;
         for (name, function) in &functions {
             if !blocked.contains(name)
                 && signature_with_globals(*function, source, None, &globals).as_deref()
@@ -688,7 +718,7 @@ fn literal_table(source: &str, root: Node<'_>, all: &[Node<'_>]) -> Option<Strin
             }
         }
     }
-    let expected = template_signature(WRAPPED_PERMUTATION, false)?;
+    let expected = constant_signature(WRAPPED_PERMUTATION, false)?;
     let transforms: std::collections::HashSet<_> = functions
         .iter()
         .filter_map(|(name, function)| {
@@ -717,7 +747,7 @@ fn literal_table(source: &str, root: Node<'_>, all: &[Node<'_>]) -> Option<Strin
         let Some(seed) = number(arguments[1], source).filter(|s| *s < 5_578_712) else {
             continue;
         };
-        let text = permute(&input, seed)?
+        let text = permute(&input, seed, Profile::Legacy)?
             .replace('%', "\u{7f}")
             .replace("#1", "%")
             .replace("#0", "#");
@@ -773,14 +803,14 @@ pub(crate) fn decode(source: &str) -> Vec<(usize, String)> {
     let Some(all) = nodes(ast.tree.root_node()) else {
         return Vec::new();
     };
-    let Some(permutation_signature) = template_signature(PERMUTATION, true) else {
+    let Some(permutation_signature) = constant_signature(PERMUTATION, true) else {
         return Vec::new();
     };
-    let Some(dictionary_signature) = template_signature(DICTIONARY, false) else {
+    let Some(dictionary_signature) = constant_signature(DICTIONARY, false) else {
         return Vec::new();
     };
     let alternate =
-        template_signature(PERMUTATION_ALT, true).zip(template_signature(DICTIONARY_ALT, false));
+        constant_signature(PERMUTATION_ALT, true).zip(constant_signature(DICTIONARY_ALT, false));
     let mut output = Vec::new();
     let mut budget = MAX_OUTPUT;
     if let Some(table) = literal_table(source, ast.tree.root_node(), &all) {
@@ -818,203 +848,4 @@ pub(crate) fn decode(source: &str) -> Vec<(usize, String)> {
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
-mod tests {
-    use super::*;
-
-    fn encode_permutation(text: &str, mut seed: u64) -> String {
-        let mut swaps = Vec::new();
-        let n = text.len() as u64;
-        for index in 0..n {
-            let a = seed * (index + 179) + seed % 18_929;
-            let b = seed * (index + 658) + seed % 13_606;
-            swaps.push(((a % n) as usize, (b % n) as usize));
-            seed = (a + b) % 5_578_712;
-        }
-        let mut bytes = text.as_bytes().to_vec();
-        for (a, b) in swaps.into_iter().rev() {
-            bytes.swap(a, b);
-        }
-        String::from_utf8(bytes).expect("ASCII encoder")
-    }
-    fn encode_dictionary_literal(text: &str) -> String {
-        let codes = [
-            32, 42, 39, 92, 10, 96, 80, 70, 66, 86, 60, 85, 71, 74, 87, 72, 75, 88, 81, 90, 76, 94,
-            82, 89, 79, 65,
-        ];
-        let mut output = String::new();
-        for byte in text.bytes() {
-            if byte == b'.' {
-                output.push_str(".!");
-            } else if let Some(index) = codes.iter().position(|c| *c == byte) {
-                output.push('.');
-                output.push(char::from(b'a' + index as u8));
-            } else {
-                output.push(char::from(byte));
-            }
-        }
-        output
-    }
-    fn encoded(program: &str, seed: u64) -> String {
-        let permutation = PERMUTATION.replacen("y=0", &format!("y={seed}"), 1);
-        let dictionary = DICTIONARY
-            .strip_prefix("function unpack(){")
-            .and_then(|s| s.strip_suffix('}'))
-            .expect("dictionary body");
-        let key = encode_permutation("constructorabcdefghijklmnopqrstuvwxyz", seed);
-        let body = encode_permutation(dictionary, seed);
-        let data = encode_permutation(&encode_dictionary_literal(program), seed);
-        format!(
-            "(function(){{var empty=\"\",width=11;{permutation}var key=perm({key}).substr(0,width);var body={body};var factory=perm[key];var parameters=\"\";var other=factory;var decoder=factory(parameters,perm(body));var text=decoder(perm({data}));var stage=other(empty,text);stage(7);return 0;}})();",
-            key = serde_json::to_string(&key).expect("key"),
-            body = serde_json::to_string(&body).expect("body"),
-            data = serde_json::to_string(&data).expect("data")
-        )
-    }
-
-    fn encoded_alternate(program: &str, seed: u64) -> String {
-        fn encode_permutation_alt(text: &str, mut seed: u64) -> String {
-            let mut swaps = Vec::new();
-            let len = text.len() as u64;
-            for index in 0..len {
-                let a = seed * (index + 525) + seed % 28_432;
-                let b = seed * (index + 186) + seed % 32_819;
-                swaps.push(((a % len) as usize, (b % len) as usize));
-                seed = (a + b) % 5_145_329;
-            }
-            let mut bytes = text.as_bytes().to_vec();
-            for (a, b) in swaps.into_iter().rev() {
-                bytes.swap(a, b);
-            }
-            String::from_utf8(bytes).expect("ASCII encoder")
-        }
-        let codes = [
-            92, 39, 42, 10, 96, 32, 87, 94, 85, 71, 86, 89, 82, 76, 74, 81, 72, 60, 75, 65, 66, 79,
-            88, 80, 90, 70,
-        ];
-        let mut encoded = String::new();
-        for byte in program.bytes() {
-            if byte == b'.' {
-                encoded.push_str(".!");
-            } else if let Some(index) = codes.iter().position(|c| *c == byte) {
-                encoded.push('.');
-                encoded.push(char::from(b'a' + index as u8));
-            } else {
-                encoded.push(char::from(byte));
-            }
-        }
-        let permutation = PERMUTATION_ALT.replacen("53180", &seed.to_string(), 1);
-        let dictionary = DICTIONARY_ALT
-            .strip_prefix("function unpack(){")
-            .and_then(|s| s.strip_suffix('}'))
-            .expect("dictionary");
-        let key = encode_permutation_alt("constructorabcdefghijklmnopqrstuvwxyz", seed);
-        let body = encode_permutation_alt(dictionary, seed);
-        let data = encode_permutation_alt(&encoded, seed);
-        format!(
-            "(function(){{var empty=\"\",width=11;{permutation}var key=iXB({key}).substr(0,width);var body={body};var factory=iXB[key];var decoder=factory(empty,iXB(body));var text=decoder(iXB({data}));WScript.Echo(text);var stage=factory(empty,text);WScript.Echo(stage);stage(7);WScript.Echo(stage(7));return 0;}})();",
-            key = serde_json::to_string(&key).unwrap(),
-            body = serde_json::to_string(&body).unwrap(),
-            data = serde_json::to_string(&data).unwrap()
-        )
-    }
-
-    #[test]
-    fn reconstructs_alternate_permutation_with_inert_echoes() {
-        let program = "WScript.Echo('fixture');";
-        let source = encoded_alternate(program, 53180);
-        assert!(decode(&source).iter().any(|(_, text)| text == program));
-        assert!(decode(&source.replace("5145329", "5145330")).is_empty());
-        assert!(decode(&source.replace("WScript.Echo(text)", "unknown(text)")).is_empty());
-        assert!(
-            decode(&source.replace("WScript.Echo(text)", "var WScript=5;WScript.Echo(text)"))
-                .is_empty()
-        );
-    }
-    #[test]
-    fn recovers_program_without_executing_it() {
-        let program = "require('child_process').exec('never execute this test');";
-        for seed in [17, 2461180] {
-            let source = encoded(program, seed);
-            assert_eq!(
-                decode(&source)
-                    .iter()
-                    .map(|r| r.1.as_str())
-                    .collect::<Vec<_>>(),
-                [program]
-            );
-            let renamed = source
-                .replace("perm", "different_transform")
-                .replace("factory", "compiler_alias");
-            assert_eq!(decode(&renamed)[0].1, program);
-        }
-    }
-    #[test]
-    fn rejects_inert_modified_and_unknown_recipes() {
-        let source = encoded("console.log('harmless');", 17);
-        for negative in [
-            serde_json::to_string(&source).expect("quoted source"),
-            format!("/* {source} */"),
-            source.replace("stage(7);", ""),
-            source.replace("var other=factory;", "var other=unknown;"),
-            source.replace(
-                "return x.join",
-                "fetch('https://example.invalid');return x.join",
-            ),
-            source.replace("stage(7);", "stage=unknown;stage(7);"),
-            source.replace("var key=perm", "perm.constructor=unknown;var key=perm"),
-        ] {
-            assert!(decode(&negative).is_empty(), "{negative}");
-        }
-    }
-    #[test]
-    fn reconstructs_reviewed_loader_exactly() {
-        let source = include_str!("../../tests/data/javascript-permutation/loader.js");
-        let expected = include_str!("../../tests/data/javascript-permutation/expected.js");
-        let parsed = filefacts::OpenOptions::new()
-            .file_type(filefacts::FileType::JavaScript)
-            .cache(false)
-            .open(source.as_bytes());
-        let all = nodes(parsed.source_ast().expect("source AST").tree.root_node()).expect("nodes");
-        let p = template_signature(PERMUTATION, true).expect("permutation");
-        let d = template_signature(DICTIONARY, false).expect("dictionary");
-        let recovered: Vec<_> = all
-            .into_iter()
-            .filter(|n| n.kind() == "statement_block")
-            .filter_map(|n| recipe(n, source, &p, &d))
-            .flatten()
-            .collect();
-        assert_eq!(recovered.len(), 1);
-        assert_eq!(recovered[0].1, expected);
-        let result = decode(source);
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].1, decode(expected)[0].1);
-    }
-    #[test]
-    fn reconstructs_only_proven_literal_configuration_table() {
-        let source = include_str!("../../tests/data/javascript-permutation/expected.js");
-        let result = decode(source);
-        assert_eq!(result.len(), 1);
-        assert!(
-            result[0]
-                .1
-                .contains("https://api.binplorer.com/getAddressHistory/")
-        );
-        assert!(result[0].1.contains("$v$5;kmc$ldm*5SA"));
-        for negative in [
-            serde_json::to_string(source).expect("quoted source"),
-            source.replace("return a+ b", "return fetch(a)+b"),
-            format!("{source};String=unknown;"),
-            source.replace("return String", "return unknown"),
-        ] {
-            assert!(decode(&negative).is_empty());
-        }
-    }
-    #[test]
-    fn dictionary_and_permutation_are_bounded() {
-        assert!(dictionary("P").is_none());
-        assert!(dictionary("P!").is_none());
-        assert!(permute("non-ASCII \u{20ac}", 17).is_none());
-        assert!(permute(&"a".repeat(MAX_PARTS + 1), 17).is_none());
-        assert!(decode(&"x".repeat(MAX_SOURCE + 1)).is_empty());
-    }
-}
+mod tests;

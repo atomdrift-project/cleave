@@ -376,13 +376,8 @@ impl super::CapabilityMapper {
     fn collect_ast_query_strings<'a>(&'a self, indices: &[usize]) -> Vec<&'a str> {
         // Guarded positive queries ride the batch too: one shared cursor
         // walk is cheaper than the standalone evaluations an `unless` hit
-        // would have spared (a 3,300-member Python wheel: 301 -> 266 CPU-s,
-        // -4-5 % over two corpora, identical findings). The batch is only a
-        // result cache, so `unless` still suppresses exactly as before.
-        // `CLEAVE_AST_BATCH_UNGUARDED=1` restores the standalone path.
-        static BATCH_GUARDED: OnceLock<bool> = OnceLock::new();
-        let batch_guarded =
-            *BATCH_GUARDED.get_or_init(|| !crate::env::flag("CLEAVE_AST_BATCH_UNGUARDED"));
+        // would spare. The batch only caches results, so `unless` still
+        // suppresses exactly as it would without it.
         let mut seen = FxHashSet::default();
         let mut out = Vec::new();
         let mut push = |c: &'a Condition| {
@@ -394,12 +389,7 @@ impl super::CapabilityMapper {
         };
         for &idx in indices {
             let t = &self.trait_definitions[idx];
-            // A batch runs before the trait's cheap suppressors; with the
-            // opt-out above, guarded positive queries stay standalone so an
-            // `unless` hit can avoid their work.
-            if batch_guarded || t.unless.as_ref().is_none_or(Vec::is_empty) {
-                push(&t.r#if);
-            }
+            push(&t.r#if);
             if let Some(unless) = &t.unless {
                 for c in unless {
                     push(c);
@@ -583,9 +573,13 @@ impl super::CapabilityMapper {
         cancellation: Option<&std::sync::atomic::AtomicBool>,
         node_text: Option<&crate::composite_rules::evaluators::NodeTextIndex>,
     ) -> Option<FxHashMap<String, crate::composite_rules::context::ConditionResult>> {
-        if crate::validation_performance::active() {
-            return None;
-        }
+        // Rule-performance validation times queries one at a time: all of
+        // them, or only those a scoped mapper names (see `measuring_only`).
+        let measured = if crate::validation_performance::active() {
+            Some(self.measured_ast_queries.as_deref()?)
+        } else {
+            None
+        };
         let tree = cached_ast?;
         static BATCH_ENABLED: OnceLock<bool> = OnceLock::new();
         if !*BATCH_ENABLED.get_or_init(|| crate::env::bool_var("CLEAVE_AST_BATCH").unwrap_or(true))
@@ -595,15 +589,15 @@ impl super::CapabilityMapper {
         // On small sources, preparing a private copy of the combined query
         // costs more than the short individual walks, whose compiled queries
         // are already shared. Reserve batching for larger files.
-        static BATCH_MIN_BYTES: OnceLock<usize> = OnceLock::new();
-        let min_bytes = *BATCH_MIN_BYTES.get_or_init(|| {
-            crate::env::parse::<usize>("CLEAVE_AST_BATCH_MIN_BYTES").unwrap_or(4 * 1024)
-        });
-        if !file_type.supports_ast_queries() || binary_data.len() < min_bytes {
+        const BATCH_MIN_BYTES: usize = 4 * 1024;
+        if !file_type.supports_ast_queries() || binary_data.len() < BATCH_MIN_BYTES {
             return None;
         }
         let source = filefacts::source_text_for_ast(binary_data);
-        let queries = self.collect_ast_query_strings(indices);
+        let mut queries = self.collect_ast_query_strings(indices);
+        if let Some(measured) = measured {
+            queries.retain(|q| !measured.contains(*q));
+        }
         crate::composite_rules::evaluators::batch_ast_queries_with_index(
             tree,
             &source,
@@ -615,6 +609,51 @@ impl super::CapabilityMapper {
             node_text,
             Some(self.boolean_ast_queries()),
         )
+    }
+
+    /// This mapper for rule-performance validation of an edit: only the AST
+    /// queries of rules defined in `files` (scope keys, see
+    /// [`super::change_scope::scope_key`]) are timed one at a time, and the
+    /// shared batch answers every other query, as it does in a scan. A query
+    /// text an edited rule shares with an unedited one is timed.
+    #[cfg(feature = "lint")]
+    #[must_use]
+    pub(crate) fn measuring_only(&self, files: &std::collections::BTreeSet<String>) -> Self {
+        let edited = |path: &std::path::Path| files.contains(&super::change_scope::scope_key(path));
+        let traits: Vec<usize> = (0..self.trait_definitions.len())
+            .filter(|&i| edited(&self.trait_definitions[i].defined_in))
+            .collect();
+        let mut measured: FxHashSet<String> = self
+            .collect_ast_query_strings(&traits)
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        for c in self
+            .composite_rules
+            .iter()
+            .filter(|c| edited(&c.defined_in))
+        {
+            let downgrade = c.downgrade.iter().flat_map(|d| d.any.iter().chain(&d.all));
+            let conditions = [&c.all, &c.any, &c.unless]
+                .into_iter()
+                .flatten()
+                .chain(downgrade)
+                .flatten();
+            measured.extend(
+                conditions
+                    .filter_map(Condition::ast_query_text)
+                    .map(str::to_owned),
+            );
+        }
+        tracing::info!(
+            files = files.len(),
+            queries = measured.len(),
+            "rule-performance validation scoped to edited rules"
+        );
+        Self {
+            measured_ast_queries: Some(std::sync::Arc::new(measured)),
+            ..self.clone()
+        }
     }
 
     /// Evaluate trait definitions against an analysis report with optional cached AST.
@@ -960,7 +999,9 @@ impl super::CapabilityMapper {
         }
         ctx.ast_node_text = cache.ast_node_text;
         if let Some(qcache) = cache.ast_query_cache {
-            ctx = ctx.with_ast_query_cache(qcache);
+            ctx = ctx
+                .with_ast_query_cache(qcache)
+                .with_measured_ast_queries(self.measured_ast_queries.as_deref());
         }
 
         if let Some(results) = inline_yara {

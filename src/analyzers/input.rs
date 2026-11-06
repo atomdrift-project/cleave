@@ -21,7 +21,6 @@ use std::sync::Arc;
 /// - Duplicate payload extraction (encoded_payload extractor called once)
 /// - Inconsistent behavior between entry points
 #[derive(Debug)]
-#[allow(dead_code)] // Fields intentionally public for library consumers and future use
 pub struct AnalysisInput<'a> {
     /// Path to the file (may be virtual for archive entries)
     pub path: &'a Path,
@@ -60,7 +59,6 @@ pub struct AnalysisInput<'a> {
     pub parsed_ctx: Option<crate::analysis_context::AnalysisContext<'a>>,
 }
 
-#[allow(dead_code)] // Methods intentionally public for library consumers and future use
 impl<'a> AnalysisInput<'a> {
     /// Create new input with required fields and empty strings.
     #[must_use]

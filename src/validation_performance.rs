@@ -1,7 +1,9 @@
 //! Measured rule costs during fresh validation. Normal scans only check a flag.
 use crate::analyzers::ast_walker::thread_cpu_time;
 use crate::composite_rules::context::{AnalysisWarning, ConditionResult, EvaluationContext};
-use crate::validation_controls::{self, ValidationIssue};
+#[cfg(feature = "lint")]
+use crate::validation_controls;
+use crate::validation_controls::ValidationIssue;
 use parking_lot::Mutex;
 use std::cell::Cell;
 use std::collections::BTreeMap;
@@ -131,7 +133,7 @@ impl<'a> QueryTimer<'a> {
         query: &'a str,
         ctx: &'a EvaluationContext<'_>,
     ) -> Option<Self> {
-        active().then(|| Self {
+        judges(query, ctx).then(|| Self {
             id,
             query,
             path: &ctx.report.target.path,
@@ -276,9 +278,21 @@ pub(crate) fn active() -> bool {
     ACTIVE.0.load(Ordering::Relaxed)
 }
 
+/// Whether validation judges `query`'s cost on the file `ctx` evaluates:
+/// every query, unless the file's batch came from a mapper scoped to an
+/// edit (see `EvaluationContext::measured_ast_queries`).
+pub(crate) fn judges(query: &str, ctx: &EvaluationContext<'_>) -> bool {
+    active()
+        && ctx
+            .measured_ast_queries
+            .is_none_or(|measured| measured.contains(query))
+}
+
 /// Full-validation cache hits may reuse a previously measured pass. Fresh
 /// validation must execute rules, including queries otherwise hidden by a batch.
+#[cfg(feature = "lint")]
 pub(crate) struct Session;
+#[cfg(feature = "lint")]
 impl Session {
     pub(crate) fn begin() -> Self {
         ISSUES.lock().clear();
@@ -290,6 +304,7 @@ impl Session {
         Self
     }
 
+    #[cfg(feature = "lint")]
     pub(crate) fn issues(&self) -> Vec<ValidationIssue> {
         let mut issues = ISSUES.lock().clone();
         for ((path, _full_count), costs) in QUERY_COSTS.lock().iter() {
@@ -308,6 +323,7 @@ impl Session {
         issues.into_values().collect()
     }
 }
+#[cfg(feature = "lint")]
 impl Drop for Session {
     fn drop(&mut self) {
         ACTIVE.0.store(false, Ordering::Relaxed);
@@ -358,8 +374,15 @@ impl<'a> RuleTimer<'a> {
 }
 impl Drop for RuleTimer<'_> {
     fn drop(&mut self) {
+        // A thread spends no more CPU than the wall time that passed, so a
+        // rule within the threshold by the wall clock is within it: skip the
+        // thread-CPU read, a kernel call that every rule on every file made.
+        let wall = self.wall.elapsed();
+        if wall <= self.threshold {
+            return;
+        }
         let elapsed = if self.cpu.is_zero() {
-            self.wall.elapsed()
+            wall
         } else {
             thread_cpu_time().saturating_sub(self.cpu)
         };

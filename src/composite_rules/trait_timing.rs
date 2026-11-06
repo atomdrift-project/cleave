@@ -30,6 +30,7 @@ fn enabled() -> bool {
 }
 
 /// Record every trait evaluation from now on, whatever the environment says.
+#[cfg(feature = "lint")]
 pub(crate) fn enable() {
     STATE.store(2, Ordering::Relaxed);
 }

@@ -163,6 +163,7 @@ mod tests {
         assert!(lznt1(&[2, 0x30, b'a', b'b', b'c'], 2).is_none());
     }
     #[test]
+    #[ignore = "needs a private sample: set CLEAVE_SKC3_FIXTURE"]
     fn actual_managed_resources_and_integrity() -> anyhow::Result<()> {
         let Ok(path) = std::env::var("CLEAVE_SKC3_FIXTURE") else {
             return Ok(());

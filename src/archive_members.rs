@@ -25,7 +25,8 @@ const MAX_EXTRACTED_MEMBER: u64 = 64 * 1024 * 1024;
 /// re-read per member instead of held resident.
 const MAX_HELD: u64 = 512 * 1024 * 1024;
 
-/// Read one member of `archive`. Each call reads and decodes the archive
+/// Read one member of `archive`, at most its first 64 MiB (a longer member is
+/// truncated, and the truncation logged). Each call reads and decodes the archive
 /// again; a caller reading several members of one archive wants
 /// [`ArchiveMembers`].
 pub fn extract_member(archive: &Path, member: &str) -> Result<Option<Vec<u8>>> {
@@ -46,8 +47,7 @@ pub fn extract_member(archive: &Path, member: &str) -> Result<Option<Vec<u8>>> {
 ///
 /// [`extract_member`] decodes a compressed tar from the start for every
 /// member, so reading each changed file of a release is quadratic in the
-/// archive: xz 5.6.0's 756-entry tarball took longer than fifteen minutes.
-/// Opening reads a tar's members in one pass and holds them; a zip, whose
+/// archive. Opening reads a tar's members in one pass and holds them; a zip, whose
 /// members are addressed directly, stays open and inflates on request.
 pub struct ArchiveMembers(Store);
 
@@ -169,9 +169,17 @@ fn zip_member<R: Read + Seek>(
     Ok(Some(read_capped(entry)?))
 }
 
+/// A member's bytes, at most [`MAX_EXTRACTED_MEMBER`] of them.
 fn read_capped(entry: impl Read) -> std::io::Result<Vec<u8>> {
     let mut buf = Vec::new();
-    entry.take(MAX_EXTRACTED_MEMBER).read_to_end(&mut buf)?;
+    entry.take(MAX_EXTRACTED_MEMBER + 1).read_to_end(&mut buf)?;
+    if buf.len() as u64 > MAX_EXTRACTED_MEMBER {
+        buf.truncate(MAX_EXTRACTED_MEMBER as usize);
+        tracing::warn!(
+            limit_bytes = MAX_EXTRACTED_MEMBER,
+            "archive member truncated to the extraction limit"
+        );
+    }
     Ok(buf)
 }
 

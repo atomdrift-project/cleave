@@ -3,8 +3,9 @@
 # is what this does — Dependabot rewrites the SHA and updates the trailing
 # version comment.
 #
-# Cargo updates are grouped into one weekly PR. Git dependencies are pinned by
-# `rev` in Cargo.toml and are bumped by hand.
+# Cargo updates are grouped into one weekly PR. Git dependencies are pinned
+# only by Cargo.lock (`cargo update -p <crate>` bumps one); Dependabot leaves
+# them alone.
 version: 2
 updates:
   - package-ecosystem: cargo

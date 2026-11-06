@@ -169,33 +169,29 @@ fn decoded_layer_findings(report: &AnalysisReport) -> (Vec<Finding>, Vec<Finding
 /// binaries. PE/ELF stay at this cap: windowing multi-hundred-MiB installers
 /// costs more than it saves.
 pub(crate) const RAW_GATE_MAX_BYTES: usize = 3 << 20;
-/// Full gate for source/text (`CLEAVE_RAW_GATE_SOURCE_MAX_KB` overrides).
-/// Same as the binary band. Above it, a large JavaScript bundle gets the
+/// Full gate for source/text (`CLEAVE_RAW_GATE_SOURCE_MAX_KB` overrides, never
+/// below the binary band). Above it, a large JavaScript bundle gets the
 /// presence-only sweep, so every text trait whose atom occurs anywhere
-/// full-scans it. A larger band speeds up individual bundles but measured
-/// neutral to slightly worse across a whole package corpus, so it stays here.
+/// full-scans it.
 pub(crate) const RAW_GATE_SOURCE_MAX_BYTES: usize = RAW_GATE_MAX_BYTES;
 /// Presence-only source sweep above [`RAW_GATE_MAX_BYTES`]: no offsets, no
 /// windowing. PE/ELF never use this band.
 pub(crate) const RAW_GATE_THIN_SOURCE_MAX_BYTES: usize = 80 << 20;
 
-fn raw_gate_caps() -> (usize, usize, usize) {
-    static CAPS: std::sync::OnceLock<(usize, usize, usize)> = std::sync::OnceLock::new();
-    *CAPS.get_or_init(|| {
-        let full = crate::env::parse::<usize>("CLEAVE_RAW_GATE_MAX_KB")
-            .map_or(RAW_GATE_MAX_BYTES, |kb| kb << 10);
-        let source_full = crate::env::parse::<usize>("CLEAVE_RAW_GATE_SOURCE_MAX_KB")
-            .map_or(RAW_GATE_SOURCE_MAX_BYTES.max(full), |kb| kb << 10);
-        let thin = crate::env::parse::<usize>("CLEAVE_RAW_GATE_THIN_SOURCE_MAX_KB")
-            .map_or(RAW_GATE_THIN_SOURCE_MAX_BYTES, |kb| kb << 10);
-        (full, source_full, thin.max(source_full))
-    })
-}
-
 /// `None` = do not run the raw-content gate. `Some(record_offsets)` runs it.
 pub(crate) fn raw_gate_plan(file_len: usize, is_source: bool) -> Option<bool> {
-    let (full, source_full, thin) = raw_gate_caps();
-    raw_gate_plan_with_source_cap(file_len, is_source, full, source_full, thin)
+    static SOURCE_FULL: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    let source_full = *SOURCE_FULL.get_or_init(|| {
+        crate::env::parse::<usize>("CLEAVE_RAW_GATE_SOURCE_MAX_KB")
+            .map_or(RAW_GATE_SOURCE_MAX_BYTES, |kb| kb << 10)
+    });
+    raw_gate_plan_with_source_cap(
+        file_len,
+        is_source,
+        RAW_GATE_MAX_BYTES,
+        source_full,
+        RAW_GATE_THIN_SOURCE_MAX_BYTES,
+    )
 }
 
 #[cfg(test)]
@@ -1169,65 +1165,4 @@ impl super::CapabilityMapper {
 }
 
 #[cfg(test)]
-mod raw_gate_plan_tests {
-    use super::{
-        RAW_GATE_MAX_BYTES, RAW_GATE_THIN_SOURCE_MAX_BYTES, raw_gate_plan_with_caps,
-        raw_gate_plan_with_source_cap,
-    };
-
-    #[test]
-    fn source_records_offsets_up_to_its_own_band_binaries_keep_the_small_one() {
-        const FULL: usize = RAW_GATE_MAX_BYTES;
-        const SRC: usize = 16 << 20;
-        const THIN: usize = RAW_GATE_THIN_SOURCE_MAX_BYTES;
-        let plan = |len, src| raw_gate_plan_with_source_cap(len, src, FULL, SRC, THIN);
-        assert_eq!(plan(9 << 20, true), Some(true), "9 MB bundle: windowed");
-        assert_eq!(plan(SRC, true), Some(true));
-        assert_eq!(
-            plan(SRC + 1, true),
-            Some(false),
-            "above the band: presence only"
-        );
-        assert_eq!(plan(THIN + 1, true), None);
-        assert_eq!(plan(9 << 20, false), None, "9 MB binary: no gate");
-        assert_eq!(plan(2 << 20, false), Some(false), "binaries never record");
-    }
-
-    const FULL: usize = RAW_GATE_MAX_BYTES;
-    const THIN: usize = RAW_GATE_THIN_SOURCE_MAX_BYTES;
-
-    #[test]
-    fn source_below_full_records_offsets() {
-        assert_eq!(
-            raw_gate_plan_with_caps(2 << 20, true, FULL, THIN),
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn source_thin_band_presence_only() {
-        assert_eq!(
-            raw_gate_plan_with_caps(FULL + 1, true, FULL, THIN),
-            Some(false)
-        );
-        assert_eq!(raw_gate_plan_with_caps(THIN, true, FULL, THIN), Some(false));
-    }
-
-    #[test]
-    fn source_above_thin_skips_gate() {
-        assert_eq!(raw_gate_plan_with_caps(THIN + 1, true, FULL, THIN), None);
-    }
-
-    #[test]
-    fn pe_above_full_skips_gate() {
-        assert_eq!(raw_gate_plan_with_caps(FULL + 1, false, FULL, THIN), None);
-    }
-
-    #[test]
-    fn pe_below_full_gates_without_offsets() {
-        assert_eq!(
-            raw_gate_plan_with_caps(2 << 20, false, FULL, THIN),
-            Some(false)
-        );
-    }
-}
+mod raw_gate_plan_tests;

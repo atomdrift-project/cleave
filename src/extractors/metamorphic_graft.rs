@@ -78,7 +78,7 @@ pub(crate) fn recover(b: &[u8]) -> Option<Recovered> {
     let section = bytes(b, last.raw, last.size)?;
     // One recognized decoder per input. Reject malformed candidates rather
     // than repeatedly decrypting attacker-selected overlapping ranges.
-    let pos = section.windows(DECODER.len()).position(|w| w == DECODER)?;
+    let pos = memchr::memmem::find(section, DECODER)?;
     let block = pos.checked_add(5 + 0x3c)?;
     let size = usize::try_from(u32_le(section, block)?).ok()?;
     if !(512..=LIMIT).contains(&size) {
@@ -96,8 +96,8 @@ pub(crate) fn recover(b: &[u8]) -> Option<Recovered> {
     // A manual mapper, not merely an arbitrary decrypted byte string.
     let mapper = [0x64, 0xa1, 0x30, 0, 0, 0, 0x8b, 0x40, 0x08];
     let ksa = [0x83, 0xe0, 0x07, 0x02, 0x14, 0x03];
-    if !plain.windows(mapper.len()).any(|w| w == mapper)
-        || !plain.windows(ksa.len()).any(|w| w == ksa)
+    if memchr::memmem::find(&plain, &mapper).is_none()
+        || memchr::memmem::find(&plain, &ksa).is_none()
     {
         return None;
     }
@@ -155,6 +155,7 @@ mod tests {
         assert_ne!(stream(&cipher, 18, 77), plain);
     }
     #[test]
+    #[ignore = "needs a private sample: set CLEAVE_GRAFT_FIXTURE"]
     fn original_and_near_misses() -> anyhow::Result<()> {
         let Ok(path) = std::env::var("CLEAVE_GRAFT_FIXTURE") else {
             return Ok(());

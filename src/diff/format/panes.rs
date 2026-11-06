@@ -54,7 +54,7 @@ fn write_pane(out: &mut String, file: &FileDiffEntry) {
             crit_dots(max_crit),
             paint_roc(max_roc).bold(),
             "changed".dimmed(),
-            file.path.bold(),
+            crate::output::sample_text(&file.path).bold(),
         );
         write_formula_line(
             out,
@@ -114,7 +114,11 @@ fn write_identity(out: &mut String, id: &crate::types::IdentityDiff) {
 
     if !id.changed {
         if let Some(cur) = id.new.as_ref().or(id.old.as_ref()) {
-            let _ = writeln!(out, "    {}", identity_summary(cur));
+            let _ = writeln!(
+                out,
+                "    {}",
+                crate::output::identity_headline(cur, true).unwrap_or_default()
+            );
         }
         return;
     }
@@ -133,8 +137,8 @@ fn write_identity(out: &mut String, id: &crate::types::IdentityDiff) {
         }
     }
     for key in keys {
-        let o = old.get(&key).map(String::as_str);
-        let n = new.get(&key).map(String::as_str);
+        let o = old.get(&key).map(|v| crate::output::sample_text(v));
+        let n = new.get(&key).map(|v| crate::output::sample_text(v));
         if o == n {
             continue;
         }
@@ -142,9 +146,9 @@ fn write_identity(out: &mut String, id: &crate::types::IdentityDiff) {
             out,
             "    {}  {}  {}  {}",
             key.dimmed(),
-            o.unwrap_or("—").red(),
+            o.as_deref().unwrap_or("—").red(),
             "→".dimmed(),
-            n.unwrap_or("—").green(),
+            n.as_deref().unwrap_or("—").green(),
         );
     }
 }
@@ -211,12 +215,6 @@ fn identity_fields(id: &filefacts::Identity) -> std::collections::BTreeMap<Strin
         m.insert(format!("id:{k}"), v.clone());
     }
     m
-}
-
-/// One-line identity summary for the unchanged case — the same concise
-/// headline the analyze view shows, so the two surfaces never diverge.
-fn identity_summary(id: &filefacts::Identity) -> String {
-    crate::output::identity_headline(id, true).unwrap_or_default()
 }
 
 fn trust_word(t: filefacts::Trust) -> &'static str {
@@ -301,7 +299,7 @@ fn write_traits(out: &mut String, scope: &ScopeDiff<TraitChange>) {
             "    {} {} {}",
             crit_dots(t.crit),
             paint_sign(sign),
-            paint_crit(short_id(&t.id), t.crit),
+            paint_crit(crate::output::sample_text(&short_id(&t.id)), t.crit),
         );
     }
 }
@@ -803,9 +801,10 @@ fn symbol_label(c: &SymbolChange) -> String {
         SymbolKind::Import => "import",
         SymbolKind::Export => "export",
     };
+    let symbol = crate::output::sample_text(&c.symbol);
     match &c.library {
-        Some(lib) => format!("[{kind}] {} @ {lib}", c.symbol),
-        None => format!("[{kind}] {}", c.symbol),
+        Some(lib) => format!("[{kind}] {symbol} @ {}", crate::output::sample_text(lib)),
+        None => format!("[{kind}] {symbol}"),
     }
 }
 
@@ -1100,7 +1099,10 @@ fn section_label(s: &SectionChange) -> String {
     let perms = s.permissions.as_deref().unwrap_or("???");
     format!(
         "{} (size {}, entropy {:.2}, perms {})",
-        s.name, s.size, s.entropy, perms
+        crate::output::sample_text(&s.name),
+        s.size,
+        s.entropy,
+        crate::output::sample_text(perms)
     )
 }
 
@@ -1111,49 +1113,4 @@ fn section_label(s: &SectionChange) -> String {
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
-mod tests {
-    use super::*;
-    use crate::types::{Criticality, MetricChange, ScopeDiff};
-
-    #[test]
-    fn metric_direction_arrows() {
-        let scope: ScopeDiff<MetricChange> = ScopeDiff {
-            changed: vec![
-                Changed {
-                    old: MetricChange {
-                        path: "x".into(),
-                        value: Value::from(10),
-                    },
-                    new: MetricChange {
-                        path: "x".into(),
-                        value: Value::from(20),
-                    },
-                },
-                Changed {
-                    old: MetricChange {
-                        path: "y".into(),
-                        value: Value::from(20),
-                    },
-                    new: MetricChange {
-                        path: "y".into(),
-                        value: Value::from(10),
-                    },
-                },
-            ],
-            old_count: 2,
-            new_count: 2,
-            old_weight: 2.0,
-            new_weight: 2.0,
-            change_weight: 0.5,
-            roc: 0.25,
-            truncated: false,
-            ..Default::default()
-        };
-        let _ = Criticality::Baseline; // silence unused import (tests/imports stay tidy)
-        let mut out = String::new();
-        write_metrics(&mut out, &scope);
-        assert!(out.contains('↑'));
-        assert!(out.contains('↓'));
-        assert!(!out.contains(" ~ "));
-    }
-}
+mod tests;

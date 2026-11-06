@@ -16,10 +16,11 @@
 #     a read-only token and no access to secrets. This workflow passes no
 #     secrets to build.yml at all — CI artifacts get an ad-hoc macOS signature,
 #     and the Developer ID identity is reachable only from release.yml.
-#   * Every cargo invocation is `--locked`. Without it a drifting git dep or a
-#     compromised registry could swap a dependency out from under a release
-#     build, and Cargo.lock is the only thing pinning filefacts/stng/dmgwiz
-#     to reviewed revisions.
+#   * Each job checks `cargo metadata --locked` before building and that
+#     Cargo.lock is unchanged after. Without it a drifting git dep or a
+#     compromised registry could swap a dependency out from under a build, and
+#     Cargo.lock is the only thing pinning filefacts/stng/dmgwiz to reviewed
+#     revisions.
 #
 # Smoke tests here are deliberately `--version`/`--help` only: neither compiles
 # the ruleset, so they stay fast and network-free. The per-platform jobs in
@@ -84,6 +85,10 @@ jobs:
           key: cargo-home-guard-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-home-guard-${{ runner.os }}-
 
+      # Fails if Cargo.lock does not already resolve Cargo.toml, so the make
+      # targets below build exactly the locked revisions.
+      - run: cargo metadata --locked --format-version 1 > /dev/null
+
       # The same checks as `make lint`, so a clean local run means a clean CI run.
       - run: make lint
 
@@ -121,8 +126,13 @@ jobs:
           key: cargo-home-test-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-home-test-${{ runner.os }}-
 
+      - run: cargo metadata --locked --format-version 1 > /dev/null
+
       # Tests that need unredistributable samples print `SKIP:` and pass.
       - run: make test
+
+      - name: Cargo.lock unchanged
+        run: git diff --exit-code Cargo.lock
 
   # Not gated on `guard`: a cold build is ~25-45 min per target and serializing
   # them behind clippy would double the wall clock for no safety gain.

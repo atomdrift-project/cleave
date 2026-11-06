@@ -4,6 +4,7 @@ use crate::composite_rules::RawQuery;
 use crate::composite_rules::{
     CompositeTrait, Condition, FileType as RuleFileType, TraitDefinition,
 };
+#[cfg(feature = "lint")]
 use rustc_hash::FxHashSet;
 use std::path::Path;
 
@@ -176,6 +177,7 @@ fn check_condition(condition: &Condition, trait_id: &str, path: &Path) -> bool {
 }
 
 /// Suggest a similar metric field for typos (simple Levenshtein distance)
+#[cfg(feature = "lint")]
 pub(super) fn suggest_metric_field(valid_fields: &FxHashSet<String>, typo: &str) -> Option<String> {
     let mut best_match: Option<(String, usize)> = None;
 

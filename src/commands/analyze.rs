@@ -57,18 +57,10 @@ pub struct AnalyzeConfig<'a> {
     pub all_files: bool,
     /// Platform filters applied during rule evaluation.
     pub platforms: &'a [composite_rules::Platform],
-    /// Minimum hostile precision threshold for composite evaluation.
-    pub min_hostile_precision: f32,
-    /// Minimum suspicious precision threshold for composite evaluation.
-    pub min_suspicious_precision: f32,
     /// Maximum file size eligible for in-memory analysis.
     pub max_memory_file_size: u64,
-    /// Whether full validation should run when loading rule data.
-    pub enable_full_validation: bool,
     /// Threshold for reporting slow rule evaluations.
     pub slow_rule_ms: u64,
-    /// Whether output is being redirected to a file.
-    pub output_to_file: bool,
     /// Target file for `--output`. When `Some` and the target is a directory,
     /// scan results are streamed directly into this file instead of being
     /// spooled into memory; write_output in the dispatcher then becomes a
@@ -78,12 +70,8 @@ pub struct AnalyzeConfig<'a> {
     pub max_scan_file_size: u64,
     /// Minimum finding criticality to emit.
     pub min_crit: Option<types::Criticality>,
-    /// Maximum finding criticality to emit.
-    pub max_crit: Option<types::Criticality>,
     /// Minimum file-level criticality to emit.
     pub min_file_crit: Option<types::Criticality>,
-    /// Maximum file-level criticality to emit.
-    pub max_file_crit: Option<types::Criticality>,
     /// Which facts JSON output keeps.
     pub facts: types::Facts,
 }
@@ -93,9 +81,7 @@ pub struct AnalyzeConfig<'a> {
 struct Output {
     format: cli::OutputFormat,
     min_crit: Option<types::Criticality>,
-    max_crit: Option<types::Criticality>,
     min_file_crit: Option<types::Criticality>,
-    max_file_crit: Option<types::Criticality>,
     facts: types::Facts,
 }
 
@@ -115,10 +101,10 @@ pub fn analysis_options(config: &AnalyzeConfig<'_>) -> cleave::AnalysisOptions {
         compact_members: false,
         all_files: config.all_files,
         platforms: platforms_lib,
-        min_hostile_precision: config.min_hostile_precision,
-        min_suspicious_precision: config.min_suspicious_precision,
+        min_hostile_precision: cleave::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
+        min_suspicious_precision: cleave::CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
         precision_scoring: false,
-        full_validation: config.enable_full_validation,
+        full_validation: false,
         max_memory_file_size: config.max_memory_file_size,
         slow_rule_ms: config.slow_rule_ms,
         max_scan_file_size: config.max_scan_file_size,
@@ -133,7 +119,7 @@ pub fn analysis_options(config: &AnalyzeConfig<'_>) -> cleave::AnalysisOptions {
 
 /// Analyze a single file or directory and render the result in the requested format.
 pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
-    run_targets(config, &[config.target.to_string()])
+    run_targets(config, &[std::path::PathBuf::from(config.target)])
 }
 
 /// Analyze every target. One file renders straight to the returned string, as
@@ -141,36 +127,30 @@ pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
 /// explicit files are analyzed in parallel (unfiltered, like a single file)
 /// and each directory is walked with the shared scan pipeline. Every target is
 /// checked before any work starts.
-pub fn run_targets(config: &AnalyzeConfig<'_>, targets: &[String]) -> Result<String> {
-    if let Some(missing) = targets.iter().find(|t| !Path::new(t.as_str()).exists()) {
-        anyhow::bail!("Path does not exist: {}", missing);
+pub fn run_targets(config: &AnalyzeConfig<'_>, targets: &[std::path::PathBuf]) -> Result<String> {
+    if let Some(missing) = targets.iter().find(|t| !t.exists()) {
+        anyhow::bail!("Path does not exist: {}", missing.display());
     }
     let out = Output {
         format: *config.format,
         min_crit: config.min_crit,
-        max_crit: config.max_crit,
         min_file_crit: config.min_file_crit,
-        max_file_crit: config.max_file_crit,
         facts: config.facts,
     };
     let options = analysis_options(config);
 
-    let (dirs, files): (Vec<&String>, Vec<&String>) =
-        targets.iter().partition(|t| Path::new(t.as_str()).is_dir());
+    let (dirs, files): (Vec<std::path::PathBuf>, Vec<std::path::PathBuf>) =
+        targets.iter().cloned().partition(|t| t.is_dir());
     if let ([], [file]) = (dirs.as_slice(), files.as_slice()) {
         return analyze_and_format(file, &options, &out);
     }
     let sink = Sink::open(config)?;
     let emit = |event: cleave::ScanEvent| emit_event(event, &out, &sink);
     if !files.is_empty() {
-        let files: Vec<std::path::PathBuf> = files
-            .iter()
-            .map(|f| std::path::PathBuf::from(f.as_str()))
-            .collect();
         cleave::scan_files(&files, &options, emit)?;
     }
-    for dir in dirs {
-        cleave::scan_directory(Path::new(dir.as_str()), &options, emit)?;
+    for dir in &dirs {
+        cleave::scan_directory(dir, &options, emit)?;
     }
     sink.finish()?;
     Ok(String::new())
@@ -188,7 +168,7 @@ enum Sink {
 impl Sink {
     fn open(config: &AnalyzeConfig<'_>) -> Result<Self> {
         Ok(match config.output_path {
-            Some(path) if config.output_to_file => {
+            Some(path) => {
                 let file = std::fs::File::create(path)
                     .with_context(|| format!("Failed to open output file {}", path))?;
                 // 256 KiB: per-file JSONL writes (~1–5 KiB) don't thrash the
@@ -274,12 +254,10 @@ fn emit_event(event: cleave::ScanEvent, out: &Output, sink: &Sink) {
 /// then applies CLI-specific post-processing (encoding layer merging, filtering,
 /// output formatting).
 fn analyze_and_format(
-    target: &str,
+    path: &Path,
     options: &cleave::AnalysisOptions,
     out: &Output,
 ) -> Result<String> {
-    let path = Path::new(target);
-
     // Core analysis — single pipeline in lib.rs, with caching
     let lib_report = cleave::analyze_file(path, options)?;
     cleave::log_scan_stats();
@@ -290,12 +268,12 @@ fn analyze_and_format(
 }
 
 fn format_report_output(report: &mut types::AnalysisReport, out: &Output) -> Result<String> {
-    if out.min_file_crit.is_some() || out.max_file_crit.is_some() {
-        apply_file_criticality_filter(report, out.min_file_crit, out.max_file_crit);
+    if let Some(min) = out.min_file_crit {
+        apply_file_criticality_filter(report, min);
     }
 
-    if out.min_crit.is_some() || out.max_crit.is_some() {
-        apply_criticality_filter(report, out.min_crit, out.max_crit);
+    if let Some(min) = out.min_crit {
+        apply_criticality_filter(report, min);
     }
 
     match out.format {
@@ -325,25 +303,9 @@ fn prepare_output_report(mut report: cleave::AnalysisReport) -> types::AnalysisR
     report
 }
 
-/// Filter findings by criticality range, then remove files with no remaining findings.
-fn apply_criticality_filter(
-    report: &mut types::AnalysisReport,
-    min_crit: Option<types::Criticality>,
-    max_crit: Option<types::Criticality>,
-) {
-    let removed = report.filter_findings(|f| {
-        if let Some(min) = min_crit
-            && f.crit < min
-        {
-            return false;
-        }
-        if let Some(max) = max_crit
-            && f.crit > max
-        {
-            return false;
-        }
-        true
-    });
+/// Drop findings below `min_crit`, then files with no findings left.
+fn apply_criticality_filter(report: &mut types::AnalysisReport, min_crit: types::Criticality) {
+    let removed = report.filter_findings(|f| f.crit >= min_crit);
 
     if removed > 0 {
         // Remove files that have no findings after filtering
@@ -361,8 +323,7 @@ fn apply_criticality_filter(
 /// regardless of the children's own criticality.
 fn apply_file_criticality_filter(
     report: &mut types::AnalysisReport,
-    min_file_crit: Option<types::Criticality>,
-    max_file_crit: Option<types::Criticality>,
+    min_file_crit: types::Criticality,
 ) {
     use std::collections::HashSet;
 
@@ -378,8 +339,7 @@ fn apply_file_criticality_filter(
             .max()
             .unwrap_or(types::Criticality::Baseline);
 
-        let passes = min_file_crit.is_none_or(|min| max_crit >= min)
-            && max_file_crit.is_none_or(|max| max_crit <= max);
+        let passes = max_crit >= min_file_crit;
 
         if !passes {
             rejected_ids.insert(file.id);
@@ -420,9 +380,7 @@ mod tests {
         Output {
             format,
             min_crit: None,
-            max_crit: None,
             min_file_crit: None,
-            max_file_crit: None,
             facts: types::Facts::Model,
         }
     }
@@ -517,60 +475,7 @@ mod tests {
             ],
         )]);
 
-        apply_criticality_filter(&mut report, Some(Criticality::Notable), None);
-
-        assert_eq!(report.files.len(), 1);
-        assert_eq!(report.files[0].findings.len(), 2);
-        let ids: Vec<&str> = report.files[0]
-            .findings
-            .iter()
-            .map(|f| f.id.as_str())
-            .collect();
-        assert!(ids.contains(&"b"));
-        assert!(ids.contains(&"c"));
-    }
-
-    #[test]
-    fn test_max_crit_filters_above() {
-        let mut report = make_report(vec![make_file(
-            "/bin/sample",
-            vec![
-                make_finding("a", Criticality::Notable),
-                make_finding("b", Criticality::Suspicious),
-                make_finding("c", Criticality::Hostile),
-            ],
-        )]);
-
-        apply_criticality_filter(&mut report, None, Some(Criticality::Suspicious));
-
-        assert_eq!(report.files.len(), 1);
-        assert_eq!(report.files[0].findings.len(), 2);
-        let ids: Vec<&str> = report.files[0]
-            .findings
-            .iter()
-            .map(|f| f.id.as_str())
-            .collect();
-        assert!(ids.contains(&"a"));
-        assert!(ids.contains(&"b"));
-    }
-
-    #[test]
-    fn test_min_and_max_crit_range() {
-        let mut report = make_report(vec![make_file(
-            "/bin/sample",
-            vec![
-                make_finding("a", Criticality::Baseline),
-                make_finding("b", Criticality::Notable),
-                make_finding("c", Criticality::Suspicious),
-                make_finding("d", Criticality::Hostile),
-            ],
-        )]);
-
-        apply_criticality_filter(
-            &mut report,
-            Some(Criticality::Notable),
-            Some(Criticality::Suspicious),
-        );
+        apply_criticality_filter(&mut report, Criticality::Notable);
 
         assert_eq!(report.files.len(), 1);
         assert_eq!(report.files[0].findings.len(), 2);
@@ -593,46 +498,10 @@ mod tests {
             ),
         ]);
 
-        apply_criticality_filter(&mut report, Some(Criticality::Notable), None);
+        apply_criticality_filter(&mut report, Criticality::Notable);
 
         assert_eq!(report.files.len(), 1);
         assert_eq!(report.files[0].path, "/bin/suspicious");
-    }
-
-    #[test]
-    fn test_crit_filter_no_flags_keeps_all() {
-        let mut report = make_report(vec![make_file(
-            "/bin/sample",
-            vec![
-                make_finding("a", Criticality::Baseline),
-                make_finding("b", Criticality::Hostile),
-            ],
-        )]);
-
-        apply_criticality_filter(&mut report, None, None);
-
-        assert_eq!(report.files[0].findings.len(), 2);
-    }
-
-    #[test]
-    fn test_crit_filter_exact_level() {
-        let mut report = make_report(vec![make_file(
-            "/bin/sample",
-            vec![
-                make_finding("a", Criticality::Notable),
-                make_finding("b", Criticality::Suspicious),
-            ],
-        )]);
-
-        // min=suspicious, max=suspicious → only suspicious
-        apply_criticality_filter(
-            &mut report,
-            Some(Criticality::Suspicious),
-            Some(Criticality::Suspicious),
-        );
-
-        assert_eq!(report.files[0].findings.len(), 1);
-        assert_eq!(report.files[0].findings[0].id, "b");
     }
 
     #[test]
@@ -655,7 +524,7 @@ mod tests {
         ]);
 
         // Only keep files whose highest trait is >= Suspicious
-        apply_file_criticality_filter(&mut report, Some(Criticality::Suspicious), None);
+        apply_file_criticality_filter(&mut report, Criticality::Suspicious);
 
         assert_eq!(report.files.len(), 1);
         assert_eq!(report.files[0].path, "/bin/high");
@@ -664,89 +533,11 @@ mod tests {
     }
 
     #[test]
-    fn test_max_file_crit_filters_files() {
-        let mut report = make_report(vec![
-            make_file("/bin/low", vec![make_finding("a", Criticality::Notable)]),
-            make_file("/bin/high", vec![make_finding("b", Criticality::Hostile)]),
-        ]);
-
-        // Only keep files whose highest trait is <= Notable
-        apply_file_criticality_filter(&mut report, None, Some(Criticality::Notable));
-
-        assert_eq!(report.files.len(), 1);
-        assert_eq!(report.files[0].path, "/bin/low");
-    }
-
-    #[test]
-    fn test_file_crit_range() {
-        let mut report = make_report(vec![
-            make_file(
-                "/bin/baseline",
-                vec![make_finding("a", Criticality::Baseline)],
-            ),
-            make_file(
-                "/bin/notable",
-                vec![
-                    make_finding("b", Criticality::Baseline),
-                    make_finding("c", Criticality::Notable),
-                ],
-            ),
-            make_file(
-                "/bin/hostile",
-                vec![make_finding("d", Criticality::Hostile)],
-            ),
-        ]);
-
-        // Only files whose max crit is Notable..=Suspicious
-        apply_file_criticality_filter(
-            &mut report,
-            Some(Criticality::Notable),
-            Some(Criticality::Suspicious),
-        );
-
-        assert_eq!(report.files.len(), 1);
-        assert_eq!(report.files[0].path, "/bin/notable");
-        // All traits preserved (including baseline)
-        assert_eq!(report.files[0].findings.len(), 2);
-    }
-
-    #[test]
-    fn test_file_crit_with_trait_crit_combined() {
-        let mut report = make_report(vec![
-            make_file(
-                "/bin/notable",
-                vec![
-                    make_finding("a", Criticality::Baseline),
-                    make_finding("b", Criticality::Notable),
-                ],
-            ),
-            make_file(
-                "/bin/hostile",
-                vec![
-                    make_finding("c", Criticality::Baseline),
-                    make_finding("d", Criticality::Hostile),
-                ],
-            ),
-        ]);
-
-        // File filter: only files with max crit <= Notable
-        apply_file_criticality_filter(&mut report, None, Some(Criticality::Notable));
-        assert_eq!(report.files.len(), 1);
-        assert_eq!(report.files[0].path, "/bin/notable");
-
-        // Then trait filter: only traits >= Notable
-        apply_criticality_filter(&mut report, Some(Criticality::Notable), None);
-        assert_eq!(report.files.len(), 1);
-        assert_eq!(report.files[0].findings.len(), 1);
-        assert_eq!(report.files[0].findings[0].id, "b");
-    }
-
-    #[test]
     fn test_file_crit_empty_findings_uses_baseline() {
         let mut report = make_report(vec![make_file("/bin/empty", vec![])]);
 
         // A file with no findings has effective max crit of Baseline
-        apply_file_criticality_filter(&mut report, Some(Criticality::Notable), None);
+        apply_file_criticality_filter(&mut report, Criticality::Notable);
 
         assert_eq!(report.files.len(), 0);
     }
@@ -792,7 +583,7 @@ mod tests {
         // Filter: only files with max crit >= Suspicious
         // Container (Baseline) fails → its children should also be removed
         // Standalone (Hostile) passes
-        apply_file_criticality_filter(&mut report, Some(Criticality::Suspicious), None);
+        apply_file_criticality_filter(&mut report, Criticality::Suspicious);
 
         assert_eq!(report.files.len(), 1);
         assert_eq!(report.files[0].path, "/bin/malware");
@@ -818,7 +609,7 @@ mod tests {
         let mut report = make_report(vec![parent, child]);
 
         // Both parent and child meet the threshold — both should survive
-        apply_file_criticality_filter(&mut report, Some(Criticality::Suspicious), None);
+        apply_file_criticality_filter(&mut report, Criticality::Suspicious);
 
         assert_eq!(report.files.len(), 2);
     }

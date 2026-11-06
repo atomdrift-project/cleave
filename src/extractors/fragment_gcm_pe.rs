@@ -1,6 +1,6 @@
 //! Recover PE members from a code-relative RC4 table envelope as inert data.
 //! No specimen code or Windows APIs are executed.
-use super::primitives::{u16_le, u32_le, u64_le};
+use super::primitives::{u16_le, u32_le};
 
 pub(crate) struct Member {
     pub(crate) offset: usize,
@@ -29,11 +29,10 @@ pub(super) fn layout(b: &[u8]) -> Option<Layout> {
         return None;
     }
     let opt = pe.checked_add(24)?;
-    let _base = match u16_le(b, opt)? {
-        0x20b => u64_le(b, opt.checked_add(24)?)?,
-        0x10b => u64::from(u32_le(b, opt.checked_add(28)?)?),
-        _ => return None,
-    };
+    // PE32+ or PE32 optional header.
+    if !matches!(u16_le(b, opt)?, 0x20b | 0x10b) {
+        return None;
+    }
     let first = opt.checked_add(usize::from(u16_le(b, pe.checked_add(20)?)?))?;
     let mut sections = Vec::new();
     for i in 0..n {
@@ -198,6 +197,7 @@ mod tests {
         }
     }
     #[test]
+    #[ignore = "needs a private sample: set CLEAVE_FRAGMENT_GCM_FIXTURE"]
     fn actual_envelope_and_integrity_controls() -> anyhow::Result<()> {
         let Ok(path) = std::env::var("CLEAVE_FRAGMENT_GCM_FIXTURE") else {
             return Ok(());

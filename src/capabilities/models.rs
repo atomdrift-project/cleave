@@ -12,7 +12,10 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize, Default, Clone)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TraitDefaults {
-    #[serde(default, alias = "for", alias = "file_types")]
+    /// Validators this rule is exempt from, each with the reason.
+    #[serde(default)]
+    pub(crate) exempt: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
     pub(crate) r#for: Option<Vec<String>>,
     #[serde(default)]
     pub(crate) platforms: Option<Vec<String>>,
@@ -40,6 +43,9 @@ pub(crate) struct TraitDefaults {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawTraitDefinition {
+    /// Validators this rule is exempt from, each with the reason.
+    #[serde(default)]
+    pub(crate) exempt: std::collections::BTreeMap<String, String>,
     pub(crate) id: String,
     #[serde(alias = "description")]
     pub(crate) desc: String,
@@ -60,7 +66,7 @@ pub(crate) struct RawTraitDefinition {
     pub(crate) platforms: Option<Vec<String>>,
     #[serde(default)]
     pub(crate) arch: Option<Vec<String>>,
-    #[serde(default, alias = "for", alias = "files")]
+    #[serde(default, rename = "for")]
     pub(crate) file_types: Option<Vec<String>>,
     #[serde(default)]
     pub(crate) size_min: Option<usize>,
@@ -92,7 +98,9 @@ pub(crate) struct RawTraitDefinition {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawCompositeRule {
-    #[serde(alias = "capability")]
+    /// Validators this rule is exempt from, each with the reason.
+    #[serde(default)]
+    pub(crate) exempt: std::collections::BTreeMap<String, String>,
     pub(crate) id: String,
     #[serde(alias = "description")]
     pub(crate) desc: String,
@@ -112,16 +120,16 @@ pub(crate) struct RawCompositeRule {
     pub(crate) platforms: Option<Vec<String>>,
     #[serde(default)]
     pub(crate) arch: Option<Vec<String>>,
-    #[serde(default, alias = "for", alias = "files")]
+    #[serde(default, rename = "for")]
     pub(crate) file_types: Option<Vec<String>>,
     #[serde(default)]
     pub(crate) size_min: Option<usize>,
     #[serde(default)]
     pub(crate) size_max: Option<usize>,
     // Boolean operators
-    #[serde(default, alias = "requires_all")]
+    #[serde(default)]
     pub(crate) all: Option<Vec<crate::composite_rules::Condition>>,
-    #[serde(default, alias = "requires_any", alias = "conditions")]
+    #[serde(default)]
     pub(crate) any: Option<Vec<crate::composite_rules::Condition>>,
     /// Minimum number of conditions that must match (for `any` lists)
     #[serde(default)]
@@ -159,6 +167,6 @@ pub(crate) struct TraitMappings {
     #[serde(default)]
     pub(crate) traits: Vec<RawTraitDefinition>,
 
-    #[serde(default, alias = "capabilities")]
+    #[serde(default)]
     pub(crate) composite_rules: Vec<RawCompositeRule>,
 }

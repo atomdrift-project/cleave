@@ -1033,3 +1033,21 @@ fn claim_output_path_leaves_distinct_names_alone() {
     assert_eq!(one.file_name().unwrap(), "dup.txt");
     assert_eq!(two.file_name().unwrap(), "dup.txt");
 }
+
+/// Cancellation must end a copy, not ask for a retry: `io::copy`,
+/// `read_to_end` and `write_all` retry `ErrorKind::Interrupted` forever,
+/// so a cancelled extraction that reported it would spin until killed.
+#[test]
+fn cancelled_adapters_end_copies_instead_of_spinning() {
+    use std::io::Write;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    let cancelled = Arc::new(AtomicBool::new(true));
+    let mut reader = CancellableReader::new(&b"payload"[..], cancelled.clone());
+    assert!(std::io::copy(&mut reader, &mut std::io::sink()).is_err());
+    let mut reader = CancellableReader::new(&b"payload"[..], cancelled.clone());
+    assert!(reader.read_to_end(&mut Vec::new()).is_err());
+    let mut writer = CancellableWriter::new(std::io::sink(), cancelled);
+    assert!(writer.write_all(b"payload").is_err());
+}

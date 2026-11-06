@@ -18,11 +18,7 @@ use crate::types::{ArchiveEntry, Export, Function, Import, Section};
 fn native_facts_threads() -> Option<usize> {
     static THREADS: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
     *THREADS.get_or_init(|| {
-        std::env::var("CLEAVE_NATIVE_FACTS_THREADS")
-            .ok()?
-            .parse::<usize>()
-            .ok()
-            .filter(|&n| n > 0)
+        crate::env::parse::<usize>("CLEAVE_NATIVE_FACTS_THREADS").filter(|&n| n > 0)
     })
 }
 

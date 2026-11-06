@@ -11,7 +11,7 @@ general corpus would be an improvement -- particularly one carrying names from
 more languages, since the current model penalises consonant-dense ones (see
 the Limits section in random_validator.rs).
 
-    python3 scripts/gen_bigram_table.py ../traits-dev . > /tmp/table.rs
+    python3 scripts/gen_bigram_table.py <traits-dir> . > /tmp/table.rs
 
 then paste the rows into BIGRAM_LOGP.
 """

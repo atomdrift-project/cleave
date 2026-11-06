@@ -178,7 +178,24 @@ fn compute_regex_requirement(regex: &str) -> Option<AnyOf> {
 }
 
 impl RequiredLiterals {
+    /// The stored form, for [`crate::capabilities::derivation_memo`].
+    pub(crate) fn to_stored(&self) -> crate::capabilities::derivation_memo::AstLiterals {
+        self.0
+            .iter()
+            .map(|pattern| {
+                pattern
+                    .iter()
+                    .map(|any| any.iter().map(|(l, ci)| (l.to_vec(), *ci)).collect())
+                    .collect()
+            })
+            .collect()
+    }
+
     /// The literals `query`, compiled from `source`, requires of its input.
+    ///
+    /// Recorded across processes by `derivation_memo`: a change to what this
+    /// derives must bump that memo's file version, or a stale record would rule
+    /// out a query the new derivation admits.
     pub(crate) fn of(query: &Query, source: &str) -> Self {
         let patterns = (0..query.pattern_count())
             .map(|i| {
@@ -283,7 +300,9 @@ fn predicate(s: &str) -> Option<((Op, &str, String), &str)> {
         (Op::Match, s.strip_prefix("match?")?)
     };
     let s = skip_whitespace(s).strip_prefix('@')?;
-    let end = s.find(|c: char| !is_identifier_char(c)).unwrap_or(s.len());
+    let end = s
+        .find(|c: char| !(c.is_alphanumeric() || matches!(c, '_' | '-' | '.')))
+        .unwrap_or(s.len());
     let (capture, s) = s.split_at(end);
     if capture.is_empty() {
         return None;
@@ -291,11 +310,6 @@ fn predicate(s: &str) -> Option<((Op, &str, String), &str)> {
     let (arg, s) = string_literal(skip_whitespace(s))?;
     let s = skip_whitespace(s).strip_prefix(')')?;
     Some(((op, capture, arg), s))
-}
-
-/// tree-sitter's `stream_scan_identifier` alphabet.
-fn is_identifier_char(c: char) -> bool {
-    c.is_alphanumeric() || matches!(c, '_' | '-' | '.')
 }
 
 /// Whitespace and `;` line comments, as tree-sitter's `stream_skip_whitespace`.

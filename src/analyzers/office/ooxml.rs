@@ -196,12 +196,6 @@ impl OoxmlEntryReader for IndexedZipReader<'_> {
     }
 }
 
-/// Parse an OOXML document.
-pub(crate) fn parse_ooxml(data: &[u8]) -> Result<OoxmlDocument> {
-    let mut reader = ZipArchiveReader::new(data)?;
-    Ok(parse_ooxml_from_reader(&mut reader))
-}
-
 /// Parse an OOXML document, borrowing filefacts's ZIP member index when available.
 pub(crate) fn parse_ooxml_with_archive_entries(
     data: &[u8],
@@ -210,7 +204,8 @@ pub(crate) fn parse_ooxml_with_archive_entries(
     if let Some(mut reader) = IndexedZipReader::new(data, entries) {
         return Ok(parse_ooxml_from_reader(&mut reader));
     }
-    parse_ooxml(data)
+    let mut reader = ZipArchiveReader::new(data)?;
+    Ok(parse_ooxml_from_reader(&mut reader))
 }
 
 fn parse_ooxml_from_reader<R: OoxmlEntryReader>(reader: &mut R) -> OoxmlDocument {

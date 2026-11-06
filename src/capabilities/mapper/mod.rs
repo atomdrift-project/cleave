@@ -214,6 +214,11 @@ pub struct CapabilityMapper {
     /// `0` means "no traits" — [`Self::empty`], including the
     /// `CLEAVE_SKIP_TRAITS` mapper — which is distinct from any loaded tree.
     pub(super) traits_revision: i64,
+    /// During rule-performance validation, the AST queries timed one at a
+    /// time; the shared batch answers every other, as in a scan. `None`
+    /// times every query. Read only while validation measures (see
+    /// `Self::measuring_only`).
+    pub(super) measured_ast_queries: Option<Arc<rustc_hash::FxHashSet<String>>>,
 }
 
 /// Every trait id the loaded rule set can reference through a

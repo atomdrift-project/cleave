@@ -88,7 +88,7 @@ use cli_dispatch::{build_dispatch_context, dispatch_command, write_output};
 const MAX_MEMORY_FILE_SIZE: u64 = 100 * 1024 * 1024;
 
 /// Largest file a directory scan analyzes; larger files are skipped. Sized to
-/// admit full OS images (ISO/UDF, DMG) from the os-image feed.
+/// admit full OS images (ISO/UDF, DMG).
 const MAX_SCAN_FILE_SIZE: u64 = 20480 * 1024 * 1024;
 
 fn main() -> std::process::ExitCode {
@@ -110,7 +110,7 @@ fn run() -> Result<()> {
     // `PATH`. A tool that reads hostile files should not weaken its own process
     // isolation by default.
     #[cfg(unix)]
-    let debug_backtraces = std::env::var_os("CLEAVE_DEBUG_BACKTRACE").is_some_and(|v| v == "1");
+    let debug_backtraces = cleave::env::flag("CLEAVE_DEBUG_BACKTRACE");
 
     // Block SIGUSR1 process-wide before spawning any threads so they all inherit
     // the blocked mask. With backtraces enabled the sigusr1 thread below consumes
@@ -308,7 +308,6 @@ fn run() -> Result<()> {
         zip_passwords: &zip_passwords,
         platforms: &[cleave::Platform::All],
         slow_rule_ms: args.slow_rule_ms,
-        output_to_file: args.output.is_some(),
         output_path: output_path.as_deref(),
         max_memory_file_size: MAX_MEMORY_FILE_SIZE,
         max_scan_file_size: MAX_SCAN_FILE_SIZE,

@@ -8,145 +8,11 @@
 //! analyzer integration layer stitches the results into
 //! `report.values_tree`.
 //!
-//! Trade-off: this is slightly redundant with parsing already done
-//! by the format analyzers (`analyzers::elf::analyze_structural`).
-//! The redundancy is intentional — these extractors run on raw
-//! bytes without depending on goblin's higher-level types, so an
-//! analyzer panic or bug elsewhere never starves attribution data.
+//! Section layout comes from the report, which filefacts populated; the
+//! raw bytes are only scanned for strings (build paths, toolchain banners).
 
 use crate::types::{AnalysisReport, Import};
 use std::collections::BTreeSet;
-
-// ---------------------------------------------------------------------------
-// ELF `.comment` section
-// ---------------------------------------------------------------------------
-
-/// Locate a named ELF section and return its byte slice. Lenient
-/// parser — bails on malformed inputs rather than propagating
-/// errors. Caps memory; only reads section header table.
-fn read_section<'a>(data: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
-    if data.len() < 0x40 || &data[..4] != b"\x7fELF" {
-        return None;
-    }
-    let is_64 = data[4] == 2;
-    let is_le = data[5] == 1;
-    if !is_le {
-        // Big-endian ELF parsing for `.comment` extraction is rare
-        // enough that we punt; the section is still found via the
-        // string-scan fallback below for trait authors.
-        return scan_section_fallback(data, name);
-    }
-
-    // e_shoff (section header table file offset)
-    // e_shentsize (section header entry size)
-    // e_shnum (number of section headers)
-    // e_shstrndx (section name string table index)
-    let (e_shoff, e_shentsize, e_shnum, e_shstrndx) = if is_64 {
-        if data.len() < 0x40 {
-            return None;
-        }
-        let shoff = u64::from_le_bytes(data[0x28..0x30].try_into().ok()?);
-        let shentsize = u16::from_le_bytes(data[0x3a..0x3c].try_into().ok()?);
-        let shnum = u16::from_le_bytes(data[0x3c..0x3e].try_into().ok()?);
-        let shstrndx = u16::from_le_bytes(data[0x3e..0x40].try_into().ok()?);
-        (
-            shoff as usize,
-            shentsize as usize,
-            shnum as usize,
-            shstrndx as usize,
-        )
-    } else {
-        if data.len() < 0x34 {
-            return None;
-        }
-        let shoff = u32::from_le_bytes(data[0x20..0x24].try_into().ok()?);
-        let shentsize = u16::from_le_bytes(data[0x2e..0x30].try_into().ok()?);
-        let shnum = u16::from_le_bytes(data[0x30..0x32].try_into().ok()?);
-        let shstrndx = u16::from_le_bytes(data[0x32..0x34].try_into().ok()?);
-        (
-            shoff as usize,
-            shentsize as usize,
-            shnum as usize,
-            shstrndx as usize,
-        )
-    };
-
-    if e_shentsize == 0 || e_shnum == 0 || e_shstrndx >= e_shnum {
-        return None;
-    }
-    if e_shoff.checked_add(e_shentsize.checked_mul(e_shnum)?)? > data.len() {
-        return None;
-    }
-
-    // Locate the section-name string table.
-    let shstrtab = read_shdr(data, e_shoff, e_shentsize, e_shstrndx, is_64)?;
-    let (shstr_off, shstr_size) = (shstrtab.sh_offset as usize, shstrtab.sh_size as usize);
-    if shstr_off.checked_add(shstr_size)? > data.len() {
-        return None;
-    }
-    let shstrings = &data[shstr_off..shstr_off + shstr_size];
-
-    // Walk section headers looking for our name.
-    for i in 0..e_shnum {
-        let shdr = read_shdr(data, e_shoff, e_shentsize, i, is_64)?;
-        let name_off = shdr.sh_name as usize;
-        if name_off >= shstrings.len() {
-            continue;
-        }
-        let nul = shstrings[name_off..].iter().position(|&b| b == 0)?;
-        let candidate = &shstrings[name_off..name_off + nul];
-        if candidate == name {
-            let off = shdr.sh_offset as usize;
-            let size = shdr.sh_size as usize;
-            if off.checked_add(size)? > data.len() {
-                return None;
-            }
-            return Some(&data[off..off + size]);
-        }
-    }
-    None
-}
-
-/// Fallback for big-endian ELFs: locate the literal section name
-/// in the file then peek a fixed offset back to find the section
-/// header. Imprecise — used only when LE parsing isn't available.
-fn scan_section_fallback<'a>(_data: &'a [u8], _name: &[u8]) -> Option<&'a [u8]> {
-    None
-}
-
-#[derive(Debug, Clone, Copy)]
-struct Shdr {
-    sh_name: u32,
-    sh_offset: u64,
-    sh_size: u64,
-}
-
-fn read_shdr(data: &[u8], shoff: usize, entsize: usize, idx: usize, is_64: bool) -> Option<Shdr> {
-    let off = shoff.checked_add(entsize.checked_mul(idx)?)?;
-    let entry = data.get(off..off + entsize)?;
-    let sh_name = u32::from_le_bytes(entry.get(..4)?.try_into().ok()?);
-    if is_64 {
-        let sh_offset = u64::from_le_bytes(entry.get(0x18..0x20)?.try_into().ok()?);
-        let sh_size = u64::from_le_bytes(entry.get(0x20..0x28)?.try_into().ok()?);
-        Some(Shdr {
-            sh_name,
-            sh_offset,
-            sh_size,
-        })
-    } else {
-        let sh_offset = u32::from_le_bytes(entry.get(0x10..0x14)?.try_into().ok()?) as u64;
-        let sh_size = u32::from_le_bytes(entry.get(0x14..0x18)?.try_into().ok()?) as u64;
-        Some(Shdr {
-            sh_name,
-            sh_offset,
-            sh_size,
-        })
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Rust runtime detection
-// ---------------------------------------------------------------------------
 
 /// Detect a Rust binary by looking for the canonical Rust allocator
 /// shim symbols (`__rust_alloc`, `__rust_dealloc`, etc.) and panic
@@ -237,14 +103,6 @@ fn legacy_rust_mangling_regex() -> Option<&'static regex::Regex> {
     static_regex!(r"^_?ZN.*17h[0-9a-f]{16}E$")
 }
 
-/// Whether the ELF carries a `.rustc` section. Set on rustc-built
-/// `lib` crates (rlib metadata) and some `bin` crates depending on
-/// build profile. An explicit "this is a Rust artifact" marker.
-#[must_use]
-pub(crate) fn has_rustc_section(data: &[u8]) -> bool {
-    read_section(data, b".rustc").is_some()
-}
-
 // ---------------------------------------------------------------------------
 // Aggregate hook: layer extracted data onto the binary kv tree
 // ---------------------------------------------------------------------------
@@ -259,13 +117,11 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
     let mut augment = serde_json::Map::new();
 
     // Top unnamed functions by cyclomatic complexity. Recovery labels
-    // discovered-but-unnamed functions as `fcn.<addr>` (rizin's spelling); named ones
-    // are `sym.X`, `entry0`, `main`, etc. A high-complexity unnamed
-    // function in a stripped library is interesting in its own right
-    // — it carries the bulk of internal logic without any ABI tie.
-    // The xz 5.6.0 backdoor lives in two anonymous functions
-    // (cc=165, cc=147); surfacing them by name lets a diff highlight
-    // their *appearance* between releases as a first-class signal.
+    // discovered-but-unnamed functions `fcn.<addr>`; named ones are `sym.X`,
+    // `entry0`, `main`, etc. A high-complexity unnamed function in a
+    // stripped library carries internal logic without any ABI tie, so
+    // naming the most complex ones lets a diff show one appearing between
+    // releases (the xz backdoor lived in two such functions).
     let mut unnamed: Vec<&crate::types::binary::Function> = report
         .functions
         .iter()
@@ -279,16 +135,6 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
             .then_with(|| b.size.unwrap_or(0).cmp(&a.size.unwrap_or(0)))
     });
     if !unnamed.is_empty() {
-        // Single-number trait targets: count of unnamed funcs whose
-        // cyclomatic complexity clears the "interesting" bar (>50,
-        // matching `binary.high_complexity_func_count`). Drift in
-        // this number between releases is the cleanest one-shot
-        // signal that hidden complexity grew (xz 5.4.5: 6, xz 5.6.0: 13).
-        let _ = unnamed
-            .iter()
-            .filter(|f| f.complexity.unwrap_or(0) > 50)
-            .count();
-
         const MAX_UNNAMED: usize = 8;
         let arr: Vec<Value> = unnamed
             .iter()
@@ -323,7 +169,7 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
     // explicit "this is a Rust artifact" marker.
     let rust_symbols = detect_rust_symbols(&report.imports, &report.exports);
     let rust_mangling = detect_rust_mangling(&report.imports, &report.exports);
-    let rust_section = has_rustc_section(raw_data);
+    let rust_section = report.sections.iter().any(|s| s.name == ".rustc");
     if !rust_symbols.is_empty() || rust_mangling.is_some() || rust_section {
         let build_extra = augment
             .entry(String::from("build"))
@@ -348,7 +194,6 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
             }
         }
     }
-    let _ = rust_section;
 
     // Builder-path / username recovery.  Cross-format byte scan
     // for `/home/<u>/`, `/Users/<u>/`, and `C:\Users\<u>\` —

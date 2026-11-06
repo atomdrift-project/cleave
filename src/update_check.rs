@@ -48,23 +48,44 @@ fn manifest_url_from(base: &str, name: &str, marker: bool) -> String {
     format!("{base}{sep}{name}{query}")
 }
 
-/// Fetch and parse a manifest over HTTPS.
+/// Largest manifest body read. The real one is a few hundred bytes.
+const MAX_MANIFEST_BYTES: u64 = 64 << 10;
+
+/// Fetch and parse a manifest over HTTPS. Plain HTTP is accepted only from a
+/// loopback `CLEAVE_UPDATE_URL`, for testing; redirects are never followed, so
+/// neither a redirect nor a downgrade can substitute another host's notice.
 fn fetch(name: &str, marker: bool) -> Result<Manifest> {
+    use std::io::Read;
+
     let url = manifest_url(name, marker);
+    let loopback = reqwest::Url::parse(&url).is_ok_and(|u| {
+        matches!(
+            u.host_str(),
+            Some("localhost" | "127.0.0.1" | "[::1]" | "::1")
+        )
+    });
     let client = reqwest::blocking::Client::builder()
+        .https_only(!loopback)
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(FETCH_TIMEOUT)
         .connect_timeout(FETCH_TIMEOUT)
         .user_agent(concat!("cleave/", env!("CARGO_PKG_VERSION")))
         .build()
         .context("building update-check HTTP client")?;
-    let text = client
+    let response = client
         .get(&url)
         .send()
         .with_context(|| format!("fetching {url}"))?
         .error_for_status()
-        .with_context(|| format!("{url} returned an error status"))?
-        .text()
+        .with_context(|| format!("{url} returned an error status"))?;
+    let mut text = String::new();
+    response
+        .take(MAX_MANIFEST_BYTES + 1)
+        .read_to_string(&mut text)
         .context("reading manifest body")?;
+    if text.len() as u64 > MAX_MANIFEST_BYTES {
+        anyhow::bail!("{url}: manifest over {MAX_MANIFEST_BYTES} bytes");
+    }
     Manifest::parse(&text)
 }
 

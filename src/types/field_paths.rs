@@ -3,6 +3,7 @@
 //! Provides a trait-based system for validating metric field references in YAML rules
 //! without hardcoding field names.
 
+#[cfg(feature = "lint")]
 use std::collections::HashSet;
 
 /// Trait for types that can declare their valid field paths and descriptions.
@@ -29,6 +30,7 @@ pub trait ValidFieldPaths {
 /// Returns all valid metric field paths for use in YAML rules
 /// Returns paths like "binary.code_to_data_ratio", "text.line_count", etc.
 #[must_use]
+#[cfg(feature = "lint")]
 pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
     // Import the trait to access its methods
     use super::field_paths::ValidFieldPaths;
@@ -140,6 +142,7 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
 /// the outcome of a network fetch. The `binary.*` / `pe.*` entries have no
 /// such excuse — they are per-file measurements sitting on the wrong side of
 /// the boundary.
+#[cfg(feature = "lint")]
 pub(crate) const CLEAVE_OWNED_METRIC_FIELDS: &[&str] = &[
     // Needs every shipped module's imports beside the manifest, so no
     // single-file parse can reach it.

@@ -184,9 +184,7 @@ pub(crate) fn configure_rayon_thread_pool(validating: bool) {
     const MIN_SAFE_THREADS: usize = 4;
 
     let mut builder = rayon::ThreadPoolBuilder::new().stack_size(8 * 1024 * 1024);
-    let explicit = std::env::var("CLEAVE_RAYON_THREADS")
-        .ok()
-        .and_then(|v| v.trim().parse::<usize>().ok());
+    let explicit = cleave::env::parse::<usize>("CLEAVE_RAYON_THREADS");
 
     if let Some(threads) = explicit {
         if threads < MIN_SAFE_THREADS {

@@ -149,12 +149,28 @@ pub(crate) fn crx_zip_offset(data: &[u8]) -> Result<usize> {
 
 /// Read an archive member from the offsets filefacts indexed for it (a ZIP
 /// central directory, a phar manifest): the `[data_offset, +compressed_size)`
-/// slice, decompressed by its method and capped at `limit` bytes.
+/// slice, decompressed by its method and capped at `limit` bytes. A member
+/// past the cap is an error.
 pub(crate) fn read_indexed_member(
     data: &[u8],
     entry: &ArchiveEntry,
     limit: u64,
 ) -> Result<Vec<u8>> {
+    let (bytes, truncated) = read_indexed_member_prefix(data, entry, limit)?;
+    if truncated {
+        anyhow::bail!("member exceeds read limit");
+    }
+    Ok(bytes)
+}
+
+/// [`read_indexed_member`], keeping the first `cap` bytes of a member that
+/// runs past them; the flag says whether it did. Decoding stops one byte past
+/// the cap, so a bomb costs no more than the cap.
+pub(crate) fn read_indexed_member_prefix(
+    data: &[u8],
+    entry: &ArchiveEntry,
+    cap: u64,
+) -> Result<(Vec<u8>, bool)> {
     let data_offset = entry
         .data_offset
         .ok_or_else(|| anyhow::anyhow!("missing member data offset"))?;
@@ -172,23 +188,20 @@ pub(crate) fn read_indexed_member(
         anyhow::bail!("member range exceeds archive size");
     }
 
+    let cap_len = usize::try_from(cap).unwrap_or(usize::MAX);
     let compressed = &data[start..end];
-    let inflate = |decoder: &mut dyn Read| -> Result<Vec<u8>> {
-        let mut limited = LimitedReader::new(decoder, limit);
+    let inflate = |decoder: &mut dyn Read| -> Result<(Vec<u8>, bool)> {
         let mut out = Vec::with_capacity(entry.size_bytes.min(16 * 1024 * 1024) as usize);
-        limited.read_to_end(&mut out)?;
-        if limited.is_limited() {
-            anyhow::bail!("compressed member exceeds read limit");
-        }
-        Ok(out)
+        decoder.take(cap.saturating_add(1)).read_to_end(&mut out)?;
+        let truncated = out.len() > cap_len;
+        out.truncate(cap_len);
+        Ok((out, truncated))
     };
     match entry.compression_method.as_deref() {
-        Some("stored") => {
-            if compressed.len() as u64 > limit {
-                anyhow::bail!("stored member exceeds read limit");
-            }
-            Ok(compressed.to_vec())
-        }
+        Some("stored") => Ok((
+            compressed[..compressed.len().min(cap_len)].to_vec(),
+            compressed.len() > cap_len,
+        )),
         // Raw deflate, no zlib header: ZIP and phar both store it this way.
         Some("deflate") => inflate(&mut flate2::read::DeflateDecoder::new(compressed)),
         Some("bzip2") => inflate(&mut bzip2::read::BzDecoder::new(compressed)),
@@ -348,24 +361,30 @@ pub(crate) fn extract_zip_entries_safe<R: Read + Seek>(
                 linkname: linkname_capture,
                 host_os: None,
             });
-            // Skip symlinks regardless (we don't extract them)
-            continue;
+            // No link is created. But the JVM, Android and pip ignore unix
+            // modes and load this entry as an ordinary file, so its bytes are
+            // extracted and analyzed like any other member's.
+            drop(entry);
+            entry = match password {
+                Some(pw) => archive.by_index_decrypt(i, pw)?,
+                None => archive.by_index(i)?,
+            };
+        } else {
+            guard.record_member_metadata(ExtractedMemberMetadata {
+                archive_path: rel_path,
+                compressed_size,
+                compression_method,
+                mtime_unix,
+                mode_octal,
+                uid: None,
+                gid: None,
+                uname: None,
+                gname: None,
+                entry_type: Some(entry_type_str.to_string()),
+                linkname: None,
+                host_os: None,
+            });
         }
-
-        guard.record_member_metadata(ExtractedMemberMetadata {
-            archive_path: rel_path,
-            compressed_size,
-            compression_method,
-            mtime_unix,
-            mode_octal,
-            uid: None,
-            gid: None,
-            uname: None,
-            gname: None,
-            entry_type: Some(entry_type_str.to_string()),
-            linkname: None,
-            host_os: None,
-        });
 
         if entry.is_dir() {
             fs::create_dir_all(&outpath)?;

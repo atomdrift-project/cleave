@@ -286,30 +286,14 @@ fn test_navigate_key_on_non_object() {
 
 #[test]
 fn test_matcher_exact_match() {
-    let matcher = KvMatcher::new(
-        Some(&"test".to_string()),
-        None,
-        None,
-        false,
-        None,
-        None,
-        None,
-    );
+    let matcher = KvMatcher::new(Some(&"test".to_string()), None, None, false, None, None);
     assert!(matcher.matches(&json!("test")));
     assert!(!matcher.matches(&json!("other")));
 }
 
 #[test]
 fn test_matcher_exact_case_insensitive() {
-    let matcher = KvMatcher::new(
-        Some(&"TEST".to_string()),
-        None,
-        None,
-        true,
-        None,
-        None,
-        None,
-    );
+    let matcher = KvMatcher::new(Some(&"TEST".to_string()), None, None, true, None, None);
     assert!(matcher.matches(&json!("test")));
     assert!(matcher.matches(&json!("TEST")));
     assert!(matcher.matches(&json!("TeSt")));
@@ -317,15 +301,7 @@ fn test_matcher_exact_case_insensitive() {
 
 #[test]
 fn test_matcher_substr_match() {
-    let matcher = KvMatcher::new(
-        None,
-        Some(&"curl".to_string()),
-        None,
-        false,
-        None,
-        None,
-        None,
-    );
+    let matcher = KvMatcher::new(None, Some(&"curl".to_string()), None, false, None, None);
     assert!(matcher.matches(&json!("curl https://evil.com")));
     assert!(matcher.matches(&json!("use curl to download")));
     assert!(!matcher.matches(&json!("wget only")));
@@ -333,15 +309,7 @@ fn test_matcher_substr_match() {
 
 #[test]
 fn test_matcher_substr_case_insensitive() {
-    let matcher = KvMatcher::new(
-        None,
-        Some(&"CURL".to_string()),
-        None,
-        true,
-        None,
-        None,
-        None,
-    );
+    let matcher = KvMatcher::new(None, Some(&"CURL".to_string()), None, true, None, None);
     assert!(matcher.matches(&json!("curl https://evil.com")));
     assert!(matcher.matches(&json!("CURL -O file")));
 }
@@ -349,7 +317,7 @@ fn test_matcher_substr_case_insensitive() {
 #[test]
 fn test_matcher_regex() {
     let regex = crate::composite_rules::condition::cached_regex(r"https?://.*\.com").unwrap();
-    let matcher = KvMatcher::new(None, None, Some(&regex), false, None, None, None);
+    let matcher = KvMatcher::new(None, None, Some(&regex), false, None, None);
     assert!(matcher.matches(&json!("http://example.com")));
     assert!(matcher.matches(&json!("https://evil.com")));
     assert!(!matcher.matches(&json!("ftp://example.com")));
@@ -357,15 +325,7 @@ fn test_matcher_regex() {
 
 #[test]
 fn test_matcher_array_any_match() {
-    let matcher = KvMatcher::new(
-        Some(&"admin".to_string()),
-        None,
-        None,
-        false,
-        None,
-        None,
-        None,
-    );
+    let matcher = KvMatcher::new(Some(&"admin".to_string()), None, None, false, None, None);
     let array = json!(["user", "admin", "guest"]);
     assert!(
         matcher.matches(&array),
@@ -382,7 +342,6 @@ fn test_matcher_array_no_match() {
         false,
         None,
         None,
-        None,
     );
     let array = json!(["user", "admin", "guest"]);
     assert!(!matcher.matches(&array));
@@ -390,7 +349,7 @@ fn test_matcher_array_no_match() {
 
 #[test]
 fn test_matcher_existence_check() {
-    let matcher = KvMatcher::new(None, None, None, false, None, None, None);
+    let matcher = KvMatcher::new(None, None, None, false, None, None);
     assert!(matcher.matches(&json!("anything")));
     assert!(matcher.matches(&json!(123)));
     assert!(matcher.matches(&json!(true)));
@@ -399,22 +358,14 @@ fn test_matcher_existence_check() {
 
 #[test]
 fn test_matcher_number_conversion() {
-    let matcher = KvMatcher::new(Some(&"42".to_string()), None, None, false, None, None, None);
+    let matcher = KvMatcher::new(Some(&"42".to_string()), None, None, false, None, None);
     assert!(matcher.matches(&json!(42)));
     assert!(matcher.matches(&json!("42")));
 }
 
 #[test]
 fn test_matcher_boolean_conversion() {
-    let matcher = KvMatcher::new(
-        Some(&"true".to_string()),
-        None,
-        None,
-        false,
-        None,
-        None,
-        None,
-    );
+    let matcher = KvMatcher::new(Some(&"true".to_string()), None, None, false, None, None);
     assert!(matcher.matches(&json!(true)));
     assert!(matcher.matches(&json!("true")));
 }

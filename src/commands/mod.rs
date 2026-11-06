@@ -37,7 +37,7 @@
 //!
 //! ### Utilities
 //! - Path handling: `expand_paths` - Recursively expands file globs and directories
-//! - Input handling: `read_paths_from_stdin` - Reads file paths from standard input
+//! - Input handling: `paths_from_lines` - Reads file paths from standard input
 //! - File type detection: `cli_file_type_to_internal` - Converts CLI file type to internal type
 //!
 //! ### Reporting Functions

@@ -4,7 +4,32 @@ use super::macho_integer_tables::{RecoveredText, inline_applescript};
 use super::primitives::{rc4, unhex};
 use filefacts::ParsedFile;
 
-fn recover_strings(data: &[u8], base: usize) -> Vec<RecoveredText> {
+/// Largest section any recoverer reads.
+const MAX_SECTION: usize = 4 * 1024 * 1024;
+/// RC4 bytes produced per file, across every section, payload and key.
+const RC4_BUDGET: usize = 64 * 1024 * 1024;
+
+/// Each section's name, file offset and bytes, for sections of at most
+/// [`MAX_SECTION`] bytes. A range is returned once even when several section
+/// headers alias it, so a hostile header list cannot multiply the work.
+fn sections<'a>(data: &'a [u8], parsed: &ParsedFile<'_>) -> Vec<(String, usize, &'a [u8])> {
+    let mut seen = std::collections::HashSet::new();
+    parsed
+        .sections()
+        .iter()
+        .filter_map(|section| {
+            let start = usize::try_from(section.file_offset).ok()?;
+            let size = usize::try_from(section.file_size).ok()?;
+            let end = start.checked_add(size)?;
+            if size > MAX_SECTION || !seen.insert((start, end)) {
+                return None;
+            }
+            Some((section.name.to_string(), start, data.get(start..end)?))
+        })
+        .collect()
+}
+
+fn recover_strings(data: &[u8], base: usize, budget: &mut usize) -> Vec<RecoveredText> {
     let mut keys = Vec::new();
     let mut payloads = Vec::new();
     let mut pos = 0;
@@ -26,6 +51,14 @@ fn recover_strings(data: &[u8], base: usize) -> Vec<RecoveredText> {
     let mut result = Vec::new();
     for (offset, cipher) in payloads {
         for key in &keys {
+            let Some(left) = budget.checked_sub(cipher.len()) else {
+                tracing::debug!(
+                    offset = base + offset,
+                    "Mach-O hex/RC4 search hit its work budget"
+                );
+                return result;
+            };
+            *budget = left;
             let plain = rc4(&cipher, key);
             if std::str::from_utf8(&plain).is_ok_and(|text| inline_applescript(text).is_some()) {
                 result.push(RecoveredText {
@@ -42,28 +75,12 @@ pub(crate) fn recover(data: &[u8], parsed: &ParsedFile<'_>) -> Vec<RecoveredText
     if data.len() > 32 * 1024 * 1024 {
         return Vec::new();
     }
-    let mut out = Vec::new();
-    for section in parsed.sections() {
-        if !section.name.ends_with("__cstring") {
-            continue;
-        }
-        let Ok(start) = usize::try_from(section.file_offset) else {
-            continue;
-        };
-        let Ok(size) = usize::try_from(section.file_size) else {
-            continue;
-        };
-        let Some(end) = start.checked_add(size) else {
-            continue;
-        };
-        if size > 4 * 1024 * 1024 {
-            continue;
-        }
-        if let Some(bytes) = data.get(start..end) {
-            out.extend(recover_strings(bytes, start));
-        }
-    }
-    out
+    let mut budget = RC4_BUDGET;
+    sections(data, parsed)
+        .into_iter()
+        .filter(|(name, _, _)| name.ends_with("__cstring"))
+        .flat_map(|(_, start, bytes)| recover_strings(bytes, start, &mut budget))
+        .collect()
 }
 
 fn custom_base64(data: &[u8], alphabet: &[u8]) -> Option<Vec<u8>> {
@@ -191,28 +208,11 @@ pub(crate) fn recover_custom(data: &[u8], parsed: &ParsedFile<'_>) -> Vec<Recove
     if data.len() > 32 * 1024 * 1024 {
         return Vec::new();
     }
-    let mut out = Vec::new();
-    for section in parsed.sections() {
-        if !section.name.ends_with("__cstring") {
-            continue;
-        }
-        let Ok(start) = usize::try_from(section.file_offset) else {
-            continue;
-        };
-        let Ok(size) = usize::try_from(section.file_size) else {
-            continue;
-        };
-        let Some(end) = start.checked_add(size) else {
-            continue;
-        };
-        if size > 4 * 1024 * 1024 {
-            continue;
-        }
-        if let Some(bytes) = data.get(start..end) {
-            out.extend(recover_custom_strings(bytes, start));
-        }
-    }
-    out
+    sections(data, parsed)
+        .into_iter()
+        .filter(|(name, _, _)| name.ends_with("__cstring"))
+        .flat_map(|(_, start, bytes)| recover_custom_strings(bytes, start))
+        .collect()
 }
 
 fn decode_lcg(cipher: &[u8], seed: u32, multiplier: u32, modulus: u32) -> Option<Vec<u8>> {
@@ -238,26 +238,11 @@ pub(crate) fn recover_lcg(data: &[u8], parsed: &ParsedFile<'_>) -> Vec<Recovered
     if data.len() > 32 * 1024 * 1024 {
         return Vec::new();
     }
-    let sections = parsed.sections();
+    let sections = sections(data, parsed);
     let mut multipliers = Vec::new();
     let mut moduli = Vec::new();
-    for section in sections.as_slice() {
-        let Ok(start) = usize::try_from(section.file_offset) else {
-            continue;
-        };
-        let Ok(size) = usize::try_from(section.file_size) else {
-            continue;
-        };
-        let Some(end) = start.checked_add(size) else {
-            continue;
-        };
-        if size > 4 * 1024 * 1024 {
-            continue;
-        }
-        let Some(bytes) = data.get(start..end) else {
-            continue;
-        };
-        if section.name.ends_with("__text") {
+    for (name, _, bytes) in &sections {
+        if name.ends_with("__text") {
             // x86 multiply-immediate followed by storage and division.
             for w in bytes.windows(29) {
                 if w[0..2] == [0x69, 0x45]
@@ -275,7 +260,7 @@ pub(crate) fn recover_lcg(data: &[u8], parsed: &ParsedFile<'_>) -> Vec<Recovered
                     }
                 }
             }
-        } else if section.name.ends_with("__cstring") {
+        } else if name.ends_with("__cstring") {
             for w in bytes.windows(9) {
                 if w[2] != b':'
                     || w[5] != b':'
@@ -302,25 +287,10 @@ pub(crate) fn recover_lcg(data: &[u8], parsed: &ParsedFile<'_>) -> Vec<Recovered
         }
     }
     let mut out = Vec::new();
-    for section in sections.as_slice() {
-        if !section.name.ends_with("__const") {
+    for &(ref name, start, bytes) in &sections {
+        if !name.ends_with("__const") || !(1024..=1024 * 1024).contains(&bytes.len()) {
             continue;
         }
-        let Ok(start) = usize::try_from(section.file_offset) else {
-            continue;
-        };
-        let Ok(size) = usize::try_from(section.file_size) else {
-            continue;
-        };
-        if !(1024..=1024 * 1024).contains(&size) {
-            continue;
-        }
-        let Some(end) = start.checked_add(size) else {
-            continue;
-        };
-        let Some(bytes) = data.get(start..end) else {
-            continue;
-        };
         let seed = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
         for &m in &multipliers {
             for &n in &moduli {
@@ -399,18 +369,28 @@ mod tests {
         let long_plain = format!("osascript -e '{}{}'", "x".repeat(512), "hello");
         let long_cipher = rc4(long_plain.as_bytes(), key);
         let input = format!("{}\0{}\0", hex(key), hex(&long_cipher));
-        let found = recover_strings(input.as_bytes(), 0);
+        let found = recover_strings(input.as_bytes(), 0, &mut { RC4_BUDGET });
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].data, long_plain.as_bytes());
         assert!(
+            recover_strings(input.as_bytes(), 0, &mut 16).is_empty(),
+            "an exhausted budget stops the search"
+        );
+        assert!(
             recover_strings(
                 format!("{}\0{}\0", hex(b"wrong-key-123456"), hex(&long_cipher)).as_bytes(),
-                0
+                0,
+                &mut { RC4_BUDGET }
             )
             .is_empty()
         );
         assert!(
-            recover_strings(format!("{}\0{}\0", hex(key), hex(&cipher)).as_bytes(), 0).is_empty()
+            recover_strings(
+                format!("{}\0{}\0", hex(key), hex(&cipher)).as_bytes(),
+                0,
+                &mut { RC4_BUDGET }
+            )
+            .is_empty()
         );
     }
 }

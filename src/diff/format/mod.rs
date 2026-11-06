@@ -153,11 +153,14 @@ pub(super) fn format_value(v: &Value) -> String {
     }
 }
 
-/// Char-aware truncation with a trailing ellipsis. Strings shorter
-/// than `max` round-trip unchanged.
+/// Char-aware truncation with a trailing ellipsis, of sample text whose
+/// controls and invisible characters are made visible first (see
+/// [`crate::output::sample_text`]). Strings shorter than `max` with nothing
+/// to escape round-trip unchanged.
 pub(super) fn truncate(s: &str, max: usize) -> String {
+    let s = crate::output::sample_text(s);
     if s.chars().count() <= max {
-        return s.to_string();
+        return s.into_owned();
     }
     let kept: String = s.chars().take(max.saturating_sub(1)).collect();
     format!("{kept}…")

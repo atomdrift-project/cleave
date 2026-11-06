@@ -57,24 +57,19 @@ pub use compact::{
     CompactDep, CompactExport, CompactFacts, CompactFile, CompactFunction, CompactImport,
     CompactReport, CompactSection, CompactTrait, Facts, RoundedMetrics, compact_from_files,
 };
-#[allow(unused_imports)]
 pub use core::{
     AnalysisReport, ArchiveEntry, Criticality, ExtractedPayload, MetricsExt, TargetInfo,
     flatten_into_metrics, kv_set_path,
 };
-#[allow(unused_imports)]
 pub use istr::Istr;
 
 pub use filefacts_view::FilefactsView;
 
-#[allow(unused_imports)]
 pub(crate) use file_analysis::{
-    ARCHIVE_DELIMITER, ENCODING_DELIMITER, FindingCounts, ReportSummary, encode_archive_path,
-    encode_decoded_path,
+    ARCHIVE_DELIMITER, ENCODING_DELIMITER, encode_archive_path, encode_decoded_path,
 };
 pub use file_analysis::{FileAnalysis, Rel, Role};
 
-#[allow(unused_imports)]
 pub use traits_findings::{
     ContextLine, Evidence, Finding, FindingKind, Note, StructuralFeature, Suppression,
     SuppressionKind, SuppressionLeg, Trait, TraitKind,
@@ -84,35 +79,20 @@ pub(crate) use traits_findings::{
     truncate_evidence_value,
 };
 
-#[allow(unused_imports)]
 pub(crate) use paths_env::{
     DirectoryAccess, DirectoryAccessPattern, EnvVarAccessType, EnvVarCategory, EnvVarInfo,
-    PathAccessType, PathCategory, PathInfo, PathType,
+    PathCategory, PathInfo, PathType,
 };
 
-#[allow(unused_imports)]
 pub use binary::{
-    AnalysisMetadata, DecodedString, Export, Function, Import, MatchedString, Section, StringInfo,
-    StringType, SyscallInfo, YaraMatch,
+    AnalysisMetadata, Export, Function, Import, MatchedString, Section, StringInfo, StringType,
+    SyscallInfo, YaraMatch,
 };
 
-#[allow(unused_imports)]
 pub use diff::{
     Changed, DiffReportV1, DiffSummary, FileDiffEntry, FileStatus, IdentityDiff, KvChange,
     MetricChange, Scope, ScopeDiff, ScopeDiffs, ScopeRocs, ScopeView, SectionChange, StringChange,
     SymbolChange, SymbolKind, TraitChange,
-};
-
-#[allow(unused_imports)]
-pub(crate) use ml_features::{
-    CallPatternMetrics, ControlFlowMetrics, DecodedValue, EmbeddedConstant, FunctionSignature,
-    NestingMetrics,
-};
-
-#[allow(unused_imports)]
-pub(crate) use code_structure::{
-    BinaryAnomaly, BinaryProperties, GoIdioms, JavaScriptIdioms, LinkingInfo, SecurityFeatures,
-    ShellIdioms, SourceCodeMetrics,
 };
 
 #[cfg(test)]

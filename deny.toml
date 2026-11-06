@@ -4,8 +4,8 @@
 all-features = true
 
 [advisories]
-# Unmaintained crates are reported, not fatal: some (serde_yaml) have no drop-in
-# successor yet. Security advisories always fail.
+# Unmaintained crates are reported, not fatal: a dependency can go quiet with
+# no drop-in successor. Security advisories always fail.
 unmaintained = "workspace"
 yanked = "deny"
 # Advisories in dependencies cleave does not control. Each names the crate that

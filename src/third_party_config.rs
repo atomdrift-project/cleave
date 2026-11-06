@@ -3,6 +3,7 @@
 //! Loads criticality mappings from `third_party/config.yaml` to assign
 //! appropriate severity levels to third-party YARA detections.
 
+use crate::types::Criticality;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -11,7 +12,7 @@ use std::sync::{Arc, PoisonError, RwLock};
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ConfigFile {
-    default_crit: String,
+    default_crit: Criticality,
     #[serde(default)]
     sources: Vec<SourceConfig>,
     #[serde(default)]
@@ -25,7 +26,7 @@ struct SourceConfig {
     #[serde(default)]
     #[allow(dead_code)]
     url: String,
-    crit: String,
+    crit: Criticality,
 }
 
 #[derive(Debug, Deserialize)]
@@ -33,7 +34,7 @@ struct SourceConfig {
 struct RuleOverride {
     id: String,
     #[serde(default)]
-    crit: Option<String>,
+    crit: Option<Criticality>,
     /// Reviewer-facing explanation when an upstream description overstates
     /// what its signature establishes.
     #[serde(default)]
@@ -49,16 +50,16 @@ struct RuleOverride {
     reason: Option<String>,
 }
 
-struct Config {
-    default_crit: String,
-    source_crit: HashMap<String, String>,
+pub(crate) struct Config {
+    default_crit: Criticality,
+    source_crit: HashMap<String, Criticality>,
     overrides: HashMap<String, RuleOverride>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            default_crit: "suspicious".to_string(),
+            default_crit: Criticality::Suspicious,
             source_crit: HashMap::new(),
             overrides: HashMap::new(),
         }
@@ -82,6 +83,18 @@ impl Config {
             source_crit,
             overrides,
         })
+    }
+
+    /// Why the config under `traits_dir` cannot be used, if it exists and does
+    /// not parse. `cleave validate` reports this as a hard error, because at
+    /// scan time the whole file falls back to defaults.
+    #[cfg(feature = "lint")]
+    pub(crate) fn problem_in(traits_dir: &std::path::Path) -> Option<String> {
+        let path = traits_dir.join("third-party").join("config.yaml");
+        let yaml = std::fs::read_to_string(&path).ok()?;
+        Self::from_yaml(&yaml)
+            .err()
+            .map(|e| format!("{}: {e}", path.display()))
     }
 
     /// Read the config at `config_path`, falling back to the defaults (with a
@@ -111,7 +124,7 @@ impl Config {
         }
     }
 
-    fn criticality_for(&self, vendor: &str, trait_id: Option<&str>) -> Option<String> {
+    fn criticality_for(&self, vendor: &str, trait_id: Option<&str>) -> Option<Criticality> {
         // 1. Check rule override (highest priority)
         if let Some(trait_id) = trait_id
             && let Some(override_rule) = self.overrides.get(trait_id)
@@ -119,18 +132,18 @@ impl Config {
             if override_rule.disable {
                 return None; // Rule disabled
             }
-            if let Some(ref crit) = override_rule.crit {
-                return Some(crit.clone());
+            if let Some(crit) = override_rule.crit {
+                return Some(crit);
             }
         }
 
         // 2. Check source default
-        if let Some(crit) = self.source_crit.get(vendor) {
-            return Some(crit.clone());
+        if let Some(&crit) = self.source_crit.get(vendor) {
+            return Some(crit);
         }
 
         // 3. Global default
-        Some(self.default_crit.clone())
+        Some(self.default_crit)
     }
 
     fn suppressed_by_unless(&self, trait_id: &str, finding_ids: &[&str]) -> Option<String> {
@@ -183,7 +196,10 @@ fn extract_vendor(namespace: &str) -> &str {
 /// Returns `None` if the rule is disabled via override.
 /// Lookup priority: rule override > source default > global default
 #[must_use]
-pub(crate) fn third_party_criticality(namespace: &str, trait_id: Option<&str>) -> Option<String> {
+pub(crate) fn third_party_criticality(
+    namespace: &str,
+    trait_id: Option<&str>,
+) -> Option<Criticality> {
     let vendor = extract_vendor(namespace);
     config().criticality_for(vendor, trait_id)
 }
@@ -219,6 +235,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_config_that_does_not_parse_is_a_validation_problem() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            Config::problem_in(dir.path()),
+            None,
+            "a missing config is fine"
+        );
+        std::fs::create_dir(dir.path().join("third-party")).unwrap();
+        let path = dir.path().join("third-party").join("config.yaml");
+        std::fs::write(&path, "default_crit: suspicious\n").unwrap();
+        assert_eq!(Config::problem_in(dir.path()), None);
+        std::fs::write(&path, "default_crit: hostlie\n").unwrap();
+        assert!(
+            Config::problem_in(dir.path()).is_some(),
+            "an invalid crit fails"
+        );
+        std::fs::write(&path, "default_crit: suspicious\nsurces: []\n").unwrap();
+        assert!(
+            Config::problem_in(dir.path()).is_some(),
+            "an unknown key fails"
+        );
+    }
+
+    #[test]
     fn descriptions_override_only_named_nonempty_rules() {
         let config = Config::from_yaml(
             r#"
@@ -246,7 +286,7 @@ default_crit: "suspicious"
 sources: []
 "#;
         let config = Config::from_yaml(yaml).unwrap();
-        assert_eq!(config.default_crit, "suspicious");
+        assert_eq!(config.default_crit, Criticality::Suspicious);
         assert_eq!(config.source_crit.len(), 0);
     }
 
@@ -268,11 +308,11 @@ overrides:
         let config = Config::from_yaml(yaml).unwrap();
         assert_eq!(
             config.source_crit.get("elastic"),
-            Some(&"hostile".to_string())
+            Some(&Criticality::Hostile)
         );
         assert_eq!(
             config.source_crit.get("bartblaze"),
-            Some(&"suspicious".to_string())
+            Some(&Criticality::Suspicious)
         );
         assert_eq!(config.overrides.len(), 1);
     }
@@ -356,19 +396,19 @@ overrides:
         // Override wins
         assert_eq!(
             config.criticality_for("elastic", Some("third_party/elastic/test")),
-            Some("hostile".to_string())
+            Some(Criticality::Hostile)
         );
 
         // Source default
         assert_eq!(
             config.criticality_for("elastic", Some("third_party/elastic/other")),
-            Some("suspicious".to_string())
+            Some(Criticality::Suspicious)
         );
 
         // Global default
         assert_eq!(
             config.criticality_for("unknown", None),
-            Some("notable".to_string())
+            Some(Criticality::Notable)
         );
     }
 

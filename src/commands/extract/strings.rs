@@ -115,10 +115,7 @@ fn run_direct(
                 {
                     if file_type == FileType::MachO
                         && let Some(nm) = crate::tool_resolution::resolve("nm")
-                        && let Ok(nm_output) = std::process::Command::new(nm)
-                            .args(["-u", "-m", "--"])
-                            .arg(path)
-                            .output()
+                        && let Ok(Some(nm_output)) = undefined_symbols_by_library(&nm, path)
                     {
                         let nm_str = String::from_utf8_lossy(&nm_output.stdout);
                         for line in nm_str.lines() {
@@ -303,6 +300,25 @@ fn format_strings_output(
             Ok(output)
         }
     }
+}
+
+/// Run `nm -u -m` on `path`. nm parses the sample, so like every tool run on
+/// analysis input it gets a deadline, a bounded capture, and none of the
+/// caller's secrets in its environment.
+#[cfg(target_os = "macos")]
+fn undefined_symbols_by_library(
+    nm: &std::path::Path,
+    path: &std::path::Path,
+) -> std::io::Result<Option<std::process::Output>> {
+    let mut command = std::process::Command::new(nm);
+    command
+        .args(["-u", "-m", "--"])
+        .arg(path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    crate::subprocess::scrub_env(&mut command);
+    crate::subprocess::output_with_timeout(&mut command, crate::subprocess::LIST_TIMEOUT)
 }
 
 #[cfg(test)]

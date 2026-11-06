@@ -54,8 +54,7 @@ pub(crate) fn thread_cpu_time() -> Duration {
 /// budget must trip on the first check). Without this the fallback below
 /// returned zero here, which silently disabled every CPU budget on Windows:
 /// a tree-sitter query on a 5 MB JSFuck bundle ran to the 180 s wall-clock
-/// deadline instead of the 5 s budget it gets on Linux (cyclotron-qa,
-/// 2026-10-31).
+/// deadline instead of the 5 s budget it gets on Linux.
 #[cfg(windows)]
 pub(crate) fn thread_cpu_time() -> Duration {
     use windows_sys::Win32::Foundation::FILETIME;

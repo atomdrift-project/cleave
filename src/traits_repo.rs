@@ -16,6 +16,7 @@
 //! inside untrusted trees, and a `traits/` directory there must not be able to
 //! replace the rules.
 
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{OnceLock, RwLock};
@@ -361,6 +362,11 @@ pub fn version() -> Option<String> {
 type GitDirtyCache = (PathBuf, String, [u8; 32], bool);
 static GIT_DIRTY_CACHE: OnceLock<RwLock<Option<GitDirtyCache>>> = OnceLock::new();
 
+/// [`git_rule_tree_dirty`], remembered in the process and in a one-entry
+/// cache file. `git status` over a 50k-file checkout takes ~400 ms, and the
+/// answer is a function of what the key holds: the commit, and the content
+/// digest of every rule file. Files that are not rules can change the status
+/// without changing the key; they do not change the rules loaded either.
 fn git_rule_tree_dirty_cached(dir: &Path, head: &str, rules_digest: [u8; 32]) -> bool {
     let cache = GIT_DIRTY_CACHE.get_or_init(|| RwLock::new(None));
     {
@@ -375,7 +381,32 @@ fn git_rule_tree_dirty_cached(dir: &Path, head: &str, rules_digest: [u8; 32]) ->
             return *dirty;
         }
     }
-    let dirty = git_rule_tree_dirty(dir);
+    let memo_key = format!(
+        "{} {head} {}",
+        hex::encode(Sha256::digest(dir.as_os_str().as_encoded_bytes())),
+        hex::encode(rules_digest)
+    );
+    let memo = (!crate::cache::skip_cache())
+        .then(|| crate::cache::cache_dir().ok())
+        .flatten()
+        .map(|cache| cache.join("traits-git-status"));
+    let remembered = memo.as_ref().and_then(|path| {
+        let text = std::fs::read_to_string(path).ok()?;
+        let (key, dirty) = text.trim_end().rsplit_once(' ')?;
+        (key == memo_key).then_some(dirty == "dirty")
+    });
+    let dirty = remembered.unwrap_or_else(|| {
+        let dirty = git_rule_tree_dirty(dir);
+        if let Some(path) = &memo {
+            let line = format!("{memo_key} {}\n", if dirty { "dirty" } else { "clean" });
+            if let Err(error) = crate::cache::atomic_write(path, line.as_bytes()) {
+                tracing::debug!(path = %path.display(), %error, "could not save the git status memo");
+            }
+        }
+        dirty
+    });
+    tracing::debug!(dir = %dir.display(), head, dirty, remembered = remembered.is_some(),
+        "traits checkout status");
     *cache
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner) =

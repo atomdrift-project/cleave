@@ -308,7 +308,7 @@ pub(crate) fn extract_strings_from_ast(
 
     match format {
         crate::cli::OutputFormat::Json => Ok(serde_json::to_string_pretty(&filtered_strings)?),
-        crate::cli::OutputFormat::Annotate | crate::cli::OutputFormat::Toc => {
+        crate::cli::OutputFormat::Annotate | crate::cli::OutputFormat::Index => {
             let mut output = String::new();
             output.push_str(&format!(
                 "Extracted {} strings from {} (AST-based)\n\n",

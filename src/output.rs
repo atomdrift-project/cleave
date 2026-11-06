@@ -2,12 +2,12 @@
 //!
 //! - `--format annotate` (default): source context around each finding
 //!   ([`format_context`] with [`TinyOpts::terminal`])
-//! - `--format toc`: a table of contents of findings per file ([`format_toc`])
+//! - `--format index`: an index of findings per file ([`format_index`])
 //! - [`TinyOpts::tiny`]: the plain LLM view an embedding host prints
 
-mod toc;
+mod index;
 
-pub use toc::format_toc;
+pub use index::format_index;
 
 use crate::types::{
     AnalysisGap, AnalysisReport, ContextLine, Criticality, FileAnalysis, Finding, Note,

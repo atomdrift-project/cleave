@@ -164,7 +164,10 @@ impl super::CapabilityMapper {
         // composites here.
 
         // Populate trait_id_map
-        let mut trait_id_map = std::collections::HashMap::with_capacity(trait_definitions.len());
+        let mut trait_id_map = super::TraitIdMap::with_capacity_and_hasher(
+            trait_definitions.len(),
+            Default::default(),
+        );
         for (idx, trait_def) in trait_definitions.iter().enumerate() {
             trait_id_map.insert(trait_def.id.clone(), idx);
         }

@@ -167,7 +167,7 @@ fn format_metrics_output(
 ) -> Result<String> {
     match format {
         cli::OutputFormat::Json => Ok(serde_json::to_string_pretty(&metrics)?),
-        cli::OutputFormat::Annotate | cli::OutputFormat::Toc => {
+        cli::OutputFormat::Annotate | cli::OutputFormat::Index => {
             use colored::Colorize;
             use std::collections::BTreeMap;
 

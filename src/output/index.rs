@@ -1,4 +1,4 @@
-//! `--format toc`: a table of contents for each file — one row per finding,
+//! `--format index`: an index of each file's findings — one row per finding,
 //! grouped under namespace pills, with a description and evidence column.
 
 use std::collections::{BTreeMap, HashSet};
@@ -128,9 +128,9 @@ fn format_evidence(finding: &Finding, context: &[ContextLine]) -> String {
     values.join(sep)
 }
 
-/// Render every file with notable-or-higher findings as a table of contents.
+/// Render every file with notable-or-higher findings as an index of its findings.
 #[must_use]
-pub fn format_toc(report: &AnalysisReport) -> String {
+pub fn format_index(report: &AnalysisReport) -> String {
     // Columns beyond the trait id: bullet(3) + space + two 2-space gutters.
     const OVERHEAD: usize = 8;
     // Room kept for evidence: descriptions truncate first, since they are often
@@ -334,7 +334,7 @@ mod tests {
             &["GET /x\u{1b}[30;40m"],
         )]);
         r.files[0].path = "pkg.tgz!!index.js\n\u{1b}[32m✓ no findings".into();
-        let output = format_toc(&r);
+        let output = format_index(&r);
         assert!(!output.contains("\u{1b}[30;40m"), "{output:?}");
         assert!(!output.contains("\u{1b}[32m✓"), "{output:?}");
         assert!(
@@ -350,7 +350,7 @@ mod tests {
     #[test]
     fn sample_text_cannot_inject_terminal_controls() {
         let osc52 = "\x1b]52;c;ZXZpbA==\x07";
-        let output = format_toc(&report(vec![finding(
+        let output = format_index(&report(vec![finding(
             "objectives/c2/http/beacon",
             Criticality::Suspicious,
             &[&format!("GET /x{osc52}\x1b[2J")],
@@ -362,14 +362,14 @@ mod tests {
 
     #[test]
     fn empty_report_renders_nothing() {
-        assert!(format_toc(&report(vec![])).is_empty());
+        assert!(format_index(&report(vec![])).is_empty());
         let quiet = finding("objectives/x", Criticality::Baseline, &["v"]);
-        assert!(format_toc(&report(vec![quiet])).is_empty());
+        assert!(format_index(&report(vec![quiet])).is_empty());
     }
 
     #[test]
     fn sections_render_in_namespace_order_with_short_ids() {
-        let output = strip_ansi(&format_toc(&report(vec![
+        let output = strip_ansi(&format_index(&report(vec![
             finding(
                 "third_party/Sekoia/Backdoor/Bpfdoor",
                 Criticality::Hostile,
@@ -396,7 +396,7 @@ mod tests {
 
     #[test]
     fn long_multi_line_evidence_ends_with_an_ellipsis_row() {
-        let output = strip_ansi(&format_toc(&report(vec![finding(
+        let output = strip_ansi(&format_index(&report(vec![finding(
             "objectives/x/y",
             Criticality::Notable,
             &["1\n2\n3\n4\n5"],

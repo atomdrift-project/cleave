@@ -17,9 +17,8 @@ All notable changes to cleave. Versions follow [semantic versioning](https://sem
 - Deobfuscate JavaScript permutations, decimal-packed strings and string tables, including inline scripts in HTML.
 - Analyze source package archives as archives, so member rules apply to them.
 - Treat a dependency held by its registry for security reasons as hostile on its own.
-- Add the `--uplink` flag for Atomdrift Uplink zero-hour rules, connecting through device-code approval.
 - Add an experimental render command that redisplays a saved report without rescanning.
-- Add a table-of-contents output format, one row per finding, selected with `--toc`.
+- Add an index output format, one row per finding, selected with `--index`.
 - Breaking: replace rizin and radare2 with in-process binform analysis; the radare2 component is gone.
 - Breaking: bump the JSON schema to 9, and emit `--format json` as one object per line.
 - Breaking: retire the tiny output format; terminal and jsonl remain as aliases.

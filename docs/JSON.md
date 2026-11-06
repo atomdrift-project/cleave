@@ -15,7 +15,7 @@ Render a saved report without reading its original files, loading rules, or
 running analysis:
 
 ```sh
-cleave render report.json --format toc
+cleave render report.json --format index
 cleave render - --format annotate < report.json
 ```
 
@@ -36,7 +36,7 @@ diff -u before.txt after.txt
 ```
 
 Renderers can read the same documents. A compact report keeps finding
-spans, not evidence values, so `--format toc` shows the context bytes a span
+spans, not evidence values, so `--format index` shows the context bytes a span
 covers and leaves evidence outside every context window blank. An
 intermediate analysis-cache report is finalized first, and says so on stderr.
 

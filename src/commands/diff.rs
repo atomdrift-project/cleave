@@ -32,7 +32,7 @@ pub fn run(
 
     match format {
         cli::OutputFormat::Json => Ok(serde_json::to_string(&report)?),
-        cli::OutputFormat::Annotate | cli::OutputFormat::Toc => {
+        cli::OutputFormat::Annotate | cli::OutputFormat::Index => {
             Ok(cleave::diff::format::format_terminal(&report))
         }
     }

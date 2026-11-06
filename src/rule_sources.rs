@@ -1,7 +1,8 @@
 //! Immutable source bytes shared by hashing, trait parsing and YARA loading.
 //! Packed rule files have virtual paths without `.zst` so all consumers see
 //! the same rule names and fingerprints as an unpacked traits checkout.
-//! A fresh snapshot reads every byte again; no stat-only cache is involved.
+//! A fresh snapshot reads every byte again. It also records a [`TreeStamp`],
+//! which lets a later process prove the tree unchanged from metadata alone.
 use anyhow::{Context, Result};
 use parking_lot::RwLock;
 use rayon::prelude::*;
@@ -42,6 +43,167 @@ pub(crate) struct RuleSources {
     files: Vec<SourceFile>,
     directories: Vec<PathBuf>,
     lookup: FxHashMap<PathBuf, usize>,
+    stamp: Option<TreeStamp>,
+}
+
+/// How long after a snapshot begins a change may still share a timestamp
+/// with what the snapshot recorded. Timestamps are only as fine as the
+/// filesystem keeps them: nanoseconds on APFS, a scheduler tick on Linux,
+/// one second on HFS+, two on FAT.
+const TIMESTAMP_GRANULARITY: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// One entry's metadata as identity: device, inode, mode, size, and mtime and
+/// ctime to the nanosecond. Checkouts, archives and `touch -r` set mtimes;
+/// the kernel sets the ctime itself on every change to the inode, and none
+/// of them can put it back. So an unchanged stamp means unchanged contents,
+/// and for a directory unchanged entries, since adding, removing or renaming
+/// one changes the directory. A changed device number (a remount, a reboot
+/// that reorders disks) only costs a full read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Stamp([i64; 8]);
+
+impl Stamp {
+    /// `None` where the platform has no ctime.
+    #[cfg(unix)]
+    // Identity bits, compared, never ordered; `Option` for the non-unix twin.
+    #[allow(clippy::cast_possible_wrap, clippy::unnecessary_wraps)]
+    fn of(metadata: &fs::Metadata) -> Option<Self> {
+        use std::os::unix::fs::MetadataExt;
+        Some(Self([
+            metadata.dev() as i64,
+            metadata.ino() as i64,
+            i64::from(metadata.mode()),
+            metadata.size() as i64,
+            metadata.mtime(),
+            metadata.mtime_nsec(),
+            metadata.ctime(),
+            metadata.ctime_nsec(),
+        ]))
+    }
+
+    #[cfg(not(unix))]
+    fn of(_: &fs::Metadata) -> Option<Self> {
+        None
+    }
+
+    /// Whether the entry changed so close to `begun` that a later change
+    /// could carry the same timestamps.
+    fn is_racy(&self, begun: SystemTime) -> bool {
+        let Some(since_epoch) = begun
+            .checked_sub(TIMESTAMP_GRANULARITY)
+            .and_then(|horizon| horizon.duration_since(SystemTime::UNIX_EPOCH).ok())
+        else {
+            return true;
+        };
+        let horizon = i128::try_from(since_epoch.as_nanos()).unwrap_or(i128::MAX);
+        let nanos = |secs: i64, nsec: i64| i128::from(secs) * 1_000_000_000 + i128::from(nsec);
+        let [.., mtime, mtime_nsec, ctime, ctime_nsec] = self.0;
+        nanos(mtime, mtime_nsec) >= horizon || nanos(ctime, ctime_nsec) >= horizon
+    }
+}
+
+/// Proof that a tree is unchanged since a snapshot, checkable with a `stat`
+/// per entry instead of a `readdir` per directory and a read per file:
+/// the snapshot's directories and files, and a digest of their [`Stamp`]s.
+///
+/// Each stamp is taken before what it vouches for is read (a directory's
+/// before its listing, a file's from the open descriptor before its bytes),
+/// so a change during the snapshot shows as a different stamp later. A
+/// snapshot that skipped an unreadable file, or saw an entry change within
+/// [`TIMESTAMP_GRANULARITY`] of starting, has no stamp.
+#[derive(Clone, Debug)]
+pub(crate) struct TreeStamp {
+    /// Root-relative paths as stored on disk, each NUL-terminated.
+    listing: Vec<u8>,
+    digest: [u8; 32],
+}
+
+impl TreeStamp {
+    fn new<'a>(
+        begun: SystemTime,
+        entries: impl Iterator<Item = (&'a Path, Option<Stamp>)>,
+    ) -> Option<Self> {
+        let mut listing = Vec::new();
+        let mut stamps = Vec::new();
+        for (path, stamp) in entries {
+            let stamp = stamp.filter(|s| !s.is_racy(begun))?;
+            listing.extend_from_slice(path.as_os_str().as_encoded_bytes());
+            listing.push(0);
+            stamps.push(stamp);
+        }
+        let digest = Self::digest_of(&listing, &stamps);
+        Some(Self { listing, digest })
+    }
+
+    fn digest_of(listing: &[u8], stamps: &[Stamp]) -> [u8; 32] {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(listing);
+        for stamp in stamps {
+            for field in stamp.0 {
+                hasher.update(field.to_le_bytes());
+            }
+        }
+        hasher.finalize().into()
+    }
+
+    /// The listed paths; `None` for one this platform cannot spell, which
+    /// no stamp it took could have listed.
+    fn entries(&self) -> Option<Vec<&Path>> {
+        let listing = self.listing.strip_suffix(&[0]).unwrap_or(&self.listing);
+        listing
+            .split(|&b| b == 0)
+            .map(|entry| {
+                #[cfg(unix)]
+                let path = Some(Path::new(
+                    <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(entry),
+                ));
+                #[cfg(not(unix))]
+                let path = std::str::from_utf8(entry).ok().map(Path::new);
+                path
+            })
+            .collect()
+    }
+
+    /// Whether every entry under `root` still has the stamp it was recorded
+    /// with. A file added or removed changes its directory's stamp, so the
+    /// listing needs no readdir to stay complete.
+    pub(crate) fn matches(&self, root: &Path) -> bool {
+        let stat = |entry: &Path| {
+            fs::metadata(root.join(entry))
+                .ok()
+                .as_ref()
+                .and_then(Stamp::of)
+        };
+        let Some(entries) = self.entries() else {
+            return false;
+        };
+        let stamps: Option<Vec<Stamp>> = if rayon::current_thread_index().is_some() {
+            entries.into_iter().map(stat).collect()
+        } else {
+            let per_reader = entries.len().div_ceil(SNAPSHOT_READERS).max(1);
+            entries
+                .into_par_iter()
+                .with_min_len(per_reader)
+                .map(stat)
+                .collect()
+        };
+        stamps.is_some_and(|stamps| Self::digest_of(&self.listing, &stamps) == self.digest)
+    }
+
+    /// The digest followed by the listing.
+    pub(crate) fn encode(&self) -> Vec<u8> {
+        [&self.digest[..], &self.listing].concat()
+    }
+
+    /// Reverse [`Self::encode`]; `None` for anything it could not have written.
+    pub(crate) fn decode(bytes: &[u8]) -> Option<Self> {
+        let (digest, listing) = bytes.split_first_chunk::<32>()?;
+        listing.ends_with(&[0]).then(|| Self {
+            listing: listing.to_vec(),
+            digest: *digest,
+        })
+    }
 }
 
 impl RuleSources {
@@ -54,11 +216,19 @@ impl RuleSources {
     /// rules must not cost every other one. A tree in which no file could be
     /// read still fails, so a permissions problem never loads as an empty set.
     pub(crate) fn fresh(root: &Path) -> Result<Self> {
+        Self::read(root, SystemTime::now())
+    }
+
+    /// [`Self::fresh`] for a snapshot taken as of `begun`, which decides what
+    /// changed too recently to stamp. Tests pass a later time to model a tree
+    /// whose last change is older than [`TIMESTAMP_GRANULARITY`].
+    pub(crate) fn read(root: &Path, begun: SystemTime) -> Result<Self> {
         let started = std::time::Instant::now();
         let root =
             fs::canonicalize(root).with_context(|| format!("resolving {}", root.display()))?;
         let mut paths = Vec::new();
         let mut directories = Vec::new();
+        let mut directory_stamps = Vec::new();
         let mut symlink_directories: Vec<(usize, PathBuf)> = Vec::new();
         for entry in walkdir::WalkDir::new(&root)
             .follow_links(true)
@@ -73,6 +243,8 @@ impl RuleSources {
                 if entry.depth() > 0 && entry.path_is_symlink() {
                     symlink_directories.push((entry.depth(), relative.clone()));
                 }
+                // Before the walk lists it, which happens on the next step.
+                directory_stamps.push(entry.metadata().ok().as_ref().and_then(Stamp::of));
                 directories.push(relative);
             } else if entry.file_type().is_file() {
                 let compressed = entry.path().extension().is_some_and(|e| e == "zst");
@@ -105,9 +277,9 @@ impl RuleSources {
             bool,
             Vec<PathBuf>,
         )|
-         -> Option<SourceFile> {
+         -> Option<(SourceFile, PathBuf, Option<Stamp>)> {
             let path = root.join(&stored_path);
-            let read = || -> std::io::Result<(Vec<u8>, Option<SystemTime>)> {
+            let read = || -> std::io::Result<(Vec<u8>, fs::Metadata)> {
                 let mut file = fs::File::open(&path)?;
                 let metadata = file.metadata()?;
                 let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
@@ -115,15 +287,19 @@ impl RuleSources {
                 if compressed {
                     bytes = zstd::decode_all(&bytes[..])?;
                 }
-                Ok((bytes, metadata.modified().ok()))
+                Ok((bytes, metadata))
             };
             match read() {
-                Ok((bytes, modified)) => Some(SourceFile {
-                    relative_path,
-                    bytes: bytes.into(),
-                    modified,
-                    symlink_directories,
-                }),
+                Ok((bytes, metadata)) => Some((
+                    SourceFile {
+                        relative_path,
+                        bytes: bytes.into(),
+                        modified: metadata.modified().ok(),
+                        symlink_directories,
+                    },
+                    stored_path,
+                    Stamp::of(&metadata),
+                )),
                 Err(error) => {
                     tracing::warn!(path = %path.display(), %error,
                             "skipping unreadable or corrupt rule file; rules it defines are not loaded");
@@ -144,10 +320,10 @@ impl RuleSources {
                 .filter_map(read_file)
                 .collect()
         };
-        files.sort_unstable_by(|a, b| a.relative_path.cmp(&b.relative_path));
+        files.sort_unstable_by(|a, b| a.0.relative_path.cmp(&b.0.relative_path));
         if files
             .windows(2)
-            .any(|pair| pair[0].relative_path == pair[1].relative_path)
+            .any(|pair| pair[0].0.relative_path == pair[1].0.relative_path)
         {
             anyhow::bail!(
                 "duplicate plain and compressed rule files under {}",
@@ -165,13 +341,32 @@ impl RuleSources {
             tracing::warn!(root = %root.display(), skipped, loaded = files.len(),
                 "rule set loaded with unreadable files skipped; detection coverage is reduced");
         }
+        let stamp = (skipped == 0)
+            .then(|| {
+                let directories = directories
+                    .iter()
+                    .map(PathBuf::as_path)
+                    .zip(directory_stamps);
+                let files = files
+                    .iter()
+                    .map(|(_, stored, stamp)| (stored.as_path(), *stamp));
+                TreeStamp::new(begun, directories.chain(files))
+            })
+            .flatten();
+        let files: Vec<SourceFile> = files.into_iter().map(|(file, _, _)| file).collect();
         tracing::info!(root = %root.display(), files = files.len(),
             bytes = files.iter().map(|f| f.bytes.len()).sum::<usize>(),
+            stamped = stamp.is_some(),
             read_ms = started.elapsed().as_millis(), "rule source snapshot read");
-        Ok(Self::from_files(root, files, directories))
+        Ok(Self::from_files(root, files, directories, stamp))
     }
 
-    fn from_files(root: PathBuf, files: Vec<SourceFile>, directories: Vec<PathBuf>) -> Self {
+    fn from_files(
+        root: PathBuf,
+        files: Vec<SourceFile>,
+        directories: Vec<PathBuf>,
+        stamp: Option<TreeStamp>,
+    ) -> Self {
         let lookup = files
             .iter()
             .enumerate()
@@ -182,7 +377,15 @@ impl RuleSources {
             files,
             directories,
             lookup,
+            stamp,
         }
+    }
+
+    /// Proof of this snapshot's tree, for a later process to check; `None`
+    /// for a subtree view or a snapshot that could not take one.
+    #[must_use]
+    pub(crate) fn tree_stamp(&self) -> Option<&TreeStamp> {
+        self.stamp.as_ref()
     }
 
     /// Source files in sorted walk order.
@@ -236,7 +439,12 @@ impl RuleSources {
             .iter()
             .filter_map(|dir| dir.strip_prefix(prefix).ok().map(Path::to_path_buf))
             .collect();
-        Some(Self::from_files(root.to_path_buf(), files, directories))
+        Some(Self::from_files(
+            root.to_path_buf(),
+            files,
+            directories,
+            None,
+        ))
     }
 }
 
@@ -327,6 +535,98 @@ mod tests {
             RuleSources::fresh(dir.path())
                 .unwrap()
                 .file(Path::new("rule.yaml"))
+                .is_none()
+        );
+    }
+
+    /// A snapshot of `root` as if its last change were long past, after
+    /// which later changes get timestamps of their own: Linux stamps inodes
+    /// from a clock that ticks every few milliseconds.
+    fn settled(root: &Path) -> RuleSources {
+        let sources =
+            RuleSources::read(root, SystemTime::now() + 2 * TIMESTAMP_GRANULARITY).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        sources
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tree_stamp_proves_an_untouched_tree_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("objectives")).unwrap();
+        fs::write(dir.path().join("objectives/a.yaml"), "a").unwrap();
+        fs::write(dir.path().join("notes.txt"), "not a rule").unwrap();
+        let stamp = settled(dir.path()).tree_stamp().unwrap().clone();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        assert!(stamp.matches(&root));
+        let decoded = TreeStamp::decode(&stamp.encode()).unwrap();
+        assert!(decoded.matches(&root));
+        assert!(TreeStamp::decode(&stamp.encode()[..40]).is_none_or(|s| !s.matches(&root)));
+        assert!(TreeStamp::decode(&[0; 31]).is_none());
+        // Files the snapshot does not read are not part of the proof.
+        fs::write(dir.path().join("notes.txt"), "edited").unwrap();
+        assert!(stamp.matches(&root));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tree_stamp_sees_every_kind_of_change() {
+        type Change = fn(&Path);
+        let changes: [(&str, Change); 6] = [
+            ("same-length edit, mtime restored", |root| {
+                let path = root.join("objectives/a.yaml");
+                let mtime = fs::metadata(&path).unwrap().modified().unwrap();
+                fs::write(&path, "b").unwrap();
+                fs::File::options()
+                    .write(true)
+                    .open(&path)
+                    .unwrap()
+                    .set_modified(mtime)
+                    .unwrap();
+            }),
+            ("file added", |root| {
+                fs::write(root.join("objectives/new.yaml"), "n").unwrap()
+            }),
+            ("file removed", |root| {
+                fs::remove_file(root.join("objectives/a.yaml")).unwrap()
+            }),
+            ("file replaced by rename", |root| {
+                fs::write(root.join("tmp"), "a").unwrap();
+                fs::rename(root.join("tmp"), root.join("objectives/a.yaml")).unwrap();
+            }),
+            ("directory added", |root| {
+                fs::create_dir(root.join("objectives/sub")).unwrap()
+            }),
+            ("non-rule file added beside the rules", |root| {
+                fs::write(root.join("objectives/README.md"), "x").unwrap();
+            }),
+        ];
+        for (what, change) in changes {
+            let dir = tempfile::tempdir().unwrap();
+            let root = fs::canonicalize(dir.path()).unwrap();
+            fs::create_dir(root.join("objectives")).unwrap();
+            fs::write(root.join("objectives/a.yaml"), "a").unwrap();
+            let stamp = settled(&root).tree_stamp().unwrap().clone();
+            change(&root);
+            assert!(!stamp.matches(&root), "{what} went unnoticed");
+        }
+    }
+
+    #[test]
+    fn a_tree_changed_within_the_timestamp_granularity_is_not_stamped() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.yaml"), "a").unwrap();
+        assert!(
+            RuleSources::fresh(dir.path())
+                .unwrap()
+                .tree_stamp()
+                .is_none()
+        );
+        assert!(
+            settled(dir.path())
+                .subtree(&fs::canonicalize(dir.path()).unwrap())
+                .unwrap()
+                .tree_stamp()
                 .is_none()
         );
     }

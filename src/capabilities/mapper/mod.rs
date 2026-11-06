@@ -50,24 +50,39 @@ pub(super) struct MatchIndexes {
 impl MatchIndexes {
     /// Build all four indexes for `traits` filtered to `platforms`. `[Platform::All]`
     /// filters nothing, so this reproduces the previous eager construction exactly.
+    ///
+    /// The four are independent and built concurrently: one after another
+    /// they were ~0.2 s of every one-file run.
     fn build(traits: &[TraitDefinition], platforms: &[Platform]) -> Self {
-        let t0 = std::time::Instant::now();
-        let raw_content_regex_index = RawContentRegexIndex::build_filtered(traits, platforms);
-        let t_raw = t0.elapsed();
-        let t1 = std::time::Instant::now();
-        let trait_index = TraitIndex::build_filtered(traits, platforms);
-        let t_trait = t1.elapsed();
-        let t2 = std::time::Instant::now();
-        let string_match_index = StringMatchIndex::build_filtered(traits, platforms);
-        let t_string = t2.elapsed();
-        let t3 = std::time::Instant::now();
-        let symbol_match_index = SymbolMatchIndex::build_filtered(traits, platforms);
-        let t_symbol = t3.elapsed();
+        fn timed<T>(build: impl FnOnce() -> T) -> (T, u64) {
+            let started = std::time::Instant::now();
+            let built = build();
+            (built, started.elapsed().as_millis() as u64)
+        }
+        let started = std::time::Instant::now();
+        let (
+            ((raw_content_regex_index, raw_regex_ms), (trait_index, trait_ms)),
+            ((string_match_index, string_ms), (symbol_match_index, symbol_ms)),
+        ) = rayon::join(
+            || {
+                rayon::join(
+                    || timed(|| RawContentRegexIndex::build_filtered(traits, platforms)),
+                    || timed(|| TraitIndex::build_filtered(traits, platforms)),
+                )
+            },
+            || {
+                rayon::join(
+                    || timed(|| StringMatchIndex::build_filtered(traits, platforms)),
+                    || timed(|| SymbolMatchIndex::build_filtered(traits, platforms)),
+                )
+            },
+        );
         tracing::debug!(
-            raw_regex_ms = t_raw.as_millis() as u64,
-            trait_ms = t_trait.as_millis() as u64,
-            string_ms = t_string.as_millis() as u64,
-            symbol_ms = t_symbol.as_millis() as u64,
+            raw_regex_ms,
+            trait_ms,
+            string_ms,
+            symbol_ms,
+            total_ms = started.elapsed().as_millis() as u64,
             "match indexes built"
         );
         // Index builds are the only computers of pattern derivations; flush any
@@ -193,7 +208,7 @@ pub struct CapabilityMapper {
         Arc<parking_lot::RwLock<rustc_hash::FxHashMap<RuleFileType, Arc<CompositeTypeLists>>>>,
     /// Maps trait ID -> index in trait_definitions
     #[allow(dead_code)]
-    pub(super) trait_id_map: std::collections::HashMap<String, usize>,
+    pub(super) trait_id_map: TraitIdMap,
     /// Platform filter(s) for rule evaluation (default: [All])
     pub(super) platforms: Vec<Platform>,
     /// Warn threshold for slow rule evaluation in milliseconds (default: 4000)
@@ -402,79 +417,144 @@ impl CapabilityMapper {
     /// predicates in `evaluate_traits_filtered_with_cache`'s per-trait
     /// closure exactly — keep the two in lockstep.
     pub(super) fn trait_eval_flags(&self) -> &[u16] {
-        self.trait_eval_flags.get_or_init(|| {
-            use crate::composite_rules::{Condition, RawQuery, TextQuery};
-            let indexes = self.match_indexes();
-            let proximity_refs = self.proximity_ref_index();
-            self.trait_definitions
-                .iter()
-                .enumerate()
-                .map(|(idx, t)| {
-                    let mut bits: u16 = 0;
-                    let needs_locations = proximity_refs.possibly_referenced(&t.id);
-                    if needs_locations {
-                        bits |= flags::NEEDS_LOCATIONS;
+        if let Some(flags) = self.trait_eval_flags.get() {
+            return flags;
+        }
+        // Built before the cell is touched, as in `match_indexes`: it fans out.
+        let flags = self.eval_flags(&self.proximity_ref_index());
+        self.trait_eval_flags.get_or_init(|| flags)
+    }
+
+    /// [`Self::trait_eval_flags`] given the proximity index, across the pool:
+    /// one pass over ~100k traits.
+    fn eval_flags(&self, proximity_refs: &TraitRefIndex) -> Vec<u16> {
+        use crate::composite_rules::{Condition, RawQuery, TextQuery};
+        use rayon::prelude::*;
+        let indexes = self.match_indexes();
+        self.trait_definitions
+            .par_iter()
+            .enumerate()
+            .map(|(idx, t)| {
+                let mut bits: u16 = 0;
+                let needs_locations = proximity_refs.possibly_referenced(&t.id);
+                if needs_locations {
+                    bits |= flags::NEEDS_LOCATIONS;
+                }
+                let counts_plain = !needs_locations
+                    && t.count_min.unwrap_or(1) == 1
+                    && t.count_max.is_none()
+                    && t.per_kb_min.is_none()
+                    && t.per_kb_max.is_none();
+                let no_location = |q: &TextQuery| {
+                    q.section.is_none()
+                        && q.offset.is_none()
+                        && q.offset_range.is_none()
+                        && q.section_offset.is_none()
+                        && q.section_offset_range.is_none()
+                };
+                if t.downgrade.is_none()
+                    && counts_plain
+                    && matches!(&t.r#if, Condition::Text(q) if q.exact.is_some() && no_location(q))
+                {
+                    bits |= flags::SIMPLE_EXACT;
+                }
+                if t.downgrade.is_none()
+                    && counts_plain
+                    && matches!(&t.r#if, Condition::Text(q) if q.substr.is_some() && no_location(q))
+                {
+                    bits |= flags::SIMPLE_SUBSTR;
+                }
+                if indexes.string_match_index.is_exact_trait(idx) {
+                    bits |= flags::IDX_EXACT;
+                }
+                if indexes.string_match_index.is_substr_trait(idx) {
+                    bits |= flags::IDX_SUBSTR;
+                }
+                if indexes.string_match_index.is_regex_trait(idx) {
+                    bits |= flags::IDX_REGEX;
+                }
+                if indexes.symbol_match_index.is_symbol_trait(idx) {
+                    bits |= flags::IDX_SYMBOL;
+                }
+                match &t.r#if {
+                    Condition::Raw(RawQuery { regex: Some(_), .. })
+                    | Condition::Raw(RawQuery { word: Some(_), .. }) => {
+                        bits |= flags::CONTENT_RAW;
                     }
-                    let counts_plain = !needs_locations && t.count_min.unwrap_or(1) == 1
-                        && t.count_max.is_none()
-                        && t.per_kb_min.is_none()
-                        && t.per_kb_max.is_none();
-                    let no_location = |q: &TextQuery| {
-                        q.section.is_none()
-                            && q.offset.is_none()
-                            && q.offset_range.is_none()
-                            && q.section_offset.is_none()
-                            && q.section_offset_range.is_none()
-                    };
-                    if t.downgrade.is_none()
-                        && counts_plain
-                        && matches!(&t.r#if, Condition::Text(q) if q.exact.is_some() && no_location(q))
-                    {
-                        bits |= flags::SIMPLE_EXACT;
+                    Condition::Text(TextQuery { regex: Some(_), .. })
+                    | Condition::Text(TextQuery { word: Some(_), .. }) => {
+                        bits |= flags::CONTENT_TEXT;
                     }
-                    if t.downgrade.is_none()
-                        && counts_plain
-                        && matches!(&t.r#if, Condition::Text(q) if q.substr.is_some() && no_location(q))
-                    {
-                        bits |= flags::SIMPLE_SUBSTR;
-                    }
-                    if indexes.string_match_index.is_exact_trait(idx) {
-                        bits |= flags::IDX_EXACT;
-                    }
-                    if indexes.string_match_index.is_substr_trait(idx) {
-                        bits |= flags::IDX_SUBSTR;
-                    }
-                    if indexes.string_match_index.is_regex_trait(idx) {
-                        bits |= flags::IDX_REGEX;
-                    }
-                    if indexes.symbol_match_index.is_symbol_trait(idx) {
-                        bits |= flags::IDX_SYMBOL;
-                    }
-                    match &t.r#if {
-                        Condition::Raw(RawQuery { regex: Some(_), .. })
-                        | Condition::Raw(RawQuery { word: Some(_), .. }) => {
-                            bits |= flags::CONTENT_RAW;
-                        }
-                        Condition::Text(TextQuery { regex: Some(_), .. })
-                        | Condition::Text(TextQuery { word: Some(_), .. }) => {
-                            bits |= flags::CONTENT_TEXT;
-                        }
-                        _ => {}
-                    }
-                    if indexes.raw_content_regex_index.is_indexed_trait(idx) {
-                        bits |= flags::RAW_INDEXED;
-                    }
-                    if t.count_min.is_some()
-                        || t.count_max.is_some()
-                        || t.per_kb_min.is_some()
-                        || t.per_kb_max.is_some()
-                    {
-                        bits |= flags::NEEDS_COUNT;
-                    }
-                    bits
-                })
-                .collect()
-        })
+                    _ => {}
+                }
+                if indexes.raw_content_regex_index.is_indexed_trait(idx) {
+                    bits |= flags::RAW_INDEXED;
+                }
+                if t.count_min.is_some()
+                    || t.count_max.is_some()
+                    || t.per_kb_min.is_some()
+                    || t.per_kb_max.is_some()
+                {
+                    bits |= flags::NEEDS_COUNT;
+                }
+                bits
+            })
+            .collect()
+    }
+
+    /// Build what the first analysis needs, concurrently: the match indexes,
+    /// the doomed-skip, composite-id and `unless:` indexes, and the
+    /// evaluation flags with the proximity index they derive from. Left lazy,
+    /// each is built serially inside the first evaluation, ~0.3 s of a
+    /// one-file run.
+    ///
+    /// A no-op once they exist, so a warm caller never queues behind a busy
+    /// pool. Rayon work runs outside every `OnceLock` initializer: a worker
+    /// that steals work while it initializes a cell could re-enter it.
+    pub(crate) fn warm_for_analysis(&self) {
+        if self.trait_eval_flags.get().is_some()
+            && self.doomed_skip.get().is_some()
+            && self.composite_id_index.get().is_some()
+            && self.unless_index.get().is_some()
+        {
+            return;
+        }
+        let started = std::time::Instant::now();
+        let ((), proximity) = rayon::join(
+            || {
+                rayon::join(
+                    || {
+                        self.match_indexes();
+                    },
+                    || {
+                        self.doomed_skip_index();
+                    },
+                );
+            },
+            || {
+                let ((), proximity) = rayon::join(
+                    || {
+                        self.composite_id_index();
+                        self.unless_index();
+                    },
+                    || {
+                        self.trait_eval_flags
+                            .get()
+                            .is_none()
+                            .then(|| self.proximity_ref_index())
+                    },
+                );
+                proximity
+            },
+        );
+        if let Some(proximity) = proximity {
+            let flags = self.eval_flags(&proximity);
+            self.trait_eval_flags.get_or_init(|| flags);
+        }
+        tracing::debug!(
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "analysis indexes warmed"
+        );
     }
 
     /// Find atomic producers whose evidence can reach a proximity constraint.
@@ -818,10 +898,11 @@ impl CapabilityMapper {
         // which a one-shot scan wants; a caller about to fan out wants each
         // built once, now, rather than raced by every worker that meets it.
         self.match_indexes().raw_content_regex_index.warm();
-        // The doomed-skip index is also lazily built on the first analysis;
-        // left out of the warm-up it lands inside the first job while that
-        // job holds the worker's cleave gate and everything else queues.
-        let _ = self.doomed_skip_index();
+        // The doomed-skip index and evaluation flags are also lazily built on
+        // the first analysis; left out of the warm-up they land inside the
+        // first job while that job holds the worker's cleave gate and
+        // everything else queues.
+        self.warm_for_analysis();
         // The trait-reference index (end-strip / member-fold `retain`) is
         // also lazy; cold it costs ~70 ms inside the first archive's member
         // fold, which holds the fold lock while every other member waits.
@@ -1147,9 +1228,17 @@ pub(super) fn fill_symbol_evidence_locations(
     }
 }
 
+/// Trait id to its index in `trait_definitions`. FxHash: built from ~100k
+/// ids on every load, where SipHash cost ~8 ms; the ids are rule names, not
+/// sample input.
+pub(crate) type TraitIdMap = rustc_hash::FxHashMap<String, usize>;
+
 // Extracted modules
 pub(crate) mod builder;
+// Rule-file scopes and rule shapes serve only `cleave validate`.
+#[cfg(feature = "lint")]
 pub(crate) mod change_scope;
+#[cfg(feature = "lint")]
 pub(crate) mod rule_shape;
 pub use builder::LoadOptions;
 pub(crate) mod doomed_skip;

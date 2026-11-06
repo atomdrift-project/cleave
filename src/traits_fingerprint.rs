@@ -213,9 +213,11 @@ fn keyed_env(excluded: &[&str]) -> Vec<(String, OsString)> {
     env
 }
 
-/// Which build is running: its GNU build-id, a hash of the linked output that
-/// changes exactly when the code does, else a SHA-256 of its complete contents. Every cache
-/// key reads it, so it is computed once per process.
+/// Which build is running: its GNU build-id or Mach-O `LC_UUID`, each a hash
+/// of the linked output that changes exactly when the code does, else a
+/// SHA-256 of its complete contents. Every cache key reads it, so it is
+/// computed once per process; on a 120 MB binary the fallback hash costs
+/// ~60 ms of every run, the load-command read well under one.
 ///
 /// Linux reads `/proc/self/exe`, which is the running image even after a
 /// deploy replaces the file on disk.
@@ -231,6 +233,7 @@ pub(crate) fn binary_identity() -> &'static str {
         exe.and_then(|exe| {
             build_id(&exe)
                 .map(|id| format!("build-id:{id}"))
+                .or_else(|| macho_uuid(&exe).map(|id| format!("uuid:{id}")))
                 .or_else(|| content_identity(&exe).map(|id| format!("sha256:{id}")))
         })
         // Failure must not let unrelated builds share an "unknown" key.
@@ -302,6 +305,44 @@ fn build_id(path: &Path) -> Option<String> {
     None
 }
 
+/// The hex `LC_UUID` of a thin 64-bit little-endian Mach-O file, or `None`
+/// for anything else, including a binary linked with `-no_uuid`. Apple's
+/// linkers and lld derive the UUID from a hash of the output, so it is to
+/// Mach-O what the build-id is to ELF.
+fn macho_uuid(path: &Path) -> Option<String> {
+    const MH_MAGIC_64: u32 = 0xfeed_facf;
+    const LC_UUID: u32 = 0x1b;
+    const HEADER: usize = 32;
+    const MAX_COMMANDS: usize = 1 << 20;
+
+    let mut file = fs::File::open(path).ok()?;
+    let mut header = [0u8; HEADER];
+    file.read_exact(&mut header).ok()?;
+    if le_u32(&header, 0)? != MH_MAGIC_64 {
+        return None;
+    }
+    let ncmds = le_u32(&header, 16)?;
+    let sizeofcmds = usize::try_from(le_u32(&header, 20)?).ok()?;
+    if sizeofcmds > MAX_COMMANDS {
+        return None;
+    }
+    let mut commands = vec![0u8; sizeofcmds];
+    file.read_exact(&mut commands).ok()?;
+    let mut at = 0usize;
+    for _ in 0..ncmds {
+        let cmd = le_u32(&commands, at)?;
+        let cmdsize = usize::try_from(le_u32(&commands, at + 4)?).ok()?;
+        if cmd == LC_UUID {
+            return Some(hex::encode(commands.get(at + 8..at + 24)?));
+        }
+        if cmdsize < 8 {
+            return None;
+        }
+        at = at.checked_add(cmdsize)?;
+    }
+    None
+}
+
 /// The descriptor of the first note named `name` with type `kind`.
 fn find_note<'a>(mut notes: &'a [u8], align: usize, name: &[u8], kind: u32) -> Option<&'a [u8]> {
     let padded = |n: usize| n.div_ceil(align) * align;
@@ -368,6 +409,34 @@ mod tests {
         );
         assert!(build_id(Path::new("/etc/hostname")).is_none());
         assert_eq!(binary_identity(), format!("build-id:{id}"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macho_uuid_reads_this_binary() {
+        let exe = std::env::current_exe().unwrap();
+        let id = macho_uuid(&exe).expect("test binary carries an LC_UUID");
+        assert!(
+            id.len() == 32 && id.chars().all(|c| c.is_ascii_hexdigit()),
+            "{id}"
+        );
+        assert_eq!(binary_identity(), format!("uuid:{id}"));
+    }
+
+    #[test]
+    fn macho_uuid_rejects_other_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("not-macho");
+        fs::write(&path, [0u8; 64]).unwrap();
+        assert!(macho_uuid(&path).is_none());
+        // A Mach-O header whose load commands claim more than the file holds.
+        let mut header = 0xfeed_facfu32.to_le_bytes().to_vec();
+        header.extend([0u8; 12]);
+        header.extend(1u32.to_le_bytes());
+        header.extend(64u32.to_le_bytes());
+        header.extend([0u8; 8]);
+        fs::write(&path, &header).unwrap();
+        assert!(macho_uuid(&path).is_none());
     }
 
     #[test]

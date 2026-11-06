@@ -26,7 +26,7 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     "text:micro-behaviors/os/container/orchestration/system-call-kubectl-parenthesized-text.yaml",
     // A quoted word is contextual evidence across the original source and
     // binary carriers; the rule remains a component rather than an identity.
-    "text:metadata/lang/source/literal/string/label/quoted-cuckoo-word-reference.yaml",
+    "text:metadata/file/profile/text-shape/quoted-cuckoo-word-reference.yaml",
     // A literal password assignment can occur in any of the original source,
     // script, or compiled carriers; preserve its cross-format match scope.
     "text:micro-behaviors/os/security/auth/password/password-qwerty-config-text.yaml",
@@ -221,7 +221,7 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // of every language. Same cross-language rationale, different matcher type.
     "literal:micro-behaviors/communications/ip/",
     // Preserve the reviewed cross-carrier scope of this PHP upload URL literal.
-    "literal:micro-behaviors/communications/url/resource-path/file/php-upload-url-reference.yaml",
+    "literal:micro-behaviors/communications/url/http-path/resource/php-upload-url-reference.yaml",
     "literal:micro-behaviors/communications/http/url/",
     "literal:objectives/command-and-control/infrastructure/",
     "literal:metadata/file/catalog/",

@@ -164,13 +164,11 @@ impl super::CapabilityMapper {
         // composites here.
 
         // Populate trait_id_map
-        let mut trait_id_map = super::TraitIdMap::with_capacity_and_hasher(
-            trait_definitions.len(),
-            Default::default(),
-        );
-        for (idx, trait_def) in trait_definitions.iter().enumerate() {
-            trait_id_map.insert(trait_def.id.clone(), idx);
-        }
+        let trait_id_map: super::TraitIdMap = trait_definitions
+            .iter()
+            .enumerate()
+            .map(|(idx, trait_def)| (trait_def.id.clone(), idx))
+            .collect();
 
         // Initialize composite rule dependencies
         for rule in &mut composite_rules {

@@ -211,7 +211,16 @@ impl UPXDecompressor {
         // the bytes only: `fs::copy` would also carry the sample's mode bits
         // (setuid, world-writable) onto a file in shared temp space, while
         // `NamedTempFile` creates it owner-only.
-        let mut temp_file = NamedTempFile::new()?;
+        //
+        // `upx -d` writes through a temp file named by swapping the input's
+        // last extension for `.upx`. The default `.tmpXXXXXX` name is all
+        // extension, so every unpack in the temp dir raced for `.upx` and
+        // the losers failed with "File exists"; a real extension gives each
+        // copy its own temp name.
+        let mut temp_file = tempfile::Builder::new()
+            .prefix("cleave-upx-")
+            .suffix(".bin")
+            .tempfile()?;
         temp_file.write_all(data)?;
         temp_file.flush()?;
         Ok(temp_file)
@@ -654,6 +663,20 @@ mod tests {
             .mode();
         assert_eq!(mode & 0o7777, 0o600, "mode {mode:o}");
         assert_eq!(std::fs::read(copied.path()).unwrap(), b"UPX! setuid sample");
+    }
+
+    /// Concurrent unpacks must not share upx's temp name, which it derives
+    /// as the file name up to its last `.`, then `.upx`.
+    #[test]
+    fn writable_temp_copies_give_upx_distinct_temp_names() {
+        let upx_temp = |copy: &NamedTempFile| {
+            let name = copy.path().file_name().unwrap().to_str().unwrap();
+            let stem = name.rfind('.').map_or(name, |dot| &name[..dot]);
+            copy.path().with_file_name(format!("{stem}.upx"))
+        };
+        let a = UPXDecompressor::copy_to_writable_temp(b"UPX! a").unwrap();
+        let b = UPXDecompressor::copy_to_writable_temp(b"UPX! b").unwrap();
+        assert_ne!(upx_temp(&a), upx_temp(&b));
     }
 
     // =========================================================================

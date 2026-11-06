@@ -353,6 +353,12 @@ opt-level = 1  # Faster test execution
 [profile.test.package.cleave]
 opt-level = 3
 
+# Dependencies compile once and rarely again, but every test process runs them
+# hot: tree-sitter queries, JSON decoding of the mapper cache, hashing,
+# decompression. Optimizing them costs nothing in the edit-test loop.
+[profile.test.package."*"]
+opt-level = 3
+
 [profile.dev]
 opt-level = 0
 debug = "line-tables-only"  # Faster builds, still debuggable

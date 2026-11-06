@@ -98,6 +98,8 @@ pub fn skip_cache() -> bool {
 /// and is NOT skipped by `CLEAVE_SKIP_CACHE` — tests that want fresh per-file
 /// analysis still benefit from reusing the compiled trait set.
 ///
+/// Also gates the stat-verified traits-tree index ([`indexed_scan`]).
+///
 /// - `CLEAVE_SKIP_MAPPER_CACHE=1` / `true` → skip
 /// - Env var unset                         → don't skip (always use the cache)
 #[must_use]
@@ -741,17 +743,20 @@ pub(crate) fn source_tag_from_snapshot(
     Some(tag)
 }
 
-/// Single-entry memo pairing a content fingerprint with the source tag computed
-/// under it. Rewritten in place, so it can neither grow nor go stale.
-fn source_tag_memo_path() -> Option<PathBuf> {
-    Some(cache_dir().ok()?.join("yara-source-tag"))
+/// Per-directory memo pairing a content fingerprint with the source tag
+/// computed under it. One file per traits directory: a single shared entry
+/// thrashed whenever two trees alternated (a checkout and a symlink to it, or
+/// a test's temporary traits), and every miss re-reads all rule text.
+fn source_tag_memo_path(traits_dir: &Path) -> Option<PathBuf> {
+    let tag = digest_bytes(traits_dir.as_os_str().as_encoded_bytes());
+    Some(cache_dir().ok()?.join(format!("yara-source-tag-{tag:016x}")))
 }
 
 /// The stored tag, if it was computed for this traits directory at exactly this
-/// content fingerprint. The directory is part of the key because the memo holds
-/// one entry and several checkouts may alternate over it.
+/// content fingerprint. The file name already names the directory; the stored
+/// directory digest guards against a hash collision in that name.
 fn memoized_source_tag(traits_dir: &Path, revision: RuleFilesRevision) -> Option<u64> {
-    let text = fs::read_to_string(source_tag_memo_path()?).ok()?;
+    let text = fs::read_to_string(source_tag_memo_path(traits_dir)?).ok()?;
     let mut fields = text.split_whitespace();
     let dir = fields.next()?;
     let stat = fields.next()?;
@@ -771,7 +776,7 @@ fn memoized_source_tag(traits_dir: &Path, revision: RuleFilesRevision) -> Option
 /// Record `tag` as the content tag for this traits directory at `revision`.
 /// Best effort: a memo that fails to write only costs the next run a re-hash.
 fn store_source_tag(traits_dir: &Path, revision: RuleFilesRevision, tag: u64) {
-    let Some(path) = source_tag_memo_path() else {
+    let Some(path) = source_tag_memo_path(traits_dir) else {
         return;
     };
     let dir = digest_bytes(traits_dir.as_os_str().as_encoded_bytes());
@@ -889,8 +894,14 @@ fn tree_index_path(traits_dir: &Path) -> Option<PathBuf> {
 /// are still read whenever one of those misses, and anything that stamps a
 /// tag into an artifact for others ([`rules_source_tag_uncached`]) hashes
 /// the bytes regardless.
+///
+/// Gated like the mapper cache, not the analysis cache: the index is a pure
+/// function of the traits tree and every entry is re-verified by stamp, so a
+/// stale one can only miss, never change a result. Under `CLEAVE_SKIP_CACHE=1`
+/// (`make test`) skipping it made every process read all ~52k rule files, and
+/// concurrent test processes serialized on the filesystem doing so.
 fn indexed_scan(traits_dir: &Path, canonical: &Path) -> Option<TraitsScan> {
-    if skip_cache() {
+    if skip_mapper_cache() {
         return None;
     }
     read_tree_index(&tree_index_path(traits_dir)?, traits_dir, canonical)
@@ -919,7 +930,7 @@ fn read_tree_index(path: &Path, traits_dir: &Path, canonical: &Path) -> Option<T
 /// Record `scan` as what the tree `stamp` describes. Best effort: an index
 /// that fails to write costs the next run a full read.
 fn store_tree_index(traits_dir: &Path, stamp: &crate::rule_sources::TreeStamp, scan: &TraitsScan) {
-    if skip_cache() {
+    if skip_mapper_cache() {
         return;
     }
     if let Some(path) = tree_index_path(traits_dir) {
@@ -1171,6 +1182,45 @@ pub fn mapper_cache_path() -> Result<PathBuf> {
 /// Get the path to the capability mapper cache file for `traits_dir`.
 pub(crate) fn mapper_cache_path_for(traits_dir: &Path) -> Result<PathBuf> {
     Ok(cache_dir()?.join(mapper_cache_key_for(traits_dir)?))
+}
+
+/// Serializes cold builds of a traits tree's mapper across processes.
+///
+/// Processes that start together (nextest's one-per-test processes, a fleet
+/// of scan workers) all miss a cold mapper cache at once, and each would parse
+/// and compile the whole rule tree: N times the CPU and memory of one build,
+/// with every one of them finishing late. The holder builds and saves; the
+/// others wait here, then load what it saved.
+///
+/// Lock files are a fixed set of slots, so temporary traits directories cannot
+/// leave one each behind; two trees that share a slot only wait on each other.
+/// A rayon worker never waits: the holder's build may need that worker's pool,
+/// and a worker blocked here could be the one it needs. `None` means build
+/// unlocked (no cache directory, a filesystem without locks, or a worker).
+pub(crate) fn mapper_build_lock(traits_dir: &Path) -> Option<fs::File> {
+    const SLOTS: u64 = 64;
+    if rayon::current_thread_index().is_some() {
+        return None;
+    }
+    let slot = digest_bytes(traits_dir_tag(traits_dir).as_bytes()) % SLOTS;
+    let path = cache_dir().ok()?.join(format!("mapper-build-{slot:02}.lock"));
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .ok()?;
+    let started = Instant::now();
+    if let Err(error) = file.lock() {
+        tracing::debug!(path = %path.display(), %error, "mapper build lock unavailable; building unlocked");
+        return None;
+    }
+    tracing::info!(
+        path = %path.display(),
+        waited_ms = started.elapsed().as_millis(),
+        "holding the mapper build lock"
+    );
+    Some(file)
 }
 
 /// Get the path to the rule stats cache file

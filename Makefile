@@ -92,13 +92,18 @@ install: release ## Install binary to first writeable location
 # otherwise mask or fabricate a finding across runs).
 test test-fast test-unit: export FILEFACTS_CACHE := 0
 test test-fast test-unit: export CLEAVE_SKIP_CACHE := 1
-# CLEAVE_SKIP_CACHE also disables the compiled-YARA (.yrc) cache. Leave it off:
-# with ~150 concurrent cleave processes, deserializing and rewriting every bucket
-# costs more than lazily compiling the one bucket a fixture needs.
+# The rule caches (mapper, traits index, compiled YARA) are pure functions of
+# the traits tree and the build, so tests share them -- but in a directory of
+# their own, never the user's: `cargo clean` drops it, and nothing a test run
+# leaves behind can reach a production `cleave`.
+test test-fast test-unit: export CLEAVE_CACHE_DIR := $(CURDIR)/target/test-cache
+# CLEAVE_SKIP_CACHE alone would also skip the compiled-YARA cache, recompiling
+# every bucket a test touches in every process that touches it.
+test test-fast test-unit: export CLEAVE_SKIP_YARA_CACHE := 0
 
 # Integration-test modules that mutate process-global state (traits override dir,
 # analysis skip-overrides, env vars) and MUST run isolated under nextest — never
-# in the shared `cargo test --test it` process, where their leaked state corrupts
+# in the shared `cargo test --workspace --test it` process, where their leaked state corrupts
 # sibling tests. Kept in sync with `support::ISOLATED_MODULES`; the
 # `shared_bucket_has_no_global_state_mutation` guard test fails if they drift.
 IT_ISOLATED := archive_determinism_test archive_partial_taxonomy archive_tmp_regression binary_traits_test \
@@ -114,65 +119,48 @@ space := $(empty) $(empty)
 IT_SKIP := $(foreach m,$(IT_ISOLATED),--skip $(m)::)
 IT_ISOLATED_RE := $(subst $(space),::|,$(IT_ISOLATED))::
 
+# Every test command selects --workspace. Cargo unifies features over the
+# selected packages, so `cargo test --test it` and `nextest --workspace` built
+# two variants of the crate: two compiles after every edit, and two build
+# identities, each with its own cold mapper cache.
+#
+# Unit tests share one process per crate: a process loads the 100k-trait
+# mapper once instead of once per test (~5s for ~4000 tests vs ~100s under
+# nextest). They mutate no process-global state; the integration crate's
+# isolated modules below are the ones that do.
 test: ## Run all tests (unit + integration)
-	@echo "Running all tests (consolidated integration crate: shared libtest + isolated nextest)..."
+	@echo "Phase 1: unit tests, one shared process per crate (cargo test)..."
+	@cargo test --workspace --lib --bins --quiet
 	@echo ""
-	@cargo build --quiet
-	@# Phase 1: the ~200 pure integration tests share ONE libtest process (one
-	@# capability-mapper build instead of one-per-test), ~20s vs ~10min.
-	@echo "Phase 1: shared-process integration tests (cargo test)..."
 	@# --test-threads=48: many of these tests wait on spawned cleave subprocesses,
 	@# so threads > cores overlaps that waiting instead of idling test slots.
-	@cargo test --test it -- $(IT_SKIP) --test-threads=48
+	@echo "Phase 2: shared-process integration tests (cargo test)..."
+	@cargo test --workspace --test it -- $(IT_SKIP) --test-threads=48
 	@echo ""
-	@# Phase 2: lib + workspace tests AND the global-state integration modules,
-	@# each isolated in its own process by nextest. The filter runs everything
-	@# outside the `it` binary plus only the isolated `it` modules (the shared
-	@# ones already ran in Phase 1).
-	@echo "Phase 2: isolated integration + lib/workspace tests (nextest)..."
-	@# Without nextest, `cargo test --workspace` puts every `it` test in ONE
-	@# process — exactly what IT_ISOLATED forbids, and it fails: whichever module
-	@# loads traits first wins the process-global mapper, so the others evaluate
-	@# against the wrong rules and the failing set shifts with thread scheduling.
-	@# The fallback therefore spawns one process per isolated module itself.
+	@# Without nextest, one `cargo test` puts every isolated module in ONE
+	@# process — exactly what IT_ISOLATED forbids: whichever module loads traits
+	@# first wins the process-global mapper, so the others evaluate against the
+	@# wrong rules. The fallback spawns one process per isolated module itself.
+	@echo "Phase 3: process-isolated tests (nextest)..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run --workspace -E 'not binary(it) | test(/$(IT_ISOLATED_RE)/)'; \
+		cargo nextest run --workspace -E 'kind(test) & (not binary(it) | test(/$(IT_ISOLATED_RE)/))'; \
 	else \
-		echo "  cargo-nextest not found; running lib/workspace tests, then one process per isolated module..."; \
-		: "--test-threads=1: a few lib tests (e.g. test_reload_rollback_on_bad_traits)"; \
-		: "point CLEAVE_TRAITS_DIR at a temp dir, which nextest isolates per process"; \
-		: "but a shared process leaks into any test analyzing concurrently."; \
-		cargo test --workspace --lib --bins -- --test-threads=1 || exit 1; \
-		cargo test -p scpt --tests -- --test-threads=1 || exit 1; \
+		echo "  cargo-nextest not found; running one process per isolated module..."; \
+		cargo test --workspace --tests --exclude cleave -- --test-threads=1 || exit 1; \
 		for m in $(IT_ISOLATED); do \
 			echo "  --- $$m"; \
-			cargo test --quiet --test it -- "$$m::" || exit 1; \
+			cargo test --workspace --quiet --test it -- "$$m::" || exit 1; \
 		done; \
 	fi
 	@echo ""
 	@echo "✓ All tests passed"
 
-test-fast: ## Run tests quickly (skip YARA in spawned processes, uses nextest)
-	@echo "Running fast tests (YARA skipped in integration tests)..."
-	@echo ""
-	@cargo build --quiet
-	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		CLEAVE_SKIP_YARA=1 cargo nextest run --workspace --lib; \
-	else \
-		CLEAVE_SKIP_YARA=1 cargo test --workspace --lib; \
-	fi
-	@echo ""
+test-fast: ## Run unit tests with YARA skipped
+	@CLEAVE_SKIP_YARA=1 cargo test --workspace --lib --bins --quiet
 	@echo "✓ Fast tests passed"
 
 test-unit: ## Run only unit tests (skip integration tests, fastest)
-	@echo "Running unit tests only..."
-	@echo ""
-	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run --lib; \
-	else \
-		cargo test --lib; \
-	fi
-	@echo ""
+	@cargo test --workspace --lib --bins --quiet
 	@echo "✓ Unit tests passed"
 
 fmt: ## Format all code with rustfmt

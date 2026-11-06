@@ -13,7 +13,7 @@
 /// What a variable is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Group {
-    /// Supported configuration, documented in the README.
+    /// Supported configuration, stable across releases.
     Configuration,
     /// Extra logging or self-checks for debugging; no effect on results.
     Diagnostics,

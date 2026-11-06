@@ -412,9 +412,14 @@ impl SymbolMatchIndex {
             let fallbacks: Vec<usize> = if symbols.is_empty() {
                 Vec::new()
             } else {
-                (0..self.regex_fallback_regexes.len())
-                    .filter(|&fi| self.regex_fallback_regexes[fi].get().is_none())
-                    .filter(|&fi| !fallback_gated(fi) || !fallback_nominated(fi).is_empty())
+                self.regex_fallback_regexes
+                    .iter()
+                    .enumerate()
+                    .filter(|&(fi, slot)| {
+                        slot.get().is_none()
+                            && (!fallback_gated(fi) || !fallback_nominated(fi).is_empty())
+                    })
+                    .map(|(fi, _)| fi)
                     .collect()
             };
             if traits.len() + fallbacks.len() > 1 {
@@ -432,16 +437,11 @@ impl SymbolMatchIndex {
                 );
             }
         }
-        let mut i = 0;
-        while i < regex_candidates.len() {
-            let trait_idx = regex_candidates[i].0;
-            let mut j = i;
-            while j < regex_candidates.len() && regex_candidates[j].0 == trait_idx {
-                j += 1;
-            }
+        for group in regex_candidates.chunk_by(|a, b| a.0 == b.0) {
+            let trait_idx = group[0].0;
             if let Some(re) = self.trait_regex(trait_idx) {
                 re.with_scratch(|cache| {
-                    for &(_, pos) in &regex_candidates[i..j] {
+                    for &(_, pos) in group {
                         let symbol = symbols[pos as usize];
                         if re.is_match_cached(normalize(symbol), cache) {
                             matched.insert(trait_idx);
@@ -450,7 +450,6 @@ impl SymbolMatchIndex {
                     }
                 });
             }
-            i = j;
         }
 
         // Regex fallback (no-literal patterns), pattern-major: each regex's

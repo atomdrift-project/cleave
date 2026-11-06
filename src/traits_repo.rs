@@ -386,10 +386,13 @@ fn git_rule_tree_dirty_cached(dir: &Path, head: &str, rules_digest: [u8; 32]) ->
         hex::encode(Sha256::digest(dir.as_os_str().as_encoded_bytes())),
         hex::encode(rules_digest)
     );
-    let memo = (!crate::cache::skip_cache())
-        .then(|| crate::cache::cache_dir().ok())
-        .flatten()
-        .map(|cache| cache.join("traits-git-status"));
+    let memo = if crate::cache::skip_cache() {
+        None
+    } else {
+        crate::cache::cache_dir()
+            .ok()
+            .map(|cache| cache.join("traits-git-status"))
+    };
     let remembered = memo.as_ref().and_then(|path| {
         let text = std::fs::read_to_string(path).ok()?;
         let (key, dirty) = text.trim_end().rsplit_once(' ')?;

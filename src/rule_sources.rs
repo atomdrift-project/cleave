@@ -341,18 +341,18 @@ impl RuleSources {
             tracing::warn!(root = %root.display(), skipped, loaded = files.len(),
                 "rule set loaded with unreadable files skipped; detection coverage is reduced");
         }
-        let stamp = (skipped == 0)
-            .then(|| {
-                let directories = directories
-                    .iter()
-                    .map(PathBuf::as_path)
-                    .zip(directory_stamps);
-                let files = files
-                    .iter()
-                    .map(|(_, stored, stamp)| (stored.as_path(), *stamp));
-                TreeStamp::new(begun, directories.chain(files))
-            })
-            .flatten();
+        let stamp = if skipped == 0 {
+            let directories = directories
+                .iter()
+                .map(PathBuf::as_path)
+                .zip(directory_stamps);
+            let files = files
+                .iter()
+                .map(|(_, stored, stamp)| (stored.as_path(), *stamp));
+            TreeStamp::new(begun, directories.chain(files))
+        } else {
+            None
+        };
         let files: Vec<SourceFile> = files.into_iter().map(|(file, _, _)| file).collect();
         tracing::info!(root = %root.display(), files = files.len(),
             bytes = files.iter().map(|f| f.bytes.len()).sum::<usize>(),

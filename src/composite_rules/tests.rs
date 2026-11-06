@@ -2621,7 +2621,7 @@ fn test_required_trait_prefilter_for_any_needs_is_not_overconstrained() {
         ..Default::default()
     };
 
-    let trait_id_map: crate::capabilities::TraitIdMap = rustc_hash::FxHashMap::from_iter([
+    let trait_id_map = crate::capabilities::TraitIdMap::from_iter([
         ("test::a".to_string(), 0usize),
         ("test::b".to_string(), 1usize),
         ("test::c".to_string(), 2usize),
@@ -2680,7 +2680,7 @@ fn test_required_trait_prefilter_keeps_all_and_fully_required_any_refs() {
         ..Default::default()
     };
 
-    let trait_id_map: crate::capabilities::TraitIdMap = rustc_hash::FxHashMap::from_iter([
+    let trait_id_map = crate::capabilities::TraitIdMap::from_iter([
         ("test::a".to_string(), 0usize),
         ("test::b".to_string(), 1usize),
         ("test::c".to_string(), 2usize),

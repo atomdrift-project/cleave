@@ -89,7 +89,7 @@ fn decoded_layers_render_the_same_from_a_file_or_its_directory() {
         .keys()
         .find(|p| p.contains("##unicode-escape@"))
         .unwrap_or_else(|| panic!("no decoded layer record: {:?}", records.keys()));
-    // The layer stays its own record (scan and isomer read `##` records), and
+    // The layer stays its own record (embedders read `##` records), and
     // its findings are also inherited by the file that carries it.
     let parent = layer.split("##").next().unwrap();
     let parent_ids: Vec<&str> = records[parent].iter().map(|(id, _)| id.as_str()).collect();

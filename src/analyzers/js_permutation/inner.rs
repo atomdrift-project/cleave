@@ -226,12 +226,14 @@ fn same(
     source: &str,
     f: Node<'_>,
     globals: &HashMap<String, String>,
-    text: &str,
+    text: &'static str,
     mask: Option<Node<'_>>,
-    kind: Option<&str>,
+    kind: Option<&'static str>,
 ) -> bool {
-    fingerprint(source, f, globals, mask.map(|n| n.id()))
-        .is_some_and(|got| template(text, kind).is_some_and(|expected| got == expected))
+    let expected = super::once_per_template(text, kind.unwrap_or(""), || template(text, kind));
+    expected.is_some_and(|expected| {
+        fingerprint(source, f, globals, mask.map(|n| n.id())).as_deref() == Some(&expected)
+    })
 }
 
 const PRODUCER: &str = "function producer(){var v={};v._=[];TABLE=MAKE_TABLE(v);return TABLE()}";
@@ -248,10 +250,7 @@ struct Proof<'a> {
     offset: u64,
     rotation: usize,
     decoder: String,
-    functions: HashMap<String, Node<'a>>,
-    globals: HashMap<String, String>,
     rotate: Node<'a>,
-    allowed_writes: HashSet<usize>,
 }
 fn prove<'a>(source: &str, root: Node<'a>, all: &[Node<'a>]) -> Option<Proof<'a>> {
     let mut functions = HashMap::new();
@@ -543,6 +542,10 @@ fn prove<'a>(source: &str, root: Node<'a>, all: &[Node<'a>]) -> Option<Proof<'a>
         }
         // The actual table object may only reach the three proved functions.
         // Reject additional reads/escapes, including calls through the producer.
+        let mut identifier_counts = HashMap::<&str, usize>::new();
+        for n in all.iter().filter(|n| n.kind() == "identifier") {
+            *identifier_counts.entry(raw(*n, source)?).or_default() += 1;
+        }
         for n in all.iter().filter(|n| n.kind() == "identifier") {
             if raw(*n, source) != Some(table_alias.as_str()) {
                 continue;
@@ -569,11 +572,7 @@ fn prove<'a>(source: &str, root: Node<'a>, all: &[Node<'a>]) -> Option<Proof<'a>
             if body.len() != 1
                 || body[0].kind() != "return_statement"
                 || expression(body[0])?.id() != n.id()
-                || all
-                    .iter()
-                    .filter(|n| n.kind() == "identifier" && raw(**n, source) == Some(own_name))
-                    .count()
-                    != 1
+                || identifier_counts.get(own_name) != Some(&1)
             {
                 return None;
             }
@@ -608,10 +607,7 @@ fn prove<'a>(source: &str, root: Node<'a>, all: &[Node<'a>]) -> Option<Proof<'a>
             offset,
             rotation: rotations[0],
             decoder,
-            functions,
-            globals,
             rotate,
-            allowed_writes,
         });
     }
     None
@@ -727,7 +723,6 @@ type Key = (usize, Option<String>);
 struct Bindings {
     parent: HashMap<usize, usize>,
     declared: HashMap<(usize, String), Vec<usize>>,
-    root: usize,
 }
 impl Bindings {
     fn resolve(&self, id: &str, mut at: usize) -> Option<usize> {
@@ -765,7 +760,6 @@ fn reduce_aliases(
     let mut bindings = Bindings {
         parent: HashMap::new(),
         declared: HashMap::new(),
-        root: root.id(),
     };
     let decoder_key = (usize::MAX, None);
     bindings
@@ -892,12 +886,6 @@ fn reduce_aliases(
         let value = &proof.table[(index + proof.rotation) % proof.table.len()];
         replacements.push((n.byte_range(), serde_json::to_string(value).ok()?));
     }
-    let _ = (
-        &proof.functions,
-        &proof.globals,
-        &proof.allowed_writes,
-        bindings.root,
-    );
     edits(source, replacements)
 }
 

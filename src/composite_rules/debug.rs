@@ -6,7 +6,7 @@
 //! zero overhead.
 
 use super::types::{Arch, FileType, Platform};
-use crate::types::{Criticality, Evidence};
+use crate::types::Criticality;
 use std::sync::RwLock;
 
 /// Why a rule was skipped before condition evaluation
@@ -188,53 +188,23 @@ impl std::fmt::Display for SkipReason {
     }
 }
 
-/// Debug info for a single condition evaluation
-#[derive(Debug, Clone, Default)]
-pub(crate) struct ConditionDebug {
-    /// Whether the condition matched
-    pub matched: bool,
-    /// Evidence collected if matched
-    pub evidence: Vec<Evidence>,
-    /// Precision score for this condition
-    pub precision: f32,
-}
-
-impl ConditionDebug {
-    /// Set the matched flag
-    #[must_use]
-    pub(crate) fn with_matched(mut self, matched: bool) -> Self {
-        self.matched = matched;
-        self
-    }
-
-    /// Set evidence
-    #[must_use]
-    pub(crate) fn with_evidence(mut self, evidence: Vec<Evidence>) -> Self {
-        self.evidence = evidence;
-        self
-    }
-
-    /// Set precision
-    #[must_use]
-    pub(crate) fn with_precision(mut self, precision: f32) -> Self {
-        self.precision = precision;
-        self
-    }
-}
-
 /// Debug info for proximity constraint evaluation
 #[derive(Debug, Clone)]
 pub(crate) struct ProximityDebug {
     /// Type of constraint: "near_lines" or "near_bytes"
+    #[cfg_attr(not(feature = "lint"), allow(dead_code))]
     pub constraint_type: String,
     /// Maximum span allowed
+    #[cfg_attr(not(feature = "lint"), allow(dead_code))]
     pub max_span: usize,
     /// Whether the constraint was satisfied
+    #[cfg_attr(not(feature = "lint"), allow(dead_code))]
     pub satisfied: bool,
     /// Human-readable explanation of the group requirement and where each
     /// condition group's evidence actually landed, so an author can see why
     /// proximity passed or failed (e.g. `all: @ line(s) [106]; any: @ line(s)
     /// [38] — need every all-leg + 1 any-leg within 1 line`).
+    #[cfg_attr(not(feature = "lint"), allow(dead_code))]
     pub detail: String,
 }
 
@@ -243,10 +213,12 @@ pub(crate) struct ProximityDebug {
 #[derive(Debug, Clone)]
 pub(crate) struct ScopeDebug {
     /// The rule's effective scope (`file`, `leaf`, `archive`, ...).
+    #[cfg_attr(not(feature = "lint"), allow(dead_code))]
     pub scope: String,
     /// Whether a single bucket satisfied the rule.
     pub satisfied: bool,
     /// What one bucket must hold, and what each bucket holds.
+    #[cfg_attr(not(feature = "lint"), allow(dead_code))]
     pub detail: String,
 }
 
@@ -254,15 +226,19 @@ pub(crate) struct ScopeDebug {
 #[derive(Debug, Clone)]
 pub(crate) struct DowngradeDebug {
     /// Original criticality before downgrade
+    #[cfg_attr(not(feature = "lint"), allow(dead_code))]
     pub original_crit: Criticality,
     /// Final criticality after downgrade (may be same if not triggered)
+    #[cfg_attr(not(feature = "lint"), allow(dead_code))]
     pub final_crit: Criticality,
     /// Whether the downgrade was triggered
+    #[cfg_attr(not(feature = "lint"), allow(dead_code))]
     pub triggered: bool,
 }
 
 /// Type of rule being evaluated
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(feature = "lint")]
 pub(crate) enum RuleType {
     /// Atomic trait definition
     Trait,
@@ -270,6 +246,7 @@ pub(crate) enum RuleType {
     Composite,
 }
 
+#[cfg(feature = "lint")]
 impl std::fmt::Display for RuleType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -286,8 +263,6 @@ pub(crate) struct EvaluationDebug {
     pub matched: bool,
     /// Reason the rule was skipped (if applicable)
     pub skip_reason: Option<SkipReason>,
-    /// Results from condition evaluations
-    pub condition_results: Vec<ConditionDebug>,
     /// Proximity constraint debug (if applicable)
     pub proximity: Option<ProximityDebug>,
     /// Scope filter debug (if the rule's scope buckets its evidence)
@@ -300,41 +275,16 @@ pub(crate) struct EvaluationDebug {
 
 impl EvaluationDebug {
     /// Create a new evaluation debug for a rule
+    #[cfg(feature = "lint")]
     pub(crate) fn new(_rule_id: impl Into<String>, _rule_type: RuleType) -> Self {
         Self {
             matched: false,
             skip_reason: None,
-            condition_results: Vec::new(),
             proximity: None,
             scope: None,
             downgrade: None,
             precision: 0.0,
         }
-    }
-
-    /// Record a skip reason
-    pub(crate) fn record_skip(&mut self, reason: SkipReason) {
-        self.skip_reason = Some(reason);
-    }
-
-    /// Add a condition result
-    pub(crate) fn add_condition(&mut self, condition: ConditionDebug) {
-        self.condition_results.push(condition);
-    }
-
-    /// Set the proximity debug info
-    pub(crate) fn set_proximity(&mut self, proximity: ProximityDebug) {
-        self.proximity = Some(proximity);
-    }
-
-    /// Set the scope filter debug info
-    pub(crate) fn set_scope(&mut self, scope: ScopeDebug) {
-        self.scope = Some(scope);
-    }
-
-    /// Set the downgrade debug info
-    pub(crate) fn set_downgrade(&mut self, downgrade: DowngradeDebug) {
-        self.downgrade = Some(downgrade);
     }
 }
 

@@ -17,7 +17,7 @@
 //! is the server's to say, so the saved file holds the token and nothing that
 //! could go stale beside it. It travels only to isotope13's own hosts, in an
 //! `Authorization` header, and never into a log: logs carry its
-//! [`Token::fingerprint`], the same one Beamline and dash show.
+//! [`Token::fingerprint`], the same one the service's dashboard shows.
 
 use std::fmt;
 use std::io;
@@ -162,8 +162,8 @@ impl Token {
         &self.0
     }
 
-    /// The first 16 hex characters of the token's SHA-256: how Beamline, the
-    /// rules Worker, and dash name a token without holding it.
+    /// The first 16 hex characters of the token's SHA-256: how the service
+    /// names a token without holding it.
     #[must_use]
     pub fn fingerprint(&self) -> String {
         hex::encode(&Sha256::digest(self.0.as_bytes())[..8])

@@ -41,11 +41,7 @@ impl AppleScriptAnalyzer {
             return;
         }
         report.imports = ctx.imports_from_filefacts();
-        report.filefacts = Some(if compact_values {
-            crate::types::FilefactsView::from_ctx_compact(ctx)
-        } else {
-            crate::types::FilefactsView::from_ctx(ctx)
-        });
+        report.filefacts = Some(crate::types::FilefactsView::of(ctx, compact_values));
         report
             .strings
             .extend(crate::strings::scpt_literal_strings(ctx));

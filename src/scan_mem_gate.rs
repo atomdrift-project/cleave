@@ -47,25 +47,12 @@ fn expansion() -> u64 {
 }
 /// Footprint multiplier for a flat image at top level — an executable (PE,
 /// ELF, Mach-O) or an OLE compound file (MSI): the bytes, their extracted
-/// strings and findings, YARA and disassembly transients, with room for an
-/// embedded installer payload. The 64x above was calibrated on member-heavy
-/// archives, whose retained per-member state really does reach 70-85x the
-/// compressed size; a flat image has no such multiplier, and under 64x a
-/// 192 MB MSI or a 112 MB Mach-O reserved most of a 32 GB box's budget for
-/// its whole analysis while using about 1 GB, parking every archive behind
-/// it for up to a minute. Measured solo peaks over the rule-loading floor:
-/// 192 MB MSI 1.1 GB (6x), 112 MB Mach-O 0.9 GB (8x), 90 MB Go ELF 0.7 GB
-/// (8x), 69 MB PE DLL 0.4 GB (6x). 16 keeps a 2x margin; the live
-/// available-memory floor still vetoes under real pressure. Overridable via
-/// `CLEAVE_MEMGATE_FLAT_EXPANSION`.
-fn flat_expansion() -> u64 {
-    static V: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        crate::env::parse("CLEAVE_MEMGATE_FLAT_EXPANSION")
-            .filter(|&n| n > 0)
-            .unwrap_or(16)
-    })
-}
+/// strings and findings, YARA transients, and room for an embedded installer
+/// payload. A flat image has none of the retained per-member state that sets
+/// the archive multiplier above; measured solo peaks run 6–8x the file size,
+/// so 16 keeps a 2x margin. The live available-memory floor still vetoes
+/// admission under real pressure.
+const FLAT_EXPANSION: u64 = 16;
 
 /// What the caller learned about a file's likely footprint before analysis
 /// (see `footprint_hint` in the scanner).
@@ -73,7 +60,7 @@ fn flat_expansion() -> u64 {
 pub(crate) enum FootprintHint {
     /// Nothing beyond the on-disk size: reserve `size × EXPANSION`.
     Unknown,
-    /// A flat image (executable or OLE compound file): `size × flat_expansion()`.
+    /// A flat image (executable or OLE compound file): `size × FLAT_EXPANSION`.
     Flat,
 }
 /// Floor so thousands of tiny files still register aggregate pressure.
@@ -104,13 +91,6 @@ fn admission_limits(total: Option<u64>, available: Option<u64>) -> (usize, u64) 
         .unwrap_or(usize::MAX)
         .max(MIN_ESTIMATE_BYTES);
     (budget, floor)
-}
-
-/// Whether a lane parked at the gate runs other queued scan paths meanwhile
-/// (default on; `CLEAVE_GATE_WAIT_WORK=0` restores plain parking).
-fn gate_wait_work_enabled() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| crate::env::parse::<u8>("CLEAVE_GATE_WAIT_WORK").is_none_or(|v| v != 0))
 }
 
 /// Aggregate byte-budget admission gate over concurrently-analysed files.
@@ -148,10 +128,10 @@ impl ScanMemGate {
         raw.max(MIN_ESTIMATE_BYTES).min(self.budget_bytes)
     }
 
-    /// Estimate for a flat image: `size × flat_expansion()`, never above
+    /// Estimate for a flat image: `size × FLAT_EXPANSION`, never above
     /// the plain estimate.
     fn estimate_flat(&self, size: u64) -> usize {
-        let raw = usize::try_from(size.saturating_mul(flat_expansion())).unwrap_or(usize::MAX);
+        let raw = usize::try_from(size.saturating_mul(FLAT_EXPANSION)).unwrap_or(usize::MAX);
         raw.max(MIN_ESTIMATE_BYTES).min(self.estimate(size))
     }
 
@@ -163,61 +143,59 @@ impl ScanMemGate {
             FootprintHint::Unknown => self.estimate(size),
         };
         let started = Instant::now();
-        let mut reserved = self
-            .reserved
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut stall_logged = false;
         loop {
-            if self.fits(*reserved, est, started.elapsed() >= FORCE_ADMIT_AFTER) {
+            // Read live memory before taking the lock: it is a system call,
+            // and every other waiter and releaser needs the lock meanwhile.
+            let available = (self.available_fn)();
+            let force = started.elapsed() >= FORCE_ADMIT_AFTER;
+            let mut reserved = self
+                .reserved
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if self.fits(*reserved, est, force, available) {
                 *reserved += est;
                 return ScanMemPermit { gate: self, est };
             }
             // Leave evidence: one warning per waiter after two minutes parked,
             // with the numbers needed to diagnose a wedged holder from logs
-            // alone (a rare whole-scan stall was observed with all
-            // workers parked here and could not be reproduced under harness).
+            // alone.
             if !stall_logged && started.elapsed() >= STALL_REPORT_AFTER {
                 stall_logged = true;
                 tracing::warn!(
                     est_mb = est / (1024 * 1024),
                     reserved_mb = *reserved / (1024 * 1024),
                     budget_mb = self.budget_bytes / (1024 * 1024),
-                    available_mb = (self.available_fn)().map(|a| a / (1024 * 1024)),
+                    available_mb = available.map(|a| a / (1024 * 1024)),
                     waited_s = started.elapsed().as_secs(),
                     "mem-gate admission stalled; will force-admit against live memory after the timeout"
                 );
             }
             // A scan lane analyzes another queued path instead of parking:
             // the queue leads with the largest files, so at startup several
-            // lanes wait here at once while their cores idle (281 thread-
-            // seconds on the benign corpus, ~12 s of wall at 24 threads).
+            // lanes would otherwise wait here at once with their cores idle.
             // The pulled path takes its own permit and never nests further
             // (`run_wait_work` refuses inside a pulled job), so this neither
             // deepens the stack nor holds a reservation while it waits.
-            if gate_wait_work_enabled() {
-                drop(reserved);
-                let ran = crate::rayon_nest::run_wait_work();
-                reserved = self
-                    .reserved
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if ran {
-                    continue;
-                }
+            drop(reserved);
+            if crate::rayon_nest::run_wait_work() {
+                continue;
             }
-            let (guard, _) = self
-                .released
-                .wait_timeout(reserved, POLL_INTERVAL)
+            let reserved = self
+                .reserved
+                .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            reserved = guard;
+            drop(
+                self.released
+                    .wait_timeout(reserved, POLL_INTERVAL)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
         }
     }
 
     /// Whether reserving `est` on top of `reserved` is allowed right now.
     #[allow(clippy::cast_possible_truncation)]
-    fn fits(&self, reserved: usize, est: usize, force: bool) -> bool {
-        let available = (self.available_fn)();
+    fn fits(&self, reserved: usize, est: usize, force: bool, available: Option<u64>) -> bool {
         // Lone file: admit if it fits live memory with headroom, so a single
         // large archive makes progress. Unknown memory or a long wait admits
         // unconditionally — the bounded escape hatch.
@@ -335,17 +313,27 @@ mod tests {
     fn unknown_available_falls_back_to_budget() {
         let g = gate(100 * MB as usize, 0, no_available);
         // Lone admits regardless.
-        assert!(g.fits(0, 80 * MB as usize, false));
+        assert!(g.fits(0, 80 * MB as usize, false, (g.available_fn)()));
         // Non-lone: budget ceiling applies.
-        assert!(g.fits(50 * MB as usize, 40 * MB as usize, false)); // 90 ≤ 100
-        assert!(!g.fits(80 * MB as usize, 40 * MB as usize, false)); // 120 > 100
+        assert!(g.fits(
+            50 * MB as usize,
+            40 * MB as usize,
+            false,
+            (g.available_fn)()
+        )); // 90 ≤ 100
+        assert!(!g.fits(
+            80 * MB as usize,
+            40 * MB as usize,
+            false,
+            (g.available_fn)()
+        )); // 120 > 100
     }
 
     #[test]
     fn flat_estimate_stays_under_the_plain_one() {
         let g = gate(64 * 1024 * 1024 * 1024, 0, avail_200mb);
         let size = 100 * MB;
-        assert_eq!(g.estimate_flat(size), (size * flat_expansion()) as usize);
+        assert_eq!(g.estimate_flat(size), (size * FLAT_EXPANSION) as usize);
         assert!(g.estimate_flat(size) < g.estimate(size));
         // Tiny executables still register the aggregate floor.
         assert_eq!(g.estimate_flat(1024), MIN_ESTIMATE_BYTES);
@@ -355,17 +343,27 @@ mod tests {
     fn live_gate_serialises_large_jobs() {
         let g = gate(10_000 * MB as usize, 100 * MB, avail_200mb);
         // 150 MB job + 100 MB floor = 250 MB > 200 available → denied.
-        assert!(!g.fits(50 * MB as usize, 150 * MB as usize, false));
+        assert!(!g.fits(
+            50 * MB as usize,
+            150 * MB as usize,
+            false,
+            (g.available_fn)()
+        ));
         // 50 MB job + 100 MB floor = 150 MB ≤ 200 available → admitted.
-        assert!(g.fits(50 * MB as usize, 50 * MB as usize, false));
+        assert!(g.fits(
+            50 * MB as usize,
+            50 * MB as usize,
+            false,
+            (g.available_fn)()
+        ));
     }
 
     #[test]
     fn lone_job_waits_until_forced_when_it_exceeds_available() {
         let g = gate(10_000 * MB as usize, 0, avail_200mb);
         // 100 MB + 2 GiB headroom > 200 MB available → not yet.
-        assert!(!g.fits(0, 100 * MB as usize, false));
+        assert!(!g.fits(0, 100 * MB as usize, false, (g.available_fn)()));
         // Forced after the bounded wait → admits (escape hatch).
-        assert!(g.fits(0, 100 * MB as usize, true));
+        assert!(g.fits(0, 100 * MB as usize, true, (g.available_fn)()));
     }
 }

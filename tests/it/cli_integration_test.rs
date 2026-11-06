@@ -703,12 +703,7 @@ fn test_kv_path_filter() {
     .unwrap();
 
     isolated_cleave_cmd()
-        .args([
-            "value",
-            file.to_str().unwrap(),
-            "--path",
-            "scripts.postinstall",
-        ])
+        .args(["value", file.to_str().unwrap(), "scripts.postinstall"])
         .assert()
         .success()
         .stdout(predicate::str::contains("scripts.postinstall"))

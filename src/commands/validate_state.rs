@@ -20,7 +20,7 @@ use crate::composite_rules::{FileType, TypeMask};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 const FORMAT: &str = "cleave-validate-fixtures-v1";
@@ -76,18 +76,7 @@ impl CurrentRules {
             .par_iter()
             .map(|file| {
                 let key = crate::capabilities::scope_key(&file.relative_path);
-                let filename = file
-                    .relative_path
-                    .file_name()
-                    .and_then(|f| f.to_str())
-                    .unwrap_or("");
-                let is_trait_file = file.relative_path.extension().is_some_and(|e| e == "yaml")
-                    && !file
-                        .relative_path
-                        .components()
-                        .any(|c| c.as_os_str() == "third-party")
-                    && !filename.to_lowercase().contains("readme")
-                    && !filename.starts_with("EXAMPLE");
+                let is_trait_file = crate::rule_sources::is_trait_file(&file.relative_path);
                 let mut hash = Sha256::new();
                 hash.update(&file.bytes);
                 (key, is_trait_file, hash.finalize().into())
@@ -115,6 +104,12 @@ pub(super) struct Plan {
     pub(super) run: Vec<bool>,
     /// Per target, its record from the last run, where there is one.
     previous: Vec<Option<Fixture>>,
+    /// Per target, whether it runs for its own sake (new, its bytes changed,
+    /// or it did not pass last time) rather than only for an edited rule.
+    fixture_changed: Vec<bool>,
+    /// Scope keys of the trait files edited, added or removed since the last
+    /// run; `None` when every fixture runs regardless.
+    edited_rules: Option<BTreeSet<String>>,
 }
 
 impl Plan {
@@ -123,7 +118,20 @@ impl Plan {
         Self {
             run: vec![true; targets],
             previous: vec![None; targets],
+            fixture_changed: vec![true; targets],
+            edited_rules: None,
         }
+    }
+
+    /// The trait files edited since the last run, when the plan follows them.
+    pub(super) fn edited_rules(&self) -> Option<&BTreeSet<String>> {
+        self.edited_rules.as_ref()
+    }
+
+    /// Whether target `i` runs for its own sake: every rule's cost on it is
+    /// unmeasured, not only an edited rule's.
+    pub(super) fn fixture_changed(&self, i: usize) -> bool {
+        self.fixture_changed[i]
     }
 
     pub(super) fn reused(&self) -> usize {
@@ -204,45 +212,49 @@ impl FixtureState {
             return Plan::full(targets.len());
         }
         let mut affected = TypeMask::EMPTY;
-        let mut changed_files = 0usize;
+        let mut edited = BTreeSet::new();
         for (path, old) in &previous.rules {
             match current.rules.get(path) {
                 Some(digest) if *digest == old.digest => {}
                 Some(_) => {
-                    changed_files += 1;
+                    edited.insert(path.clone());
                     affected |= TypeMask::from_words(old.scope);
                     affected |= scopes.get(path).copied().unwrap_or(TypeMask::ALL);
                 }
                 None => {
-                    changed_files += 1;
+                    edited.insert(path.clone());
                     affected |= TypeMask::from_words(old.scope);
                 }
             }
         }
         for path in current.rules.keys() {
             if !previous.rules.contains_key(path) {
-                changed_files += 1;
+                edited.insert(path.clone());
                 affected |= scopes.get(path).copied().unwrap_or(TypeMask::ALL);
             }
         }
         let mut run = Vec::with_capacity(targets.len());
+        let mut fixture_changed = Vec::with_capacity(targets.len());
         let mut previous_records = Vec::with_capacity(targets.len());
         for (target, digest) in targets.iter().zip(digests) {
             let record = previous.fixtures.get(&fixture_key(root, target)).cloned();
-            let reuse = match (&record, digest) {
-                (Some(record), Some(digest)) => {
-                    record.passed
-                        && record.digest == *digest
-                        && !TypeMask::from_words(record.types).intersects(affected)
-                }
-                _ => false,
+            let (changed, rules_reach) = match (&record, digest) {
+                (Some(record), Some(digest)) => (
+                    !record.passed || record.digest != *digest,
+                    TypeMask::from_words(record.types).intersects(affected),
+                ),
+                _ => (true, true),
             };
-            run.push(!reuse);
+            run.push(changed || rules_reach);
+            fixture_changed.push(changed);
             previous_records.push(record);
         }
+        let changed_files = edited.len();
         let plan = Plan {
             run,
             previous: previous_records,
+            fixture_changed,
+            edited_rules: Some(edited),
         };
         tracing::info!(
             changed_files,

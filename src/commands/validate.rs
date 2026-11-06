@@ -157,11 +157,7 @@ pub fn run_with_options(
     if slow_rules.is_some() {
         crate::composite_rules::trait_timing::enable();
     }
-    let soft = soft
-        || matches!(
-            std::env::var("CLEAVE_VALIDATE_SOFT").ok().as_deref(),
-            Some("1" | "true" | "yes" | "on")
-        );
+    let soft = soft || crate::env::flag("CLEAVE_VALIDATE_SOFT");
     // `--exclude` silences specific validators (the only suppression knob);
     // `--soft` downgrades every Soft-severity problem to advisory, leaving only
     // Hard problems (won't load / won't fire) fatal.
@@ -323,6 +319,14 @@ pub fn run_with_options(
     let performance = crate::validation_performance::Session::begin();
     let analysis_started = Instant::now();
     let selected: Vec<usize> = (0..targets.len()).filter(|&i| plan.run[i]).collect();
+    // Time rules where an edit can have changed their cost: every rule on a
+    // fixture that runs for its own sake, only the edited rules on one that
+    // runs because an edited rule reaches it. Their other queries share the
+    // AST batch a scan uses, which is half the cost of timing each alone.
+    let edited_only = plan
+        .edited_rules()
+        .filter(|_| selected.iter().any(|&i| !plan.fixture_changed(i)))
+        .map(|files| Arc::new(mapper.measuring_only(files)));
 
     // A fixture whose last analysis alone outlasted this run's balanced
     // share of the pool is analyzed first, by itself, with the whole pool
@@ -353,8 +357,12 @@ pub fn run_with_options(
     let analyze_one = |i: usize| {
         let t = &targets[i];
         let fixture_started = Instant::now();
+        let rules = match &edited_only {
+            Some(scoped) if !plan.fixture_changed(i) => scoped,
+            _ => &mapper,
+        };
         let report = stage.analyze(t.path(), |p| {
-            cleave::analyze_file_with_mapper(p, &options, &mapper)
+            cleave::analyze_file_with_mapper(p, &options, rules)
         });
         let elapsed_ms = fixture_started.elapsed().as_millis();
         if elapsed_ms >= 500 {
@@ -904,148 +912,7 @@ fn evaluate(results: Vec<(Target, Result<AnalysisReport>)>) -> Result<FixtureSum
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
-mod severity_fixture_tests {
-    use super::*;
-
-    fn write(root: &Path, name: &str) {
-        let path = root.join(name);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, "fixture").unwrap();
-    }
-
-    #[test]
-    fn discovery_uses_only_first_directory_and_includes_hidden_inputs() {
-        let root = tempfile::tempdir().unwrap();
-        write(root.path(), "hostile/generated/baseline/.payload.js");
-        write(root.path(), "baseline/.github/action.yml");
-        write(root.path(), "notable/scripts/build.py");
-        let targets = discover_targets(root.path()).unwrap();
-        assert_eq!(targets.len(), 3);
-        assert_eq!(targets[0].expected, Criticality::Baseline);
-        assert_eq!(targets[1].expected, Criticality::Hostile);
-        assert_eq!(targets[2].expected, Criticality::Notable);
-        // Gitignore, extensions and script directory names never exclude data.
-        write(root.path(), "notable/.gitignore");
-        assert_eq!(discover_targets(root.path()).unwrap().len(), 4);
-    }
-
-    #[test]
-    fn fresh_unknown_files_and_legacy_manifests_are_rejected() {
-        let root = tempfile::tempdir().unwrap();
-        write(root.path(), "hostile/sample.js");
-        assert!(discover_targets(root.path()).is_ok());
-        write(root.path(), "triage/receipt.json");
-        let error = discover_targets(root.path()).err().unwrap().to_string();
-        assert!(error.contains("triage/receipt.json"), "{error}");
-        std::fs::remove_file(root.path().join("triage/receipt.json")).unwrap();
-        write(root.path(), "expectations.toml");
-        assert!(
-            discover_targets(root.path())
-                .err()
-                .unwrap()
-                .to_string()
-                .contains("expectations.toml")
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn symlinks_are_errors_and_never_followed() {
-        let root = tempfile::tempdir().unwrap();
-        let outside = tempfile::tempdir().unwrap();
-        write(root.path(), "baseline/real.txt");
-        std::os::unix::fs::symlink(outside.path(), root.path().join("baseline/link")).unwrap();
-        assert!(
-            discover_targets(root.path())
-                .err()
-                .unwrap()
-                .to_string()
-                .contains("baseline/link")
-        );
-    }
-
-    #[test]
-    fn empty_fixture_tree_is_not_a_passing_test_suite() {
-        let root = tempfile::tempdir().unwrap();
-        assert!(discover_targets(root.path()).is_err());
-    }
-
-    #[test]
-    fn size_limits_have_exact_boundaries_and_only_noop_subtrees_are_exempt() {
-        let root = tempfile::tempdir().unwrap();
-        write(root.path(), "baseline/input.bin");
-        let input = root.path().join("baseline/input.bin");
-        std::fs::write(&input, vec![0; 20 * 1024]).unwrap();
-        assert!(discover_targets(root.path()).is_ok());
-        std::fs::write(&input, vec![0; 20 * 1024 + 1]).unwrap();
-        assert!(
-            discover_targets(root.path())
-                .err()
-                .unwrap()
-                .to_string()
-                .contains("20 KiB")
-        );
-        let compressed = root.path().join("baseline/input.bin.xz");
-        std::fs::rename(&input, &compressed).unwrap();
-        std::fs::write(&compressed, vec![0; 500 * 1024]).unwrap();
-        assert!(discover_targets(root.path()).is_ok());
-        std::fs::write(&compressed, vec![0; 500 * 1024 + 1]).unwrap();
-        assert!(
-            discover_targets(root.path())
-                .err()
-                .unwrap()
-                .to_string()
-                .contains("500 KiB")
-        );
-        let exempt = root.path().join("baseline/does-nothing/input.bin");
-        std::fs::create_dir_all(exempt.parent().unwrap()).unwrap();
-        std::fs::rename(&compressed, exempt).unwrap();
-        assert!(discover_targets(root.path()).is_ok());
-    }
-
-    #[test]
-    fn storage_compression_preserves_bytes_and_original_basename() {
-        use std::io::Write;
-        let root = tempfile::tempdir().unwrap();
-        let stage = NeutralStage::new(root.path()).unwrap();
-        let path = root.path().join("package.json.xz");
-        let input = b"{\"name\":\"fixture\"}";
-        let mut encoder = xz2::write::XzEncoder::new(Vec::new(), 6);
-        encoder.write_all(input).unwrap();
-        std::fs::write(&path, encoder.finish().unwrap()).unwrap();
-        let staged = stage.stage(&path).unwrap();
-        assert_eq!(staged.file_name().unwrap(), "package.json");
-        assert_eq!(std::fs::read(staged).unwrap(), input);
-        std::fs::write(&path, b"invalid xz").unwrap();
-        assert!(stage.stage(&path).is_err());
-    }
-
-    #[test]
-    fn severity_uses_members_and_ignores_scores_and_filtered_findings() {
-        let mut report = AnalysisReport::new(cleave::TargetInfo {
-            path: "bundle.zip".into(),
-            file_type: "zip".into(),
-            size_bytes: 1,
-            sha256: "abc".into(),
-            architectures: None,
-        });
-        report.finalize();
-        assert_eq!(report_severity(&report).unwrap(), Criticality::Baseline);
-        let mut member = report.files[0].clone();
-        member.path = "bundle.zip!!member.js##base64@1".into();
-        let mut finding = cleave::types::Finding::new("test", Default::default(), "test", 1.0);
-        finding.crit = Criticality::Hostile;
-        member.findings.push(finding);
-        report.files.push(member);
-        assert_eq!(report_severity(&report).unwrap(), Criticality::Hostile);
-        let target = Target {
-            path: "sample".into(),
-            expected: Criticality::Suspicious,
-            metadata: None,
-        };
-        assert!(evaluate(vec![(target, Ok(report))]).is_err());
-    }
-}
+mod severity_fixture_tests;
 
 /// Substring that no path-derived value of a staged fixture may contain.
 const TESTDATA: &str = "testdata";
@@ -1068,6 +935,10 @@ struct NeutralStage {
     /// Lowercased substrings that must not appear in any path-derived value.
     forbidden: Vec<String>,
     paths: parking_lot::Mutex<std::collections::BTreeMap<String, String>>,
+    /// Per staged content directory, the analyses using it. The last one out
+    /// removes it, so the stage empties during the run instead of in one
+    /// serial removal of every fixture after the verdict is known.
+    users: parking_lot::Mutex<std::collections::HashMap<PathBuf, usize>>,
 }
 
 impl NeutralStage {
@@ -1106,6 +977,7 @@ impl NeutralStage {
             dir,
             forbidden,
             paths: parking_lot::Mutex::default(),
+            users: parking_lot::Mutex::default(),
         })
     }
 
@@ -1150,6 +1022,9 @@ impl NeutralStage {
         let Some(parent) = dest.parent() else {
             anyhow::bail!("neutral path has no parent: {}", dest.display());
         };
+        // Claimed before it is created, so the last user of the directory
+        // never removes it under a lane that is about to place a file there.
+        *self.users.lock().entry(parent.to_path_buf()).or_insert(0) += 1;
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
         let placed = if compressed {
@@ -1194,7 +1069,9 @@ impl NeutralStage {
             neutral.to_string_lossy().into_owned(),
             fixture.to_string_lossy().into_owned(),
         );
-        let mut report = analyze(&neutral)?;
+        let analyzed = analyze(&neutral);
+        self.release(&neutral);
+        let mut report = analyzed?;
         report.finalize();
         let leaks = path_leaks(&report, &self.forbidden);
         if !leaks.is_empty() {
@@ -1209,6 +1086,30 @@ impl NeutralStage {
             &fixture.to_string_lossy(),
         );
         Ok(report)
+    }
+
+    /// Done with `neutral`: the last analysis using its content directory
+    /// removes it. A directory left behind goes with the stage.
+    fn release(&self, neutral: &Path) {
+        let Some(parent) = neutral.parent() else {
+            return;
+        };
+        let mut users = self.users.lock();
+        let Some(count) = users.get_mut(parent) else {
+            return;
+        };
+        *count -= 1;
+        if *count > 0 {
+            return;
+        }
+        users.remove(parent);
+        // Removed under the lock: a lane staging this content again claims
+        // the directory only once it is gone.
+        let removed = std::fs::remove_dir_all(parent);
+        drop(users);
+        if let Err(error) = removed {
+            tracing::debug!(dir = %parent.display(), %error, "staged fixture not removed");
+        }
     }
 
     /// Diagnostics survive the temporary stage, including when a rejected
@@ -1427,226 +1328,4 @@ fn collect_overlap_findings(
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
-mod neutral_stage_tests {
-    use super::{
-        AnalysisReport, NeutralStage, Path, TESTDATA, neutral_relative_path, path_leaks,
-        relabel_paths,
-    };
-
-    fn report_at(path: &str, basename: &str) -> AnalysisReport {
-        let mut report = AnalysisReport::new(cleave::TargetInfo {
-            path: path.to_string(),
-            file_type: "javascript".to_string(),
-            size_bytes: 1,
-            sha256: "abc".to_string(),
-            architectures: None,
-        });
-        report.values_tree = Some(Box::new(serde_json::json!({
-            "file": { "basename": basename, "size": 1 },
-        })));
-        report
-    }
-
-    fn forbidden(traits_dir: &str) -> Vec<String> {
-        vec![TESTDATA.to_string(), traits_dir.to_lowercase()]
-    }
-
-    #[test]
-    fn neutral_path_is_content_hash_and_basename_only() {
-        let fixture = Path::new("/r/traits/testdata/benign/gh-controls/.github/action.yml");
-        let rel = neutral_relative_path(fixture, b"on: push\n").unwrap();
-        let parts: Vec<_> = rel.iter().map(|c| c.to_str().unwrap()).collect();
-        assert_eq!(parts.len(), 2, "{rel:?}");
-        assert_eq!(parts[0].len(), 16);
-        assert!(parts[0].bytes().all(|b| b.is_ascii_hexdigit() || b == b'g'));
-        assert!(!parts[0].contains("e2e"));
-        assert_eq!(parts[1], "action.yml");
-        for dir in [
-            "testdata",
-            "benign",
-            "gh-controls",
-            ".github",
-            "traits",
-            "/r",
-        ] {
-            assert!(!rel.to_str().unwrap().contains(dir), "{rel:?} names {dir}");
-        }
-        // Same bytes share a directory; different bytes never do.
-        assert_eq!(
-            rel,
-            neutral_relative_path(Path::new("elsewhere/action.yml"), b"on: push\n").unwrap()
-        );
-        assert_ne!(
-            rel,
-            neutral_relative_path(fixture, b"on: pull_request\n").unwrap()
-        );
-    }
-
-    #[test]
-    fn neutral_stage_rejects_random_test_directory_markers() {
-        assert!(super::neutral_test_path(Path::new("/tmp/cleave-validate-qa1")).unwrap());
-        assert!(super::neutral_test_path(Path::new("/tmp/cleave-validate-e2e")).unwrap());
-        assert!(!super::neutral_test_path(Path::new("/tmp/cleave-validate-clean")).unwrap());
-    }
-
-    #[test]
-    fn digest_stage_directory_cannot_be_an_e2e_path() {
-        use sha2::{Digest, Sha256};
-        let data = (0u32..100_000)
-            .map(u32::to_le_bytes)
-            .find(|b| hex::encode(&Sha256::digest(b)[..8]).contains("e2e"))
-            .unwrap();
-        let rel = neutral_relative_path(Path::new("fixture.py"), &data).unwrap();
-        assert!(!super::neutral_test_path(&rel).unwrap());
-        assert!(!rel.to_string_lossy().contains("e2e"));
-    }
-
-    #[test]
-    fn stage_places_fixture_outside_traits_dir_and_cleans_up() {
-        let traits = tempfile::tempdir().unwrap();
-        let dir = traits
-            .path()
-            .join("testdata")
-            .join("benign")
-            .join("npm-pkg");
-        std::fs::create_dir_all(&dir).unwrap();
-        let fixture = dir.join("package.json");
-        std::fs::write(&fixture, br#"{"name":"x"}"#).unwrap();
-
-        let stage = NeutralStage::new(traits.path()).unwrap();
-        let root = stage.dir.path().to_path_buf();
-        let neutral = stage.stage(&fixture).unwrap();
-        // Staging the same fixture twice (two lanes) is harmless.
-        assert_eq!(neutral, stage.stage(&fixture).unwrap());
-
-        assert!(neutral.starts_with(&root));
-        assert_eq!(neutral.file_name().unwrap(), "package.json");
-        assert_eq!(std::fs::read(&neutral).unwrap(), br#"{"name":"x"}"#);
-        let shown = neutral.to_string_lossy().to_lowercase();
-        let canonical = std::fs::canonicalize(traits.path()).unwrap();
-        for bad in [
-            TESTDATA.to_string(),
-            "npm-pkg".to_string(),
-            "benign".to_string(),
-            canonical.to_string_lossy().to_lowercase(),
-            traits.path().to_string_lossy().to_lowercase(),
-        ] {
-            assert!(!shown.contains(&bad), "{shown} contains {bad}");
-        }
-
-        drop(stage);
-        assert!(!root.exists(), "stage directory must be removed");
-        assert!(fixture.exists(), "the fixture itself must survive");
-    }
-
-    #[test]
-    fn analyze_reports_under_fixture_path_and_rejects_leaks() {
-        let traits = tempfile::tempdir().unwrap();
-        let dir = traits.path().join("testdata").join("benign");
-        std::fs::create_dir_all(&dir).unwrap();
-        let fixture = dir.join("index.js");
-        std::fs::write(&fixture, b"1").unwrap();
-        let stage = NeutralStage::new(traits.path()).unwrap();
-
-        let report = stage
-            .analyze(&fixture, |p| {
-                Ok(report_at(&p.to_string_lossy(), "index.js"))
-            })
-            .unwrap();
-        let original = fixture.to_string_lossy();
-        assert_eq!(report.files[0].path, original);
-
-        let neutral = stage.stage(&fixture).unwrap();
-        let mut issues = vec![crate::validation_controls::ValidationIssue::new(
-            "rule-performance",
-            format!("cost exceeded on '{}!!/member.js'", neutral.display()),
-        )];
-        stage.relabel_issues(&mut issues);
-        assert_eq!(
-            issues[0].message,
-            format!("cost exceeded on '{original}!!/member.js'")
-        );
-
-        // An engine path that bypasses the stage must fail loudly.
-        let err = stage
-            .analyze(&fixture, |_| Ok(report_at(&original, "index.js")))
-            .unwrap_err();
-        assert!(err.to_string().contains("testdata"), "{err:#}");
-    }
-
-    #[test]
-    fn guard_flags_every_path_derived_value() {
-        let traits = "/Users/x/traits-dev";
-        let clean = "/tmp/cleave-validate-a/0123456789abcdef/index.js";
-
-        let mut ok = report_at(clean, "index.js");
-        ok.finalize();
-        assert!(path_leaks(&ok, &forbidden(traits)).is_empty());
-
-        let mut in_testdata = report_at("/w/TestData/benign/index.js", "index.js");
-        in_testdata.finalize();
-        assert!(!path_leaks(&in_testdata, &forbidden(traits)).is_empty());
-
-        let mut in_traits = report_at(&format!("{traits}/benign/index.js"), "index.js");
-        in_traits.finalize();
-        assert!(!path_leaks(&in_traits, &forbidden(traits)).is_empty());
-
-        // A basename is path-derived even when the path is clean.
-        let mut basename = report_at(clean, "testdata-index.js");
-        basename.finalize();
-        let leaks = path_leaks(&basename, &forbidden(traits));
-        assert!(
-            leaks.iter().any(|l| l.starts_with("file.basename")),
-            "{leaks:?}"
-        );
-
-        // Only the flattened kv (e.g. restored from cache) carries it.
-        let mut kv_only = report_at(clean, "index.js");
-        kv_only.finalize();
-        kv_only.values_tree = None;
-        kv_only.files[0]
-            .kv
-            .insert("file.stem".into(), serde_json::json!("testdata"));
-        assert!(!path_leaks(&kv_only, &forbidden(traits)).is_empty());
-
-        // A member file whose host path escaped the stage.
-        let mut member = report_at(clean, "index.js");
-        member.finalize();
-        let mut escaped = member.files[0].clone();
-        escaped.path = format!("{traits}/x.zip!!a.js");
-        member.files.push(escaped);
-        assert!(!path_leaks(&member, &forbidden(traits)).is_empty());
-    }
-
-    #[test]
-    fn guard_ignores_archive_member_paths() {
-        let clean = "/tmp/cleave-validate-a/0123456789abcdef/pkg.zip";
-        let mut report = report_at(clean, "pkg.zip");
-        report.finalize();
-        let mut member = report.files[0].clone();
-        member.path = format!("{clean}!!go/src/testdata/x.go##base64@3");
-        member
-            .kv
-            .insert("file.basename".into(), serde_json::json!("testdata"));
-        report.files.push(member);
-        assert!(path_leaks(&report, &forbidden("/Users/x/traits-dev")).is_empty());
-    }
-
-    #[test]
-    fn relabel_rewrites_only_the_staged_root() {
-        let neutral = "/t/h/a.js";
-        let mut report = report_at(neutral, "a.js");
-        report.finalize();
-        let mut member = report.files[0].clone();
-        member.path = format!("{neutral}##base64@4");
-        report.files.push(member);
-        let mut sibling = report.files[0].clone();
-        sibling.path = "/t/h/a.jsx".into();
-        report.files.push(sibling);
-
-        relabel_paths(&mut report, neutral, "/fix/a.js");
-        assert_eq!(report.files[0].path, "/fix/a.js");
-        assert_eq!(report.files[1].path, "/fix/a.js##base64@4");
-        assert_eq!(report.files[2].path, "/t/h/a.jsx");
-    }
-}
+mod neutral_stage_tests;

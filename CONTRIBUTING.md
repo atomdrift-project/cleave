@@ -31,7 +31,7 @@ Traits live in the [traits repository](https://github.com/atomdrift-project/trai
 | Known Entities | `well-known/` | Specific malware family or tool signatures |
 | Metadata | `metadata/` | Informational file properties |
 
-If you're unsure where a rule belongs, the decision framework in [TAXONOMY.md](https://github.com/atomdrift-project/traits/blob/main/TAXONOMY.md) will walk you through it. For YAML syntax, condition types, and composite rules, see [RULES.md](https://github.com/atomdrift-project/traits/blob/main/RULES.md). Hostile composites need a precision score >= 3.5; `cleave test-rules --rules <dir::id> <file>` prints a rule's score and the terms behind it.
+If you're unsure where a rule belongs, the decision framework in [TAXONOMY.md](https://github.com/atomdrift-project/traits/blob/main/TAXONOMY.md) will walk you through it. For YAML syntax, condition types, and composite rules, see [RULES.md](https://github.com/atomdrift-project/traits/blob/main/RULES.md). Hostile composites need a precision score of at least 1.6, or `cleave validate` flags them; `cleave test-rules --rules <dir::id> <file>` prints a rule's score and the terms behind it.
 
 ### Step by step
 
@@ -96,7 +96,7 @@ All compiler warnings must be clean. If you're not sure about the right approach
 
 - [ ] `make ci` passes
 - [ ] New traits follow [TAXONOMY.md](https://github.com/atomdrift-project/traits/blob/main/TAXONOMY.md) placement and tier dependency rules
-- [ ] Hostile composites meet the precision >= 3.5 threshold (`cleave test-rules`)
+- [ ] Hostile composites meet the precision >= 1.6 threshold (`cleave test-rules`)
 - [ ] Hostile rules live in `objectives/` or `well-known/`, never in `micro-behaviors/`
 - [ ] Tested against at least one real sample with `cleave test-rules`
 

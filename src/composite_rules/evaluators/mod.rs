@@ -1030,10 +1030,6 @@ pub(crate) fn windows_from_atom_hits(
     Some(merge_spans(spans))
 }
 
-/// Log compiled-regex store occupancy and churn. `*_evictions` near
-/// `*_inserts` means the working set exceeds that store's byte budget and
-/// engines recompile per use instead of being reused — the signature of
-/// budget thrash on archive scans.
 /// Coverage counters for `eval_raw`'s hit-window confirmation: how many
 /// evaluations searched only gate-atom windows vs. the whole member, how many
 /// bytes each mode walked, and why each full scan fell back. Logged from
@@ -1071,52 +1067,6 @@ pub(crate) mod raw_window_stats {
         counter.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// `CLEAVE_RAW_FULL_TOP=N`: log the N traits whose full scans walked
-    /// the most bytes, with the fallback reason (1 no atoms, 2 unbounded,
-    /// 3 other, 4 str engine). Off (0) by default.
-    fn full_top_n() -> usize {
-        static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-        *N.get_or_init(|| crate::env::parse::<usize>("CLEAVE_RAW_FULL_TOP").unwrap_or(0))
-    }
-    type FullTop = rustc_hash::FxHashMap<(Box<str>, u8), (u64, u64)>;
-    static FULL_TOP: std::sync::Mutex<Option<FullTop>> = std::sync::Mutex::new(None);
-    pub(crate) fn note_full(trait_id: Option<&str>, reason: u8, bytes: usize) {
-        if full_top_n() == 0 {
-            return;
-        }
-        let Ok(mut guard) = FULL_TOP.lock() else {
-            return;
-        };
-        let map = guard.get_or_insert_with(FullTop::default);
-        let e = map
-            .entry((Box::from(trait_id.unwrap_or("?")), reason))
-            .or_insert((0, 0));
-        e.0 += 1;
-        e.1 += bytes as u64;
-    }
-    fn log_full_top() {
-        let n = full_top_n();
-        if n == 0 {
-            return;
-        }
-        let Ok(guard) = FULL_TOP.lock() else {
-            return;
-        };
-        let Some(map) = guard.as_ref() else {
-            return;
-        };
-        let mut rows: Vec<_> = map.iter().collect();
-        rows.sort_by_key(|r| std::cmp::Reverse(r.1.1));
-        for ((id, reason), (evals, bytes)) in rows.into_iter().take(n) {
-            tracing::info!(
-                trait_id = %id,
-                reason,
-                evals,
-                mb = bytes / (1 << 20),
-                "eval_raw full-scan top"
-            );
-        }
-    }
     pub(crate) fn add_bytes(counter: &AtomicU64, n: usize) {
         counter.fetch_add(n as u64, Ordering::Relaxed);
     }
@@ -1144,7 +1094,6 @@ pub(crate) mod raw_window_stats {
             decoded_skipped = DECODED_SKIPPED.load(Ordering::Relaxed),
             "eval_raw window coverage"
         );
-        log_full_top();
     }
 }
 
@@ -1156,7 +1105,10 @@ pub(crate) fn bytes_regex_store_stats() -> (usize, usize, u64, usize) {
     })
 }
 
-#[allow(dead_code)] // called from lib.rs end-of-scan path
+/// Log compiled-regex store occupancy and churn. `*_evictions` near
+/// `*_inserts` means the working set exceeds that store's byte budget and
+/// engines recompile per use instead of being reused — the signature of
+/// budget thrash on archive scans.
 pub(crate) fn log_regex_cache_stats() {
     let uni = REGEX_CACHE.get().map_or(0, |c| c.read().len());
     let (bytes_len, bytes_bytes, bytes_inserts, bytes_evictions, bytes_replacements, bytes_budget) =
@@ -1626,370 +1578,15 @@ pub(crate) fn resolve_effective_range_opt<'a>(
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
-mod mandatory_atom_set_tests {
-    use super::{best_mandatory_atom, bounded_consumed_bytes, mandatory_atom_set};
-
-    fn set(pattern: &str) -> Option<Vec<(String, bool)>> {
-        mandatory_atom_set(pattern).map(|mut s| {
-            s.sort();
-            s
-        })
-    }
-
-    /// The five consumer-webmail traits were the top aggregate CPU consumers
-    /// on JS-heavy archives precisely because none of them had an extractable
-    /// single atom. Each must now gate on its provider-domain any-of set.
-    #[test]
-    fn email_provider_family_extracts() {
-        assert_eq!(
-            set(r"(?i).{0,64}\b[\w.%+-]{1,64}@(gmail|googlemail)\.com\b"),
-            Some(vec![("gmail".into(), true), ("googlemail".into(), true)])
-        );
-        assert_eq!(
-            set(r".{0,64}[\w.%+-]{1,64}@(proton\.me|protonmail\.com|pm\.me|tuta\.io)\b"),
-            Some(vec![
-                ("pm.me".into(), false),
-                ("proton.me".into(), false),
-                ("protonmail.com".into(), false),
-                ("tuta.io".into(), false)
-            ])
-        );
-        // (ru|com) has a 2-byte branch, so the *second* alternation is
-        // unusable; the first still gates.
-        assert_eq!(
-            set(r".{0,64}[\w.%+-]{1,64}@(yandex|mail)\.(ru|com)\b"),
-            Some(vec![("mail".into(), false), ("yandex".into(), false)])
-        );
-        assert_eq!(
-            set(r".{0,64}[\w.%+-]{1,64}@(outlook|hotmail|live|msn)\.com\b"),
-            Some(vec![
-                ("hotmail".into(), false),
-                ("live".into(), false),
-                ("msn".into(), false),
-                ("outlook".into(), false)
-            ])
-        );
-    }
-
-    /// Single-literal extraction must not regress relative to
-    /// `best_mandatory_atom` on its own cases.
-    #[test]
-    fn single_literal_parity() {
-        for pat in [
-            r"\s*token.*",
-            r"fs\.readdirSync\(",
-            r"^import\s+os$",
-            r"(?:prefix)?CreateRemoteThread",
-        ] {
-            let old = best_mandatory_atom(pat);
-            let new = set(pat);
-            assert!(
-                new.is_some() || old.is_none(),
-                "{pat}: old extracted {old:?} but new returned None"
-            );
-        }
-    }
-
-    /// `(?i)` literals parse as case-pair classes; the run coalescer must
-    /// reassemble them into one CI atom.
-    #[test]
-    fn case_insensitive_literal_runs() {
-        assert_eq!(
-            set(r"(?i)powershell"),
-            Some(vec![("powershell".into(), true)])
-        );
-        // Mixed letters and non-letters stay one run.
-        assert_eq!(set(r"(?i)\.com\b"), Some(vec![(".com".into(), true)]));
-    }
-
-    /// Baseline CSS `font-family` rule: the only long mandatory literal sits
-    /// after `(^|})` and bounded `[^}]` runs, so a prefix extractor leaves it
-    /// ungated. The any-of walk must still recover the CI `font-family` atom.
-    #[test]
-    fn css_font_family_rule_extracts_ci_atom() {
-        assert_eq!(
-            set(r"(?i)(^|})[^@{}]{0,80}\{[^}]{0,160}font-family\s*:"),
-            Some(vec![("font-family".into(), true)])
-        );
-    }
-
-    /// Non-ASCII patterns get the unicode engine (E7b), whose case folding
-    /// covers non-ASCII letters — so a byte-mode-extracted atom carrying raw
-    /// `ç` bytes is NOT mandatory (`Için` matches the engine, misses the
-    /// atom). Extraction must parse such patterns in unicode mode, where the
-    /// fold class at `ç` breaks the run: `için`/`você` branches die and the
-    /// alternation (or whole pattern) stays ungated. Caught as the
-    /// `lang-turkish` loss on the VSCodium corpus.
-    #[test]
-    fn non_ascii_ci_patterns_do_not_emit_byte_atoms() {
-        assert_eq!(set(r"(?i)\b(için|olarak|gibi)\b"), None);
-        // The pure-ASCII run before the fold class is still mandatory (every
-        // match carries some ASCII case of `voc`), so it may gate; the raw
-        // `ê` bytes must not appear in any atom.
-        assert_eq!(set(r"(?i)\bvocê\b.{0,2}"), Some(vec![("voc".into(), true)]));
-        // Case-sensitive non-ASCII literals are exact bytes in every engine
-        // mode; they may still gate.
-        assert_eq!(
-            set(r"执行任意系统命令"),
-            Some(vec![("执行任意系统命令".into(), false)])
-        );
-    }
-
-    /// The corpus probe's catch: the HIR factors the shared `[Pp]` out of
-    /// `PING…PONG|PONG…PING`, and naive prefix composition glued it onto
-    /// branch atoms that sit mid-branch, gating on nonexistent
-    /// "pping"/"ppong". Composition must require branch-anchored atoms.
-    #[test]
-    fn unanchored_branch_atoms_do_not_compose() {
-        let got = set(r"(?i)PING.{0,120}PONG|PONG.{0,120}PING").unwrap();
-        assert_eq!(got, vec![("ping".into(), true), ("pong".into(), true)]);
-    }
-
-    /// Sets that cannot be guaranteed (or gate poorly) stay inextractable.
-    #[test]
-    fn rejects_unguaranteed_sets() {
-        // Every branch short.
-        assert_eq!(set(r"@(ru|com)"), None);
-        // One uncovered branch voids the alternation.
-        assert_eq!(set(r"(gmail|[a-z]{5})"), None);
-        // Pure classes / no literal.
-        assert_eq!(set(r"(?i)[ąćęłńśźż]"), None);
-        assert_eq!(set(r"[\w.%+-]{1,64}"), None);
-        // Optional literal is not mandatory.
-        assert_eq!(set(r"(?:gmail)?[0-9]{4}"), None);
-    }
-
-    /// Any-of guarantee spot check: strings matching the pattern must contain
-    /// at least one atom (case-folded when flagged CI).
-    #[test]
-    fn atoms_are_mandatory_in_matches() {
-        let pat = r"(?i).{0,64}\b[\w.%+-]{1,64}@(gmail|googlemail)\.com\b";
-        let atoms = mandatory_atom_set(pat).unwrap();
-        let re = regex::Regex::new(pat).unwrap();
-        for hay in [
-            "contact me at Bob.Smith@GMail.com today",
-            "x@googlemail.com",
-            "prefix junk drop@gmail.com",
-        ] {
-            let m = re.find(hay).expect("test string must match");
-            let matched = m.as_str().to_ascii_lowercase();
-            assert!(
-                atoms.iter().any(|(a, ci)| if *ci {
-                    matched.contains(&a.to_ascii_lowercase())
-                } else {
-                    m.as_str().contains(a.as_str())
-                }),
-                "match {matched:?} contains no atom from {atoms:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn bounded_consumed_bytes_examples() {
-        assert_eq!(bounded_consumed_bytes(r"PING.{0,120}PONG"), Some(128));
-        assert_eq!(bounded_consumed_bytes(r"foo"), Some(3));
-        assert_eq!(bounded_consumed_bytes(r"foo.*bar"), None);
-        assert_eq!(bounded_consumed_bytes(r"[^\n]*foo"), None);
-        assert_eq!(bounded_consumed_bytes(r"(?s)foo.*bar"), None);
-        // Trailing `\s*` is capped so CSS can window; `.*` stays unbounded.
-        assert_eq!(bounded_consumed_bytes(r"foo\s*bar"), Some(3 + 256 + 3));
-        let css = bounded_consumed_bytes(r"(?i)(^|})[^@{}]{0,80}\{[^}]{0,160}font-family\s*:");
-        assert!(css.is_some() && css.unwrap() <= 8192);
-    }
-}
+mod mandatory_atom_set_tests;
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
-mod mandatory_atom_set_probe {
-    //! Offline soundness screen, not part of the suite: verifies over a real
-    //! corpus that every pattern the any-of extractor newly gates cannot match
-    //! a file its atoms are absent from. Run with:
-    //! `PROBE_PATTERNS=… PROBE_CORPUS=… cargo test --release -p cleave --lib \
-    //!    mandatory_atom_set_probe -- --ignored --nocapture`
-    use super::{best_mandatory_atom, mandatory_atom_set};
-
-    #[test]
-    #[ignore]
-    fn newly_gated_atoms_are_mandatory_on_corpus() {
-        let patterns_path = std::env::var("PROBE_PATTERNS").expect("PROBE_PATTERNS");
-        let corpus_dir = std::env::var("PROBE_CORPUS").expect("PROBE_CORPUS");
-        let pats: Vec<String> =
-            serde_json::from_slice(&std::fs::read(patterns_path).unwrap()).unwrap();
-
-        let mut newly: Vec<(String, Vec<(String, bool)>)> = Vec::new();
-        for p in &pats {
-            let old = best_mandatory_atom(p);
-            let new = mandatory_atom_set(p);
-            if old.is_none()
-                && let Some(set) = new
-            {
-                newly.push((p.clone(), set));
-            }
-        }
-        println!("patterns: {}, newly gated: {}", pats.len(), newly.len());
-
-        // Compile byte-mode first, unicode fallback — engine parity.
-        let compiled: Vec<(usize, regex::bytes::Regex)> = newly
-            .iter()
-            .enumerate()
-            .filter_map(|(i, (p, _))| {
-                regex::bytes::RegexBuilder::new(p)
-                    .unicode(false)
-                    .multi_line(true)
-                    .size_limit(super::REGEX_SIZE_LIMIT)
-                    .build()
-                    .or_else(|_| {
-                        regex::bytes::RegexBuilder::new(p)
-                            .multi_line(true)
-                            .size_limit(super::REGEX_SIZE_LIMIT)
-                            .build()
-                    })
-                    .ok()
-                    .map(|re| (i, re))
-            })
-            .collect();
-
-        let mut files = 0usize;
-        let mut violations = 0usize;
-        for entry in walkdir::WalkDir::new(&corpus_dir)
-            .into_iter()
-            .filter_map(Result::ok)
-            .filter(|e| e.file_type().is_file())
-        {
-            let Ok(content) = std::fs::read(entry.path()) else {
-                continue;
-            };
-            if content.len() > 300 << 10 {
-                continue;
-            }
-            files += 1;
-            let lower: Vec<u8> = content.to_ascii_lowercase();
-            for (i, re) in &compiled {
-                if !re.is_match(&content) {
-                    continue;
-                }
-                let (p, atoms) = &newly[*i];
-                let present = atoms.iter().any(|(a, ci)| {
-                    if *ci {
-                        memchr::memmem::find(&lower, a.to_ascii_lowercase().as_bytes()).is_some()
-                    } else {
-                        memchr::memmem::find(&content, a.as_bytes()).is_some()
-                    }
-                });
-                if !present {
-                    violations += 1;
-                    println!(
-                        "VIOLATION file={} pattern={:?} atoms={:?}",
-                        entry.path().display(),
-                        p,
-                        atoms
-                    );
-                }
-            }
-        }
-        println!(
-            "checked {} files x {} patterns: {} violations",
-            files,
-            compiled.len(),
-            violations
-        );
-        assert_eq!(violations, 0, "gate would cause false negatives");
-    }
-}
+mod mandatory_atom_set_probe;
 
 #[cfg(test)]
-mod window_tests {
-    #![allow(clippy::expect_used)]
-    use super::*;
-
-    /// Reference: line bounds found by scanning from the haystack ends, the
-    /// way the builder worked before the incremental walk.
-    fn naive_line_windows(hay: &[u8], hits: &[u32]) -> Vec<(usize, usize)> {
-        let mut spans = Vec::new();
-        for &hit in hits {
-            let hit = hit as usize;
-            let lo = memchr::memrchr(b'\n', &hay[..hit]).map_or(0, |n| n + 1);
-            let hi = memchr::memchr(b'\n', &hay[hit..]).map_or(hay.len(), |n| hit + n + 1);
-            spans.push((lo, hi));
-        }
-        merge_spans(spans)
-    }
-
-    #[test]
-    fn line_local_windows_match_the_naive_scan_on_long_lines() {
-        // Three long minified-style lines with many atom hits each, plus a
-        // short one: every shape the incremental walk has to get right.
-        let mut hay = Vec::new();
-        let mut hits = Vec::new();
-        for (line_no, reps) in [(0usize, 40usize), (1, 1), (2, 25), (3, 3)] {
-            for i in 0..reps {
-                if line_no == 1 {
-                    hay.extend_from_slice(b"short foo(x) bar;");
-                } else {
-                    hay.extend_from_slice(b"var a=b.c(d);if(e){f=g}");
-                    if i % 2 == 0 {
-                        hits.push(hay.len() as u32);
-                        hay.extend_from_slice(b"foo(");
-                    }
-                    hay.extend_from_slice(b"h.i(j,k);");
-                }
-            }
-            hay.push(b'\n');
-        }
-        // Windowing is only chosen when the windows cover under half of the
-        // haystack: pad with a long hit-free line.
-        hay.extend(std::iter::repeat_n(b'x', 8 * hay.len()));
-        hay.push(b'\n');
-        assert!(hay.len() > MIN_HAYSTACK_TO_WINDOW);
-        let pattern = r"foo\([^\n]*bar";
-        assert!(
-            matches!(window_shape(pattern), Some((true, _, 0))),
-            "test pattern must be line-local"
-        );
-        let got = windows_from_atom_hits(&hay, &hits, pattern, 0, hay.len()).expect("windowable");
-        assert_eq!(got, naive_line_windows(&hay, &hits));
-    }
-}
+mod window_tests;
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
-mod window_shape_probe {
-    //! Offline screen: classify every `type: text` regex of a rule set by
-    //! whether `eval_raw` can window it around its atom hits. Run with:
-    //! `PROBE_PATTERNS=<file> cargo test -p cleave --lib window_shape_probe -- --ignored --nocapture`
-    #[test]
-    #[ignore]
-    fn classify_patterns() {
-        let Ok(path) = std::env::var("PROBE_PATTERNS") else {
-            return;
-        };
-        let text = std::fs::read_to_string(path).unwrap();
-        let (mut windowed, mut unbounded, mut invalid) = (0usize, 0usize, 0usize);
-        for pat in text.lines().filter(|l| !l.is_empty()) {
-            let raw = crate::composite_rules::condition::raw_regex_pattern(None, Some(pat), false)
-                .unwrap();
-            if super::parse_hir_like_engine(&raw).is_none() {
-                invalid += 1;
-                continue;
-            }
-            match super::window_shape(&raw) {
-                Some((line, look, radius)) => {
-                    windowed += 1;
-                    println!("W\tline={line}\tlook={look}\tr={radius}\t{pat}");
-                }
-                None => {
-                    unbounded += 1;
-                    let hir = super::parse_hir_like_engine(&raw).unwrap();
-                    let (abs, _, _) = super::look_info(&hir);
-                    let bounded = super::bounded_consumed_bytes(&raw).is_some();
-                    let line_local = super::unbounded_reps_are_line_local(&hir);
-                    let newline = super::hir_can_match_newline(&hir);
-                    println!(
-                        "U\tabs={abs}\tbounded={bounded}\tline_local={line_local}\tnewline={newline}\t{pat}"
-                    );
-                }
-            }
-        }
-        println!("SUMMARY windowed={windowed} unbounded={unbounded} invalid={invalid}");
-    }
-}
+mod window_shape_probe;

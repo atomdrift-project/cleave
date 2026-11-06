@@ -115,7 +115,11 @@ pyinstx = { path = "crates/pyinstx" }
 
 # YARA pattern matching
 yara-classify = { path = "crates/yara-classify" }
-yara-x = { version = "1.23", features = ["rules-profiling"] }
+# `native-code-serialization`: a compiled bucket in the per-user cache keeps
+# its machine code, so a warm process maps it instead of re-running Cranelift
+# over every bucket it touches (seconds of CPU per process). The cache is
+# private to this host and never filled from a download; see `TierSource`.
+yara-x = { version = "1.23", features = ["native-code-serialization"] }
 
 # Tree-sitter core types only. Per-language grammars (and their parsers)
 # live in filefacts; cleave consumes the cached `tree_sitter::Tree`
@@ -167,9 +171,9 @@ cab = "0.6"
 # cli (clap) features cleave doesn't use.
 dmgwiz = { git = "https://github.com/atomdrift-project/dmgwiz.git", default-features = false }
 lzx = { path = "crates/lzx" }
-# Pinned to 0.39 because rusqlite 0.40 pulls libsqlite3-sys 0.38, whose build
-# script uses the still-unstable cfg_select! macro (rust-lang/rust#115585) and
-# fails on stable rustc <= 1.94. Bump back to 0.40 once cfg_select is stable.
+# Pinned to 0.39: rusqlite 0.40 pulls libsqlite3-sys 0.38, whose build script
+# needs the cfg_select! macro (rust-lang/rust#115585). Bump to 0.40 once the
+# MSRV (rust-version above) includes a stable cfg_select!.
 rusqlite = { version = "0.39", features = ["bundled"] }
 
 # Parallelization
@@ -270,6 +274,11 @@ lint = []
 # adds global lock-registry bookkeeping to every acquire/release. Build with:
 # cargo build --features deadlock-detection
 deadlock-detection = ["parking_lot/deadlock_detection"]
+# Per-rule YARA timing: warns about any rule that takes over a second on one
+# file (with a ready-made `disable:` override) and enables
+# CLEAVE_YARA_RULE_TIMING. Off by default because yara-x times every rule of
+# every scan when it is built in.
+yara-profiling = ["yara-x/rules-profiling"]
 # Use jemalloc allocator for better memory management in long-running sessions.
 # Prevents glibc malloc arena fragmentation that causes multi-GB RSS bloat
 # when processing thousands of files across many rayon threads.

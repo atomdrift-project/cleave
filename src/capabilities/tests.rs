@@ -138,6 +138,7 @@ fn test_parse_file_types_binary_alias() {
 #[test]
 fn test_apply_trait_defaults_applies_all_defaults() {
     let defaults = models::TraitDefaults {
+        exempt: Default::default(),
         r#for: Some(vec!["php".to_string()]),
         platforms: Some(vec!["linux".to_string()]),
         arch: None,
@@ -217,6 +218,7 @@ fn test_apply_trait_defaults_applies_all_defaults() {
 #[test]
 fn test_apply_trait_defaults_trait_overrides_defaults() {
     let defaults = models::TraitDefaults {
+        exempt: Default::default(),
         r#for: Some(vec!["php".to_string()]),
         platforms: Some(vec!["linux".to_string()]),
         arch: None,
@@ -293,6 +295,7 @@ fn test_apply_trait_defaults_trait_overrides_defaults() {
 #[test]
 fn test_apply_trait_defaults_unset_mbc_with_none() {
     let defaults = models::TraitDefaults {
+        exempt: Default::default(),
         r#for: None,
         platforms: None,
         arch: None,
@@ -364,6 +367,7 @@ fn test_apply_trait_defaults_unset_mbc_with_none() {
 #[test]
 fn test_apply_trait_defaults_unset_attack_with_none() {
     let defaults = models::TraitDefaults {
+        exempt: Default::default(),
         r#for: None,
         platforms: None,
         arch: None,
@@ -435,6 +439,7 @@ fn test_apply_trait_defaults_unset_attack_with_none() {
 #[test]
 fn test_apply_trait_defaults_unset_file_types_with_none() {
     let defaults = models::TraitDefaults {
+        exempt: Default::default(),
         r#for: Some(vec!["php".to_string()]),
         platforms: None,
         arch: None,
@@ -506,6 +511,7 @@ fn test_apply_trait_defaults_unset_file_types_with_none() {
 #[test]
 fn test_apply_trait_defaults_size_and_entropy_from_defaults() {
     let defaults = models::TraitDefaults {
+        exempt: Default::default(),
         r#for: Some(vec!["pe".to_string()]),
         platforms: Some(vec!["windows".to_string()]),
         arch: None,
@@ -635,6 +641,7 @@ fn test_apply_trait_defaults_size_and_entropy_from_defaults() {
 #[test]
 fn test_apply_composite_defaults_applies_all_defaults() {
     let defaults = models::TraitDefaults {
+        exempt: Default::default(),
         r#for: Some(vec!["elf".to_string(), "macho".to_string()]),
         platforms: Some(vec!["linux".to_string(), "macos".to_string()]),
         arch: None,
@@ -847,7 +854,7 @@ mod bare_or_hostile_ceiling {
         impostor.id.push_str("-impostor");
         let mut rules = vec![rule, impostor];
         warnings.clear();
-        validation::validate_hostile_composite_precision(&mut rules, &[], &mut warnings, 3.5, 1.9);
+        precision::validate_hostile_composite_precision(&mut rules, &[], &mut warnings, 3.5, 1.9);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("registry-security-held-package-impostor"));
         assert!(rules.iter().all(|rule| rule.crit == Criticality::Hostile));
@@ -866,6 +873,7 @@ mod bare_or_hostile_ceiling {
 #[test]
 fn test_apply_composite_defaults_unset_with_none() {
     let defaults = models::TraitDefaults {
+        exempt: Default::default(),
         r#for: Some(vec!["elf".to_string()]),
         platforms: Some(vec!["linux".to_string()]),
         arch: None,
@@ -940,7 +948,7 @@ fn test_apply_composite_defaults_unset_with_none() {
 fn test_yaml_with_defaults_and_unset() {
     let yaml = r#"
 defaults:
-  file_types: [php]
+  for: [php]
   mbc: "B0001"
   attack: "T1059"
   criticality: suspicious
@@ -998,7 +1006,7 @@ traits:
 fn test_yaml_composite_rules_with_defaults() {
     let yaml = r#"
 defaults:
-  file_types: [elf, macho, pe]
+  for: [elf, macho, pe]
   attack: "T1071.001"
   criticality: notable
 
@@ -1586,7 +1594,7 @@ fn test_precision_direct_conditions() {
         composites.iter().map(|c| (c.id.as_str(), c)).collect();
     let trait_lookup: HashMap<&str, &TraitDefinition> = HashMap::new();
 
-    let precision = validation::calculate_composite_precision(
+    let precision = precision::calculate_composite_precision(
         "test/three-strings",
         &composite_lookup,
         &trait_lookup,
@@ -1641,7 +1649,7 @@ fn test_precision_file_type_filter() {
         composites.iter().map(|c| (c.id.as_str(), c)).collect();
     let trait_lookup: HashMap<&str, &TraitDefinition> = HashMap::new();
 
-    let precision = validation::calculate_composite_precision(
+    let precision = precision::calculate_composite_precision(
         "test/with-filetype",
         &composite_lookup,
         &trait_lookup,
@@ -1782,7 +1790,7 @@ fn test_precision_recursive_expansion() {
     let trait_lookup: HashMap<&str, &TraitDefinition> =
         traits.iter().map(|t| (t.id.as_str(), t)).collect();
 
-    let precision = validation::calculate_composite_precision(
+    let precision = precision::calculate_composite_precision(
         "test/composite-b",
         &composite_lookup,
         &trait_lookup,
@@ -1871,7 +1879,7 @@ fn test_precision_cycle_detection() {
         composites.iter().map(|c| (c.id.as_str(), c)).collect();
     let trait_lookup: HashMap<&str, &TraitDefinition> = HashMap::new();
 
-    let precision = validation::calculate_composite_precision(
+    let precision = precision::calculate_composite_precision(
         "test/circular-a",
         &composite_lookup,
         &trait_lookup,
@@ -1927,7 +1935,7 @@ fn test_precision_caching() {
     let trait_lookup: HashMap<&str, &TraitDefinition> = HashMap::new();
 
     // First call - should calculate and cache
-    let precision1 = validation::calculate_composite_precision(
+    let precision1 = precision::calculate_composite_precision(
         "test/cacheable",
         &composite_lookup,
         &trait_lookup,
@@ -1939,7 +1947,7 @@ fn test_precision_caching() {
     assert_eq!(cache.get("test/cacheable"), Some(&precision1));
 
     // Second call - should use cache
-    let precision2 = validation::calculate_composite_precision(
+    let precision2 = precision::calculate_composite_precision(
         "test/cacheable",
         &composite_lookup,
         &trait_lookup,
@@ -2020,10 +2028,10 @@ fn test_precision_threshold_validation() {
     let traits: Vec<TraitDefinition> = vec![];
 
     // Precalculate precision before validation
-    validation::precalculate_all_composite_precisions(&mut composites, &traits);
+    precision::precalculate_all_composite_precisions(&mut composites, &traits);
 
     let mut warnings = Vec::new();
-    validation::validate_hostile_composite_precision(
+    precision::validate_hostile_composite_precision(
         &mut composites,
         &traits,
         &mut warnings,
@@ -2129,10 +2137,10 @@ fn test_suspicious_precision_threshold_validation() {
     let traits: Vec<TraitDefinition> = vec![];
 
     // Precalculate precision before validation
-    validation::precalculate_all_composite_precisions(&mut composites, &traits);
+    precision::precalculate_all_composite_precisions(&mut composites, &traits);
 
     let mut warnings = Vec::new();
-    validation::validate_hostile_composite_precision(
+    precision::validate_hostile_composite_precision(
         &mut composites,
         &traits,
         &mut warnings,
@@ -2253,7 +2261,7 @@ fn test_atomic_suspicious_precision_threshold_validation() {
 
     let mut traits = vec![low_trait, ok_trait];
     let mut warnings = Vec::new();
-    validation::validate_hostile_trait_precision(&mut traits, &mut warnings, 3.5, 1.9);
+    precision::validate_hostile_trait_precision(&mut traits, &mut warnings, 3.5, 1.9);
 
     let low_trait = traits
         .iter()
@@ -2351,7 +2359,7 @@ fn test_precision_mixed_conditions() {
         composites.iter().map(|c| (c.id.as_str(), c)).collect();
     let trait_lookup: HashMap<&str, &TraitDefinition> = HashMap::new();
 
-    let precision = validation::calculate_composite_precision(
+    let precision = precision::calculate_composite_precision(
         "test/mixed",
         &composite_lookup,
         &trait_lookup,
@@ -2470,7 +2478,7 @@ fn test_precision_deep_nesting() {
         composites.iter().map(|c| (c.id.as_str(), c)).collect();
     let trait_lookup: HashMap<&str, &TraitDefinition> = HashMap::new();
 
-    let precision = validation::calculate_composite_precision(
+    let precision = precision::calculate_composite_precision(
         "test/level3",
         &composite_lookup,
         &trait_lookup,
@@ -2562,7 +2570,7 @@ fn test_precision_correct_algorithm() {
         composites.iter().map(|c| (c.id.as_str(), c)).collect();
     let trait_lookup: HashMap<&str, &TraitDefinition> = HashMap::new();
 
-    let precision = validation::calculate_composite_precision(
+    let precision = precision::calculate_composite_precision(
         "test/correct-precision",
         &composite_lookup,
         &trait_lookup,
@@ -2722,7 +2730,7 @@ fn test_precision_traits_with_size_restrictions() {
         composites.iter().map(|c| (c.id.as_str(), c)).collect();
     let trait_lookup: HashMap<&str, &TraitDefinition> = HashMap::new();
 
-    let precision = validation::calculate_composite_precision(
+    let precision = precision::calculate_composite_precision(
         "test/composite-with-sized-traits",
         &composite_lookup,
         &trait_lookup,
@@ -3278,12 +3286,12 @@ fn test_atomic_precision_calibration_spread() {
         ..Default::default()
     };
 
-    let raw_precision = validation::calculate_trait_precision(&raw_trait);
-    let ast_precision = validation::calculate_trait_precision(&ast_trait);
+    let raw_precision = precision::calculate_trait_precision(&raw_trait);
+    let ast_precision = precision::calculate_trait_precision(&ast_trait);
 
     assert!((1.0..=4.0).contains(&raw_precision));
     assert!(ast_precision > raw_precision);
-    assert!(ast_precision <= validation::atomic_calibrated_max());
+    assert!(ast_precision <= precision::atomic_calibrated_max());
 }
 
 #[test]
@@ -3355,9 +3363,9 @@ fn test_atomic_precision_long_regex_and_large_not_list_stays_calibrated() {
         ..Default::default()
     };
 
-    let precision = validation::calculate_trait_precision(&trait_def);
+    let precision = precision::calculate_trait_precision(&trait_def);
     assert!(
-        precision <= validation::atomic_calibrated_max(),
+        precision <= precision::atomic_calibrated_max(),
         "long regex and large not-list should remain in atomic band, got {precision}"
     );
 }
@@ -3432,11 +3440,11 @@ fn test_scope_filters_do_not_dominate_atomic_precision() {
         ..broad_scope.clone()
     };
 
-    let broad_precision = validation::calculate_trait_precision(&broad_scope);
-    let narrow_precision = validation::calculate_trait_precision(&narrow_scope);
+    let broad_precision = precision::calculate_trait_precision(&broad_scope);
+    let narrow_precision = precision::calculate_trait_precision(&narrow_scope);
 
-    assert!(broad_precision <= validation::atomic_calibrated_max());
-    assert!(narrow_precision <= validation::atomic_calibrated_max());
+    assert!(broad_precision <= precision::atomic_calibrated_max());
+    assert!(narrow_precision <= precision::atomic_calibrated_max());
     assert!(
         narrow_precision > broad_precision,
         "narrow scope should score higher than broad scope, got broad={broad_precision}, narrow={narrow_precision}"
@@ -3551,7 +3559,7 @@ fn test_composite_precision_calibration_band() {
     let mut cache = HashMap::new();
     let mut visiting = HashSet::new();
 
-    let precision = validation::calculate_composite_precision(
+    let precision = precision::calculate_composite_precision(
         "test/calibrated-composite",
         &composite_lookup,
         &trait_lookup,
@@ -3560,7 +3568,7 @@ fn test_composite_precision_calibration_band() {
     );
 
     assert!(precision >= 1.0);
-    assert!(precision <= validation::composite_calibrated_max());
+    assert!(precision <= precision::composite_calibrated_max());
 }
 
 #[test]
@@ -3748,14 +3756,14 @@ fn test_composite_prefix_reference_matches_explicit_expansion_precision() {
     let mut cache = HashMap::new();
     let mut visiting = HashSet::new();
 
-    let prefix_precision = validation::calculate_composite_precision(
+    let prefix_precision = precision::calculate_composite_precision(
         "test/family-ref",
         &composite_lookup,
         &trait_lookup,
         &mut cache,
         &mut visiting,
     );
-    let explicit_precision = validation::calculate_composite_precision(
+    let explicit_precision = precision::calculate_composite_precision(
         "test/family-ref-explicit",
         &composite_lookup,
         &trait_lookup,
@@ -3897,9 +3905,9 @@ fn test_composite_any_uses_weakest_average_with_breadth_penalty() {
         ..Default::default()
     };
 
-    let loose_precision = validation::calculate_trait_precision(&loose);
-    let medium_precision = validation::calculate_trait_precision(&medium);
-    let strong_precision = validation::calculate_trait_precision(&strong);
+    let loose_precision = precision::calculate_trait_precision(&loose);
+    let medium_precision = precision::calculate_trait_precision(&medium);
+    let strong_precision = precision::calculate_trait_precision(&strong);
 
     let composite = CompositeTrait {
         required_trait_indices: Vec::new(),
@@ -3948,7 +3956,7 @@ fn test_composite_any_uses_weakest_average_with_breadth_penalty() {
     let mut cache = HashMap::new();
     let mut visiting = HashSet::new();
 
-    let precision = validation::calculate_composite_precision(
+    let precision = precision::calculate_composite_precision(
         "test/any-average",
         &composite_lookup,
         &trait_lookup,
@@ -4082,14 +4090,14 @@ fn test_inherited_composite_scores_are_compressed() {
     let mut cache = HashMap::new();
     let mut visiting = HashSet::new();
 
-    let child_precision = validation::calculate_composite_precision(
+    let child_precision = precision::calculate_composite_precision(
         "test/child",
         &composite_lookup,
         &trait_lookup,
         &mut cache,
         &mut visiting,
     );
-    let parent_precision = validation::calculate_composite_precision(
+    let parent_precision = precision::calculate_composite_precision(
         "test/parent",
         &composite_lookup,
         &trait_lookup,
@@ -4097,7 +4105,7 @@ fn test_inherited_composite_scores_are_compressed() {
         &mut visiting,
     );
 
-    assert!(child_precision > validation::atomic_calibrated_max());
+    assert!(child_precision > precision::atomic_calibrated_max());
     assert!(parent_precision < child_precision);
 }
 
@@ -4129,14 +4137,14 @@ traits:
       exact: probe-leg-marker
 composite_rules:
   - id: probe-dead-pe-developer
-    desc: Probe ref to a retired PE signer id
+    desc: Probe ref to a signer id the engine cannot emit
     crit: suspicious
     conf: 0.8
     all:
       - id: probe-leg
     unless:
-      - id: metadata/signed/developer::acme-corporation
-      - id: metadata/signed/unknown::acme-corporation
+      - id: metadata/signature/verified/developer::Acme Corporation
+      - id: metadata/signature/verified/signer::acme-corporation
   - id: probe-self-suppressed
     desc: Probe rule whose unless covers its leg
     crit: suspicious
@@ -4165,16 +4173,16 @@ composite_rules:
         "{:#}",
         result.expect_err("validation must reject the probe traits")
     );
-    // Exactly the retired PE id, with the reason; the valid unknown:: id is
+    // Exactly the misspelled id, with the reason; the valid signer:: id is
     // not counted.
     assert!(err.contains("1 broken trait references"), "{err}");
     assert!(
-        err.contains("'metadata/signed/developer::acme-corporation'"),
+        err.contains("'metadata/signature/verified/developer::Acme Corporation'"),
         "{err}"
     );
-    assert!(err.contains("10-char Apple team id"), "{err}");
+    assert!(err.contains("leaves are normalized"), "{err}");
     assert!(
-        !err.contains("'metadata/signed/unknown::acme-corporation'"),
+        !err.contains("'metadata/signature/verified/signer::acme-corporation'"),
         "{err}"
     );
     assert!(
@@ -4182,4 +4190,118 @@ composite_rules:
         "{err}"
     );
     assert!(!err.contains("self-referencing"), "{err}");
+}
+
+#[test]
+fn exemptions_name_known_validators_with_reasons() {
+    let yaml = r#"
+defaults:
+  for: [elf]
+  exempt:
+    broad-platform-scope: "Every rule here names a portable protocol."
+traits:
+  - id: well-known/app/demo::banner
+    desc: "Demo banner"
+    crit: notable
+    exempt:
+      wellknown-size-filter: "A product banner is a reference, not the binary's identity."
+      no-such-validator: "Typo"
+      binary-section-filter: ""
+    if:
+      type: text
+      exact: "demo"
+"#;
+    let mappings: models::TraitMappings = crate::yaml::from_str(yaml).expect("parse YAML");
+    let mut warnings = Vec::new();
+    let raw = mappings.traits.into_iter().next().expect("one trait");
+    let t = parsing::apply_trait_defaults(
+        raw,
+        &mappings.defaults,
+        &mut warnings,
+        Path::new("demo.yaml"),
+        false,
+    );
+    assert!(t.is_exempt("wellknown-size-filter"));
+    assert!(t.is_exempt("broad-platform-scope"), "file defaults apply");
+    assert!(
+        !t.is_exempt("binary-section-filter"),
+        "an exemption needs a reason"
+    );
+    assert!(!t.is_exempt("no-such-validator"));
+    let invalid: Vec<_> = warnings
+        .iter()
+        .filter(|w| w.starts_with("Invalid exemption"))
+        .collect();
+    assert_eq!(invalid.len(), 2, "{warnings:?}");
+}
+
+/// A suppression may cite only a verified signature: any other state is a
+/// name whoever made the certificate chose. Detection legs may cite any
+/// state, and `exempt:` with a reason opts a reviewed rule out.
+#[test]
+fn suppressions_may_cite_only_verified_signatures() {
+    let yaml = r#"
+defaults:
+  for: [pe]
+traits:
+  - id: trusts-self-signed
+    desc: "Excused by a self-signed claim"
+    crit: suspicious
+    if: { type: text, exact: "x" }
+    unless:
+      - id: metadata/signature/self-signed/signer::adobe-inc.
+  - id: trusts-any-state
+    desc: "Excused by any signature state"
+    crit: suspicious
+    if: { type: text, exact: "x" }
+    downgrade:
+      any:
+        - id: metadata/signature/
+  - id: trusts-verified
+    desc: "Excused by a verified signature"
+    crit: suspicious
+    if: { type: text, exact: "x" }
+    unless:
+      - id: metadata/signature/verified/platform::microsoft
+  - id: reviewed
+    desc: "Reviewed exception"
+    crit: suspicious
+    exempt:
+      unverified-signature-suppressor: "Reviewed: the claim only lowers a notable leg."
+    if: { type: text, exact: "x" }
+    unless:
+      - id: metadata/signature/unverified/signer::example
+"#;
+    let mappings: models::TraitMappings = crate::yaml::from_str(yaml).expect("parse YAML");
+    let mut warnings = Vec::new();
+    let traits: Vec<_> = mappings
+        .traits
+        .into_iter()
+        .map(|raw| {
+            parsing::apply_trait_defaults(
+                raw,
+                &mappings.defaults,
+                &mut warnings,
+                Path::new("demo.yaml"),
+                false,
+            )
+        })
+        .collect();
+    let found =
+        crate::capabilities::validation::find_unverified_signature_suppressors(&traits, &[]);
+    let flagged: Vec<(&str, &str)> = found
+        .iter()
+        .map(|f| (f.id.as_str(), f.reference.as_str()))
+        .collect();
+    assert_eq!(
+        flagged,
+        [
+            (
+                "trusts-self-signed",
+                "metadata/signature/self-signed/signer::adobe-inc."
+            ),
+            ("trusts-any-state", "metadata/signature/"),
+        ],
+        "{warnings:?}"
+    );
 }

@@ -273,6 +273,18 @@ pub(crate) fn invalidate() {
     SOURCES.write().clear();
 }
 
+/// Whether `relative` (a path under the traits root) is a trait file the
+/// loader reads: YAML outside `third-party/`, and not a README or EXAMPLE.
+pub(crate) fn is_trait_file(relative: &std::path::Path) -> bool {
+    let filename = relative.file_name().and_then(|f| f.to_str()).unwrap_or("");
+    relative.extension().is_some_and(|e| e == "yaml")
+        && !relative
+            .components()
+            .any(|c| c.as_os_str() == "third-party")
+        && !filename.to_lowercase().contains("readme")
+        && !filename.starts_with("EXAMPLE")
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {

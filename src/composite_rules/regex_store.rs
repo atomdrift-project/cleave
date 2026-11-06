@@ -130,12 +130,9 @@ impl<K: Hash + Eq, V> std::fmt::Debug for BudgetedStore<K, V> {
 }
 
 fn env_mb(var: &str, default_mb: usize) -> usize {
-    std::env::var(var)
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
+    crate::env::parse::<usize>(var)
         .unwrap_or(default_mb)
-        * 1024
-        * 1024
+        .saturating_mul(1024 * 1024)
 }
 
 /// Default store budget scaled to the machine: 1/16th of physical memory,

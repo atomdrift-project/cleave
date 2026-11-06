@@ -10,7 +10,11 @@
 //! dominated cold-start for single-sample scans. With the memo warm the same
 //! work is a hash lookup.
 //!
-//! Invalidation: an *algorithm* change to either derivation function must bump
+//! It also keeps the literals each tree-sitter query requires
+//! ([`ast_literals`]), so a later process can rule a query out for a file
+//! without compiling it.
+//!
+//! Invalidation: an *algorithm* change to any derivation function must bump
 //! the version in [`FILE_NAME`]; stale files are simply abandoned. Corrupt or
 //! unreadable files degrade to an empty memo (everything recomputes, correctness
 //! unaffected). Writes are atomic (tempfile + rename); concurrent processes
@@ -20,6 +24,7 @@ use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 // v2: mandatory_atom_set landed (any-of alternation atoms, CI runs,
 // anchored prefix composition, engine-mirrored parse mode). The v1 files
@@ -40,19 +45,35 @@ struct MemoData {
     /// and recompute lazily.
     #[serde(default)]
     atom_set: FxHashMap<String, Option<Vec<(String, bool)>>>,
+    /// tree-sitter query text -> per pattern, the any-of literal sets every
+    /// match contains (`ast_gate::RequiredLiterals`). A pure function of the
+    /// query text: capture quantifiers come from the pattern's own structure,
+    /// not the grammar. Only queries that compiled are recorded; a query that
+    /// did not is always compiled again. Additive, like `atom_set`.
+    #[serde(default)]
+    ast_literals: FxHashMap<String, AstLiterals>,
 }
 
+/// The stored form of `ast_gate::RequiredLiterals`.
+pub(crate) type AstLiterals = Vec<Vec<Vec<(Vec<u8>, bool)>>>;
+
+/// The memo: what was loaded from disk, which never changes afterwards and so
+/// is read without a lock, and what this process derived since, behind one.
+/// The index builds read it from every pool thread at once; a shared lock on
+/// the loaded entries measured ~5% of a small-archive run as reader contention.
 struct Memo {
-    data: MemoData,
-    dirty: bool,
+    loaded: MemoData,
+    added: RwLock<MemoData>,
+    dirty: AtomicBool,
 }
 
-static MEMO: OnceLock<RwLock<Memo>> = OnceLock::new();
+static MEMO: OnceLock<Memo> = OnceLock::new();
 
-fn memo() -> &'static RwLock<Memo> {
-    MEMO.get_or_init(|| {
-        let data = load().unwrap_or_default();
-        RwLock::new(Memo { data, dirty: false })
+fn memo() -> &'static Memo {
+    MEMO.get_or_init(|| Memo {
+        loaded: load().unwrap_or_default(),
+        added: RwLock::new(MemoData::default()),
+        dirty: AtomicBool::new(false),
     })
 }
 
@@ -78,19 +99,35 @@ fn load() -> Option<MemoData> {
     }
 }
 
-/// Memoized [`super::indexes::StringMatchIndex::extract_regex_literal`].
-pub(crate) fn prefix_literal(pattern: &str) -> Option<String> {
-    if let Some(hit) = memo().read().data.prefix.get(pattern) {
+/// The memoized value of `pattern` in `field`, computing and recording it with
+/// `compute` on a miss.
+fn memoized<T: Clone>(
+    pattern: &str,
+    field: fn(&MemoData) -> &FxHashMap<String, T>,
+    field_mut: fn(&mut MemoData) -> &mut FxHashMap<String, T>,
+    compute: impl FnOnce() -> T,
+) -> T {
+    let memo = memo();
+    if let Some(hit) = field(&memo.loaded).get(pattern) {
         return hit.clone();
     }
-    let computed = super::indexes::StringMatchIndex::extract_regex_literal(pattern);
-    let mut guard = memo().write();
-    guard
-        .data
-        .prefix
-        .insert(pattern.to_owned(), computed.clone());
-    guard.dirty = true;
+    if let Some(hit) = field(&memo.added.read()).get(pattern) {
+        return hit.clone();
+    }
+    let computed = compute();
+    field_mut(&mut memo.added.write()).insert(pattern.to_owned(), computed.clone());
+    memo.dirty.store(true, Ordering::Relaxed);
     computed
+}
+
+/// Memoized [`super::indexes::StringMatchIndex::extract_regex_literal`].
+pub(crate) fn prefix_literal(pattern: &str) -> Option<String> {
+    memoized(
+        pattern,
+        |d| &d.prefix,
+        |d| &mut d.prefix,
+        || super::indexes::StringMatchIndex::extract_regex_literal(pattern),
+    )
 }
 
 /// Memoized UTF-8 projection of
@@ -98,30 +135,25 @@ pub(crate) fn prefix_literal(pattern: &str) -> Option<String> {
 /// call site immediately discards non-UTF-8 atoms, so only the string form is
 /// stored.
 pub(crate) fn mandatory_atom_utf8(pattern: &str) -> Option<String> {
-    if let Some(hit) = memo().read().data.atom.get(pattern) {
-        return hit.clone();
-    }
-    let computed = crate::composite_rules::evaluators::best_mandatory_atom(pattern)
-        .and_then(|b| String::from_utf8(b).ok());
-    let mut guard = memo().write();
-    guard.data.atom.insert(pattern.to_owned(), computed.clone());
-    guard.dirty = true;
-    computed
+    memoized(
+        pattern,
+        |d| &d.atom,
+        |d| &mut d.atom,
+        || {
+            crate::composite_rules::evaluators::best_mandatory_atom(pattern)
+                .and_then(|b| String::from_utf8(b).ok())
+        },
+    )
 }
 
 /// Memoized [`crate::composite_rules::evaluators::mandatory_atom_set`].
 pub(crate) fn mandatory_atom_set(pattern: &str) -> Option<Vec<(String, bool)>> {
-    if let Some(hit) = memo().read().data.atom_set.get(pattern) {
-        return hit.clone();
-    }
-    let computed = crate::composite_rules::evaluators::mandatory_atom_set(pattern);
-    let mut guard = memo().write();
-    guard
-        .data
-        .atom_set
-        .insert(pattern.to_owned(), computed.clone());
-    guard.dirty = true;
-    computed
+    memoized(
+        pattern,
+        |d| &d.atom_set,
+        |d| &mut d.atom_set,
+        || crate::composite_rules::evaluators::mandatory_atom_set(pattern),
+    )
 }
 
 thread_local! {
@@ -153,22 +185,77 @@ pub(crate) fn with_mandatory_atom_set<R>(
     })
 }
 
-/// Flush the memo to disk if any entry was added since load. Called once after
-/// the match indexes finish building — the only phase that computes derivations.
+/// Run `f` over the literals `query` requires, if a process that compiled it
+/// recorded them.
+pub(crate) fn with_ast_literals<R>(query: &str, f: impl FnOnce(&AstLiterals) -> R) -> Option<R> {
+    let memo = memo();
+    if let Some(hit) = memo.loaded.ast_literals.get(query) {
+        return Some(f(hit));
+    }
+    memo.added.read().ast_literals.get(query).map(f)
+}
+
+/// Record the literals `query` requires, derived from its compiled form.
+pub(crate) fn record_ast_literals(query: &str, literals: AstLiterals) {
+    let memo = memo();
+    if memo.loaded.ast_literals.contains_key(query)
+        || memo.added.read().ast_literals.contains_key(query)
+    {
+        return;
+    }
+    memo.added
+        .write()
+        .ast_literals
+        .insert(query.to_owned(), literals);
+    memo.dirty.store(true, Ordering::Relaxed);
+}
+
+/// Flush the memo to disk if any entry was added since load. Called after the
+/// match indexes finish building, and after each top-level analysis, which is
+/// when tree-sitter queries first compile.
 pub(crate) fn persist() {
-    let guard = memo().read();
-    if !guard.dirty {
+    let memo = memo();
+    if !memo.dirty.swap(false, Ordering::Relaxed) {
         return;
     }
     let Some(path) = memo_path() else { return };
-    let Ok(bytes) = serde_json::to_vec(&guard.data) else {
-        return;
+    let bytes = {
+        let added = memo.added.read();
+        // Serialize the union without cloning the loaded maps: entries are
+        // only ever added, so a key in both carries the same value.
+        #[derive(Serialize)]
+        struct Union<'a> {
+            prefix: Merged<'a, Option<String>>,
+            atom: Merged<'a, Option<String>>,
+            atom_set: Merged<'a, Option<Vec<(String, bool)>>>,
+            ast_literals: Merged<'a, AstLiterals>,
+        }
+        struct Merged<'a, T>(&'a FxHashMap<String, T>, &'a FxHashMap<String, T>);
+        impl<T: Serialize> Serialize for Merged<'_, T> {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                s.collect_map(
+                    self.0
+                        .iter()
+                        .chain(self.1.iter().filter(|(k, _)| !self.0.contains_key(*k))),
+                )
+            }
+        }
+        serde_json::to_vec(&Union {
+            prefix: Merged(&memo.loaded.prefix, &added.prefix),
+            atom: Merged(&memo.loaded.atom, &added.atom),
+            atom_set: Merged(&memo.loaded.atom_set, &added.atom_set),
+            ast_literals: Merged(&memo.loaded.ast_literals, &added.ast_literals),
+        })
     };
-    drop(guard);
     // pid-suffixed so two cold processes never interleave writes into one tmp.
     let tmp = path.with_extension(format!("json.tmp.{}", std::process::id()));
-    if std::fs::write(&tmp, &bytes).is_ok() && std::fs::rename(&tmp, &path).is_ok() {
-        memo().write().dirty = false;
-        tracing::debug!(bytes = bytes.len(), "persisted regex derivation memo");
+    match bytes {
+        Ok(bytes)
+            if std::fs::write(&tmp, &bytes).is_ok() && std::fs::rename(&tmp, &path).is_ok() =>
+        {
+            tracing::debug!(bytes = bytes.len(), "persisted regex derivation memo");
+        }
+        // Keep the entries owed to disk for the next flush.
+        _ => memo.dirty.store(true, Ordering::Relaxed),
     }
 }

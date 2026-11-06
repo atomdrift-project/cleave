@@ -96,57 +96,6 @@ mod tests {
     // =============================================================================
 
     #[test]
-    fn test_major_version_mapping() {
-        assert_eq!(JavaClassAnalyzer::major_to_java_version(52), "8");
-        assert_eq!(JavaClassAnalyzer::major_to_java_version(55), "11");
-        assert_eq!(JavaClassAnalyzer::major_to_java_version(61), "17");
-    }
-
-    #[test]
-    fn test_major_version_mapping_java_1x() {
-        assert_eq!(JavaClassAnalyzer::major_to_java_version(45), "1.1");
-        assert_eq!(JavaClassAnalyzer::major_to_java_version(46), "1.2");
-        assert_eq!(JavaClassAnalyzer::major_to_java_version(47), "1.3");
-        assert_eq!(JavaClassAnalyzer::major_to_java_version(48), "1.4");
-    }
-
-    #[test]
-    fn test_major_version_mapping_java_5_7() {
-        assert_eq!(JavaClassAnalyzer::major_to_java_version(49), "5");
-        assert_eq!(JavaClassAnalyzer::major_to_java_version(50), "6");
-        assert_eq!(JavaClassAnalyzer::major_to_java_version(51), "7");
-    }
-
-    #[test]
-    fn test_major_version_mapping_java_9_21() {
-        assert_eq!(JavaClassAnalyzer::major_to_java_version(53), "9");
-        assert_eq!(JavaClassAnalyzer::major_to_java_version(54), "10");
-        assert_eq!(JavaClassAnalyzer::major_to_java_version(56), "12");
-        assert_eq!(JavaClassAnalyzer::major_to_java_version(57), "13");
-        assert_eq!(JavaClassAnalyzer::major_to_java_version(58), "14");
-        assert_eq!(JavaClassAnalyzer::major_to_java_version(59), "15");
-        assert_eq!(JavaClassAnalyzer::major_to_java_version(60), "16");
-        assert_eq!(JavaClassAnalyzer::major_to_java_version(62), "18");
-        assert_eq!(JavaClassAnalyzer::major_to_java_version(63), "19");
-        assert_eq!(JavaClassAnalyzer::major_to_java_version(64), "20");
-        assert_eq!(JavaClassAnalyzer::major_to_java_version(65), "21");
-    }
-
-    #[test]
-    fn test_major_version_mapping_future() {
-        assert_eq!(JavaClassAnalyzer::major_to_java_version(66), "22");
-        assert_eq!(JavaClassAnalyzer::major_to_java_version(70), "26");
-    }
-
-    // =============================================================================
-    // End-to-end fixture tests
-    //
-    // Constant-pool parsing now lives in filefacts; these exercise the full
-    // analyze() path (filefacts parse -> `class.class_refs`/`class.strings`
-    // -> cleave capability heuristics).
-    // =============================================================================
-
-    #[test]
     fn test_analyze_hello_world_class() {
         let fixture_path = Path::new("tests/fixtures/java/HelloWorld.class");
         if !fixture_path.exists() {

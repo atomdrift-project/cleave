@@ -74,6 +74,7 @@ fn index_half(
 impl<'a> FindingScope<'a> {
     /// The id index for a scope made of `own` findings only (see
     /// [`Self::with_index`]).
+    #[cfg(feature = "lint")]
     pub(crate) fn own_index(own: &[Finding]) -> FxHashMap<u64, SmallVec<[u32; 2]>> {
         let mut index = FxHashMap::default();
         index_half(&mut index, HALF_OWN, own.iter());
@@ -97,6 +98,7 @@ impl<'a> FindingScope<'a> {
 
     /// Scope with a caller-supplied index — or `None` to skip the shortcut and
     /// scan every lookup, which is what the rule-authoring tools want.
+    #[cfg(feature = "lint")]
     pub(crate) fn with_index(
         own: &'a [Finding],
         extra: Option<&'a [Finding]>,
@@ -231,7 +233,6 @@ pub(crate) struct FileEvalCaches {
     kv_format: Arc<OnceLock<StructuredFormat>>,
     kv_parsed: Arc<OnceLock<Box<Value>>>,
     kv_offsets: Arc<OnceLock<FxHashMap<String, u64>>>,
-    lower_binary: Arc<OnceLock<Vec<u8>>>,
     lossy_utf8: Arc<OnceLock<String>>,
     string_exact_index: Arc<OnceLock<FxHashMap<String, Vec<u32>>>>,
     string_exact_index_ci: Arc<OnceLock<FxHashMap<String, Vec<u32>>>>,
@@ -292,6 +293,11 @@ pub(crate) struct EvaluationContext<'a> {
     /// Keyed by the original query string. Missing key → `eval_ast_query`
     /// runs that pattern itself (compile fail, or the batch was declined).
     pub ast_query_cache: Option<&'a FxHashMap<String, ConditionResult>>,
+    /// Rule-performance validation of an edit: alongside `ast_query_cache`,
+    /// the queries whose cost is judged on this file. Another query that runs
+    /// alone here is not recorded: its peers would be only the queries the
+    /// batch did not answer, which are no measure of this file.
+    pub(crate) measured_ast_queries: Option<&'a rustc_hash::FxHashSet<String>>,
     /// Node kinds and short node texts collected during the source walk.
     pub(crate) ast_node_text: Option<&'a super::evaluators::NodeTextIndex>,
     /// Index for O(1) exact string lookups. Values are indices into
@@ -365,11 +371,6 @@ pub(crate) struct EvaluationContext<'a> {
     /// Validated UTF-8 view of `binary_data`, populated once per file for source-code
     /// file types. Lets AST/text evaluators skip the per-rule O(N) `from_utf8` check.
     pub cached_source_utf8: Option<&'a str>,
-    /// Whole-`binary_data` ASCII-lowercased once. Production CI search now
-    /// uses `cached_ci_searcher` on the original bytes; this slot remains so
-    /// existing `EvaluationContext` constructors stay source-compatible.
-    #[allow(dead_code)]
-    pub cached_lower_binary: Arc<OnceLock<Vec<u8>>>,
     /// Lossy UTF-8 view of the *whole* `binary_data`, built at most once per
     /// file and shared across every full-range Unicode condition. Only used
     /// where `cached_source_utf8` is absent — i.e. non-source content, which is
@@ -459,11 +460,11 @@ impl<'a> EvaluationContext<'a> {
             cached_kv_format: Arc::new(OnceLock::new()),
             cached_kv_parsed: Arc::new(OnceLock::new()),
             cached_kv_offsets: Arc::new(OnceLock::new()),
-            cached_lower_binary: Arc::new(OnceLock::new()),
             cached_lossy_utf8: Arc::new(OnceLock::new()),
             cached_ast_source_utf8: Arc::new(OnceLock::new()),
             ast_kind_cache: None,
             ast_query_cache: None,
+            measured_ast_queries: None,
             ast_node_text: None,
             string_exact_index: Arc::new(OnceLock::new()),
             string_exact_index_ci: Arc::new(OnceLock::new()),
@@ -496,7 +497,6 @@ impl<'a> EvaluationContext<'a> {
         self.cached_kv_format = Arc::clone(&caches.kv_format);
         self.cached_kv_parsed = Arc::clone(&caches.kv_parsed);
         self.cached_kv_offsets = Arc::clone(&caches.kv_offsets);
-        self.cached_lower_binary = Arc::clone(&caches.lower_binary);
         self.cached_lossy_utf8 = Arc::clone(&caches.lossy_utf8);
         self.string_exact_index = Arc::clone(&caches.string_exact_index);
         self.string_exact_index_ci = Arc::clone(&caches.string_exact_index_ci);
@@ -545,6 +545,15 @@ impl<'a> EvaluationContext<'a> {
         cache: &'a FxHashMap<String, ConditionResult>,
     ) -> Self {
         self.ast_query_cache = Some(cache);
+        self
+    }
+
+    /// Judge only these queries' costs (see `measured_ast_queries`).
+    pub(crate) fn with_measured_ast_queries(
+        mut self,
+        measured: Option<&'a rustc_hash::FxHashSet<String>>,
+    ) -> Self {
+        self.measured_ast_queries = measured;
         self
     }
 
@@ -631,14 +640,6 @@ impl<'a> EvaluationContext<'a> {
         } else {
             None
         }
-    }
-
-    /// Unused production helper: ASCII-lowercase the whole haystack.
-    /// eval_raw CI now searches original bytes via `cached_ci_searcher`.
-    #[allow(dead_code)]
-    pub(crate) fn lower_binary(&self) -> &[u8] {
-        self.cached_lower_binary
-            .get_or_init(|| self.binary_data.to_ascii_lowercase())
     }
 
     /// The exact byte-preserving text view for the cached filefacts AST.
@@ -762,7 +763,7 @@ impl<'a> EvaluationContext<'a> {
     /// for most (rule x member) pairs on big archives; eager construction was
     /// a measurable allocation tax on scans that never collect debug info.
     pub(crate) fn record_skip(&self, reason: impl FnOnce() -> SkipReason) {
-        self.with_debug(|debug| debug.record_skip(reason()));
+        self.with_debug(|debug| debug.skip_reason = Some(reason()));
     }
 
     /// Record that `unless:`/`downgrade:` legs withheld or demoted a trait.
@@ -844,11 +845,11 @@ impl<'a> EvaluationContext<'a> {
             cached_kv_format: Arc::new(OnceLock::new()),
             cached_kv_parsed: Arc::new(OnceLock::new()),
             cached_kv_offsets: Arc::new(OnceLock::new()),
-            cached_lower_binary: Arc::new(OnceLock::new()),
             cached_lossy_utf8: Arc::new(OnceLock::new()),
             cached_ast_source_utf8: Arc::new(OnceLock::new()),
             ast_kind_cache: None,
             ast_query_cache: None,
+            measured_ast_queries: None,
             ast_node_text: None,
             string_exact_index: Arc::new(OnceLock::new()),
             string_exact_index_ci: Arc::new(OnceLock::new()),
@@ -1118,118 +1119,7 @@ fn mask_markup_comments(source: &[u8]) -> Option<Vec<u8>> {
 }
 
 #[cfg(test)]
-mod markup_comment_tests {
-    #![allow(clippy::unwrap_used)]
-    use super::mask_markup_comments;
-
-    #[test]
-    fn leaves_sources_without_comments_unallocated() {
-        assert_eq!(mask_markup_comments(b"<p>live</p>"), None);
-    }
-
-    #[test]
-    fn masks_html_and_aspnet_comments_without_shifting_offsets() {
-        let source = b"<p>live</p>\n<!-- hidden\ncode -->\n<%-- server hidden --%>\n<textarea>tail</textarea>";
-        let masked = mask_markup_comments(source).unwrap();
-        assert_eq!(masked.len(), source.len());
-        assert_eq!(masked.iter().filter(|b| **b == b'\n').count(), 4);
-        assert!(masked.windows(4).any(|w| w == b"live"));
-        assert!(!masked.windows(6).any(|w| w == b"hidden"));
-        assert!(masked.windows(4).any(|w| w == b"tail"));
-    }
-
-    #[test]
-    fn does_not_treat_raw_text_element_contents_as_html_comments() {
-        let source = b"<textarea><!-- submitted source --></textarea><script><!-- js source --></script><!-- page note -->";
-        let masked = mask_markup_comments(source).unwrap();
-        assert!(
-            masked
-                .windows(b"<!-- submitted source -->".len())
-                .any(|w| w == b"<!-- submitted source -->")
-        );
-        assert!(
-            masked
-                .windows(b"<!-- js source -->".len())
-                .any(|w| w == b"<!-- js source -->")
-        );
-        assert!(
-            !masked
-                .windows(b"page note".len())
-                .any(|w| w == b"page note")
-        );
-    }
-
-    #[test]
-    fn unterminated_comments_mask_to_eof_but_keep_line_breaks() {
-        let source = b"live\n<!-- hidden\nmore";
-        let masked = mask_markup_comments(source).unwrap();
-        assert_eq!(masked.len(), source.len());
-        assert_eq!(masked.iter().filter(|b| **b == b'\n').count(), 2);
-        assert!(masked.starts_with(b"live\n"));
-        assert!(!masked.windows(6).any(|w| w == b"hidden"));
-    }
-}
+mod markup_comment_tests;
 
 #[cfg(test)]
-mod pooled_finding_tests {
-    use super::FindingScope;
-    use crate::types::{Evidence, Finding};
-
-    #[test]
-    fn pooled_scope_borrows_evidence_and_preserves_seed_then_iteration_order() {
-        let left = Finding {
-            id: "fixture/left".into(),
-            evidence: vec![Evidence::new("text", "fixture", "original evidence")],
-            ..Default::default()
-        };
-        let right = Finding {
-            id: "fixture/right".into(),
-            ..Default::default()
-        };
-        let extra = [Finding {
-            id: "fixture/derived".into(),
-            ..Default::default()
-        }];
-        let pooled = [&left, &right, &left];
-        let scope = FindingScope::from_pooled(&pooled, &extra);
-        let observed: Vec<_> = scope.iter().collect();
-        let expected = [&left, &right, &left, &extra[0]];
-        assert_eq!(observed.len(), expected.len());
-        for (actual, original) in observed.into_iter().zip(expected) {
-            assert!(
-                std::ptr::eq(actual, original),
-                "finding storage must be borrowed"
-            );
-        }
-        for id in ["fixture/left", "fixture/right", "fixture/derived"] {
-            assert!(scope.contains_id(id));
-        }
-        assert!(!scope.contains_id("fixture/missing"));
-    }
-
-    #[test]
-    fn container_scope_preserves_own_then_pooled_then_derived_order() {
-        let own = [Finding {
-            id: "fixture/own".into(),
-            ..Default::default()
-        }];
-        let member = Finding {
-            id: "fixture/member".into(),
-            ..Default::default()
-        };
-        let derived = [Finding {
-            id: "fixture/derived".into(),
-            ..Default::default()
-        }];
-        let pooled = [&member, &own[0], &member];
-        let scope = FindingScope::with_pooled(&own, &pooled, &derived);
-        let expected = [&own[0], &member, &own[0], &member, &derived[0]];
-        let actual: Vec<_> = scope.iter().collect();
-        assert_eq!(actual.len(), expected.len());
-        for (borrowed, original) in actual.into_iter().zip(expected) {
-            assert!(std::ptr::eq(borrowed, original));
-            assert!(scope.contains_id(original.id.as_str()));
-        }
-        assert!(!scope.contains_id("fixture/missing"));
-    }
-}
+mod pooled_finding_tests;

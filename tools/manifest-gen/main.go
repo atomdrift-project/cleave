@@ -274,8 +274,8 @@ func ensureEngine(c *config, rel string) (string, bool) {
 	}
 	tag := "v" + rel
 	dir := filepath.Join(c.out, "engines", tag)
-	// The default binary target is renamed across releases (…scan -> ascan ->
-	// atomscan). Rather than guess from a fixed candidate list, read the name
+	// The default binary target has been renamed across releases. Rather than
+	// guess from a fixed candidate list, read the name
 	// straight from that tag's Cargo.toml `default-run` — the authoritative
 	// "default binary target for this version" (read-only `git show`, no
 	// checkout). Fall back to the --engine-bin candidates only for tags that

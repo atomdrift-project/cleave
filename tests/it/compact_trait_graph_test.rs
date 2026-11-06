@@ -1,5 +1,5 @@
-//! Regression guard: the compact JSON (`--format json` — what scan uploads to
-//! hopper) must carry each composite's edges to the traits it fired on.
+//! Regression guard: the compact JSON (`--format json`) must carry each
+//! composite's edges to the traits it fired on.
 //!
 //! The trait graph is the whole shape of a detection: "shell spawn" plus
 //! "outbound socket" is a different story from either alone, and which atomics a

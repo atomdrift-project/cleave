@@ -226,6 +226,7 @@ const VALIDATORS: &[(&str, Check)] = &[
     ("invalid-trait-ids", references::invalid_trait_ids),
     ("self-referencing-traits", references::self_referencing_traits),
     ("dead-downgrades", references::dead_downgrades),
+    ("unverified-signature-suppressors", references::unverified_signature_suppressors),
     ("exhaustive-suppressors", references::exhaustive_suppressors),
     ("directory-shadowed-refs", references::directory_shadowed_refs),
     ("uncallable-symbol-matchers", references::uncallable_symbol_matchers),
@@ -235,6 +236,7 @@ const VALIDATORS: &[(&str, Check)] = &[
     ("leg-suppressing-composites", references::leg_suppressing_composites),
     ("unresolved-trait-prefixes", references::unresolved_trait_prefixes),
     ("retired-internal-refs", references::retired_internal_refs),
+    ("third-party-config", references::third_party_config),
 
     // Tier boundaries and the `crit: exception` contract.
     ("cap-obj-violations", tiers::cap_obj_violations),

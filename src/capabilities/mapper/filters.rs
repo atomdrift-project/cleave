@@ -215,7 +215,7 @@ impl super::CapabilityMapper {
 ///
 /// A sibling member is never in scope. Counting every citation in the report
 /// made the same member bytes keep or lose a trait depending on what shipped
-/// beside them — and hopper stores one analysis per member SHA-256. An
+/// beside them, though a consumer may store one analysis per member SHA-256. An
 /// archive's findings also carry copies of its members' own composites; those
 /// are `file`-scoped, so they vouch for nothing beyond the member they fired
 /// in.

@@ -16,7 +16,7 @@ use crate::types::Criticality;
 use std::collections::{HashMap, HashSet};
 
 const BASE_TRAIT_PRECISION: f32 = 1.0;
-const PARAM_UNIT: f32 = 0.2;
+pub(crate) const PARAM_UNIT: f32 = 0.2;
 const CASE_INSENSITIVE_MULTIPLIER: f32 = 0.25;
 const EXTRA_FILE_TYPE_PENALTY: f32 = 0.1;
 const EXTRA_PLATFORM_PENALTY: f32 = 0.1;
@@ -33,8 +33,11 @@ const CHILD_DIMINISHING_MULTIPLIER: f32 = 0.6;
 const ANY_BRANCH_PENALTY: f32 = 0.15;
 const INHERITED_COMPOSITE_SOFT_MAX: f32 = 4.0;
 const INHERITED_COMPOSITE_COMPRESS_MULTIPLIER: f32 = 0.2;
+#[cfg(feature = "lint")]
 const ATOMIC_CALIBRATED_MAX: f32 = 4.0;
+#[cfg(feature = "lint")]
 const COMPOSITE_CALIBRATED_MAX: f32 = 10.0;
+#[cfg(feature = "lint")]
 const COMPOSITE_INFLATION_WARNING_THRESHOLD: f32 = 16.0;
 const IS_CHECK_BONUS: f32 = 0.25;
 const COMPOSITE_SCOPE_PENALTY_MULTIPLIER: f32 = 0.35;
@@ -149,16 +152,19 @@ pub(crate) fn platform_precision_penalty(platforms: &[Platform]) -> f32 {
 }
 
 #[must_use]
+#[cfg(feature = "lint")]
 pub(crate) fn atomic_calibrated_max() -> f32 {
     ATOMIC_CALIBRATED_MAX
 }
 
 #[must_use]
+#[cfg(feature = "lint")]
 pub(crate) fn composite_calibrated_max() -> f32 {
     COMPOSITE_CALIBRATED_MAX
 }
 
 #[must_use]
+#[cfg(feature = "lint")]
 pub(crate) fn composite_inflation_warning_threshold() -> f32 {
     COMPOSITE_INFLATION_WARNING_THRESHOLD
 }
@@ -949,6 +955,7 @@ fn calculate_composite_precision_indexed(
     BASE_TRAIT_PRECISION
 }
 
+#[cfg(feature = "lint")]
 pub(crate) fn calculate_composite_precision(
     rule_id: &str,
     composite_lookup: &HashMap<&str, &CompositeTrait>,

@@ -109,21 +109,6 @@ pub(super) mod shared {
 
 // Re-export public API (pub(crate) - accessible to capabilities module)
 
-// Rule loading, re-exported for the checks and their tests.
-#[allow(unused_imports)]
-pub(crate) use super::parsing::autoprefix_trait_refs;
-
-// Precision calculation
-// Precision scoring lives outside the linter (every load applies the
-// thresholds); re-exported for the checks that report on it.
-#[allow(unused_imports)] // calculate_composite_precision is used by test_rules in binary
-pub(crate) use super::precision::{
-    atomic_calibrated_max, build_reference_index, calculate_composite_precision,
-    calculate_trait_precision, composite_calibrated_max, composite_inflation_warning_threshold,
-    file_type_precision_penalty, platform_precision_penalty, precalculate_all_composite_precisions,
-    validate_hostile_composite_precision, validate_hostile_trait_precision,
-};
-
 // Duplicate detection
 pub(crate) use duplicates::{
     ExtractedPatterns, check_basename_pattern_duplicates, check_exact_contained_by_substr,
@@ -184,25 +169,25 @@ pub(crate) use taxonomy::{
 };
 
 // Logic constraint validation
-#[allow(unused_imports)] // find_needs_zero used by binary target
 pub(crate) use constraints::{
     LegRole, MAX_AGGREGATE_SUPPRESSIONS, MAX_NOTABLE_DOWNGRADE_DIRECT,
     MAX_NOTABLE_DOWNGRADE_EXPANDED, MAX_OWN_SUPPRESSIONS, MISSING_CONDITIONS,
-    find_broad_notable_downgrades, find_container_name_convictions,
-    find_convictions_without_content, find_dangling_directory_refs, find_dead_any_alternatives,
-    find_dead_composites, find_dead_downgrades, find_directory_shadowed_refs,
-    find_empty_condition_clauses, find_excessive_file_types, find_excessive_skip_conditions,
-    find_exhaustive_suppressors, find_hex_binary_missing_section,
-    find_hostile_composites_with_too_few_notable_legs, find_impossible_composite_filetypes,
-    find_impossible_count_constraints, find_impossible_length_bounds, find_impossible_needs,
-    find_impossible_size_constraints, find_invalid_hex_patterns, find_invalid_not_usage,
-    find_kv_exists_with_matcher, find_legs_outside_for, find_length_bounds_without_regex,
-    find_missing_search_patterns, find_mixed_archive_filetype_traits, find_needs_without_any,
-    find_needs_zero, find_none_only_with_proximity, find_one_fact_convictions,
-    find_orphaned_components, find_pooling_scope_without_container, find_pure_alias_traits,
-    find_redundant_explicit_defaults, find_redundant_needs_one, find_scope_without_valid_container,
-    find_should_use_defaults, find_subsumed_required_legs, find_too_short_patterns,
-    find_uncallable_symbol_matchers, is_runtime_synthesized_namespace,
+    UNVERIFIED_SIGNATURE_SUPPRESSOR, find_broad_notable_downgrades,
+    find_container_name_convictions, find_convictions_without_content,
+    find_dangling_directory_refs, find_dead_any_alternatives, find_dead_composites,
+    find_dead_downgrades, find_directory_shadowed_refs, find_empty_condition_clauses,
+    find_excessive_file_types, find_excessive_skip_conditions, find_exhaustive_suppressors,
+    find_hex_binary_missing_section, find_hostile_composites_with_too_few_notable_legs,
+    find_impossible_composite_filetypes, find_impossible_count_constraints,
+    find_impossible_length_bounds, find_impossible_needs, find_impossible_size_constraints,
+    find_invalid_hex_patterns, find_invalid_not_usage, find_kv_exists_with_matcher,
+    find_legs_outside_for, find_length_bounds_without_regex, find_missing_search_patterns,
+    find_mixed_archive_filetype_traits, find_needs_without_any, find_needs_zero,
+    find_none_only_with_proximity, find_one_fact_convictions, find_orphaned_components,
+    find_pooling_scope_without_container, find_pure_alias_traits, find_redundant_explicit_defaults,
+    find_redundant_needs_one, find_scope_without_valid_container, find_should_use_defaults,
+    find_subsumed_required_legs, find_too_short_patterns, find_uncallable_symbol_matchers,
+    find_unverified_signature_suppressors, is_runtime_synthesized_namespace,
 };
 
 // Utility functions

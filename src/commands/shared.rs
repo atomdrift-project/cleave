@@ -10,12 +10,16 @@
 //! - **Analysis Helpers**: Report creation and development-engine setup
 //! - **Utility Functions**: Type conversions, string extraction, and metric flattening
 
-use crate::analyzers::{self, FileType, FileTypeExt};
+#[cfg(feature = "lint")]
+use crate::analyzers::FileTypeExt;
+use crate::analyzers::{self, FileType};
+#[cfg(feature = "lint")]
 use crate::types;
 use anyhow::Result;
 use serde::Serialize;
 use std::io::BufRead;
 use std::path::Path;
+use std::path::PathBuf;
 
 // ============================================================================
 // Data Structures
@@ -51,17 +55,7 @@ pub(crate) struct SymbolInfo {
 // Input Handling
 // ============================================================================
 
-/// Read paths from stdin, one per line, skipping empty lines and comments
-/// (lines starting with `#`).
-///
-/// File names are attacker-controlled, so a line that is not UTF-8 is logged
-/// and skipped; it never ends the list. Only a line ending (`\n` or `\r\n`)
-/// is stripped: leading and trailing spaces are part of a file name.
-pub(crate) fn read_paths_from_stdin() -> Vec<String> {
-    paths_from_lines(std::io::stdin().lock())
-}
-
-fn paths_from_lines(reader: impl BufRead) -> Vec<String> {
+fn paths_from_lines(reader: impl BufRead) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     for line in reader.split(b'\n') {
         let line = match line {
@@ -72,28 +66,42 @@ fn paths_from_lines(reader: impl BufRead) -> Vec<String> {
             }
         };
         let line = line.strip_suffix(b"\r").unwrap_or(&line);
-        match std::str::from_utf8(line) {
-            Ok(path) if path.is_empty() || path.starts_with('#') => {}
-            Ok(path) => paths.push(path.to_string()),
-            Err(_) => tracing::warn!(
+        if line.is_empty() || line.starts_with(b"#") {
+            continue;
+        }
+        match path_from_bytes(line) {
+            Some(path) => paths.push(path),
+            None => tracing::warn!(
                 path = %String::from_utf8_lossy(line).escape_debug(),
-                "skipping non-UTF-8 path from stdin"
+                "skipping a path this platform cannot represent"
             ),
         }
     }
     paths
 }
 
+#[cfg(unix)]
+#[allow(clippy::unnecessary_wraps)] // `None` only where paths are not bytes
+fn path_from_bytes(bytes: &[u8]) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(bytes)))
+}
+
+#[cfg(not(unix))]
+fn path_from_bytes(bytes: &[u8]) -> Option<PathBuf> {
+    std::str::from_utf8(bytes).ok().map(PathBuf::from)
+}
+
 /// Expand paths, replacing "-" with paths read from stdin.
 #[must_use]
-pub fn expand_paths(paths: Vec<String>, format: &crate::cli::OutputFormat) -> Vec<String> {
+pub fn expand_paths(paths: Vec<String>, format: &crate::cli::OutputFormat) -> Vec<PathBuf> {
     let mut expanded = Vec::new();
     let mut stdin_read = false;
 
     for path in paths {
         if path == "-" {
             if !stdin_read {
-                let stdin_paths = read_paths_from_stdin();
+                let stdin_paths = paths_from_lines(std::io::stdin().lock());
                 if *format != crate::cli::OutputFormat::Json {
                     eprintln!("Read {} paths from stdin", stdin_paths.len());
                 }
@@ -102,7 +110,7 @@ pub fn expand_paths(paths: Vec<String>, format: &crate::cli::OutputFormat) -> Ve
             }
             // If "-" appears multiple times, only read stdin once
         } else {
-            expanded.push(path);
+            expanded.push(PathBuf::from(path));
         }
     }
 
@@ -131,6 +139,7 @@ pub(crate) fn dev_engine(
 ///
 /// Routes the file to the appropriate analyzer based on file type and
 /// returns a comprehensive analysis report.
+#[cfg(feature = "lint")]
 pub(crate) fn create_analysis_report(
     path: &Path,
     file_type: &FileType,
@@ -175,6 +184,7 @@ pub(crate) fn create_analysis_report(
 ///
 /// Uses substring matching and Levenshtein distance to find rules
 /// that are similar to the query string.
+#[cfg(feature = "lint")]
 pub(crate) fn find_similar_rules(
     mapper: &crate::capabilities::CapabilityMapper,
     query: &str,
@@ -216,6 +226,7 @@ pub(crate) fn find_similar_rules(
 }
 
 /// Find all rules (traits and composites) that are in a given directory prefix.
+#[cfg(feature = "lint")]
 pub(crate) fn find_rules_in_directory(
     mapper: &crate::capabilities::CapabilityMapper,
     directory: &str,
@@ -248,6 +259,7 @@ pub(crate) fn find_rules_in_directory(
 // ============================================================================
 
 /// Convert CLI file type enum to internal FileType.
+#[cfg(feature = "lint")]
 pub(crate) fn cli_file_type_to_internal(ft: crate::cli::DetectFileType) -> FileType {
     match ft {
         crate::cli::DetectFileType::Elf => FileType::Elf,
@@ -343,7 +355,12 @@ mod tests {
     #[test]
     fn a_non_utf8_path_does_not_end_the_list() {
         let input: &[u8] = b"a.bin\r\n\xff\xfe.bin\n\n# note\n b c \nlast";
-        assert_eq!(paths_from_lines(input), ["a.bin", " b c ", "last"]);
+        let paths = paths_from_lines(input);
+        let names: Vec<_> = paths.iter().map(|p| p.to_string_lossy()).collect();
+        #[cfg(unix)]
+        assert_eq!(names, ["a.bin", "\u{fffd}\u{fffd}.bin", " b c ", "last"]);
+        #[cfg(not(unix))]
+        assert_eq!(names, ["a.bin", " b c ", "last"]);
     }
 
     /// The report is built from the bytes the caller passes, not re-read from

@@ -3,11 +3,12 @@
 
 use super::{Report, ValidationInput, is_dynamic_metadata_ref, report};
 use crate::capabilities::validation::{
-    MAX_NOTABLE_DOWNGRADE_DIRECT, MAX_NOTABLE_DOWNGRADE_EXPANDED, collect_trait_refs_from_rule,
-    collect_trait_refs_from_trait_def, find_broad_notable_downgrades, find_dead_downgrades,
-    find_directory_shadowed_refs, find_exhaustive_suppressors, find_invalid_trait_ids,
-    find_leg_suppressing_composites, find_line_number, find_self_referencing_composites,
-    find_self_referencing_traits, find_self_suppressing_traits, find_uncallable_symbol_matchers,
+    MAX_NOTABLE_DOWNGRADE_DIRECT, MAX_NOTABLE_DOWNGRADE_EXPANDED, UNVERIFIED_SIGNATURE_SUPPRESSOR,
+    collect_trait_refs_from_rule, collect_trait_refs_from_trait_def, find_broad_notable_downgrades,
+    find_dead_downgrades, find_directory_shadowed_refs, find_exhaustive_suppressors,
+    find_invalid_trait_ids, find_leg_suppressing_composites, find_line_number,
+    find_self_referencing_composites, find_self_referencing_traits, find_self_suppressing_traits,
+    find_uncallable_symbol_matchers, find_unverified_signature_suppressors,
 };
 use crate::composite_rules::{CompositeTrait, MetricsQuery, TraitDefinition};
 use rayon::prelude::*;
@@ -131,6 +132,37 @@ pub(super) fn dead_downgrades<'a>(input: &'a ValidationInput<'a>) -> Report<'a> 
                 ),
             );
         }
+    })
+}
+
+/// Suppressions may cite only verified signatures: any other signature state
+/// is a claim whoever made the certificate chose.
+pub(super) fn unverified_signature_suppressors<'a>(input: &'a ValidationInput<'a>) -> Report<'a> {
+    let found =
+        find_unverified_signature_suppressors(input.trait_definitions, input.composite_rules);
+    report(move |warnings| {
+        if found.is_empty()
+            || crate::validation_controls::is_validator_disabled(UNVERIFIED_SIGNATURE_SUPPRESSOR)
+        {
+            return;
+        }
+        eprintln!(
+            "\n❌ ERROR: {} suppressions trust a signature nothing verified",
+            found.len()
+        );
+        eprintln!(
+            "   Only metadata/signature/verified/ proves a signer. Self-signed, unverified and\n   \
+             invalid signatures name whoever their maker chose, so excusing a rule by them\n   \
+             lets the attacker excuse it. Cite a verified/ finding instead.\n"
+        );
+        for f in &found {
+            eprintln!("   '{}': {}: {}", f.id, f.clause, f.reference);
+        }
+        eprintln!();
+        warnings.push_id(
+            UNVERIFIED_SIGNATURE_SUPPRESSOR,
+            format!("{} suppressions trust an unverified signature", found.len()),
+        );
     })
 }
 
@@ -500,6 +532,17 @@ pub(super) fn report_unresolved_trait_prefixes(
 /// noise for binaries with many imports; YAML rules that
 /// need to gate on a specific symbol/function call should
 /// use inline `type: symbol, exact: <name>` conditions.
+/// The third-party YARA config must parse: when it does not, every disable,
+/// crit and unless override in it is silently dropped at scan time.
+pub(super) fn third_party_config<'a>(input: &'a ValidationInput<'a>) -> Report<'a> {
+    let problem = crate::third_party_config::Config::problem_in(input.dir_path);
+    report(move |warnings| {
+        if let Some(problem) = problem {
+            warnings.push_id("third-party-config", problem);
+        }
+    })
+}
+
 pub(super) fn retired_internal_refs<'a>(input: &'a ValidationInput<'a>) -> Report<'a> {
     report(move |warnings| {
         tracing::trace!("Step 11/15: Checking for retired internal/symbols references");
@@ -995,69 +1038,4 @@ fn build_filename_reference_suggestion(
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
-mod tests {
-    use super::{is_open_filefacts_metric_path, matches_metric_family};
-
-    /// Fixed keys are accepted by exact name, not because their namespace is
-    /// waved through. The second list is the point of the change: these are
-    /// real metric names from before the cleave→filefacts migration, and
-    /// under the old namespace exemption every one of them validated while
-    /// matching nothing.
-    #[test]
-    fn fixed_metric_keys_are_checked_by_name() {
-        let valid = crate::types::field_paths::all_valid_metric_paths();
-        for field in [
-            "chm.user_entry_count",
-            "archive.member_count",
-            "image.width",
-            "wasm.import_count",
-            "registry.downloads_recent",
-            "file.entropy",
-        ] {
-            assert!(valid.contains(field), "{field} should be a known metric");
-        }
-
-        for field in [
-            "binary.overall_entropy",
-            "text.total_lines",
-            "strings.total",
-            "pe.has_rich_header",
-            "chmx.user_entry_count",
-        ] {
-            assert!(
-                !valid.contains(field) && !is_open_filefacts_metric_path(field),
-                "{field} is not emitted and must not validate"
-            );
-        }
-    }
-
-    /// Templated keys are matched by shape, one path segment per placeholder.
-    #[test]
-    fn templated_metric_keys_match_by_shape() {
-        for field in [
-            "ast.op.xor",
-            "archive.compression.method_counts.deflate",
-            "archive.format.regular_count",
-            "consistency.extension_content_mismatch.binary_as_text",
-            "source.query_limited.identifiers",
-            "source.query_limited.identifiers.output_limit",
-        ] {
-            assert!(
-                is_open_filefacts_metric_path(field),
-                "{field} should match a family"
-            );
-        }
-
-        // A placeholder covers one segment, so a template must not swallow a
-        // longer path that has a template of its own — otherwise a typo in
-        // the suffix would validate against the shorter form.
-        assert!(!matches_metric_family(
-            "source.query_limited.identifiers.output_limit",
-            "source.query_limited.<query>"
-        ));
-        // An empty placeholder is not a value.
-        assert!(!matches_metric_family("ast.op.", "ast.op.<operator>"));
-        // Literal text around the placeholder still has to line up.
-        assert!(!matches_metric_family("ast.ops.xor", "ast.op.<operator>"));
-    }
-}
+mod tests;

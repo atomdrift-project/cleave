@@ -19,7 +19,7 @@ use rustc_hash::FxHashMap;
 use std::cell::Cell;
 use std::ops::ControlFlow;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, LazyLock, OnceLock};
+use std::sync::{Arc, LazyLock};
 use std::time::Instant;
 use streaming_iterator::StreamingIterator;
 
@@ -235,12 +235,6 @@ enum MatchMode {
     Regex,
 }
 
-/// Check if file type supports AST parsing.
-/// Positive list: only types with a tree-sitter parser are supported.
-pub(crate) fn supports_ast(file_type: FileType) -> bool {
-    file_type.supports_ast_queries()
-}
-
 /// Evaluate unified AST condition
 /// Handles both simple mode (kind/node + exact/substr/regex) and advanced mode (query)
 pub(crate) fn eval_ast<'a>(
@@ -253,8 +247,8 @@ pub(crate) fn eval_ast<'a>(
     case_insensitive: bool,
     ctx: &EvaluationContext<'a>,
 ) -> ConditionResult {
-    // Skip AST evaluation for file types that don't support tree-sitter parsing
-    if !supports_ast(ctx.file_type) {
+    // Only types with a tree-sitter parser support AST queries.
+    if !ctx.file_type.supports_ast_queries() {
         return ConditionResult::no_match();
     }
 
@@ -570,7 +564,7 @@ pub(super) fn eval_ast_query_with_budget<'a>(
     ctx: &EvaluationContext<'a>,
     cpu_budget: std::time::Duration,
 ) -> ConditionResult {
-    eval_ast_query_once(query_str, ctx, cpu_budget, per_root_enabled())
+    eval_ast_query_once(query_str, ctx, cpu_budget, true)
 }
 
 /// `eval_ast_query` with the per-root walk forced on or off, for tests that
@@ -589,13 +583,6 @@ pub(super) fn eval_ast_query_with_mode<'a>(
     )
 }
 
-/// Whether a rooted query walks per root node (`CLEAVE_AST_PER_ROOT`, on by
-/// default) rather than once over the whole tree.
-fn per_root_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| crate::env::bool_var("CLEAVE_AST_PER_ROOT").unwrap_or(true))
-}
-
 /// Run `query_str` on `ctx` again for its cost alone: validation confirms a
 /// fixture's cost outliers this way once the fixture is evaluated (see
 /// [`crate::validation_performance::confirm_outliers`]). `None` when the
@@ -609,7 +596,7 @@ pub(crate) fn remeasure_ast_query(
         query_str,
         ctx,
         ast_query_cpu_budget(query_str, ctx.deadline),
-        per_root_enabled(),
+        true,
     );
     let cost = probe.cost();
     drop(probe);
@@ -651,10 +638,18 @@ fn eval_ast_query_once<'a>(
     };
     let lang = &*tree.language();
 
+    // Required literal predicates read the original source in both views, so
+    // a file missing them cannot match. Asked before compiling when an earlier
+    // process recorded the query's literals: most queries a file meets fail
+    // here, and compiling one costs ~5 ms, more than the evaluation it gates.
+    if remembered_literals_may_match(lang, ctx.file_type, query_str, source.as_bytes())
+        == Some(false)
+    {
+        return ConditionResult::no_match();
+    }
     let Some(compiled) = cached_ast_query(lang, ctx.file_type, query_str) else {
         return ConditionResult::no_match();
     };
-    // Required literal predicates read the original source in both views.
     // Reject impossible queries before walking or reparsing for comment removal.
     if !compiled.may_match(source.as_bytes()) {
         return ConditionResult::no_match();
@@ -724,7 +719,7 @@ fn eval_ast_query_once<'a>(
     // deep_clone reuses compiled regex code while giving caches private pools;
     // copying stays outside cursor timing and inside the whole-rule deadline.
     let measured_query =
-        crate::validation_performance::active().then(|| compiled.query.deep_clone());
+        crate::validation_performance::judges(query_str, ctx).then(|| compiled.query.deep_clone());
     let _execution_timer = crate::validation_performance::ast_execution_started();
     if RequiredSubqueries::enabled() {
         let mut enabled = vec![true; compiled.query.pattern_count()];
@@ -1074,6 +1069,7 @@ fn cached_ast_query(
     let compile_started = diagnostic.then(Instant::now);
     let compiled = tree_sitter::Query::new(lang, query_str).ok().map(|query| {
         let literals = RequiredLiterals::of(&query, query_str);
+        crate::capabilities::derivation_memo::record_ast_literals(query_str, literals.to_stored());
         let nodes = RequiredNodes::of(lang, &query, query_str);
         let subqueries = if RequiredSubqueries::enabled() {
             RequiredSubqueries::of(lang, &query, query_str)
@@ -1101,6 +1097,34 @@ fn cached_ast_query(
     compiled
 }
 
+/// Whether `source` holds the literals some pattern of `query_str` requires,
+/// by the requirements an earlier process recorded. `None` when there is no
+/// record, or this process already compiled the query and its compiled gate
+/// answers instead. Mirrors [`RequiredLiterals::may_match`].
+fn remembered_literals_may_match(
+    lang: &tree_sitter::Language,
+    file_type: FileType,
+    query_str: &str,
+    source: &[u8],
+) -> Option<bool> {
+    let key = (
+        ast_query_language_key(lang, file_type),
+        query_str.to_string(),
+    );
+    if QUERY_CACHE.read().contains_key(&key) {
+        return None;
+    }
+    crate::capabilities::derivation_memo::with_ast_literals(query_str, |patterns| {
+        patterns.is_empty()
+            || patterns.iter().any(|requirements| {
+                requirements.iter().all(|any| {
+                    any.iter()
+                        .any(|(literal, ci)| super::ast_gate::source_contains(source, literal, *ci))
+                })
+            })
+    })
+}
+
 /// Tree-sitter's `set_match_limit` accepts at most this many matches per cursor.
 /// Combined `query:` batches share one cursor, so a bomb can starve later
 /// patterns — on exceed we drop the batch and fall back to per-query eval.
@@ -1112,8 +1136,7 @@ const COMBINED_AST_QUERY_GROUP_STATE_LIMIT: u32 = 64;
 /// The shared batch walk's CPU budget is the per-query budget times the
 /// active queries it stands in for, up to this many (12 x 5 s = 60 s).
 const BATCH_CPU_BUDGET_MAX_QUERIES: usize = 12;
-/// Trees nested at least this deep run the shared batch per root node
-/// (`CLEAVE_AST_BATCH_PER_ROOT_DEPTH`). One whole-tree cursor keeps up to
+/// Trees nested at least this deep run the shared batch per root node. One whole-tree cursor keeps up to
 /// `COMBINED_AST_QUERY_GROUP_STATE_LIMIT` live states per pattern for every
 /// level of nesting of its root kind, and visits each node against all of
 /// them: a 5 MB JSFuck expression nested past 1,000 levels burned the whole
@@ -1127,10 +1150,7 @@ fn batch_per_root_depth() -> u32 {
     if let Some(depth) = BATCH_PER_ROOT_DEPTH_OVERRIDE.with(Cell::get) {
         return depth;
     }
-    static DEPTH: OnceLock<u32> = OnceLock::new();
-    *DEPTH.get_or_init(|| {
-        crate::env::parse::<u32>("CLEAVE_AST_BATCH_PER_ROOT_DEPTH").unwrap_or(BATCH_PER_ROOT_DEPTH)
-    })
+    BATCH_PER_ROOT_DEPTH
 }
 
 #[cfg(test)]
@@ -1216,7 +1236,7 @@ pub(crate) fn batch_ast_queries_with_index(
     // (each also outside the structural gate). The view is built only when
     // two of them can match the file's literals; when it cannot be built
     // they stay on the per-query path, which reports why.
-    if comment_bank_enabled() && source.len() <= AST_QUERY_BYTE_LIMIT {
+    if source.len() <= AST_QUERY_BYTE_LIMIT {
         let lang = &*tree.language();
         let candidates = query_strs
             .iter()
@@ -1257,13 +1277,6 @@ pub(crate) fn batch_ast_queries_with_index(
         }
     }
     out
-}
-
-/// Whether comment-ignoring queries share a walk (`CLEAVE_AST_COMMENT_BATCH`,
-/// on by default).
-fn comment_bank_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| crate::env::bool_var("CLEAVE_AST_COMMENT_BATCH").unwrap_or(true))
 }
 
 /// One shared walk for the queries of one tree view: ordinary queries over the
@@ -1848,98 +1861,7 @@ pub(super) fn combined_bank_cached_for_test(
 }
 
 #[cfg(test)]
-mod batch_design_exclusion_tests {
-    use super::batch_leaves_out_by_design;
-
-    #[test]
-    fn multi_wildcard_and_comment_view_queries_stay_off_the_heavy_tail() {
-        assert!(batch_leaves_out_by_design(
-            "(call_expression arguments: (arguments (_)* @a (_)* @b))"
-        ));
-        assert!(batch_leaves_out_by_design(
-            "((call_expression) @c (#set! cleave.ignore-comments \"true\"))"
-        ));
-        assert!(!batch_leaves_out_by_design(
-            "(binary_expression left: (_) @l operator: \"-\")"
-        ));
-    }
-}
+mod batch_design_exclusion_tests;
 
 #[cfg(test)]
-mod cache_lock_tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
-    use super::*;
-
-    #[test]
-    fn ast_cache_hit_does_not_wait_for_compiler() {
-        let source = b"const value = 1;";
-        let parsed = filefacts::OpenOptions::new()
-            .path(std::path::Path::new("cache-lock.js"))
-            .cache(false)
-            .open(source);
-        let _ = parsed.values();
-        let tree = parsed.source_ast().unwrap().tree.clone();
-        let language = tree.language();
-        let pattern = "(identifier) @cache_lock_hit";
-        let key = (
-            ast_query_language_key(&language, FileType::JavaScript),
-            pattern.to_string(),
-        );
-        let compiler = query_compiler(&key).lock();
-        let query = tree_sitter::Query::new(&language, pattern).unwrap();
-        let compiled = Arc::new(CompiledAstQuery {
-            literals: RequiredLiterals::of(&query, pattern),
-            nodes: RequiredNodes::of(&language, &query, pattern),
-            subqueries: RequiredSubqueries::default(),
-            ignore_comments: false,
-            deferred: DeferredPredicates::of(&query, pattern),
-            root_kinds: per_root_kinds(&language, &query, pattern),
-            query,
-        });
-        QUERY_CACHE.write().insert(key, Some(compiled.clone()));
-        let (send, receive) = std::sync::mpsc::channel();
-        let thread = std::thread::spawn(move || {
-            let hit = cached_ast_query(&tree.language(), FileType::JavaScript, pattern);
-            send.send(hit).unwrap();
-        });
-        // Release before asserting/joining so a regression cannot deadlock the test.
-        let hit = receive.recv_timeout(std::time::Duration::from_secs(5));
-        drop(compiler);
-        thread.join().unwrap();
-        assert!(Arc::ptr_eq(
-            &compiled,
-            &hit.expect("cached hits must not wait for compilation")
-                .unwrap()
-        ));
-    }
-
-    #[test]
-    fn ast_cache_concurrent_misses_share_one_query() {
-        let parsed = filefacts::OpenOptions::new()
-            .path(std::path::Path::new("cache-misses.js"))
-            .cache(false)
-            .open(b"const value = 1;");
-        let _ = parsed.values();
-        let tree = parsed.source_ast().unwrap().tree;
-        let barrier = std::sync::Arc::new(std::sync::Barrier::new(16));
-        let queries: Vec<_> = std::thread::scope(|scope| {
-            let threads: Vec<_> = (0..16)
-                .map(|_| {
-                    let tree = tree.clone();
-                    let barrier = barrier.clone();
-                    scope.spawn(move || {
-                        barrier.wait();
-                        cached_ast_query(
-                            &tree.language(),
-                            FileType::JavaScript,
-                            "(identifier) @cache_concurrent_misses",
-                        )
-                        .unwrap()
-                    })
-                })
-                .collect();
-            threads.into_iter().map(|t| t.join().unwrap()).collect()
-        });
-        assert!(queries.iter().all(|q| Arc::ptr_eq(&queries[0], q)));
-    }
-}
+mod cache_lock_tests;

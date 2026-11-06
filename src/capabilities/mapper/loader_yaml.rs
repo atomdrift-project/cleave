@@ -197,6 +197,7 @@ impl super::CapabilityMapper {
             // Pinned at load: results key on the traits this mapper read, not
             // on whatever the process-global scan holds when they are stored.
             traits_revision: crate::cache::traits_revision_fingerprint(),
+            measured_ast_queries: None,
         })
     }
 }

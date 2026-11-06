@@ -75,22 +75,26 @@ impl FilefactsView {
     /// engine through the typed `FileAnalysis` fields, not this view.
     #[must_use]
     pub fn from_ctx(ctx: &crate::analysis_context::AnalysisContext<'_>) -> Self {
-        Self::from_ctx_with_values(ctx, ctx.parsed.values().as_json().clone())
+        Self::of(ctx, false)
     }
 
-    /// Project a context for a report that will be folded into compact output.
+    /// Project a context for a report; `compact` is set when the report will
+    /// be folded into compact output.
     ///
     /// Compact files serialize structural values through their flattened `kv`
-    /// facts, so retaining the complete native tree here duplicates that data.
+    /// facts, so retaining the complete native tree there duplicates that data.
     /// Dependency identity/scripts, runtime imports, and Maven coverage gaps
     /// have post-evaluation readers; the remaining fields are still required by the
     /// symbol/flow evaluators and compact reference projection.
     #[must_use]
-    pub(crate) fn from_ctx_compact(ctx: &crate::analysis_context::AnalysisContext<'_>) -> Self {
-        Self::from_ctx_with_values(
-            ctx,
-            retained_dependency_values(ctx.parsed.values().as_json()),
-        )
+    pub(crate) fn of(ctx: &crate::analysis_context::AnalysisContext<'_>, compact: bool) -> Self {
+        let values = ctx.parsed.values().as_json();
+        let values = if compact {
+            retained_dependency_values(values)
+        } else {
+            values.clone()
+        };
+        Self::from_ctx_with_values(ctx, values)
     }
 
     fn from_ctx_with_values(

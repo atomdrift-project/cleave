@@ -95,6 +95,7 @@ impl PdfAnalyzer {
         if !nested_findings.is_empty() {
             let container_findings = self.engine.rules().evaluate_container_composites(
                 &report,
+                data,
                 &nested_findings,
                 &report.target.file_type,
                 // PDF subfile findings are not origin-stamped yet; see

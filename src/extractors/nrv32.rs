@@ -342,6 +342,7 @@ mod tests {
         assert!(branches(&mut [0xe8, 5], 1).is_err());
     }
     #[test]
+    #[ignore = "needs a private sample: set NRV_EXTERNAL_SAMPLE"]
     fn external_sample_matches_isolated_reference_if_supplied() {
         let Ok(path) = std::env::var("NRV_EXTERNAL_SAMPLE") else {
             return;

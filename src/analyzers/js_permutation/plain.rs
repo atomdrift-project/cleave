@@ -1,7 +1,7 @@
 //! Bounded, literal-only evaluation of a fully recognized nested shuffle.
 use super::{
-    MAX_FUEL, MAX_OUTPUT, MAX_PARTS, children, literal, nodes, number, raw, signature,
-    template_signature, unwrap,
+    MAX_FUEL, MAX_OUTPUT, MAX_PARTS, children, constant_signature, literal, nodes, number, raw,
+    signature, unwrap,
 };
 
 const SHUFFLE: &str = r#"function Ox$(b,q){var r=b.length;var m=[];for(var z=0;z<r;z++){m[z]=b.charAt(z)};for(var z=0;z<r;z++){var e=q*(z+114)+(q%37316);var g=q*(z+661)+(q%53955);var x=e%r;var l=g%r;var t=m[x];m[x]=m[l];m[l]=t;q=(e+g)%4338439;};var a=String.fromCharCode(127);var p='';var h='%';var o='#1';var n='%';var u='#0';var f='#';return m.join(p).split(h).join(a).split(o).join(n).split(u).join(f).split(a);}"#;
@@ -42,7 +42,7 @@ fn shuffled(input: &str, mut seed: u64) -> Option<String> {
 /// shuffle body is recognized and none of the relevant names are rebound.
 pub(super) fn expand(source: &str) -> Option<String> {
     const PREFIX: &str = "function __cleave_decoded_scope(){";
-    let expected = template_signature(SHUFFLE, false)?;
+    let expected = constant_signature(SHUFFLE, false)?;
     let mut current = source.to_owned();
     let mut remaining = MAX_FUEL;
     let mut changed = false;

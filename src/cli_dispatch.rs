@@ -17,7 +17,6 @@ struct AnalyzeDispatchContext<'a> {
     enable_third_party_global: bool,
     platforms: &'a [cleave::Platform],
     slow_rule_ms: u64,
-    output_to_file: bool,
     output_path: Option<&'a str>,
     max_memory_file_size: u64,
     max_scan_file_size: u64,
@@ -43,25 +42,22 @@ fn analyze_config<'a>(ctx: &'a AnalyzeDispatchContext<'a>, target: &'a str) -> A
         disabled: ctx.disabled,
         all_files: ctx.all_files,
         platforms: ctx.platforms,
-        min_hostile_precision: cleave::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
-        min_suspicious_precision: cleave::CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
         max_memory_file_size: ctx.max_memory_file_size,
-        enable_full_validation: false,
         slow_rule_ms: ctx.slow_rule_ms,
-        output_to_file: ctx.output_to_file,
         output_path: ctx.output_path,
         max_scan_file_size: ctx.max_scan_file_size,
         // Only a floor is selectable (`--min-crit`, `--min-file-crit`): nobody
         // asks to hide the hostile findings.
         min_crit: ctx.min_crit,
-        max_crit: None,
         min_file_crit: ctx.min_file_crit,
-        max_file_crit: None,
         facts: ctx.facts,
     }
 }
 
-fn analyze_targets(targets: &[String], ctx: &AnalyzeDispatchContext<'_>) -> Result<String> {
+fn analyze_targets(
+    targets: &[std::path::PathBuf],
+    ctx: &AnalyzeDispatchContext<'_>,
+) -> Result<String> {
     cleave::commands::analyze_targets(&analyze_config(ctx, ""), targets)
 }
 
@@ -120,7 +116,6 @@ pub(crate) struct DispatchOptions<'a> {
     pub zip_passwords: &'a [String],
     pub platforms: &'a [cleave::Platform],
     pub slow_rule_ms: u64,
-    pub output_to_file: bool,
     pub output_path: Option<&'a str>,
     pub max_memory_file_size: u64,
     pub max_scan_file_size: u64,
@@ -141,7 +136,6 @@ pub(crate) fn build_dispatch_context<'a>(opts: &DispatchOptions<'a>) -> Dispatch
             enable_third_party_global: !opts.disabled.third_party,
             platforms: opts.platforms,
             slow_rule_ms: opts.slow_rule_ms,
-            output_to_file: opts.output_to_file,
             output_path: opts.output_path,
             max_memory_file_size: opts.max_memory_file_size,
             max_scan_file_size: opts.max_scan_file_size,
@@ -278,13 +272,8 @@ pub(crate) fn dispatch_command(
             }
             inspect_command(resolved, tree.as_ref(), ctx.format, ctx.disabled)?
         }
-        Some(cli::Command::Value {
-            target,
-            path,
-            path_flag,
-        }) => {
-            let path = path.as_deref().or(path_flag.as_deref());
-            extract_kv_command(&target, path, ctx.format, ctx.disabled)?
+        Some(cli::Command::Value { target, path }) => {
+            extract_kv_command(&target, path.as_deref(), ctx.format, ctx.disabled)?
         }
         #[cfg(feature = "lint")]
         Some(cli::Command::TestRules { target, rules }) => {

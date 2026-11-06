@@ -35,7 +35,7 @@ pub(crate) fn extract_version_info(data: &[u8]) -> VersionInfo {
     }
 
     let anchor = utf16le("VS_VERSION_INFO");
-    let Some(start) = find_subslice(data, &anchor) else {
+    let Some(start) = memchr::memmem::find(data, &anchor) else {
         return out;
     };
 
@@ -56,7 +56,7 @@ pub(crate) fn extract_version_info(data: &[u8]) -> VersionInfo {
     // resources with damaged/zeroed String-entry headers.
     for key in CANONICAL_VERSION_KEYS {
         let key_utf16 = utf16le(key);
-        if let Some(pos) = find_subslice(window, &key_utf16) {
+        if let Some(pos) = memchr::memmem::find(window, &key_utf16) {
             // PE/COFF VS_VERSIONINFO String entry layout:
             //   WORD wLength | WORD wValueLength | WORD wType  (6 bytes)
             //   WCHAR szKey[]  (NUL-terminated)
@@ -246,10 +246,6 @@ fn read_utf16le_string(bytes: &[u8]) -> Option<String> {
     String::from_utf16(&units).ok().filter(|s| !s.is_empty())
 }
 
-fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    memchr::memmem::find(haystack, needle)
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -348,7 +344,7 @@ mod tests {
     #[test]
     fn extract_version_info_recovers_canonical_key_with_damaged_header() {
         let mut buf = build_versioninfo_buffer(&[("FileDescription", "Damaged resource")]);
-        let key_pos = find_subslice(&buf, &utf16le("FileDescription")).unwrap();
+        let key_pos = memchr::memmem::find(&buf, &utf16le("FileDescription")).unwrap();
         buf[key_pos - 6..key_pos].fill(0);
 
         let info = extract_version_info(&buf);

@@ -240,10 +240,17 @@ fn test_max_depth_limit() {
         "Depth 2 should work (becomes 3 after increment)"
     );
 
-    // Depth 4 should fail
+    // Past the limit the payload is not analyzed, but it is not dropped
+    // either: it comes back as a layer marked incomplete.
     let result = analyze_embedded_string("test.bin", &string_info, 0, &engine, 3, None);
+    let Ok(cleave::analyzers::embedded_code_detector::EmbeddedAnalysisResult::EncodedLayer(layer)) =
+        result
+    else {
+        panic!("a payload past the depth limit must be reported, got {result:?}");
+    };
     assert!(
-        result.is_err(),
-        "Depth 3 should fail (would become 4, exceeds MAX_DECODE_DEPTH)"
+        layer
+            .analysis_gaps
+            .contains(cleave::types::AnalysisGap::EmbeddedSourceIncomplete)
     );
 }

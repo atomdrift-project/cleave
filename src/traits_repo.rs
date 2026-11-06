@@ -303,8 +303,8 @@ fn migrate_legacy_install() {
 /// Rename the pre-split `traits/` to `traits-oss/`, unless the new one exists.
 ///
 /// Whatever it is moves: an installed bundle, a checkout, or a symlink to one —
-/// a rename moves the link, not its target, so a developer's `traits ->
-/// traits-dev` keeps pointing where it did. Leaving a git-managed tree behind
+/// a rename moves the link, not its target, so a developer's `traits` link to
+/// a checkout keeps pointing where it did. Leaving a git-managed tree behind
 /// would instead strand it and bootstrap a public bundle in its place.
 fn migrate_legacy_dir(legacy: &Path, oss: &Path) {
     if std::fs::symlink_metadata(oss).is_ok() || std::fs::symlink_metadata(legacy).is_err() {
@@ -350,7 +350,7 @@ pub fn version() -> Option<String> {
     let rules_digest = crate::cache::traits_content_for(&traits_dir).rules;
     if git_rule_tree_dirty_cached(&traits_dir, &head, rules_digest) {
         // A checkout can load changed rules while HEAD still names the old
-        // rules. Hopper uses this revision as a dedupe key, so a dirty tree
+        // rules. Consumers use this revision as a dedupe key, so a dirty tree
         // needs a content-derived version distinct from every commit prefix.
         Some(format!("w{}", hex::encode(&rules_digest[..8])))
     } else {
@@ -386,8 +386,13 @@ fn git_rule_tree_dirty_cached(dir: &Path, head: &str, rules_digest: [u8; 32]) ->
 /// Target this checkout even when invoked from another repository's Git hook.
 /// `git -C` changes directory but does not override inherited repository paths,
 /// notably the parent's GIT_INDEX_FILE (which may name its commit index.lock).
-fn git_command_in(dir: &Path) -> Command {
-    let mut command = Command::new("git");
+/// git is found by [`crate::tool_resolution::resolve`], never by a bare name:
+/// a relative or empty `PATH` entry would otherwise run a `git` planted in the
+/// working directory, which is often the sample tree.
+fn git_command_in(dir: &Path) -> std::io::Result<Command> {
+    let git = crate::tool_resolution::resolve("git")
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "git not found"))?;
+    let mut command = Command::new(git);
     command.arg("-C").arg(dir);
     for name in [
         "GIT_DIR",
@@ -405,23 +410,25 @@ fn git_command_in(dir: &Path) -> Command {
     ] {
         command.env_remove(name);
     }
-    command
+    Ok(command)
 }
 
 fn git_rule_tree_dirty(dir: &Path) -> bool {
-    let result = git_command_in(dir)
-        // Global excludes are a user convenience for working-tree status, but
-        // they must not hide rule files from the version check. Cleave can load
-        // an ignored YAML file just like any other rule source, so a global
-        // `*.yaml` ignore would otherwise make the reported revision stale.
-        .arg("-c")
-        .arg(format!(
-            "core.excludesFile={}",
-            if cfg!(windows) { "NUL" } else { "/dev/null" }
-        ))
-        .args(["status", "--porcelain=v1", "--untracked-files=normal", "--"])
-        .args(RULE_SOURCE_DIRS.iter().copied())
-        .output();
+    let result = git_command_in(dir).and_then(|mut command| {
+        command
+            // Global excludes are a user convenience for working-tree status, but
+            // they must not hide rule files from the version check. Cleave can load
+            // an ignored YAML file just like any other rule source, so a global
+            // `*.yaml` ignore would otherwise make the reported revision stale.
+            .arg("-c")
+            .arg(format!(
+                "core.excludesFile={}",
+                if cfg!(windows) { "NUL" } else { "/dev/null" }
+            ))
+            .args(["status", "--porcelain=v1", "--untracked-files=normal", "--"])
+            .args(RULE_SOURCE_DIRS.iter().copied())
+            .output()
+    });
     // libtest captures this output and nextest shows it when a test fails.
     // Keep the original status result: rerunning Git after an assertion could
     // hide a transient subprocess failure.
@@ -551,7 +558,7 @@ mod tests {
     #[test]
     fn a_pre_split_symlink_moves_and_keeps_its_target() {
         let tmp = tempfile::tempdir().unwrap();
-        let checkout = tmp.path().join("traits-dev");
+        let checkout = tmp.path().join("rules-checkout");
         std::fs::create_dir_all(checkout.join(".git")).unwrap();
         std::fs::create_dir_all(checkout.join("objectives")).unwrap();
         let (legacy, oss) = (tmp.path().join("traits"), tmp.path().join("traits-oss"));
@@ -596,6 +603,7 @@ mod tests {
         }
         let run = |args: &[&str]| {
             let output = git_command_in(dir)
+                .unwrap()
                 .env("GIT_CONFIG_GLOBAL", &git_config)
                 .env("GIT_CONFIG_NOSYSTEM", "1")
                 .env("GIT_TEMPLATE_DIR", &git_template)

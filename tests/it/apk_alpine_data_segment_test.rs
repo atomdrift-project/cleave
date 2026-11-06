@@ -6,10 +6,8 @@
 //! the **data** segment (the installed files — every ELF binary and library).
 //!
 //! The exploder previously wrapped an apk in a single-stream `GzDecoder`, which
-//! decompresses only the first segment (control). Production evidence: across
-//! the entire hopper sample catalog, *zero* ELF members were ever ingested from
-//! `feed='wolfi.dev'` (or `feed='alpinelinux.org'`) — only `.PKGINFO` — while
-//! ELF ingestion worked for every other binary feed. The binaries in the data
+//! decompresses only the first segment (control), so no ELF member of a
+//! Wolfi or Alpine package was ever analyzed — only `.PKGINFO`. The binaries in the data
 //! segment were silently dropped.
 //!
 //! This test builds a faithful multi-segment apk (control gzip ++ data gzip)

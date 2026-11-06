@@ -27,7 +27,6 @@ pub(crate) fn analyze_embedded_as_child(
     offset: usize,
     engine: crate::Engine,
     yara_engine: Option<Arc<YaraEngine>>,
-    _parent_strings: &[stng::ExtractedString],
 ) -> Option<Vec<crate::types::FileAnalysis>> {
     let suffix = if kind_str == "pe" { ".exe" } else { "" };
     let temp = tempfile::Builder::new().suffix(suffix).tempfile().ok()?;

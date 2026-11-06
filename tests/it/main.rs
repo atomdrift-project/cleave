@@ -5,7 +5,6 @@
 //! dropping `tests/it/<name>.rs` and a `mod <name>;` line below.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-mod amos_traits_test;
 mod apk_alpine_data_segment_test;
 mod archive_determinism_test;
 mod archive_member_payload_parity_test;

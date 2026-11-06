@@ -73,6 +73,7 @@ impl super::CapabilityMapper {
             // results produced with no rules can never be served to a run that
             // has them.
             traits_revision: 0,
+            measured_ast_queries: None,
         }
     }
 

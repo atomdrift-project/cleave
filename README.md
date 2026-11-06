@@ -121,14 +121,24 @@ serialized output is not byte-for-byte identical between runs.
 | --- | --- |
 | `CLEAVE_TRAITS_DIR` | Rules directory to load (same as `--traits-dir`). |
 | `CLEAVE_CACHE_DIR` | Cache directory. It must be owned by you and not writable by others. |
-| `CLEAVE_SKIP_CACHE` | `1` disables the analysis and compiled-rule caches. |
+| `CLEAVE_SKIP_CACHE` | `1` analyzes afresh, ignoring cached results. |
+| `CLEAVE_SKIP_MAPPER_CACHE` | `1` reparses the rules instead of loading the compiled rule cache. |
+| `CLEAVE_SKIP_YARA_CACHE` | `1` recompiles YARA rules instead of loading compiled ones. |
 | `CLEAVE_NO_UPDATE_CHECK` | `1` disables the release notice. |
 | `CLEAVE_RAYON_THREADS` | Worker threads (default: all cores). |
 | `CLEAVE_LOG_LEVEL` | Log level: `error`, `warn`, `info`, `debug` or `trace`. |
 | `CLEAVE_FORMAT` | Default output format when `--format` is not given. |
+| `CLEAVE_VALIDATE` | `1` runs full rule validation while loading rules. |
+| `CLEAVE_VALIDATE_SOFT` | `1` makes `cleave validate` fail only on problems that stop a rule loading or firing. |
+| `CLEAVE_REGEX_STR_MB` | Memory budget, in MiB, for compiled string-rule regexes (default scales with RAM). |
+| `CLEAVE_REGEX_RAW_MB` | Memory budget, in MiB, for compiled byte-rule regexes (default 512). |
+| `CLEAVE_REGEX_SCRATCH_MB` | Per-thread regex scratch memory in MiB; lower values trade speed for memory. |
+| `CLEAVE_MEMBER_PRESSURE_FLOOR_MB` | Analyze archive members one at a time below this much free memory (`0` disables). |
+| `CLEAVE_ANALYSIS_MEMO_MB` | Size, in MiB, of the in-process cache of recent results. |
 
-Other `CLEAVE_*` variables are diagnostics or unstable tuning knobs for large
-deployments; see `src/env.rs`.
+Boolean variables accept `1`/`true`/`yes`/`on` and `0`/`false`/`no`/`off`.
+Every other `CLEAVE_*` variable is a diagnostic, a test hook, or an unstable
+tuning knob; `src/env.rs` lists them all.
 
 ## What it analyzes
 

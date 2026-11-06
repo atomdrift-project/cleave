@@ -39,14 +39,6 @@ const NOT_VALIDATION_INPUTS: &[&str] = &[
     "CLEAVE_UPDATE_URL",
 ];
 
-/// Whether clean marks are switched off: `CLEAVE_SKIP_CLEAN_MARK=1`, or
-/// `CLEAVE_SKIP_CACHE=1`, which already asks for fresh results.
-fn marks_disabled() -> bool {
-    ["CLEAVE_SKIP_CLEAN_MARK", "CLEAVE_SKIP_CACHE"]
-        .iter()
-        .any(|name| std::env::var(name).is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")))
-}
-
 /// Proof that this build fully validated this exact traits tree and found
 /// nothing to report.
 ///
@@ -72,7 +64,9 @@ impl CleanMark {
     /// rejects, so a tree clean without it is not vouched for with it.
     #[must_use]
     pub(crate) fn for_traits(traits_dir: &Path, precision: Option<(f32, f32)>) -> Option<Self> {
-        if marks_disabled() {
+        // Marks are off under `CLEAVE_SKIP_CLEAN_MARK=1`, or `CLEAVE_SKIP_CACHE=1`,
+        // which already asks for fresh results.
+        if crate::env::flag("CLEAVE_SKIP_CLEAN_MARK") || crate::env::flag("CLEAVE_SKIP_CACHE") {
             return None;
         }
         Self::slot(traits_dir, precision)
@@ -92,14 +86,6 @@ impl CleanMark {
         })
     }
 
-    /// Whether `traits_dir`, read again now, still has this mark's key.
-    fn still_matches(&self, traits_dir: &Path) -> bool {
-        mark_key(
-            crate::cache::traits_content_uncached(traits_dir),
-            self.precision,
-        ) == self.key
-    }
-
     /// Whether this tree already validated clean.
     #[must_use]
     pub(crate) fn is_set(&self) -> bool {
@@ -112,7 +98,11 @@ impl CleanMark {
     /// this mark's key. A tree edited while it loaded was validated from bytes
     /// that match neither key, so it earns no mark.
     pub(crate) fn set_if_unchanged(&self, traits_dir: &Path) {
-        if self.still_matches(traits_dir) {
+        let now = mark_key(
+            crate::cache::traits_content_uncached(traits_dir),
+            self.precision,
+        );
+        if now == self.key {
             self.set();
         } else {
             tracing::info!(key = %self.key, "traits changed while loading; no validated-clean mark");

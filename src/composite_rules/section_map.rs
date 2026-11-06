@@ -93,6 +93,7 @@ impl SectionMap {
     /// produce an empty section list, which becomes an empty
     /// `SectionMap` — the same behaviour the old goblin-fallback path
     /// produced.
+    #[cfg(feature = "lint")]
     pub(crate) fn from_binary(binary_data: &[u8]) -> Self {
         let file_size = binary_data.len() as u64;
         let parsed = filefacts::open(binary_data);
@@ -101,12 +102,14 @@ impl SectionMap {
 
     /// Returns true if this map contains any section information.
     #[must_use]
+    #[cfg(feature = "lint")]
     pub(crate) fn has_sections(&self) -> bool {
         !self.sections.is_empty()
     }
 
     /// Returns a list of all section names in this map.
     #[must_use]
+    #[cfg(feature = "lint")]
     pub(crate) fn section_names(&self) -> Vec<&str> {
         self.sections.iter().map(|s| s.name.as_str()).collect()
     }

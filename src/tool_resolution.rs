@@ -114,15 +114,10 @@ fn fallback_roots() -> Vec<PathBuf> {
 
     #[cfg(windows)]
     {
-        if let Some(local) = windows_env_path("LOCALAPPDATA") {
-            roots.push(local.join("Microsoft/WinGet/Links"));
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            roots.push(PathBuf::from(local).join("Microsoft/WinGet/Links"));
         }
     }
 
     roots
-}
-
-#[cfg(windows)]
-fn windows_env_path(name: &str) -> Option<PathBuf> {
-    std::env::var_os(name).map(PathBuf::from)
 }

@@ -12,7 +12,7 @@
 
 use crate::analyzers::embedded_code_detector::{EMBEDDED_LANG_NAMES, ENCODED_LAYER_NAMES};
 use crate::analyzers::macho::{ENTITLEMENT_CATEGORIES, entitlement_category};
-use crate::analyzers::pe::normalize_signer_name;
+use crate::analyzers::signature::{INVALID_REASONS, KINDS, STATES, normalize_name};
 
 /// Fixed structural ids emitted by the analyzers.
 const EXACT_IDS: &[&str] = &[
@@ -24,7 +24,7 @@ const EXACT_IDS: &[&str] = &[
     "metadata/binary/linking::macho-dylib",
     "metadata/binary/linking::macho-rpath",
     "metadata/build/debug::elf-debuglink",
-    "metadata/signed/integrity::macho-code-directory-invalid",
+    "metadata/signature/invalid/tampered::macho-code-directory",
 ];
 
 /// Fixed ids emitted by the Chrome/WebExtension manifest analyzer.
@@ -33,19 +33,6 @@ const CHROME_EXACT_IDS: &[&str] = &[
     "metadata/permission/extension-api::web-accessible-resource-entries",
     "metadata/permission/activation::persistent-background-declaration",
     "objectives/supply-chain/metadata-anomaly/update-url::external",
-];
-
-/// `metadata/signed/<category>::<leaf>` categories the analyzers emit.
-/// `macho.rs` `emit_signature_findings`: developer (team id), platform
-/// (`apple`), self-signed (signer org), unknown (`unknown`), id (bundle id);
-/// `pe.rs`: unknown and leaf (normalized signer name).
-const SIGNED_CATEGORIES: &[&str] = &[
-    "developer",
-    "platform",
-    "self-signed",
-    "unknown",
-    "leaf",
-    "id",
 ];
 
 /// Validate a reference into a runtime-synthesized namespace.
@@ -75,7 +62,8 @@ pub(crate) fn check_emitted_ref(id: &str) -> Option<Result<(), String>> {
         None => (id.trim_end_matches('/'), None),
     };
     match (path, leaf) {
-        ("metadata/signed" | "metadata/entitlement" | "metadata/lang/embedded", None) => {
+        ("metadata/signed", _) => Some(Err(RETIRED_SIGNED.to_string())),
+        ("metadata/signature" | "metadata/entitlement" | "metadata/lang/embedded", None) => {
             Some(Ok(()))
         }
         ("metadata/lang/embedded", Some(lang)) => Some(if EMBEDDED_LANG_NAMES.contains(&lang) {
@@ -97,8 +85,11 @@ pub(crate) fn check_emitted_ref(id: &str) -> Option<Result<(), String>> {
                     None => Err("decoded layers require a named leaf".to_string()),
                 });
             }
-            if let Some(category) = path.strip_prefix("metadata/signed/") {
-                return check_signed(category, leaf);
+            if path.starts_with("metadata/signed/") {
+                return Some(Err(RETIRED_SIGNED.to_string()));
+            }
+            if let Some(rest) = path.strip_prefix("metadata/signature/") {
+                return check_signature(rest, leaf);
             }
             if let Some(category) = path.strip_prefix("metadata/entitlement/") {
                 return check_entitlement(category, leaf);
@@ -153,37 +144,49 @@ fn check_chrome_api_ref(rest: &str) -> Result<(), String> {
     }
 }
 
-fn check_signed(category: &str, leaf: Option<&str>) -> Option<Result<(), String>> {
-    if !SIGNED_CATEGORIES.contains(&category) {
+/// Why a `metadata/signed/` reference fails: the namespace said "signed"
+/// whether or not the signature verified.
+const RETIRED_SIGNED: &str = "metadata/signed/ is retired: signer findings live under \
+     metadata/signature/<verified|self-signed|unverified|invalid/<reason>>/<kind>::<name>";
+
+/// Check a reference under `metadata/signature/` (`rest` is the path after
+/// it) against what `analyzers::signature` emits:
+/// `<state>/<kind>::<normalized name>`, with `platform` and `developer` only
+/// under `verified/`. `None` for any other shape, which is a YAML trait.
+fn check_signature(rest: &str, leaf: Option<&str>) -> Option<Result<(), String>> {
+    let (state, kind) = match rest.split_once('/') {
+        Some(("invalid", rest)) => match rest.split_once('/') {
+            Some((reason, kind)) => (reason, Some(kind)),
+            None => (rest, None),
+        },
+        Some((state, kind)) => (state, Some(kind)),
+        None => (rest, None),
+    };
+    let is_state = STATES.contains(&state) || INVALID_REASONS.contains(&state);
+    let Some(kind) = kind else {
+        // `<state>/` itself: a directory the engine fills.
+        return (is_state && leaf.is_none()).then_some(Ok(()));
+    };
+    if !is_state || !KINDS.contains(&kind) {
         return None;
     }
     let Some(leaf) = leaf else {
         return Some(Ok(()));
     };
-    let ok = match category {
-        // Mach-O `developer::<team id>`: Apple team ids are ten uppercase
-        // alphanumerics; `unknown` when the signature carries none.
-        "developer" => {
-            leaf == "unknown"
-                || (leaf.len() == 10
-                    && leaf
-                        .bytes()
-                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit()))
-        }
-        // Only Mach-O emits this category, and only for Apple platform
-        // binaries. Other `platform::` ids are YAML traits, checked statically.
-        "platform" => leaf == "apple",
-        "unknown" | "leaf" => !leaf.is_empty() && normalize_signer_name(leaf) == leaf,
-        _ => !leaf.is_empty(),
-    };
-    Some(if ok {
-        Ok(())
+    let verified_only = matches!(kind, "platform" | "developer");
+    Some(if verified_only && state != "verified" {
+        Err(format!(
+            "{kind}:: is emitted only under metadata/signature/verified/"
+        ))
+    } else if kind == "platform" && !matches!(leaf, "apple" | "microsoft") {
+        Err("the engine emits verified/platform::apple and ::microsoft only".to_string())
+    } else if leaf.is_empty() || normalize_name(leaf) != leaf {
+        Err(format!(
+            "{kind}:: leaves are normalized: `{}`",
+            normalize_name(leaf)
+        ))
     } else {
-        Err(match category {
-            "developer" => "the engine emits developer::<10-char Apple team id>; a PE signer is unknown::<name> or leaf::<name>".to_string(),
-            "platform" => "the engine emits only platform::apple; other platform:: ids must be YAML traits".to_string(),
-            _ => format!("{category}:: leaves are normalized: `{}`", normalize_signer_name(leaf)),
-        })
+        Ok(())
     })
 }
 
@@ -212,15 +215,19 @@ mod tests {
     #[test]
     fn engine_emitted_ids_validate() {
         for id in [
-            "metadata/signed/developer::ABCDE12345",
-            "metadata/signed/developer::unknown",
-            "metadata/signed/platform::apple",
-            "metadata/signed/leaf::microsoft-corporation",
-            "metadata/signed/leaf::valve-corp.",
-            "metadata/signed/unknown::digicert-trusted-g4-code-signing-rsa4096-sha384-2021-ca1",
-            "metadata/signed/id::com.apple.ls",
-            "metadata/signed/integrity::macho-code-directory-invalid",
-            "metadata/signed/developer/",
+            "metadata/signature/verified/platform::apple",
+            "metadata/signature/verified/platform::microsoft",
+            "metadata/signature/verified/developer::abcde12345",
+            "metadata/signature/verified/signer::microsoft-corporation",
+            "metadata/signature/self-signed/signer::adobe-inc.",
+            "metadata/signature/unverified/subject::digicert-trusted-g4-code-signing-rsa4096-sha384-2021-ca1",
+            "metadata/signature/unverified/id::com.apple.ls",
+            "metadata/signature/invalid/tampered/signer::microsoft-corporation",
+            "metadata/signature/invalid/bad-signature/signer::valve-corp.",
+            "metadata/signature/invalid/tampered::macho-code-directory",
+            "metadata/signature/verified/",
+            "metadata/signature/unverified/signer/",
+            "metadata/signature/invalid/tampered/",
             "metadata/entitlement/security::com.apple.security.cs.debugger",
             "metadata/entitlement/security",
             "metadata/lang/embedded::shell",
@@ -235,10 +242,11 @@ mod tests {
     #[test]
     fn impossible_engine_ids_are_rejected() {
         for id in [
-            // PE stopped emitting developer::<cn> / platform::<cn>.
-            "metadata/signed/developer::mozilla-corporation",
-            "metadata/signed/platform::authenticode-signed",
-            "metadata/signed/leaf::Microsoft Corporation",
+            // Proven-identity kinds exist only under verified/.
+            "metadata/signature/unverified/platform::microsoft",
+            "metadata/signature/self-signed/developer::abcde12345",
+            "metadata/signature/verified/platform::adobe",
+            "metadata/signature/verified/signer::Microsoft Corporation",
             "metadata/entitlement/network::com.apple.security.cs.debugger",
             "metadata/lang/embedded::ruby",
         ] {
@@ -247,10 +255,27 @@ mod tests {
     }
 
     #[test]
+    fn the_retired_signed_namespace_is_rejected() {
+        for id in [
+            "metadata/signed/platform::apple",
+            "metadata/signed/leaf::microsoft-corporation",
+            "metadata/signed/platform/",
+            "metadata/signed",
+        ] {
+            let got = check_emitted_ref(id);
+            assert!(
+                matches!(&got, Some(Err(why)) if why.contains("metadata/signature/")),
+                "{id}: {got:?}"
+            );
+        }
+    }
+
+    #[test]
     fn yaml_namespaces_fall_through_to_static_validation() {
         for id in [
-            "metadata/signed/trust-level::unsigned",
-            "metadata/signed/certificate/identity::pe-signature-verified",
+            "metadata/signature/absent::unsigned-pe-executable",
+            "metadata/signature/invalid/pe::pe-signature-digest-mismatch",
+            "metadata/signature/verified/platform/microsoft::microsoft-nt-kernel-image",
             "metadata/lang/encoding/unicode-escape::electron-js2c-marker",
             "metadata/lang/encoding/wide::shell-interpreter-powershell",
             "metadata/dylib::mscoree/dll.",
@@ -261,79 +286,44 @@ mod tests {
     }
 
     #[test]
-    fn developer_leaf_is_an_apple_team_id() {
-        for ok in ["ABCDE12345", "0123456789", "unknown"] {
-            assert_eq!(
-                check_emitted_ref(&format!("metadata/signed/developer::{ok}")),
-                Some(Ok(())),
-                "{ok}"
-            );
-        }
-        for bad in ["ABCDE1234", "ABCDE123456", "abcde12345", "ABCDE-2345", ""] {
-            assert!(
-                matches!(
-                    check_emitted_ref(&format!("metadata/signed/developer::{bad}")),
-                    Some(Err(_))
-                ),
-                "{bad}"
-            );
-        }
-    }
-
-    #[test]
     fn signer_leaves_must_be_in_normalized_form() {
-        for ok in [
-            "acme",
-            "acme-inc.",
-            "sectigo-rsa-time-stamping-signer-#3",
-            "ооо-яндекс",
-        ] {
-            for cat in ["unknown", "leaf"] {
+        for ok in ["acme", "acme-inc.", "sectigo-rsa-time-stamping-signer-3"] {
+            for kind in ["signer", "subject", "id"] {
                 assert_eq!(
-                    check_emitted_ref(&format!("metadata/signed/{cat}::{ok}")),
+                    check_emitted_ref(&format!("metadata/signature/unverified/{kind}::{ok}")),
                     Some(Ok(()))
                 );
             }
         }
-        for bad in ["Acme", "acme inc", "acme,inc", "acme(inc)", ""] {
-            let got = check_emitted_ref(&format!("metadata/signed/leaf::{bad}"));
+        for bad in [
+            "Acme",
+            "acme inc",
+            "acme,inc",
+            "acme(inc)",
+            "ооо-яндекс",
+            "",
+        ] {
+            let got = check_emitted_ref(&format!("metadata/signature/verified/signer::{bad}"));
             assert!(matches!(got, Some(Err(_))), "{bad}: {got:?}");
         }
         // The reason names the spelling the engine would have produced.
-        let Some(Err(why)) = check_emitted_ref("metadata/signed/leaf::Acme Inc") else {
+        let Some(Err(why)) = check_emitted_ref("metadata/signature/verified/signer::Acme Inc")
+        else {
             panic!("expected a rejection");
         };
         assert!(why.contains("acme-inc"), "{why}");
     }
 
     #[test]
-    fn fixed_leaf_categories_accept_only_their_values() {
-        assert_eq!(
-            check_emitted_ref("metadata/signed/platform::apple"),
-            Some(Ok(()))
-        );
-        assert!(matches!(
-            check_emitted_ref("metadata/signed/platform::microsoft-windows"),
-            Some(Err(_))
-        ));
-        assert_eq!(
-            check_emitted_ref("metadata/signed/integrity::macho-code-directory-invalid"),
-            Some(Ok(()))
-        );
-        // Not an engine category: static validation decides.
-        assert_eq!(
-            check_emitted_ref("metadata/signed/integrity::anything-else"),
-            None
-        );
-    }
-
-    #[test]
     fn directory_refs_into_engine_namespaces() {
         for dir in [
-            "metadata/signed",
-            "metadata/signed/",
-            "metadata/signed/leaf/",
-            "metadata/signed/unknown",
+            "metadata/signature",
+            "metadata/signature/",
+            "metadata/signature/verified/",
+            "metadata/signature/invalid/",
+            "metadata/signature/invalid/tampered/",
+            "metadata/signature/unverified/signer/",
+            "metadata/signature/verified/platform",
             "metadata/entitlement/",
             "metadata/entitlement/keychain/",
             "metadata/lang/embedded",
@@ -341,7 +331,8 @@ mod tests {
             assert_eq!(check_emitted_ref(dir), Some(Ok(())), "{dir}");
         }
         // YAML-only directories fall through.
-        assert_eq!(check_emitted_ref("metadata/signed/trust-level/"), None);
+        assert_eq!(check_emitted_ref("metadata/signature/absent/"), None);
+        assert_eq!(check_emitted_ref("metadata/signature/claim/"), None);
         assert_eq!(check_emitted_ref("metadata/entitlement/nonsense/"), None);
     }
 

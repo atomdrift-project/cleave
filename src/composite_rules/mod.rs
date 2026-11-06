@@ -26,8 +26,6 @@ pub(crate) mod traits;
 pub(crate) mod types;
 
 // Re-export public API
-#[allow(unused_imports)]
-pub(crate) use condition::StringValidator;
 pub(crate) use condition::{
     CommentQuery, Condition, EncodedQuery, HexQuery, KvQuery, LiteralQuery, MetricsQuery,
     PathInput, PathQuery, RawQuery, SectionQuery, SymbolQuery, TextQuery, TreeSitterQuery,
@@ -36,7 +34,6 @@ pub(crate) use context::{EvaluationContext, FindingScope};
 pub(crate) use section_map::SectionMap;
 pub(crate) use traits::{CompositeTrait, DowngradeConditions, Scope, TraitDefinition};
 
-#[allow(unused_imports)]
 pub(crate) use types::Arch;
 pub(crate) use types::FileType;
 pub use types::Platform;

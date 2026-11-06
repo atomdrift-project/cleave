@@ -272,27 +272,6 @@ where
     deserializer.deserialize_any(HexOrIntVisitor)
 }
 
-/// Decoded string (base64, xor-decoded, etc.)
-/// Deprecated: Use StringInfo with encoding_chain instead.
-#[allow(dead_code)] // Constructed in tests only
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DecodedString {
-    /// The decoded plaintext value
-    #[serde(serialize_with = "serialize_truncated_string")]
-    pub value: String,
-    /// Original encoded value (truncated to 4KB)
-    #[serde(serialize_with = "serialize_truncated_string")]
-    pub encoded: String,
-    /// Encoding method (base64, xor, etc.)
-    pub method: String,
-    /// Optional: XOR key used (for xor method)
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub key: Option<String>,
-    /// Offset in file where encoded string was found
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub offset: Option<String>,
-}
-
 /// A string literal extracted from a binary or source file
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StringInfo {
@@ -500,7 +479,7 @@ pub struct YaraMatch {
     /// YARA namespace (typically the rule file name)
     pub namespace: String,
     /// Criticality level from rule metadata
-    pub crit: String,
+    pub crit: super::Criticality,
     /// Human-readable description from rule metadata
     pub desc: String,
     /// Specific string patterns that triggered the match
@@ -521,7 +500,6 @@ pub struct YaraMatch {
     /// Raw `arch_context` metadata value from the YARA rule (not serialized).
     /// Used to filter rules at analysis time based on the file's architecture.
     #[serde(skip, default)]
-    #[allow(dead_code)] // Read by lib.rs pipeline (process_yara_result)
     pub arch_context: Option<String>,
 }
 
@@ -944,7 +922,7 @@ mod tests {
         let yara = YaraMatch {
             rule: "malware_generic".to_string(),
             namespace: "malware".to_string(),
-            crit: "hostile".to_string(),
+            crit: crate::types::Criticality::Hostile,
             desc: "Generic malware signature".to_string(),
             matched_strings: vec![],
             is_capability: false,
@@ -962,7 +940,7 @@ mod tests {
         let yara = YaraMatch {
             rule: "network_communication".to_string(),
             namespace: "capabilities".to_string(),
-            crit: "suspicious".to_string(),
+            crit: crate::types::Criticality::Suspicious,
             desc: "Network communication capability".to_string(),
             matched_strings: vec![],
             is_capability: true,
@@ -987,34 +965,5 @@ mod tests {
         };
         assert_eq!(ms.identifier, "$a");
         assert_eq!(ms.offset, 0x1234);
-    }
-
-    // ==================== DecodedString Tests ====================
-
-    #[test]
-    fn test_decoded_string_creation() {
-        let ds = DecodedString {
-            value: "hello world".to_string(),
-            encoded: "aGVsbG8gd29ybGQ=".to_string(),
-            method: "base64".to_string(),
-            key: None,
-            offset: Some("0x1000".to_string()),
-        };
-        assert_eq!(ds.value, "hello world");
-        assert_eq!(ds.method, "base64");
-        assert!(ds.key.is_none());
-    }
-
-    #[test]
-    fn test_decoded_string_with_xor_key() {
-        let ds = DecodedString {
-            value: "decrypted".to_string(),
-            encoded: "encrypted bytes".to_string(),
-            method: "xor".to_string(),
-            key: Some("0x55".to_string()),
-            offset: None,
-        };
-        assert_eq!(ds.method, "xor");
-        assert_eq!(ds.key, Some("0x55".to_string()));
     }
 }

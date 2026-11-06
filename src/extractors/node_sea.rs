@@ -281,6 +281,7 @@ mod tests {
         assert!(blob(&b, 8).is_none());
     }
     #[test]
+    #[ignore = "needs a private sample: set SEA_EXTERNAL_SAMPLE"]
     fn independent_resource_reference_if_supplied() {
         if let Ok(p) = std::env::var("SEA_EXTERNAL_SAMPLE") {
             let b = std::fs::read(p).unwrap();

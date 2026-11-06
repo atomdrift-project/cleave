@@ -315,13 +315,9 @@ mod tests {
         assert_eq!(category_to_element("analytics"), None);
         assert_eq!(category_to_element("encoded-payload"), None);
         assert_eq!(category_to_element("builder"), None);
-        // Removed during the 2026-05 trait-hierarchy resync — no findings
-        // reference these paths anymore.
+        // No trait category maps to these.
         assert_eq!(category_to_element("host"), None);
         assert_eq!(category_to_element("network"), None);
-        // NOTE: metadata/vendor was believed removed during the 2026-05
-        // resync but is present again in traits-dev — see
-        // test_2026_09_resync_mappings.
     }
 
     /// Directories added to the traits taxonomy map to their own elements.

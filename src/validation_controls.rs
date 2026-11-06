@@ -3,9 +3,11 @@
 //! This keeps temporary validator disables centralized while validators are
 //! re-enabled one at a time.
 
+#[cfg(feature = "lint")]
 use anyhow::{Result, bail};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{OnceLock, RwLock};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -67,6 +69,9 @@ const HARD_VALIDATOR_IDS: &[&str] = &[
     "score-caps",
     // A trait or composite that references itself never fires.
     "self-reference",
+    // A suppression that trusts an unverified signature lets whoever made the
+    // certificate excuse the rule.
+    "unverified-signature-suppressor",
     // A composite references a trait id that does not exist — it never fires.
     "broken-reference",
     // size/count/needs bounds make the rule unsatisfiable (or always-true).
@@ -92,6 +97,15 @@ const HARD_VALIDATOR_IDS: &[&str] = &[
     // A `type: tree-sitter` `query:` that compiles against no grammar it can
     // run on. Evaluation caches the compile failure and the rule never fires.
     "ast-query-compile",
+    // An unrecognized `crit:` loads the rule as baseline, silently demoting a
+    // hostile or suspicious detection.
+    "invalid-criticality",
+    // The third-party YARA config does not parse, so all of its overrides
+    // (disables, crit changes, unless guards) are dropped at scan time.
+    "third-party-config",
+    // An `exempt:` entry names no validator, or gives no reason: the rule
+    // would silently keep a problem its author meant to justify.
+    "invalid-exemption",
 ];
 
 /// The severity of a validator, looked up by id. Unknown/legacy ids default to
@@ -149,6 +163,7 @@ impl ValidationIssues {
         Self { issues: Vec::new() }
     }
 
+    #[cfg(feature = "lint")]
     pub(crate) fn push(&mut self, message: impl Into<String>) {
         self.push_legacy(message);
     }
@@ -158,6 +173,7 @@ impl ValidationIssues {
             .push(ValidationIssue::new(validator_id, message));
     }
 
+    #[cfg(feature = "lint")]
     pub(crate) fn push_count(
         &mut self,
         validator_id: &'static str,
@@ -263,6 +279,7 @@ impl ValidationIssue {
     }
 
     #[must_use]
+    #[cfg(feature = "lint")]
     pub(crate) fn with_count(mut self, count: usize) -> Self {
         self.count = count;
         self
@@ -332,24 +349,19 @@ static DISABLED_VALIDATOR_OVERRIDE: OnceLock<RwLock<Option<BTreeSet<String>>>> =
 /// Whether validation runs in `--soft` mode, where only [`Severity::Hard`]
 /// problems are fatal. Set once per process by the `validate` command (or the
 /// `CLEAVE_VALIDATE_SOFT` env toggle) before the mapper loads.
-static SOFT_VALIDATION_MODE: OnceLock<RwLock<bool>> = OnceLock::new();
-
-fn soft_validation_mode_lock() -> &'static RwLock<bool> {
-    SOFT_VALIDATION_MODE.get_or_init(|| RwLock::new(false))
-}
+static SOFT_VALIDATION_MODE: AtomicBool = AtomicBool::new(false);
 
 /// Enable or disable soft validation for the rest of the process.
+#[cfg(feature = "lint")]
 pub(crate) fn set_soft_validation_mode(on: bool) {
-    if let Ok(mut g) = soft_validation_mode_lock().write() {
-        *g = on;
-    }
+    SOFT_VALIDATION_MODE.store(on, Ordering::Relaxed);
 }
 
 /// The pass/fail threshold: in soft mode only [`Severity::Hard`] problems fail;
 /// otherwise any problem (`Soft` or `Hard`) fails.
 #[must_use]
 pub(crate) fn fatal_severity_threshold() -> Severity {
-    if soft_validation_mode_lock().read().is_ok_and(|g| *g) {
+    if SOFT_VALIDATION_MODE.load(Ordering::Relaxed) {
         Severity::Hard
     } else {
         Severity::Soft
@@ -362,27 +374,34 @@ pub(crate) fn fatal_severity_threshold() -> Severity {
 /// caller's chosen format without consulting the process environment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ValidationOutputFormat {
+    #[cfg_attr(not(feature = "lint"), allow(dead_code))]
     Terminal,
+    #[cfg_attr(not(feature = "lint"), allow(dead_code))]
     Json,
 }
 
-static VALIDATION_OUTPUT_FORMAT: OnceLock<RwLock<Option<ValidationOutputFormat>>> = OnceLock::new();
-
-fn validation_output_format_lock() -> &'static RwLock<Option<ValidationOutputFormat>> {
-    VALIDATION_OUTPUT_FORMAT.get_or_init(|| RwLock::new(None))
-}
+/// 0 = unset, 1 = terminal, 2 = JSON.
+static VALIDATION_OUTPUT_FORMAT: AtomicU8 = AtomicU8::new(0);
 
 /// Set the validation-issue output format for the rest of the process.
 /// Pass `None` to clear (the mapper will fall back to terminal rendering).
+#[cfg(feature = "lint")]
 pub(crate) fn set_validation_output_format(fmt: Option<ValidationOutputFormat>) {
-    if let Ok(mut g) = validation_output_format_lock().write() {
-        *g = fmt;
-    }
+    let code = match fmt {
+        None => 0,
+        Some(ValidationOutputFormat::Terminal) => 1,
+        Some(ValidationOutputFormat::Json) => 2,
+    };
+    VALIDATION_OUTPUT_FORMAT.store(code, Ordering::Relaxed);
 }
 
 #[must_use]
 pub(crate) fn validation_output_format() -> Option<ValidationOutputFormat> {
-    validation_output_format_lock().read().ok().and_then(|g| *g)
+    match VALIDATION_OUTPUT_FORMAT.load(Ordering::Relaxed) {
+        1 => Some(ValidationOutputFormat::Terminal),
+        2 => Some(ValidationOutputFormat::Json),
+        _ => None,
+    }
 }
 
 fn disabled_validator_override() -> &'static RwLock<Option<BTreeSet<String>>> {
@@ -1072,6 +1091,27 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Name concrete file types or combine groups explicitly (e.g. for: [binaries, scripts]).",
     },
     ValidatorSpec {
+        id: "invalid-exemption",
+        category: ValidatorCategory::Quality,
+        display_id: "invalid-exemption",
+        description: "An exempt: entry names an unknown validator or gives no reason.",
+        fix: "Use a validator id from `cleave validate --list` and say why the rule is exempt.",
+    },
+    ValidatorSpec {
+        id: "third-party-config",
+        category: ValidatorCategory::Quality,
+        display_id: "third-party-config",
+        description: "third-party/config.yaml does not parse.",
+        fix: "Fix the YAML; until then every override in it is ignored.",
+    },
+    ValidatorSpec {
+        id: "invalid-criticality",
+        category: ValidatorCategory::Quality,
+        display_id: "invalid-crit",
+        description: "Trait or composite has an unrecognized crit: value.",
+        fix: "Use one of exception, component, baseline, notable, suspicious, hostile.",
+    },
+    ValidatorSpec {
         id: "unknown-file-type",
         category: ValidatorCategory::Quality,
         display_id: "for-unknown",
@@ -1105,6 +1145,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         display_id: "suppress",
         description: "Rule relies on too many unless:/downgrade: suppressions.",
         fix: "Tighten the matcher, split by technique, lower criticality, or delete low-signal catch-alls.",
+    },
+    ValidatorSpec {
+        id: "unverified-signature-suppressor",
+        category: ValidatorCategory::Policy,
+        display_id: "unverified-signature-suppressor",
+        description: "unless:/downgrade: cites a signature outside metadata/signature/verified/, which proves nothing about the signer.",
+        fix: "Cite a metadata/signature/verified/ finding, or move the reference into a detection leg.",
     },
     ValidatorSpec {
         id: "dead-downgrade",
@@ -1176,6 +1223,7 @@ pub(crate) fn validator_spec(id: &str) -> Option<&'static ValidatorSpec> {
     VALIDATOR_SPECS.iter().find(|spec| spec.id == id)
 }
 
+#[cfg(feature = "lint")]
 fn resolve_validator_id(id: &str) -> Option<&'static str> {
     if id == "full-directory-composite" || id == "full-dir" || id == "reuse/full-dir" {
         return Some("many-directory-references");
@@ -1186,6 +1234,7 @@ fn resolve_validator_id(id: &str) -> Option<&'static str> {
         .map(|spec| spec.id)
 }
 
+#[cfg(feature = "lint")]
 pub(crate) fn set_disabled_validators_override(ids: Option<&str>) -> Result<()> {
     let Some(ids) = ids else {
         return Ok(());
@@ -1207,14 +1256,6 @@ pub(crate) fn set_disabled_validators_override(ids: Option<&str>) -> Result<()> 
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(disabled);
     Ok(())
-}
-
-#[must_use]
-pub(crate) fn disabled_validator_specs() -> Vec<&'static ValidatorSpec> {
-    VALIDATOR_SPECS
-        .iter()
-        .filter(|spec| is_validator_disabled(spec.id))
-        .collect()
 }
 
 /// Whether a validator has been silenced for this run via `--exclude`.
@@ -1246,7 +1287,10 @@ pub(crate) struct DisabledValidatorView {
 pub(crate) fn disabled_validators_by_category() -> BTreeMap<&'static str, Vec<DisabledValidatorView>>
 {
     let mut grouped: BTreeMap<&'static str, Vec<DisabledValidatorView>> = BTreeMap::new();
-    for spec in disabled_validator_specs() {
+    for spec in VALIDATOR_SPECS
+        .iter()
+        .filter(|spec| is_validator_disabled(spec.id))
+    {
         grouped
             .entry(spec.category.display())
             .or_default()
@@ -1263,6 +1307,7 @@ pub(crate) fn disabled_validators_by_category() -> BTreeMap<&'static str, Vec<Di
 }
 
 #[must_use]
+#[cfg(feature = "lint")]
 pub(crate) fn format_disabled_validators_terminal() -> String {
     let grouped = disabled_validators_by_category();
     if grouped.is_empty() {
@@ -1359,114 +1404,4 @@ fn issue_fix_lines(issues: &[ValidationIssue]) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn legacy_issue_extracts_prefix_location() {
-        let issue = ValidationIssue::legacy("./traits/a.yaml:12: broken rule");
-        assert_eq!(issue.file.as_deref(), Some("./traits/a.yaml"));
-        assert_eq!(issue.line, Some(12));
-        assert_eq!(issue.location(), "./traits/a.yaml:12");
-    }
-
-    #[test]
-    fn legacy_issue_extracts_in_location() {
-        let issue = ValidationIssue::legacy("trait 'x' in \"./traits/a.yaml\": bad");
-        assert_eq!(issue.file.as_deref(), Some("./traits/a.yaml"));
-        assert_eq!(issue.line, None);
-        assert_eq!(issue.location(), "./traits/a.yaml");
-    }
-
-    #[test]
-    fn detection_integrity_validators_are_hard() {
-        // The whole `--soft` policy: these break loading or firing, so they stay
-        // fatal even in soft mode.
-        for id in [
-            "duplicate-trait-id",
-            "invalid-file-type",
-            "score-caps",
-            "self-reference",
-            "broken-reference",
-            "impossible-constraint",
-            "no-search-pattern",
-            "malformed-condition",
-            "count-min-regex-alternation",
-            "invalid-id-chars",
-        ] {
-            assert_eq!(
-                validator_severity(id),
-                Severity::Hard,
-                "{id} must be Hard (fatal in --soft)"
-            );
-        }
-    }
-
-    #[test]
-    fn hygiene_validators_are_soft() {
-        // Representative authoring-hygiene checks: the rule loads and fires, so
-        // soft mode downgrades them to advisory.
-        for id in [
-            "regex-length",
-            "regex-memory",
-            "brittle-path-pattern",
-            "oversized-dir",
-            "wide-dir",
-            "tier-violation",
-            "precision",
-            "wellknown-size-filter",
-            "broad-filetype-cap",
-            "for-all",
-            "unknown-subdirectory",
-            "malware-subcategory",
-            "wellknown-composite-only",
-            "pure-alias",
-            "broad-platform-scope",
-            "all-platforms-directory",
-            "hostile-too-few-notable-legs",
-            // Forward-compat degradation on older engines, not a load-breaking flaw.
-            "unknown-metric-field",
-            "unknown-file-type",
-            // Unknown/legacy ids default to Soft.
-            "validation",
-        ] {
-            assert_eq!(
-                validator_severity(id),
-                Severity::Soft,
-                "{id} must be Soft (advisory in --soft)"
-            );
-        }
-    }
-
-    #[test]
-    fn every_hard_id_has_a_spec() {
-        // Hard ids must render with a real label/fix, not the UNKNOWN fallback.
-        for id in HARD_VALIDATOR_IDS {
-            assert!(
-                validator_spec(id).is_some(),
-                "hard validator {id} needs a ValidatorSpec"
-            );
-        }
-    }
-
-    #[test]
-    fn soft_threshold_only_when_soft_mode() {
-        set_soft_validation_mode(false);
-        assert_eq!(fatal_severity_threshold(), Severity::Soft);
-        set_soft_validation_mode(true);
-        assert_eq!(fatal_severity_threshold(), Severity::Hard);
-        set_soft_validation_mode(false);
-    }
-
-    #[test]
-    fn terminal_output_groups_fixes() {
-        let issues = vec![
-            ValidationIssue::new("regex-length", "first").with_location("a.yaml", Some(1)),
-            ValidationIssue::new("regex-length", "second").with_location("a.yaml", Some(1)),
-        ];
-        let out = format_validation_issues_terminal(&issues);
-        assert!(out.contains("a.yaml:1"));
-        assert!(out.contains("qual/re-len              2"));
-        assert_eq!(out.matches("qual/re-len:").count(), 1);
-    }
-}
+mod tests;

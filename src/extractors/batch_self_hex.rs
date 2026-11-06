@@ -193,6 +193,7 @@ mod tests {
         assert!(recover(&envelope(&vec![65; 1024])).is_none());
     }
     #[test]
+    #[ignore = "needs a private sample: set CLEAVE_BATCH_HEX_FIXTURE"]
     fn actual_fixture() {
         let Ok(path) = std::env::var("CLEAVE_BATCH_HEX_FIXTURE") else {
             return;

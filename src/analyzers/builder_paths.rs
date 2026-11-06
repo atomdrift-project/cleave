@@ -116,7 +116,7 @@ pub(crate) fn extract(data: &[u8]) -> BuilderPaths {
         let needle = prefix.bytes;
         let mut start = 0;
         while start + needle.len() <= scan.len() {
-            let Some(pos) = find_subslice(&scan[start..], needle) else {
+            let Some(pos) = memchr::memmem::find(&scan[start..], needle) else {
                 break;
             };
             let abs = start + pos;
@@ -287,10 +287,6 @@ const PREFIXES: &[Prefix] = &[
         separator: '\\',
     },
 ];
-
-fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack.windows(needle.len()).position(|w| w == needle)
-}
 
 /// Walk forward from `start` to find the end of a candidate path.
 /// Stops at the first byte that isn't a printable path character

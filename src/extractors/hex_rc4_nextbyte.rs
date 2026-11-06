@@ -4,6 +4,11 @@ pub(crate) struct Member {
     pub(crate) offset: usize,
     pub(crate) data: Vec<u8>,
 }
+/// RC4 bytes produced per file, across every candidate blob and key. Decoy
+/// blobs spend it but cannot make the search unbounded, and a candidate that
+/// fails is skipped rather than ending the search.
+const WORK_BUDGET: usize = 128 * 1024 * 1024;
+
 pub(crate) fn recover(b: &[u8]) -> Option<Member> {
     if b.len() > 64 * 1024 * 1024 {
         return None;
@@ -25,7 +30,7 @@ pub(crate) fn recover(b: &[u8]) -> Option<Member> {
     if keys.is_empty() {
         return None;
     }
-    let mut candidates = 0;
+    let mut work = 0usize;
     for at in 0..b.len().saturating_sub(16) {
         if u32_le(b, at + 4) != Some(0) || u32_le(b, at + 8) != Some(0) {
             continue;
@@ -40,12 +45,15 @@ pub(crate) fn recover(b: &[u8]) -> Option<Member> {
         if !hex.iter().all(u8::is_ascii_hexdigit) {
             continue;
         }
-        candidates += 1;
-        if candidates > 4 {
-            return None;
-        }
-        let cipher = unhex(hex)?;
+        let Some(cipher) = unhex(hex) else {
+            continue;
+        };
         for key in &keys {
+            work = work.saturating_add(cipher.len());
+            if work > WORK_BUDGET {
+                tracing::debug!(offset = at, "hex/RC4 envelope search hit its work budget");
+                return None;
+            }
             let mut plain = rc4(&cipher, key);
             for i in 0..plain.len() {
                 plain[i] = (plain[i] ^ key[i % 4]).wrapping_sub(plain[(i + 1) % plain.len()]);
@@ -102,6 +110,21 @@ mod tests {
         let mut wrong_key = outer.clone();
         wrong_key[pe.len() + 4] ^= 1;
         assert!(recover(&wrong_key).is_none());
+        // Decoy blobs ahead of the real one are skipped, not a reason to stop.
+        let mut decoyed = pe.to_vec();
+        let at = outer.len() - hex.len() - 16 - 16;
+        decoyed.extend_from_slice(&outer[pe.len()..at + 16]);
+        for _ in 0..6 {
+            decoyed.extend_from_slice(&[0x11; 4]);
+            decoyed.extend_from_slice(&[0; 8]);
+            decoyed.extend_from_slice(&2048u32.to_le_bytes());
+            decoyed.extend_from_slice(&[b'a'; 2048]);
+        }
+        decoyed.extend_from_slice(&outer[at + 16..]);
+        assert_eq!(
+            recover(&decoyed).map(|payload| payload.data),
+            Some(plain[64..].to_vec())
+        );
         let last = outer.len() - 1;
         outer[last] = b'z';
         assert!(recover(&outer).is_none());

@@ -190,6 +190,8 @@ lint: ## Run code formatting and linting checks
 	@echo "Checking formatting..."
 	@cargo fmt --all --check
 	@echo "✓ Formatting passed"
+	@./scripts/check-hygiene.sh
+	@echo "✓ Hygiene passed (file length, internal names, validator rule IDs)"
 	@echo ""
 	@echo "Running clippy with workspace lints..."
 	@cargo clippy --workspace --all-targets --all-features -- -D warnings

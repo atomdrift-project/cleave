@@ -72,7 +72,7 @@ pub(crate) fn extract_tar_entries_safe<R: Read>(
         // (case-insensitively) is renamed rather than left to overwrite it.
         // Directories keep their sanitized name so members extracted beneath
         // them still resolve.
-        let outpath = if entry_type.is_file() {
+        let outpath = if carries_file_content(entry_type) {
             guard.claim_output_path(outpath)
         } else {
             outpath
@@ -125,7 +125,7 @@ pub(crate) fn extract_tar_entries_safe<R: Read>(
 
         if entry_type.is_dir() {
             fs::create_dir_all(&outpath)?;
-        } else if entry_type.is_file() {
+        } else if carries_file_content(entry_type) {
             if size > MAX_FILE_SIZE {
                 guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
                     file: entry_name.clone(),
@@ -177,6 +177,24 @@ pub(crate) fn extract_tar_entries_safe<R: Read>(
     }
 
     Ok(())
+}
+
+/// Whether an installer unpacking this entry writes its bytes as a file.
+/// POSIX tells readers to treat an unrecognized typeflag as a regular file,
+/// and tar-rs (cargo), Python `tarfile` (pip) and GNU tar all do; contiguous
+/// (`7`) and GNU sparse files are regular files too. Reading only typeflag
+/// `0` would let a package hide its payload behind any other flag.
+pub(super) fn carries_file_content(t: tar::EntryType) -> bool {
+    !(t.is_dir()
+        || t.is_symlink()
+        || t.is_hard_link()
+        || t.is_character_special()
+        || t.is_block_special()
+        || t.is_fifo()
+        || t.is_gnu_longname()
+        || t.is_gnu_longlink()
+        || t.is_pax_global_extensions()
+        || t.is_pax_local_extensions())
 }
 
 /// Map a tar EntryType to a short forensic label.

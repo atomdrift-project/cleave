@@ -300,8 +300,8 @@ fn facts_disabled() -> bool {
 /// [`facts_disabled`] for given values of `CLEAVE_VALIDATE_FACTS` and
 /// `CLEAVE_SKIP_CACHE`.
 fn facts_disabled_by(validate_facts: Option<&str>, skip_cache: Option<&str>) -> bool {
-    validate_facts == Some("0")
-        || skip_cache.is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    validate_facts.and_then(crate::env::truthy) == Some(false)
+        || skip_cache.and_then(crate::env::truthy) == Some(true)
 }
 
 /// Open the facts for a full validation run and start reading the last run's
@@ -448,6 +448,7 @@ mod tests {
             );
         }
         assert!(facts_disabled_by(Some("0"), None));
+        assert!(facts_disabled_by(Some("off"), None));
         assert!(!facts_disabled_by(Some("1"), None));
     }
 

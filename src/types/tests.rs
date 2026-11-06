@@ -1,8 +1,7 @@
-//! Test module.
+//! Tests for the types module.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-//! Tests for types module
-
+use super::paths_env::PathAccessType;
 use super::*;
 
 #[test]
@@ -361,7 +360,7 @@ fn test_yara_match_creation() {
     let yara_match = YaraMatch {
         rule: "malware_rule".to_string(),
         namespace: "malware".to_string(),
-        crit: "hostile".to_string(),
+        crit: crate::types::Criticality::Hostile,
         desc: "Malware detected".to_string(),
         matched_strings: vec![],
         is_capability: false,
@@ -373,7 +372,7 @@ fn test_yara_match_creation() {
 
     assert_eq!(yara_match.rule, "malware_rule");
     assert_eq!(yara_match.namespace, "malware");
-    assert_eq!(yara_match.crit, "hostile");
+    assert_eq!(yara_match.crit, crate::types::Criticality::Hostile);
 }
 
 #[test]

@@ -399,51 +399,6 @@ impl MetricsExt for std::collections::BTreeMap<String, f64> {
     }
 }
 
-/// Flatten any `Serialize` value into the flat metric map under
-/// dotted keys prefixed with `prefix`. Numbers become `f64`; bools
-/// become `1.0` / `0.0`; nested objects recurse; strings and arrays
-/// are skipped (they belong in `values_tree`, not `metrics`). The
-/// transitional path during #41 — producers that still build typed
-/// structs internally can dump them into `filefacts_metrics` in one
-/// call instead of writing N `metrics.insert(...)` lines by hand.
-pub fn flatten_into_metrics<T: serde::Serialize>(
-    value: &T,
-    prefix: &str,
-    out: &mut std::collections::BTreeMap<String, f64>,
-) {
-    if let Ok(json) = serde_json::to_value(value) {
-        flatten_json_into_metrics(&json, prefix, out);
-    }
-}
-
-fn flatten_json_into_metrics(
-    value: &serde_json::Value,
-    prefix: &str,
-    out: &mut std::collections::BTreeMap<String, f64>,
-) {
-    if let serde_json::Value::Object(map) = value {
-        for (k, v) in map {
-            let key = if prefix.is_empty() {
-                k.clone()
-            } else {
-                format!("{prefix}.{k}")
-            };
-            match v {
-                serde_json::Value::Number(n) => {
-                    if let Some(f) = n.as_f64() {
-                        out.insert(key, f);
-                    }
-                }
-                serde_json::Value::Bool(b) => {
-                    out.insert(key, if *b { 1.0 } else { 0.0 });
-                }
-                serde_json::Value::Object(_) => flatten_json_into_metrics(v, &key, out),
-                _ => {}
-            }
-        }
-    }
-}
-
 /// Set a value at a dotted path inside an `Option<Box<serde_json::Value>>`
 /// kv tree, creating intermediate objects as needed. `serde_json::Value`
 /// becomes the canonical home for any metric-shaped data that doesn't

@@ -61,45 +61,6 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
     // were once re-listed here by hand, or waved through by namespace, which
     // is how a batch of renamed keys stayed "valid" while matching nothing.
 
-    // Office metrics: cross-format fields plus per-container sub-structs.
-    // Cross-format `office.*` fields flow through `filefacts_metrics`
-    // (no typed `OfficeMetrics` struct after #41). Sub-structs
-    // (`ole`, `ooxml`, `vba`, `xlm`) remain as internal data
-    // carriers populated by analyzer parsers, then flattened into
-    // `office.<sub>.<field>` via `flatten_into_metrics`.
-    use super::office_metrics::{OleMetrics, OoxmlMetrics, VbaMetrics, XlmMetrics};
-    // Cross-format `office.*` fields have no typed struct: cleave's office
-    // analyzer writes them straight into `filefacts_metrics`, so this is
-    // their declaration.
-    for field in [
-        "office.dde_link_count",
-        "office.embedded_executable_count",
-        "office.external_frame_count",
-        "office.external_image_count",
-        "office.external_oleobject_count",
-        "office.external_ref_count",
-        "office.external_template_count",
-        "office.has_macros",
-        "office.is_encrypted",
-        "office.is_macro_enabled_extension",
-        "office.vba_module_count",
-        "office.vba_source_size",
-    ] {
-        paths.insert(field.to_string());
-    }
-    for field in OleMetrics::valid_field_paths() {
-        paths.insert(format!("office.ole.{}", field));
-    }
-    for field in OoxmlMetrics::valid_field_paths() {
-        paths.insert(format!("office.ooxml.{}", field));
-    }
-    for field in VbaMetrics::valid_field_paths() {
-        paths.insert(format!("office.vba.{}", field));
-    }
-    for field in XlmMetrics::valid_field_paths() {
-        paths.insert(format!("office.xlm.{}", field));
-    }
-
     // Composite scores
     for field in ObfuscationScore::valid_field_paths() {
         paths.insert(format!("obfuscation.{}", field));
@@ -221,14 +182,8 @@ pub(crate) fn all_metric_descriptions() -> std::collections::HashMap<String, &'s
     // LNK metrics live in filefacts; field descriptions for `lnk.*`
     // come from filefacts's emission rather than a typed struct here.
 
-    // Office metrics
-    // Cross-format `office.*` field descriptions retired with the
-    // typed `OfficeMetrics` struct. Sub-struct descriptions stay.
-    use super::office_metrics::{OleMetrics, OoxmlMetrics, VbaMetrics, XlmMetrics};
-    add!("office.ole", OleMetrics);
-    add!("office.ooxml", OoxmlMetrics);
-    add!("office.vba", VbaMetrics);
-    add!("office.xlm", XlmMetrics);
+    // Office metrics (`office.*`) come from filefacts, described where it
+    // emits them.
 
     map
 }

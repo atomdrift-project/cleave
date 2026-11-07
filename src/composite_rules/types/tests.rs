@@ -374,6 +374,7 @@ fn every_variant_has_a_distinct_type_bit() {
 }
 
 #[test]
+#[cfg(feature = "lint")]
 fn label_round_trips_through_from_str() {
     // Every type name an author is shown must be one they can type back.
     // Three deliberate exceptions, none of which `from_str` owns:

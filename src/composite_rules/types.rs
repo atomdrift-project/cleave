@@ -1317,6 +1317,7 @@ impl FileType {
     /// `label_round_trips_through_from_str` pins every arm, and the match is
     /// exhaustive, so a new variant cannot be added without naming it here.
     #[must_use]
+    #[cfg(feature = "lint")]
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::All => "all",

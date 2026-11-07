@@ -1,7 +1,9 @@
-//! OLE2/CFBF compound document parser for legacy Office formats.
+//! Payload extraction from OLE2 compound files (.doc, .xls, .ppt, .msg, .msi).
 //!
-//! Handles .doc, .xls, .ppt, .msg and other legacy Microsoft Office documents
-//! that use the Compound File Binary Format (CFBF/OLE2).
+//! filefacts parses the document (`office.*`); this module only copies out
+//! the bytes cleave analyzes as sub-files: streams that are executables,
+//! cabinets or MSI Binary-table scripts, OLE1 Packager payloads at the
+//! offsets filefacts located, and Outlook attachments.
 
 // Parses attacker-controlled bytes: index and offset arithmetic must be
 // checked, so a forged header is a parse error rather than a panic.
@@ -82,344 +84,96 @@ pub(crate) struct MsgAttachment {
     pub data: Vec<u8>,
 }
 
-/// Parsed OLE2 compound document.
-#[derive(Debug)]
-pub(crate) struct Ole2Document {
-    /// Document subtype detected from streams
-    pub doc_subtype: Ole2Subtype,
-    /// Whether VBA macros were found
-    pub has_vba: bool,
-    /// Whether the document is encrypted
-    pub has_encryption: bool,
-    /// Stream names found in the document
-    pub stream_names: Vec<String>,
-    /// Streams containing embedded PE/ELF executables (with extracted bytes for sub-analysis)
-    pub embedded_executables: Vec<EmbeddedExecutable>,
-    /// OLE10Native embedded objects (filename, size)
-    pub ole10_native_objects: Vec<Ole10NativeInfo>,
-    /// Outlook message attachments (empty unless `doc_subtype` is `Msg`).
-    /// An attachment whose data stream is already in `embedded_executables`
-    /// is left out so it is analyzed once.
-    pub msg_attachments: Vec<MsgAttachment>,
-    /// Known dangerous CLSIDs found on storages
-    pub dangerous_clsids: Vec<ClsidMatch>,
-    /// Document metadata (author, title, etc.)
-    pub metadata: DocumentMetadata,
-    /// CompObj stream contents (None when stream missing or malformed).
-    pub compobj: Option<CompObjData>,
-}
-
-/// Info about an OLE10Native embedded object.
+/// A payload filefacts located inside a stream (an OLE1 Packager object's
+/// file), from an `office.embedded[]` entry with a `data_offset`.
 #[derive(Debug, Clone)]
-pub(crate) struct Ole10NativeInfo {
-    pub stream_path: String,
-    pub embedded_filename: Option<String>,
-    pub embedded_size: u32,
+pub(crate) struct LocatedPayload {
+    pub stream: String,
+    pub filename: String,
+    pub offset: u64,
+    pub size: u64,
+    pub kind: EmbeddedExecKind,
 }
 
-/// A dangerous CLSID found on a storage entry.
-#[derive(Debug, Clone)]
-pub(crate) struct ClsidMatch {
-    pub storage_path: String,
-    pub clsid: String,
-    pub description: &'static str,
-}
-
-/// Office document subtype detected from OLE2 stream names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Ole2Subtype {
-    Word,
-    Excel,
-    PowerPoint,
-    Msg,
-    Msi,
-    Unknown,
-}
-
-impl Ole2Subtype {
-    /// Return the file type string for report metadata.
-    pub(crate) fn as_str(&self) -> &'static str {
-        match self {
-            Self::Word => "doc",
-            Self::Excel => "xls",
-            Self::PowerPoint => "ppt",
-            Self::Msg => "msg",
-            Self::Msi => "msi",
-            Self::Unknown => "ole",
-        }
-    }
-}
-
-/// Document metadata extracted from SummaryInformation /
-/// DocumentSummaryInformation property sets.
-///
-/// String fields come from `\x05SummaryInformation` per MS-OLEPS;
-/// numeric fields cover both streams.  Keep all fields optional —
-/// many real-world documents omit several properties.
+/// The payloads of one compound file, for sub-analysis.
 #[derive(Debug, Default)]
-pub(crate) struct DocumentMetadata {
-    pub title: Option<String>,
-    pub author: Option<String>,
-    pub last_author: Option<String>,
-    pub application: Option<String>,
-    /// PIDSI_PAGECOUNT (0x0E) — VT_I4.  Zero on freshly-built lures.
-    pub page_count: Option<u32>,
-    /// PIDSI_WORDCOUNT (0x0F) — VT_I4.  Low values on lures.
-    pub word_count: Option<u32>,
-    /// PIDSI_CHARCOUNT (0x10) — VT_I4.
-    pub char_count: Option<u32>,
-    /// PIDSI_REVNUMBER (0x09) — VT_LPSTR holding a decimal integer
-    /// (Word writes "1" / "12" etc.); we parse the leading number.
-    pub revision_number: Option<u32>,
-    /// PIDSI_EDITTIME (0x0A) — VT_FILETIME stored as a duration in
-    /// 100-ns units.  Surfaced as minutes for trait friendliness.
-    pub total_edit_time_minutes: Option<u64>,
-    /// PIDDSI_SECURITY (0x13) from DocumentSummaryInformation —
-    /// bit 0 password-protected, bit 1 read-only-recommended,
-    /// bit 2 read-only-enforced, bit 3 locked.
-    pub security_flag: Option<u32>,
+pub(crate) struct Ole2Payloads {
+    pub executables: Vec<EmbeddedExecutable>,
+    pub msg_attachments: Vec<MsgAttachment>,
 }
 
-/// CompObj stream contents per MS-OLEDS §2.3.6.1.  Surfaces the three
-/// ProgID/clipboard fields most useful for fake-extension detection
-/// — a `.doc` whose CompObj says `Excel.Sheet.8` is a known
-/// masquerade pattern (CVE-2017-0199 droppers, malicious DOCX renames).
-#[derive(Debug, Default, Clone)]
-pub(crate) struct CompObjData {
-    /// AnsiUserType — human-readable type label
-    /// (e.g., "Microsoft Office Excel Worksheet").
-    pub user_type: String,
-    /// AnsiClipboardFormat string variant (e.g., "Biff8"). Empty when
-    /// the format is a registered clipboard ID rather than a string.
-    pub clipboard_format: String,
-    /// "Reserved3" string — the canonical ProgID Office writes here
-    /// (e.g., "Excel.Sheet.8", "Word.Document.8", "PowerPoint.Show.8").
-    pub app_version: String,
-}
-
-/// Parse an OLE2 compound document.
-pub(crate) fn parse_ole2(data: &[u8]) -> Result<Ole2Document> {
-    let cursor = Cursor::new(data);
-    let mut comp = cfb::CompoundFile::open(cursor)?;
-
-    // Enumerate all entries, collecting CLSIDs from storages.
-    // `is_stream` is captured so embedded-executable scanning can skip storages
-    // without round-tripping through `open_stream` errors.
-    let mut entries: Vec<(String, u64, bool)> = Vec::new();
-    let mut dangerous_clsids: Vec<ClsidMatch> = Vec::new();
-
-    for entry in comp.walk() {
-        let path = entry.path().to_string_lossy().to_string();
-        let len = entry.len();
-        let is_stream = entry.is_stream();
-
-        // Check CLSIDs on storage entries
-        if entry.is_storage() {
-            let clsid = entry.clsid().to_string();
-            if let Some(desc) = lookup_dangerous_clsid(&clsid) {
-                dangerous_clsids.push(ClsidMatch {
-                    storage_path: path.clone(),
-                    clsid,
-                    description: desc,
-                });
-            }
+/// Copy out the payloads of the compound file `data`: executable and script
+/// streams, the `located` payloads inside streams, and, for an Outlook
+/// message, its attachments.
+pub(crate) fn extract_payloads(
+    data: &[u8],
+    is_msg: bool,
+    located: &[LocatedPayload],
+) -> Result<Ole2Payloads> {
+    let mut comp = cfb::CompoundFile::open(Cursor::new(data))?;
+    let entries: Vec<(String, u64, bool)> = comp
+        .walk()
+        .map(|e| {
+            (
+                e.path().to_string_lossy().into_owned(),
+                e.len(),
+                e.is_stream(),
+            )
+        })
+        .collect();
+    let mut executables = find_embedded_executables(&mut comp, &entries);
+    for payload in located {
+        if executables.len() >= MAX_EMBEDDED_EXECUTABLES {
+            break;
         }
-
-        entries.push((path, len, is_stream));
+        if let Some(executable) = carve(&mut comp, payload) {
+            executables.push(executable);
+        }
     }
-
-    let stream_names: Vec<String> = entries.iter().map(|(name, _, _)| name.clone()).collect();
-
-    // Detect document subtype
-    let doc_subtype = detect_subtype(&stream_names);
-
-    // Check for VBA
-    let has_vba = stream_names
-        .iter()
-        .any(|s| s.to_lowercase().contains("/vba/") || s.to_lowercase().ends_with("/vba"));
-
-    // VBA module source is decompressed by filefacts and read back via
-    // `vba::modules_from_ctx`; the parser only records macro presence.
-
-    // Check for encryption
-    let has_encryption = stream_names
-        .iter()
-        .any(|s| s.contains("EncryptionInfo") || s.contains("EncryptedPackage"));
-
-    // Check for embedded executables
-    let embedded_executables = find_embedded_executables(&mut comp, &entries);
-
-    // Check for OLE10Native embedded objects
-    let ole10_native_objects = find_ole10_native(&mut comp, &entries);
-
-    let msg_attachments = if doc_subtype == Ole2Subtype::Msg {
-        let already_extracted: Vec<&str> = embedded_executables
-            .iter()
-            .map(|e| e.stream_path.as_str())
-            .collect();
+    let msg_attachments = if is_msg {
+        let already_extracted: Vec<&str> =
+            executables.iter().map(|e| e.stream_path.as_str()).collect();
         find_msg_attachments(&mut comp, &entries, &already_extracted)
     } else {
         Vec::new()
     };
-
-    // Extract metadata
-    let metadata = extract_metadata(&mut comp);
-
-    // CompObj stream parsing — best-effort; missing or malformed
-    // streams produce None and the doc is otherwise unaffected.
-    let compobj = extract_compobj(&mut comp);
-
-    Ok(Ole2Document {
-        doc_subtype,
-        has_vba,
-        has_encryption,
-        stream_names,
-        embedded_executables,
-        ole10_native_objects,
+    Ok(Ole2Payloads {
+        executables,
         msg_attachments,
-        dangerous_clsids,
-        metadata,
-        compobj,
     })
 }
 
-/// Read and parse the `\x01CompObj` stream if present.
-fn extract_compobj(comp: &mut cfb::CompoundFile<Cursor<&[u8]>>) -> Option<CompObjData> {
-    let mut data = Vec::new();
-    {
-        let mut stream = comp.open_stream("\x01CompObj").ok()?;
-        if stream.read_to_end(&mut data).is_err() {
-            return None;
-        }
-    }
-    parse_compobj(&data)
-}
-
-/// Parse the CompObj stream layout (MS-OLEDS §2.3.6.1).
-///
-/// The stream begins with a 28-byte fixed header (Reserved1 4 + Version
-/// 4 + Reserved2 20) followed by:
-///   - AnsiUserType: LengthPrefixedAnsiString
-///   - AnsiClipboardFormat: ClipboardFormatOrAnsiString
-///   - Reserved3:  optional LengthPrefixedAnsiString (the ProgID)
-///
-/// LengthPrefixedAnsiString = u32 LE length (incl. trailing NUL) +
-/// `length` bytes. A length of 0 means absent. ClipboardFormat encodes
-/// either a 32-bit clipboard ID (1..=0x1FF, no string) or a marker
-/// `0xFFFFFFFE`/`0xFFFFFFFF` followed by a length-prefixed string. We
-/// surface only the *string* variant — the registered-ID case isn't
-/// useful for masquerade detection.
-fn parse_compobj(data: &[u8]) -> Option<CompObjData> {
-    const HEADER_SIZE: usize = 28;
-    if data.len() < HEADER_SIZE + 4 {
+/// The `payload` bytes of its stream, named for the packaged file beside it
+/// (`/ObjectPool/_1/payload.exe`) so the member path reads as what it is.
+fn carve(
+    comp: &mut cfb::CompoundFile<Cursor<&[u8]>>,
+    payload: &LocatedPayload,
+) -> Option<EmbeddedExecutable> {
+    if payload.size < MIN_EMBEDDED_EXECUTABLE_SIZE || payload.size > MAX_EMBEDDED_EXECUTABLE_SIZE {
         return None;
     }
-    let mut pos = HEADER_SIZE;
-    let mut out = CompObjData::default();
-
-    // 1) AnsiUserType
-    if let Some((s, advance)) = data.get(pos..).and_then(read_length_prefixed_ansi) {
-        out.user_type = s;
-        pos = pos.checked_add(advance)?;
-    } else {
-        return Some(out);
+    let mut stream = comp.open_stream(&payload.stream).ok()?;
+    let end = payload.offset.checked_add(payload.size)?;
+    if end > stream.len() {
+        return None;
     }
-
-    // 2) AnsiClipboardFormat — MS-OLEDS encodes this as either a 4-byte
-    //    registered clipboard ID or a length-prefixed ANSI string. The
-    //    naive "small value = ID, large value = length" heuristic fails
-    //    for short formats like `"Biff8\0"` (length 6, looks like an
-    //    ID).  We prefer the string interpretation: if the declared
-    //    length fits in the remaining buffer AND the bytes look like
-    //    printable ASCII, accept as a string. Otherwise fall back to
-    //    "registered ID, advance 4".
-    let Some(marker) = le_u32(data, pos) else {
-        return Some(out);
-    };
-    let str_start = pos.saturating_add(4);
-    if marker == 0 {
-        pos = str_start;
-    } else {
-        let len = marker as usize;
-        let format = data
-            .get(str_start..str_start.saturating_add(len))
-            .filter(|field| {
-                (1..=256).contains(&len)
-                    && field
-                        .iter()
-                        .all(|b| b.is_ascii_graphic() || *b == b' ' || *b == 0)
-            });
-        if let Some(format) = format {
-            out.clipboard_format = sanitize_ansi(format);
-            pos = str_start.saturating_add(len);
-        } else {
-            // Registered clipboard ID — no string follows.
-            pos = str_start;
-        }
-    }
-
-    // 3) Reserved3 — optional LengthPrefixedAnsiString carrying ProgID.
-    if let Some((s, _advance)) = data.get(pos..).and_then(read_length_prefixed_ansi) {
-        out.app_version = s;
-    }
-
-    Some(out)
-}
-
-/// Read a `LengthPrefixedAnsiString` from the start of `buf`. Returns
-/// the decoded string (with trailing NUL stripped) and the number of
-/// bytes consumed. Returns `None` when the buffer is too short or the
-/// length field exceeds remaining bytes.
-fn read_length_prefixed_ansi(buf: &[u8]) -> Option<(String, usize)> {
-    let len = le_u32(buf, 0)? as usize;
-    if len == 0 {
-        return Some((String::new(), 4));
-    }
-    let end = len.checked_add(4)?;
-    Some((sanitize_ansi(buf.get(4..end)?), end))
-}
-
-fn sanitize_ansi(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes)
-        .trim_end_matches('\0')
-        .to_string()
-}
-
-/// Detect document subtype from stream names.
-fn detect_subtype(stream_names: &[String]) -> Ole2Subtype {
-    for name in stream_names {
-        let lower = name.to_lowercase();
-        if lower.contains("worddocument") {
-            return Ole2Subtype::Word;
-        }
-        if lower.contains("workbook") || lower.contains("/book") {
-            return Ole2Subtype::Excel;
-        }
-        if lower.contains("powerpoint document") || lower.contains("powerpoint") {
-            return Ole2Subtype::PowerPoint;
-        }
-        if lower.contains("__properties_version") || lower.contains("__substg1") {
-            return Ole2Subtype::Msg;
-        }
-        // MSI installers: _Tables stream or Binary. streams with MSI structure
-        if lower.contains("_tables") || lower.contains("/binary.") {
-            return Ole2Subtype::Msi;
-        }
-        // MSI installers also encode their table/stream names into the Unicode
-        // PUA-ish range U+3800..U+4900. A stream whose payload-name (everything
-        // after the leading "/" and excluding the SummaryInformation control
-        // stream) is composed entirely of codepoints in that range is an MSI
-        // table/storage entry — see the MSI streamname encoding in [MS-MSI].
-        let payload = name.trim_start_matches('/').trim_start_matches('\u{0005}');
-        if !payload.is_empty()
-            && payload
-                .chars()
-                .all(|c| ('\u{3800}'..'\u{4900}').contains(&c))
-        {
-            return Ole2Subtype::Msi;
-        }
-    }
-    Ole2Subtype::Unknown
+    std::io::copy(
+        &mut (&mut stream).take(payload.offset),
+        &mut std::io::sink(),
+    )
+    .ok()?;
+    let mut data = Vec::with_capacity(usize::try_from(payload.size).ok()?);
+    stream.take(payload.size).read_to_end(&mut data).ok()?;
+    let parent = payload
+        .stream
+        .rsplit_once('/')
+        .map_or("", |(parent, _)| parent);
+    let name = sanitize_attachment_filename(Some(&payload.filename), 0);
+    Some(EmbeddedExecutable {
+        stream_path: format!("{parent}/{name}"),
+        kind: payload.kind,
+        data,
+    })
 }
 
 /// Scan streams for executable binaries, cabinets, and MSI Binary scripts.
@@ -771,270 +525,6 @@ pub(crate) fn sanitize_attachment_filename(raw: Option<&str>, index: u32) -> Str
     } else {
         name.to_string()
     }
-}
-
-/// Find OLE10Native embedded objects and extract their metadata.
-///
-/// OLE10Native streams contain embedded files (often executables) packaged
-/// using the legacy OLE1 embedding format. The stream starts with a size
-/// field followed by embedded file metadata (filename, path).
-fn find_ole10_native(
-    comp: &mut cfb::CompoundFile<Cursor<&[u8]>>,
-    entries: &[(String, u64, bool)],
-) -> Vec<Ole10NativeInfo> {
-    let mut found = Vec::new();
-
-    for (path, size, _is_stream) in entries {
-        if *size < 6 || *size > 50 * 1024 * 1024 {
-            continue;
-        }
-
-        // OLE10Native streams have \x01Ole10Native in the name
-        let lower = path.to_lowercase();
-        if !lower.contains("ole10native") {
-            continue;
-        }
-
-        if let Ok(mut stream) = comp.open_stream(path) {
-            let mut header = vec![0u8; (*size).min(512) as usize];
-            if stream.read_exact(&mut header).is_ok() {
-                // OLE10Native format: u32 total_size, u16 version (==2)
-                if let (Some(total_size), Some(version)) = (le_u32(&header, 0), le_u16(&header, 4))
-                {
-                    let embedded_filename = if version == 2 {
-                        // After version, there are null-terminated strings: label, filename, ...
-                        let bytes = header.get(6..).unwrap_or_default();
-                        bytes
-                            .iter()
-                            .position(|&byte| byte == 0)
-                            .filter(|&end| end > 0)
-                            .and_then(|end| bytes.get(..end))
-                            .map(|label| String::from_utf8_lossy(label).into_owned())
-                    } else {
-                        None
-                    };
-
-                    found.push(Ole10NativeInfo {
-                        stream_path: path.clone(),
-                        embedded_filename,
-                        embedded_size: total_size,
-                    });
-                }
-            }
-        }
-    }
-
-    found
-}
-
-/// Known dangerous CLSIDs that indicate specific exploit vectors or suspicious objects.
-///
-/// These CLSIDs on storage entries signal known attack techniques:
-/// - Equation Editor: CVE-2017-11882, CVE-2018-0802
-/// - Packager Shell Object: Embeds arbitrary files
-/// - scriptlet.typelib: Script execution
-fn lookup_dangerous_clsid(clsid: &str) -> Option<&'static str> {
-    // Normalize: cfb returns lowercase with hyphens
-    match clsid {
-        // Equation Editor (CVE-2017-11882, CVE-2018-0802)
-        "0002ce02-0000-0000-c000-000000000046" => Some("Equation Editor 3.0 (CVE-2017-11882)"),
-        // Packager Shell Object — embeds arbitrary files
-        "f20da720-c02f-11ce-927b-0800095ae340" => Some("OLE Package Shell Object"),
-        // scriptlet.typelib — script execution
-        "06290bd2-48aa-11d2-8432-006008c3fbfc" => Some("scriptlet.typelib (script execution)"),
-        // htmlfile — HTML Application
-        "25336920-03f9-11cf-8fd0-00aa00686f13" => Some("htmlfile (HTML document)"),
-        // MSCOMCTL.ListViewCtrl — CVE-2012-0158
-        "996bf5e0-8044-4650-adeb-0b013914e99c" => Some("MSCOMCTL.ListViewCtrl (CVE-2012-0158)"),
-        "bdd1f04b-858b-11d1-b16a-00c0f0283628" => Some("MSCOMCTL.ListViewCtrl.2 (CVE-2012-0158)"),
-        // Shell.Explorer — embedded browser
-        "8856f961-340a-11d0-a96b-00c04fd705a2" => Some("Shell.Explorer (embedded browser)"),
-        // OLE2Link — external link object
-        "00000300-0000-0000-c000-000000000046" => Some("StdOleLink (external link)"),
-        _ => None,
-    }
-}
-
-/// Extract metadata from SummaryInformation and
-/// DocumentSummaryInformation property sets.
-///
-/// The OLE property set format (MS-OLEPS) uses fixed-offset records.
-/// Both streams share the same outer structure; only the property IDs
-/// they expose differ.
-fn extract_metadata(comp: &mut cfb::CompoundFile<Cursor<&[u8]>>) -> DocumentMetadata {
-    let mut meta = DocumentMetadata::default();
-
-    // \x05SummaryInformation — title/author/page count/edit time/etc.
-    if let Ok(mut stream) = comp.open_stream("\x05SummaryInformation") {
-        let mut data = Vec::new();
-        if stream.read_to_end(&mut data).is_ok() {
-            parse_summary_info(&data, &mut meta);
-        }
-    }
-    // \x05DocumentSummaryInformation — security flag and custom props.
-    if let Ok(mut stream) = comp.open_stream("\x05DocumentSummaryInformation") {
-        let mut data = Vec::new();
-        if stream.read_to_end(&mut data).is_ok() {
-            parse_doc_summary_info(&data, &mut meta);
-        }
-    }
-
-    meta
-}
-
-/// Parse OLE2 SummaryInformation property set (MS-OLEPS).
-///
-/// Structure:
-/// - 28 byte header (byte_order, version, os_version, clsid, num_sections)
-/// - Section header: fmtid (16 bytes) + offset (4 bytes) per section
-/// - Section: size (4 bytes) + num_properties (4 bytes) + property entries
-/// - Property entry: property_id (4 bytes) + offset (4 bytes)
-fn parse_summary_info(data: &[u8], meta: &mut DocumentMetadata) {
-    let Some(section) = locate_first_section(data) else {
-        return;
-    };
-    for (prop_id, prop_offset) in property_entries(section) {
-        // Property IDs for SummaryInformation (PIDSI_*):
-        // 0x02 Title, 0x04 Author, 0x06 ApplicationName, 0x08 LastAuthor,
-        // 0x09 RevNumber, 0x0A EditTime, 0x0E PageCount, 0x0F WordCount,
-        // 0x10 CharCount, 0x0C CreateTime, 0x0D LastSaveTime
-        match prop_id {
-            0x02 => meta.title = read_property_string(section, prop_offset),
-            0x04 => meta.author = read_property_string(section, prop_offset),
-            0x06 => meta.application = read_property_string(section, prop_offset),
-            0x08 => meta.last_author = read_property_string(section, prop_offset),
-            0x09 => {
-                if let Some(s) = read_property_string(section, prop_offset) {
-                    meta.revision_number = parse_leading_u32(&s);
-                }
-            }
-            0x0A => meta.total_edit_time_minutes = read_filetime_minutes(section, prop_offset),
-            0x0E => meta.page_count = read_property_u32(section, prop_offset),
-            0x0F => meta.word_count = read_property_u32(section, prop_offset),
-            0x10 => meta.char_count = read_property_u32(section, prop_offset),
-            _ => {}
-        }
-    }
-}
-
-/// Parse DocumentSummaryInformation. Currently captures `PIDDSI_SECURITY`
-/// (property 0x13) only; future expansion can pick up custom properties
-/// here without touching SummaryInformation parsing.
-fn parse_doc_summary_info(data: &[u8], meta: &mut DocumentMetadata) {
-    let Some(section) = locate_first_section(data) else {
-        return;
-    };
-    for (prop_id, prop_offset) in property_entries(section) {
-        if prop_id == 0x13 {
-            meta.security_flag = read_property_u32(section, prop_offset);
-        }
-    }
-}
-
-/// Walk the MS-OLEPS outer structure and return a slice into the first
-/// property-set section (the `size + num_properties + entries` block).
-/// - 28 byte header (byte_order, version, os_version, clsid, num_sections)
-/// - Section header: fmtid (16 bytes) + offset (4 bytes) per section
-fn locate_first_section(data: &[u8]) -> Option<&[u8]> {
-    if data.len() < 48 || le_u16(data, 0)? != 0xFFFE || le_u32(data, 24)? == 0 {
-        return None;
-    }
-    let section_offset = le_u32(data, 44)? as usize;
-    if section_offset.checked_add(8)? > data.len() {
-        return None;
-    }
-    data.get(section_offset..)
-}
-
-/// The `(property_id, offset)` entries of a property-set section (each an
-/// 8-byte `id + offset` pair after the `size + num_properties` header), as
-/// far as both the declared count and the section's bytes go. Entries whose
-/// value would start past the section are skipped.
-fn property_entries(section: &[u8]) -> impl Iterator<Item = (u32, usize)> + '_ {
-    let count = le_u32(section, 4).map_or(0, |n| n as usize);
-    section
-        .get(8..)
-        .unwrap_or_default()
-        .as_chunks::<8>()
-        .0
-        .iter()
-        .take(count)
-        .filter_map(|entry| {
-            let id = le_u32(entry, 0)?;
-            let offset = le_u32(entry, 4)? as usize;
-            (offset.checked_add(8)? <= section.len()).then_some((id, offset))
-        })
-}
-
-/// Read a VT_I4 (0x0003) property value as u32.  Negative values are
-/// clamped to zero — the four numeric SummaryInformation properties
-/// we care about are intrinsically non-negative.
-fn read_property_u32(section: &[u8], offset: usize) -> Option<u32> {
-    if le_u32(section, offset)? != 0x0003 {
-        return None;
-    }
-    let value = le_u32(section, offset.checked_add(4)?)? as i32;
-    Some(value.max(0) as u32)
-}
-
-/// Read a VT_FILETIME (0x0040) property value and return the duration
-/// in *minutes*.  PIDSI_EDITTIME stores the total time the document
-/// has been edited, packaged as a FILETIME-style duration in 100-ns
-/// units.  Real edit times are tiny relative to absolute FILETIMEs,
-/// so a literal-FILETIME-as-timestamp interpretation overflows; we
-/// always treat the value as a duration here.
-fn read_filetime_minutes(section: &[u8], offset: usize) -> Option<u64> {
-    if le_u32(section, offset)? != 0x0040 {
-        return None;
-    }
-    let raw = le_u64(section, offset.checked_add(4)?)?;
-    // 100-ns units → minutes.
-    raw.checked_div(600_000_000)
-}
-
-/// Parse the leading run of decimal digits as a u32 (ignoring trailing
-/// junk like "12.0" → 12). Used for `PIDSI_REVNUMBER` which Word stores
-/// as a string.
-fn parse_leading_u32(s: &str) -> Option<u32> {
-    let digits: String = s.chars().take_while(char::is_ascii_digit).collect();
-    digits.parse().ok()
-}
-
-/// Read a VT_LPSTR property value from the section.
-fn read_property_string(section: &[u8], offset: usize) -> Option<String> {
-    // VT_LPSTR = 0x001E
-    if le_u32(section, offset)? != 0x001E {
-        return None;
-    }
-    let str_len = le_u32(section, offset.checked_add(4)?)? as usize;
-    if str_len == 0 {
-        return None;
-    }
-    let start = offset.checked_add(8)?;
-    let bytes = section.get(start..start.checked_add(str_len)?)?;
-    let s = String::from_utf8_lossy(bytes)
-        .trim_end_matches('\0')
-        .to_string();
-
-    if s.is_empty() { None } else { Some(s) }
-}
-
-fn le_u16(buf: &[u8], at: usize) -> Option<u16> {
-    Some(u16::from_le_bytes(
-        buf.get(at..at.checked_add(2)?)?.try_into().ok()?,
-    ))
-}
-
-fn le_u32(buf: &[u8], at: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(
-        buf.get(at..at.checked_add(4)?)?.try_into().ok()?,
-    ))
-}
-
-fn le_u64(buf: &[u8], at: usize) -> Option<u64> {
-    Some(u64::from_le_bytes(
-        buf.get(at..at.checked_add(8)?)?.try_into().ok()?,
-    ))
 }
 
 #[cfg(test)]

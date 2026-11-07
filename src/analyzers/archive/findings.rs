@@ -382,9 +382,6 @@ pub(super) fn is_benign_archive_symlink_escape(path: &str) -> bool {
 /// a container image layer's root filesystem. Decided by content, never by the
 /// file name, which whoever built the archive chooses.
 pub(super) fn carries_system_symlinks(archive_type: FileType, contents: &[ArchiveEntry]) -> bool {
-    if std::env::var_os("CLEAVE_DBG_SYMLINK").is_some() {
-        eprintln!("DBG carries type={archive_type:?} n={} sample={:?}", contents.len(), contents.iter().filter(|e| e.path.contains("os-release")).map(|e| e.path.clone()).take(3).collect::<Vec<_>>());
-    }
     match archive_type {
         FileType::PkgArch => is_system_package(archive_type, contents),
         // Alpine/Wolfi packages install into `/` as root and routinely ship

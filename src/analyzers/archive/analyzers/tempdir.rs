@@ -513,14 +513,17 @@ impl ArchiveAnalyzer {
         // Ordering by signal before the cap is the second half: a sample taken
         // for size should never be what decides a verdict, so the members a
         // verdict rests on sort to the front and survive it.
+        // Type each member from its bytes, as the in-memory path does.
         let mut non_class_files: Vec<_> = other_files
             .into_iter()
             .filter(|e| {
                 let path = e.path();
-                is_nested_archive_member(path, None)
-                    || !is_benign_java_path(path.strip_prefix(temp_dir).unwrap_or(path))
+                let file_type =
+                    crate::analyzers::detect_file_type(path).unwrap_or(FileType::Unknown);
+                (is_nested_archive_member(&file_type)
+                    || !is_benign_java_path(path.strip_prefix(temp_dir).unwrap_or(path)))
+                    && is_interesting_jar_resource(path, &file_type)
             })
-            .filter(|e| is_interesting_jar_resource(e.path(), None))
             .collect();
         // Path breaks rank ties so the selection is reproducible; walkdir
         // order is filesystem order, which is not.

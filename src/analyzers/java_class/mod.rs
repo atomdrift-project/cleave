@@ -160,14 +160,6 @@ impl Analyzer for JavaClassAnalyzer {
 
         Ok(report)
     }
-
-    fn can_analyze(&self, file_path: &Path) -> bool {
-        if let Some(ext) = file_path.extension() {
-            ext == "class"
-        } else {
-            false
-        }
-    }
 }
 
 impl Default for JavaClassAnalyzer {

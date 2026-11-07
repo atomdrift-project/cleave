@@ -67,6 +67,13 @@ const PINNED_ISSUERS: &[(&str, &str)] = &[
         "c7460b0edda1b44c8e2164b234ebecc3962a6a37a936b74a6e7d46682938f084",
         "DigiCert EV Code Signing CA (SHA2)",
     ),
+    // Intel's oneAPI runtime DLLs (qkmalloc, 2025). Published at
+    // crt.sectigo.com; issued by Sectigo Public Code Signing Root R46, whose
+    // cross-certificate chains to USERTrust RSA Certification Authority.
+    (
+        "7fb0f58d71130abe724969f1cdc9b6a8d3274da18d059229b009a5b9b5557445",
+        "Sectigo Public Code Signing CA R36",
+    ),
 ];
 
 /// The pinned CA that signed this signature's code-signing leaf, read from

@@ -580,7 +580,8 @@ impl ArchiveAnalyzer {
                         // parser hide the member's behavior: retry using its
                         // path-derived type, while keeping the parse failure
                         // visible in the fallback report.
-                        let fallback_type = crate::analyzers::detect_file_type_from_path(file_path);
+                        let fallback_type =
+                            crate::analyzers::declared_file_type_from_name(file_path);
                         if fallback_type == FileType::Unknown
                             || fallback_type == *file_type
                             || fallback_type.is_archive()

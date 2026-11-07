@@ -475,52 +475,34 @@ fn test_plain_embedded_offsets_are_parent_relative() {
 
 #[test]
 fn test_top_level_self_detection_for_php_is_suppressed() {
+    // The host is the member's detected type, as every analyzer passes it.
+    let php = Some(&FileType::Php);
+    assert!(is_top_level_self_detection(false, 0, &FileType::Php, php));
+    assert!(!is_top_level_self_detection(true, 0, &FileType::Php, php));
+    assert!(!is_top_level_self_detection(false, 32, &FileType::Php, php));
     assert!(is_top_level_self_detection(
-        "archive.zip!!src/ParseException.php",
-        false,
-        0,
-        &FileType::Php,
-        None,
-    ));
-    assert!(!is_top_level_self_detection(
-        "archive.zip!!src/ParseException.php",
-        true,
-        0,
-        &FileType::Php,
-        None,
-    ));
-    assert!(!is_top_level_self_detection(
-        "archive.zip!!src/ParseException.php",
-        false,
-        32,
-        &FileType::Php,
-        None,
-    ));
-    assert!(is_top_level_self_detection(
-        "archive.zip!!src/ParseException.php",
         false,
         0,
         &FileType::JavaScript,
-        None,
+        php
     ));
-
     assert!(is_top_level_self_detection(
-        "agildodock.install",
         false,
         0,
         &FileType::Shell,
         Some(&FileType::Shell),
     ));
+    // Without a detected host nothing is guessed from the file name.
+    assert!(!is_top_level_self_detection(false, 0, &FileType::Php, None));
 }
 
 #[test]
 fn test_top_level_self_detection_for_c_shell_misclassification_is_suppressed() {
     assert!(is_top_level_self_detection(
-        "include/sound/sdca_function.h",
         false,
         0,
         &FileType::Shell,
-        None,
+        Some(&FileType::C),
     ));
 }
 

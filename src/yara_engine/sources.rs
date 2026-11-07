@@ -490,6 +490,20 @@ impl YaraEngine {
             platforms.push("unix".to_string());
         }
 
+        // Route by canonical filefacts labels only. Tags that name no file
+        // type are dropped, so such a rule lands in the fallback bucket rather
+        // than in a bucket no scan ever loads.
+        let canonical = crate::analyzers::yara_buckets_for_tags(&filetypes);
+        if canonical.is_empty() && !filetypes.is_empty() {
+            tracing::debug!(
+                rule = rule_name,
+                tags = ?filetypes,
+                "YARA filetype tags name no file type; routing to fallback"
+            );
+            filetype_source = "none".to_string();
+        }
+        let filetypes = canonical;
+
         RuleContext {
             filetypes,
             filetype_source,
@@ -585,10 +599,7 @@ impl YaraEngine {
                     .push(rule_text);
             } else {
                 for ft in &context.filetypes {
-                    tier_rules
-                        .entry(ft.to_ascii_lowercase())
-                        .or_default()
-                        .push(rule_text);
+                    tier_rules.entry(ft.clone()).or_default().push(rule_text);
                 }
             }
             contexts.insert(rule_context_key(namespace, r.name), context);

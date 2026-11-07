@@ -1022,11 +1022,9 @@ impl ArchiveAnalyzer {
                 .filter(|m| !m.relative_path.ends_with(".class"))
                 .filter(|m| {
                     let path = Path::new(&m.relative_path);
-                    is_nested_archive_member(path, Some(&m.file_type)) || !is_benign_java_path(path)
+                    is_nested_archive_member(&m.file_type) || !is_benign_java_path(path)
                 })
-                .filter(|m| {
-                    is_interesting_jar_resource(Path::new(&m.relative_path), Some(&m.file_type))
-                })
+                .filter(|m| is_interesting_jar_resource(Path::new(&m.relative_path), &m.file_type))
                 // Members the analysis would skip anyway must not spend the
                 // cap: a jar padded with a few hundred opaque `assets/*.db`
                 // blobs otherwise pushed its XOR-encoded payload past it.

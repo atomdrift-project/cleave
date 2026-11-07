@@ -13,36 +13,6 @@ mod tests {
     // =============================================================================
 
     #[test]
-    fn test_can_analyze_class_extension() {
-        let analyzer = JavaClassAnalyzer::new();
-        assert!(analyzer.can_analyze(Path::new("Test.class")));
-    }
-
-    #[test]
-    fn test_cannot_analyze_other_extension() {
-        let analyzer = JavaClassAnalyzer::new();
-        assert!(!analyzer.can_analyze(Path::new("test.java")));
-    }
-
-    #[test]
-    fn test_can_analyze_nested_class() {
-        let analyzer = JavaClassAnalyzer::new();
-        assert!(analyzer.can_analyze(Path::new("Test$Inner.class")));
-    }
-
-    #[test]
-    fn test_cannot_analyze_jar() {
-        let analyzer = JavaClassAnalyzer::new();
-        assert!(!analyzer.can_analyze(Path::new("test.jar")));
-    }
-
-    #[test]
-    fn test_cannot_analyze_no_extension() {
-        let analyzer = JavaClassAnalyzer::new();
-        assert!(!analyzer.can_analyze(Path::new("testclass")));
-    }
-
-    #[test]
     fn test_analyze_projects_filefacts_imports() {
         let analyzer = JavaClassAnalyzer::new();
         let path = Path::new(concat!(
@@ -411,14 +381,6 @@ mod tests {
             let analyzer = JavaClassAnalyzer::new();
             // Should never panic on any string
             let _ = analyzer.is_interesting_string(&s);
-        }
-
-        #[test]
-        fn test_can_analyze_never_panics(filename in ".*") {
-            let analyzer = JavaClassAnalyzer::new();
-            let path = Path::new(&filename);
-            // Should never panic on any filename
-            let _ = analyzer.can_analyze(path);
         }
     }
 }

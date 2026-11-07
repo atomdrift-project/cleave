@@ -20,43 +20,43 @@ fn both_factories_cover_the_same_types() {
 #[test]
 fn bridge_path_detection() {
     assert_eq!(
-        detect_file_type_from_path(Path::new("script.py")),
+        declared_file_type_from_name(Path::new("script.py")),
         FileType::Python
     );
     assert_eq!(
-        detect_file_type_from_path(Path::new("app.js")),
+        declared_file_type_from_name(Path::new("app.js")),
         FileType::JavaScript
     );
     assert_eq!(
-        detect_file_type_from_path(Path::new("Component.jsx")),
+        declared_file_type_from_name(Path::new("Component.jsx")),
         FileType::JavaScript
     );
     assert_eq!(
-        detect_file_type_from_path(Path::new("data.xyz")),
+        declared_file_type_from_name(Path::new("data.xyz")),
         FileType::Unknown
     );
     assert_eq!(
-        detect_file_type_from_path(Path::new("page.html")),
+        declared_file_type_from_name(Path::new("page.html")),
         FileType::Html
     );
     assert_eq!(
-        detect_file_type_from_path(Path::new("evil.service")),
+        declared_file_type_from_name(Path::new("evil.service")),
         FileType::SystemdService
     );
     assert_eq!(
-        detect_file_type_from_path(Path::new("README.md")),
+        declared_file_type_from_name(Path::new("README.md")),
         FileType::Markdown
     );
     assert_eq!(
-        detect_file_type_from_path(Path::new("notes.txt")),
+        declared_file_type_from_name(Path::new("notes.txt")),
         FileType::Text
     );
     assert_eq!(
-        detect_file_type_from_path(Path::new("Makefile")),
+        declared_file_type_from_name(Path::new("Makefile")),
         FileType::Makefile
     );
     assert_eq!(
-        detect_file_type_from_path(Path::new("rules.mk")),
+        declared_file_type_from_name(Path::new("rules.mk")),
         FileType::Makefile
     );
 }
@@ -346,7 +346,7 @@ fn script_sniff_counts_distinct_markers_in_either_encoding() {
 #[test]
 fn bridge_known_toml_manifests_by_basename() {
     assert_eq!(
-        detect_file_type_from_path(Path::new("Cargo.toml")),
+        declared_file_type_from_name(Path::new("Cargo.toml")),
         FileType::CargoToml
     );
     assert_eq!(
@@ -366,7 +366,7 @@ fn bridge_known_toml_manifests_by_basename() {
 #[test]
 fn bridge_dotenv_files_are_text() {
     assert_eq!(
-        detect_file_type_from_path(Path::new(".env")),
+        declared_file_type_from_name(Path::new(".env")),
         FileType::Text
     );
     assert_eq!(
@@ -374,7 +374,7 @@ fn bridge_dotenv_files_are_text() {
         FileType::Text
     );
     assert_eq!(
-        detect_file_type_from_path(Path::new(".env.backup.20260617_154013")),
+        declared_file_type_from_name(Path::new(".env.backup.20260617_154013")),
         FileType::Text
     );
     assert_eq!(
@@ -451,7 +451,7 @@ fn scripts_named_like_text_keep_their_content_type() {
 #[test]
 fn bridge_arch_package_metadata_stays_text() {
     assert_eq!(
-        detect_file_type_from_path(Path::new(".PKGINFO")),
+        declared_file_type_from_name(Path::new(".PKGINFO")),
         FileType::Text
     );
     assert_eq!(
@@ -485,4 +485,20 @@ fn bridge_report_file_type_delegates_to_filefacts_label() {
     );
     assert_eq!(FileType::ObjectiveC.report_file_type(), "objective_c");
     assert_eq!(FileType::Elf.report_file_type(), "elf");
+}
+
+/// Commands type a file from the same full contents a scan reads: a
+/// call-over-blob shellcode whose `pop` target lies past the first KiB must
+/// be shellcode both ways (it was `data` when commands sniffed a 1 KiB prefix).
+#[test]
+fn detect_file_type_matches_scan_detection_past_first_kib() {
+    let mut data = vec![0xE8, 0x00, 0x10, 0x00, 0x00];
+    data.extend(std::iter::repeat_n(0xA5u8, 0x1000));
+    data.extend([0x59, 0x55, 0x48, 0x89, 0xE5, 0x48, 0x83, 0xEC, 0x20, 0xC3]);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("payload.bin");
+    std::fs::write(&path, &data).unwrap();
+    let scanned = detect_file_type_from_data(&path, &data);
+    assert_eq!(detect_file_type(&path).unwrap(), scanned);
+    assert_eq!(scanned, FileType::Shellcode);
 }

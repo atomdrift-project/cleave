@@ -1129,17 +1129,6 @@ impl Analyzer for ElfAnalyzer {
                 .with_parsed_ctx(&ctx);
         self.analyze_input(&input)
     }
-
-    fn can_analyze(&self, file_path: &Path) -> bool {
-        // ELF magic: `\x7fELF` (`7f 45 4c 46`). Read 4 bytes — the
-        // full filefacts-backed parse runs once we commit to analyze().
-        let Ok(mut file) = fs::File::open(file_path) else {
-            return false;
-        };
-        use std::io::Read;
-        let mut magic = [0u8; 4];
-        file.read_exact(&mut magic).is_ok() && magic == [0x7f, b'E', b'L', b'F']
-    }
 }
 
 fn has_unbacked_load_segment(segments: &serde_json::Value, file_len: u64) -> bool {

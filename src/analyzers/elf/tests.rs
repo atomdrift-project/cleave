@@ -80,21 +80,6 @@ fn direct_syscall_projection_carries_number_and_args() {
 }
 
 #[test]
-fn test_can_analyze_elf() {
-    let analyzer = ElfAnalyzer::new();
-    let test_file = test_elf_path();
-
-    assert!(analyzer.can_analyze(&test_file));
-}
-
-#[test]
-fn test_cannot_analyze_non_elf() {
-    let analyzer = ElfAnalyzer::new();
-    assert!(!analyzer.can_analyze(&PathBuf::from("/dev/null")));
-    assert!(!analyzer.can_analyze(&PathBuf::from("tests/fixtures/test.exe")));
-}
-
-#[test]
 fn test_analyze_elf_file() {
     let analyzer = ElfAnalyzer::new();
     let test_file = test_elf_path();

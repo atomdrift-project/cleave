@@ -847,17 +847,6 @@ fn archive_analyzer_config_applies_analysis_options() {
 }
 
 #[test]
-fn test_can_analyze() {
-    let analyzer = ArchiveAnalyzer::new();
-    let fixtures = Path::new("tests/fixtures/archives");
-    assert!(analyzer.can_analyze(&fixtures.join("test.zip")));
-    assert!(analyzer.can_analyze(&fixtures.join("test.tar.gz")));
-    assert!(!analyzer.can_analyze(&fixtures.join("testfile.txt")));
-    // Non-existent paths always return false (no magic to read)
-    assert!(!analyzer.can_analyze(Path::new("/tmp/nonexistent.zip")));
-}
-
-#[test]
 fn test_calculate_sha256() {
     let _analyzer = ArchiveAnalyzer::new();
     let data = b"test data";

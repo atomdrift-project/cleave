@@ -116,35 +116,11 @@ impl Analyzer for PickleAnalyzer {
         let data = std::fs::read(file_path)?;
         Ok(self.analyze_pickle(file_path, &data))
     }
-
-    fn can_analyze(&self, file_path: &Path) -> bool {
-        if let Some(ext) = file_path.extension() {
-            matches!(
-                ext.to_string_lossy().to_lowercase().as_str(),
-                "pkl" | "pickle" | "joblib"
-            )
-        } else {
-            false
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_can_analyze_extensions() {
-        let analyzer = PickleAnalyzer::new();
-        assert!(analyzer.can_analyze(Path::new("model.pkl")));
-        assert!(analyzer.can_analyze(Path::new("data.pickle")));
-        assert!(analyzer.can_analyze(Path::new("pipeline.joblib")));
-        assert!(analyzer.can_analyze(Path::new("MODEL.PKL")));
-        assert!(!analyzer.can_analyze(Path::new("model.pt")));
-        assert!(!analyzer.can_analyze(Path::new("model.pth")));
-        assert!(!analyzer.can_analyze(Path::new("script.py")));
-        assert!(!analyzer.can_analyze(Path::new("noext")));
-    }
 
     #[test]
     fn test_analyze_pickle_report_structure() {

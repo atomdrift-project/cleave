@@ -112,86 +112,9 @@ impl Analyzer for MediaAnalyzer {
         let ctx = Some(crate::analysis_context::AnalysisContext::open(
             file_path, &data,
         ));
-        // Standalone entry point: recover the container from the extension,
-        // which is the only signal available without a detection pass.
-        let label = file_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(str::to_ascii_lowercase)
-            .unwrap_or_default();
-        Ok(self.analyze_media(file_path, &data, &label, None, ctx.as_ref()))
-    }
-
-    fn can_analyze(&self, file_path: &Path) -> bool {
-        file_path.extension().is_some_and(|ext| {
-            matches!(
-                ext.to_string_lossy().to_lowercase().as_str(),
-                "wav"
-                    | "wave"
-                    | "aiff"
-                    | "aif"
-                    | "aifc"
-                    | "mp3"
-                    | "mp4"
-                    | "avif"
-                    | "avifs"
-                    | "tif"
-                    | "tiff"
-                    | "m4a"
-                    | "m4v"
-                    | "mov"
-                    | "ico"
-                    | "cur"
-                    | "gif"
-                    | "bmp"
-                    | "dib"
-                    | "webp"
-            )
-        })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn claims_every_media_container_extension() {
-        let analyzer = MediaAnalyzer::new();
-        for name in [
-            "/tmp/x.wav",
-            "/tmp/x.aiff",
-            "/tmp/x.aif",
-            "/tmp/x.mp3",
-            "/tmp/x.mp4",
-            "/tmp/x.avif",
-            "/tmp/x.tif",
-            "/tmp/x.m4a",
-            "/tmp/x.mov",
-            "/tmp/x.ico",
-            "/tmp/x.cur",
-            "/tmp/x.gif",
-            "/tmp/x.bmp",
-            "/tmp/x.webp",
-            "/tmp/x.WAV",
-        ] {
-            assert!(analyzer.can_analyze(Path::new(name)), "{name}");
-        }
-    }
-
-    /// The masquerade path routes on the *extension*, so neighbouring asset
-    /// types must not be swept in — `.png`/`.jpg` have their own analyzers.
-    #[test]
-    fn ignores_non_media_extensions() {
-        let analyzer = MediaAnalyzer::new();
-        for name in [
-            "/tmp/x.png",
-            "/tmp/x.jpg",
-            "/tmp/x.ttf",
-            "/tmp/x.js",
-            "/tmp/x",
-        ] {
-            assert!(!analyzer.can_analyze(Path::new(name)), "{name}");
-        }
+        // Standalone entry point: identify the container from the bytes, the
+        // same detection a scan runs, never from the extension.
+        let file_type = crate::analyzers::detect_file_type_from_data(file_path, &data);
+        Ok(self.analyze_media(file_path, &data, file_type.label(), None, ctx.as_ref()))
     }
 }

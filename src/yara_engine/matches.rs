@@ -170,13 +170,16 @@ impl YaraEngine {
             &filetype_source,
         );
 
+        // Same routing as bucket assignment: tags that name no file type leave
+        // the rule in the fallback bucket, which applies to every scan.
+        let rule_buckets = crate::analyzers::yara_buckets_for_tags(&rule_filetypes);
         if let Some(filter_types) = file_type_filter
-            && !rule_filetypes.is_empty()
+            && !rule_buckets.is_empty()
         {
-            let matches_filter = rule_filetypes.iter().any(|rule_type| {
+            let matches_filter = rule_buckets.iter().any(|bucket| {
                 filter_types
                     .iter()
-                    .any(|ft| rule_type == &ft.to_lowercase())
+                    .any(|ft| ft.eq_ignore_ascii_case(bucket))
             });
             if !matches_filter {
                 tracing::warn!(

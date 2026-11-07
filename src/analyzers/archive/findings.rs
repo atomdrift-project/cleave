@@ -382,6 +382,9 @@ pub(super) fn is_benign_archive_symlink_escape(path: &str) -> bool {
 /// a container image layer's root filesystem. Decided by content, never by the
 /// file name, which whoever built the archive chooses.
 pub(super) fn carries_system_symlinks(archive_type: FileType, contents: &[ArchiveEntry]) -> bool {
+    if std::env::var_os("CLEAVE_DBG_SYMLINK").is_some() {
+        eprintln!("DBG carries type={archive_type:?} n={} sample={:?}", contents.len(), contents.iter().filter(|e| e.path.contains("os-release")).map(|e| e.path.clone()).take(3).collect::<Vec<_>>());
+    }
     match archive_type {
         FileType::PkgArch => is_system_package(archive_type, contents),
         // Alpine/Wolfi packages install into `/` as root and routinely ship
@@ -390,8 +393,43 @@ pub(super) fn carries_system_symlinks(archive_type: FileType, contents: &[Archiv
         FileType::ApkAlpine => has_root_member(contents, ".PKGINFO"),
         // Detected from content only: an OCI layout or a `docker save` manifest.
         FileType::OciImage => true,
+        // A root filesystem export (`docker export`, a WSL or podman machine
+        // image): its absolute links resolve inside the image once it is the
+        // root, e.g. Fedora's `etc/pam.d/system-auth -> /etc/authselect/...`.
+        FileType::Tar | FileType::TarGz | FileType::TarBz2 | FileType::TarXz | FileType::TarZst => {
+            is_os_root_filesystem(contents)
+        }
         _ => false,
     }
+}
+
+/// Members a root filesystem export needs under each FHS tree before the
+/// archive counts as one; an os-release next to a handful of files is not.
+const MIN_ROOTFS_TREE_MEMBERS: usize = 16;
+
+/// Whether the archive is an OS root filesystem by content: a root-level
+/// `etc/os-release` or `usr/lib/os-release` beside populated `etc/`,
+/// `usr/bin/` and `usr/lib*/` trees.
+fn is_os_root_filesystem(contents: &[ArchiveEntry]) -> bool {
+    if !(has_root_member(contents, "etc/os-release")
+        || has_root_member(contents, "usr/lib/os-release"))
+    {
+        return false;
+    }
+    let tree_members = |prefixes: &[&str]| {
+        contents
+            .iter()
+            .filter(|entry| {
+                let path = entry.path.trim_start_matches("./");
+                !path.contains('!') && prefixes.iter().any(|prefix| path.starts_with(prefix))
+            })
+            .take(MIN_ROOTFS_TREE_MEMBERS)
+            .count()
+            >= MIN_ROOTFS_TREE_MEMBERS
+    };
+    tree_members(&["etc/"])
+        && tree_members(&["usr/bin/"])
+        && tree_members(&["usr/lib/", "usr/lib64/"])
 }
 
 fn has_root_member(contents: &[ArchiveEntry], name: &str) -> bool {
@@ -440,8 +478,46 @@ mod tests {
         // A nested member called .PKGINFO does not count.
         let nested = entries(&["data/.PKGINFO"]);
         assert!(!carries_system_symlinks(FileType::ApkAlpine, &nested));
-        // Plain tarballs never get the allowance, whatever they contain.
+        // A tarball gets the allowance only as a whole root filesystem.
         assert!(!carries_system_symlinks(FileType::Tar, &pkg));
+    }
+
+    #[test]
+    fn root_filesystem_tar_carries_system_symlinks() {
+        let mut paths: Vec<String> = vec!["etc/os-release".to_string()];
+        for i in 0..MIN_ROOTFS_TREE_MEMBERS {
+            paths.push(format!("etc/conf{i}"));
+            paths.push(format!("usr/bin/tool{i}"));
+            paths.push(format!("usr/lib64/lib{i}.so"));
+        }
+        let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+        let rootfs = entries(&refs);
+        assert!(carries_system_symlinks(FileType::TarZst, &rootfs));
+        assert!(carries_system_symlinks(FileType::Tar, &rootfs));
+        // Same members in a non-tar container: no allowance.
+        assert!(!carries_system_symlinks(FileType::Zip, &rootfs));
+
+        // An os-release beside a few files is not a root filesystem.
+        let thin = entries(&[
+            "etc/os-release",
+            "etc/passwd",
+            "usr/bin/sh",
+            "usr/lib/libc.so",
+        ]);
+        assert!(!carries_system_symlinks(FileType::Tar, &thin));
+        // Nor is a full tree without os-release, or with it only nested.
+        let no_release: Vec<&str> = refs
+            .iter()
+            .copied()
+            .filter(|p| *p != "etc/os-release")
+            .collect();
+        assert!(!carries_system_symlinks(
+            FileType::Tar,
+            &entries(&no_release)
+        ));
+        let mut nested = no_release.clone();
+        nested.push("payload/etc/os-release");
+        assert!(!carries_system_symlinks(FileType::Tar, &entries(&nested)));
     }
 
     #[test]

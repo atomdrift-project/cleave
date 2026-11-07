@@ -19,6 +19,19 @@ pub(crate) fn collect_yara_evidence<'a, 'b>(
 ) -> Vec<Evidence> {
     let mut evidence = Vec::new();
     'outer: for matched_rule in results.matching_rules() {
+        // A condition satisfied without string hits is still a match.
+        if matched_rule
+            .patterns()
+            .all(|p| p.matches().next().is_none())
+        {
+            if evidence.len() >= MAX_EVIDENCE_PER_TRAIT {
+                break;
+            }
+            evidence.push(crate::yara_engine::rule_level_evidence(
+                matched_rule.identifier(),
+            ));
+            continue;
+        }
         for pattern in matched_rule.patterns() {
             for m in pattern.matches() {
                 if evidence.len() >= MAX_EVIDENCE_PER_TRAIT {

@@ -645,22 +645,6 @@ impl Analyzer for ChromeManifestAnalyzer {
         let content = String::from_utf8_lossy(&bytes);
         self.analyze_manifest(file_path, &content)
     }
-
-    fn can_analyze(&self, file_path: &Path) -> bool {
-        // Check if it's a manifest.json that looks like a Chrome extension
-        if let Some(name) = file_path.file_name()
-            && name == "manifest.json"
-        {
-            // Try to peek at content to verify it's a Chrome extension manifest
-            if let Ok(content) = fs::read_to_string(file_path) {
-                return content.contains("manifest_version")
-                    && (content.contains("permissions")
-                        || content.contains("content_scripts")
-                        || content.contains("background"));
-            }
-        }
-        false
-    }
 }
 
 #[cfg(test)]

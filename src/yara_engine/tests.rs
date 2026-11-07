@@ -1,4 +1,5 @@
 use super::*;
+use crate::analyzers::{FileType, FileTypeExt};
 
 /// Metadata reaches findings as the rule author wrote it: no Debug
 /// escaping of quotes or non-ASCII, and numbers without a type wrapper.
@@ -181,7 +182,7 @@ traits:
     let mut yara = YaraEngine::new_for_test();
     load_test_bucket(
         &mut yara,
-        "class",
+        FileType::JavaClass.label(),
         &[
             (
                 "inline.test/jar::alert",
@@ -2189,10 +2190,8 @@ rule Linux_Backdoor_Bash_e427876d : FILE
         source,
         "3p.elastic.Linux_Backdoor_Bash",
     );
-    assert_eq!(
-        ctx.filetypes,
-        vec!["sh".to_string(), "bash".to_string(), "zsh".to_string()]
-    );
+    // sh/bash/zsh tags all name the canonical shell type.
+    assert_eq!(ctx.filetypes, vec!["shell".to_string()]);
     assert_eq!(ctx.platforms, vec!["linux".to_string()]);
 }
 
@@ -2545,47 +2544,74 @@ fn test_js_scan_selection_includes_fallback() {
 }
 
 #[test]
-fn test_classify_inline_trait_yara_uses_declared_for_metadata() {
-    let source = r#"
-rule demo_inline_archive_rule {
-    condition:
-        true
-}
-"#;
+fn test_classify_inline_trait_yara_uses_declared_for_labels() {
     let tiers = |declared: &[&str]| {
         let declared: Vec<String> = declared.iter().copied().map(String::from).collect();
-        YaraEngine::classify_inline_trait_yara_tiers(source, "inline.demo-inline", &declared)
+        YaraEngine::classify_inline_trait_yara_tiers(&declared)
     };
-    // Explicit `for:` filetypes parse like trait `for:` (so `ts` means
-    // JavaScript) and expand into every bucket that file type scans.
-    assert_eq!(tiers(&["ts"]), ["js", "mjs", "cjs", "jsx", "ts"]);
-    assert_eq!(
-        tiers(&["jar", "zip"]),
-        ["zip", "archive", "jar", "war", "ear", "class", "java"]
-    );
-    assert_eq!(tiers(&["ps1"]), ["ps1", "psm1", "psd1"]);
+    // `for:` parses like a trait `for:` and buckets by the canonical label of
+    // every identified type it admits — the key a scan of that type loads.
+    assert!(tiers(&["ts"]).contains(&"javascript".to_string()));
+    let archives = tiers(&["jar", "zip"]);
+    assert!(archives.contains(&"jar".to_string()) && archives.contains(&"zip".to_string()));
+    assert_eq!(tiers(&["shellcode"]), ["shellcode"]);
+    assert_eq!(tiers(&["wasm"]), ["wasm"]);
+    for declared in [
+        &["ts"][..],
+        &["jar", "zip"],
+        &["ps1"],
+        &["binaries"],
+        &["shellcode"],
+    ] {
+        for bucket in tiers(declared) {
+            let ft = FileType::from_label(&bucket)
+                .unwrap_or_else(|| panic!("{declared:?} routed to non-label bucket {bucket}"));
+            assert_eq!(ft.yara_filetypes(), [bucket.as_str()], "{declared:?}");
+        }
+    }
 }
 
 #[test]
-fn test_classify_inline_trait_yara_falls_back_to_source_classification() {
-    let source = r#"
-rule demo_inline_php {
-    strings:
-        $a = "<?php" ascii
-    condition:
-        $a
+fn test_classify_inline_trait_yara_without_types_uses_fallback() {
+    // No concrete `for:` means the trait applies everywhere; the rule name is
+    // never consulted (a "php"/"x64"/"donut" name must not narrow routing).
+    for declared in [vec![], vec!["all".to_string()], vec!["none".to_string()]] {
+        assert_eq!(
+            YaraEngine::classify_inline_trait_yara_tiers(&declared),
+            vec![FALLBACK_BUCKET.to_string()],
+            "{declared:?}"
+        );
+    }
 }
-"#;
-    // No usable `for:`, so the rule's derived context filetypes are used —
-    // the "php" token in the rule name resolves to the php bucket.
-    assert_eq!(
-        YaraEngine::classify_inline_trait_yara_tiers(
-            source,
-            "inline.demo-inline",
-            &["none".to_string()]
-        ),
-        vec!["php".to_string()]
-    );
+
+/// Every type that identification can produce must scan a bucket that its
+/// own rules can route to, and every legacy alias must route somewhere.
+#[test]
+fn test_every_file_type_and_alias_routes_to_a_scanned_bucket() {
+    for ft in FileType::ALL {
+        if matches!(ft, FileType::Unknown) {
+            continue;
+        }
+        let scanned = ft.yara_filetypes();
+        assert!(
+            crate::analyzers::yara_buckets_for_tags(&[ft.label()])
+                .contains(&ft.label().to_string()),
+            "label {} misses {ft:?}",
+            ft.label()
+        );
+        assert!(
+            scanned.contains(&ft.label()),
+            "{ft:?} does not scan its own bucket"
+        );
+        for alias in ft.yara_aliases() {
+            let routed = crate::analyzers::yara_buckets_for_tags(&[alias]);
+            assert!(
+                routed.contains(&ft.label().to_string()),
+                "alias {alias} misses {ft:?}"
+            );
+        }
+    }
+    assert!(crate::analyzers::yara_buckets_for_tags(&["no-such-type"]).is_empty());
 }
 
 #[test]
@@ -2621,8 +2647,8 @@ rule builtin_generic_rule {
     // The JS rule lands in each of its inferred filetype buckets.
     let js_bucket = split
         .tiers
-        .get("js")
-        .expect("js rule bucketed into js filetype");
+        .get("javascript")
+        .expect("js rule bucketed into the javascript label");
     assert!(js_bucket.contains("builtin_js_rule"));
 
     let pe_bucket = split
@@ -2845,4 +2871,45 @@ fn test_dump_runtime_rule_sets_by_tier() {
             eprintln!("  {name}");
         }
     }
+}
+
+/// A rule whose condition holds without any string hit is still a match:
+/// both the combined-engine channel and per-condition evidence record it.
+#[test]
+fn stringless_inline_rule_match_is_recorded() {
+    let ns = "inline.test/shellcode::stringless";
+    let source = "rule stringless { condition: uint8(0) == 0xE8 and filesize > 4 }";
+    let mut compiler = yara_x::Compiler::new();
+    compiler.new_namespace(ns);
+    compiler.add_source(source).unwrap();
+    let rules = compiler.build();
+    let mut yara = YaraEngine::new_for_test();
+    let cell = yara
+        .tiers
+        .entry(FileType::Shellcode.label().to_string())
+        .or_default();
+    cell.set(Some(Arc::new(rules))).unwrap();
+    yara.populated_tiers
+        .insert(FileType::Shellcode.label().to_string());
+    yara.compiled_inline_namespaces.push(ns.to_string());
+    yara.rule_counts = (1, 0);
+    let filter = FileType::Shellcode.yara_filetypes();
+    let hit = yara
+        .scan_bytes(b"\xE8\x00\x10\x00\x00\x90", Some(&filter))
+        .unwrap();
+    let evidence = hit.inline_traits.get(ns).expect("stringless rule matched");
+    assert!(!evidence.is_empty());
+    let miss = yara
+        .scan_bytes(b"\x90\x90\x90\x90\x90\x90", Some(&filter))
+        .unwrap();
+    assert!(miss.inline_traits.get(ns).is_none_or(Vec::is_empty));
+
+    let mut compiler = yara_x::Compiler::new();
+    compiler.add_source(source).unwrap();
+    let rules = compiler.build();
+    let data = b"\xE8\x00\x10\x00\x00\x90";
+    let mut scanner = yara_x::Scanner::new(&rules);
+    let results = scanner.scan(data).unwrap();
+    let evidence = crate::composite_rules::evaluators::yara::collect_yara_evidence(&results, data);
+    assert_eq!(evidence.len(), 1);
 }

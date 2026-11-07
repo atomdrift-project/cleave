@@ -251,28 +251,12 @@ impl Analyzer for PdfAnalyzer {
         let data = std::fs::read(file_path)?;
         Ok(self.analyze_pdf(file_path, &data))
     }
-
-    fn can_analyze(&self, file_path: &Path) -> bool {
-        file_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.eq_ignore_ascii_case("pdf"))
-            .unwrap_or(false)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn can_analyze_pdf_extension() {
-        let analyzer = PdfAnalyzer::new();
-        assert!(analyzer.can_analyze(Path::new("/tmp/test.pdf")));
-        assert!(analyzer.can_analyze(Path::new("/tmp/test.PDF")));
-        assert!(!analyzer.can_analyze(Path::new("/tmp/test.png")));
-    }
 
     /// `collect_js_payloads` returns an empty list when filefacts didn't
     /// populate `pdf.javascript[]` (PDF without any /JS sites).

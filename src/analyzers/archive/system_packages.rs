@@ -17,7 +17,7 @@ use super::guards::{
     MAX_TOTAL_SIZE, sanitize_entry_path, symlink_escapes,
 };
 use super::tar::extract_tar_entries_safe;
-use crate::analyzers::FileTypeExt;
+use crate::analyzers::{FileType, FileTypeExt};
 use crate::types::ArchiveEntry;
 use anyhow::{Context, Result};
 use std::fs::{self, File};
@@ -244,10 +244,14 @@ fn parse_7z_technical_listing(stdout: &str) -> Vec<ArchiveEntry> {
             let name = field("Path")?;
             let size_bytes = field("Size")?.parse::<u64>().ok()?;
             let is_dir = field("Attributes").is_some_and(|a| a.starts_with('D'));
+            // Only the encrypted directory is readable: nothing identified the
+            // member's bytes, so its type is unknown and the name is recorded
+            // as the claim it is (`declared_type`), never as its identity.
+            let declared = crate::analyzers::declared_file_type_from_name(Path::new(name));
             Some(ArchiveEntry {
                 path: name.replace('\\', "/"),
-                file_type: crate::analyzers::detect_file_type_from_path(Path::new(name))
-                    .report_file_type(),
+                file_type: FileType::Unknown.report_file_type(),
+                declared_type: (declared != FileType::Unknown).then(|| declared.report_file_type()),
                 sha256: String::new(),
                 size_bytes,
                 compressed_size: field("Packed Size").and_then(|v| v.parse().ok()),

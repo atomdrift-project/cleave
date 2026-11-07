@@ -8,7 +8,7 @@
 //! difference is the addition of debug tracing via `DebugCollector`.
 
 use crate::analysis_context::AnalysisContext;
-use crate::analyzers::{FileType, detect_file_type};
+use crate::analyzers::{FileTypeExt, detect_file_type};
 use crate::commands::shared::{dev_engine, find_rules_in_directory, find_similar_rules};
 use crate::commands::test::{build_test_capability_mapper, evaluation_data, prepare_test_analysis};
 use crate::yara_engine::YaraEngine;
@@ -88,21 +88,13 @@ pub fn run(
 
     // Run YARA scan on preferred arch slice (matching production behavior)
     // This gives us inline YARA results for traits with `type: yara` conditions
-    let file_type_filter: &[&str] = match prepared.file_type {
-        FileType::MachO => &["macho", "dylib", "kext"],
-        FileType::Elf => &["elf", "so", "ko"],
-        FileType::Pe => &["pe", "exe", "dll", "sys"],
-        _ => &[],
-    };
+    // Same buckets a production scan of this type loads.
+    let file_type_filter = prepared.file_type.yara_filetypes();
 
     let inline_yara: HashMap<String, Vec<crate::types::Evidence>> = if yara_loaded {
         let yara_result = yara_engine.scan_bytes(
             &prepared.preferred_binary_data,
-            if file_type_filter.is_empty() {
-                None
-            } else {
-                Some(file_type_filter)
-            },
+            Some(file_type_filter.as_slice()),
         );
         process_yara_result(&mut prepared.report, Some(yara_result), Some(&yara_engine))
     } else {

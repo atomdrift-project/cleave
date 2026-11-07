@@ -865,15 +865,13 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // On production runs where recovery output is cached, YARA (~270ms) otherwise sits between
     // stng (~290ms) and structural (~50ms), adding to the critical path.  Running them in
     // parallel eliminates that 270ms from the wall-clock total.
-    let binary_yara_ftypes: Option<&[&str]> = if yara_engine.is_none() {
+    let binary_yara_buckets = crate::analyzers::FileTypeExt::yara_filetypes(&file_type);
+    let binary_yara_ftypes: Option<&[&str]> = if yara_engine.is_none()
+        || !matches!(file_type, FileType::Pe | FileType::Elf | FileType::MachO)
+    {
         None
     } else {
-        match file_type {
-            FileType::Pe => Some(&["pe", "exe", "dll", "bat", "ps1"]),
-            FileType::Elf => Some(&["elf", "so", "ko"]),
-            FileType::MachO => Some(&["macho", "dylib", "kext"]),
-            _ => None,
-        }
+        Some(binary_yara_buckets.as_slice())
     };
 
     // Extract strings with stng ONCE - used for encoded payloads and passed to analyzers.

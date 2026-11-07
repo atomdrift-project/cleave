@@ -62,6 +62,11 @@ pub struct FilefactsView {
     /// surfaced here — only what filefacts declares.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub references: Vec<filefacts::Reference>,
+    /// Byte spans (`start`, `len`) of source-comment bodies, so text rules can
+    /// opt out of matching inside comments (`exclude_comments`). Only spans
+    /// whose bytes equal filefacts' recorded comment are kept.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub comment_spans: Vec<(usize, usize)>,
 }
 
 impl FilefactsView {
@@ -108,6 +113,7 @@ impl FilefactsView {
             symbols: retained_symbols(parsed),
             errors: serialize_to_array(parsed.errors()),
             references: parsed.references().to_vec(),
+            comment_spans: comment_spans(ctx),
         }
     }
 
@@ -121,12 +127,32 @@ impl FilefactsView {
             && self.symbols.is_empty()
             && self.errors.is_empty()
             && self.references.is_empty()
+            && self.comment_spans.is_empty()
     }
 
     /// Release native values with no compact-output reader after evaluation.
     pub(crate) fn retain_compact_values(&mut self) {
         self.values = retained_dependency_values(&self.values);
     }
+}
+
+/// Source-comment body spans of a non-executable file. A comment whose
+/// recorded text is not its own bytes (a decoded or re-encoded file) is left
+/// out rather than masked at the wrong place.
+fn comment_spans(ctx: &crate::analysis_context::AnalysisContext<'_>) -> Vec<(usize, usize)> {
+    if ctx.parsed.fileid().file_type().is_executable_code() {
+        return Vec::new();
+    }
+    ctx.parsed
+        .comments()
+        .iter()
+        .filter_map(|comment| {
+            let start = usize::try_from(comment.offset).ok()?;
+            let len = comment.value.len();
+            let bytes = ctx.content.get(start..start.checked_add(len)?)?;
+            (len > 0 && bytes == comment.value.as_bytes()).then_some((start, len))
+        })
+        .collect()
 }
 
 pub(super) fn retained_dependency_values(tree: &serde_json::Value) -> serde_json::Value {

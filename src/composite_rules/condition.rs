@@ -1157,6 +1157,10 @@ pub(crate) struct TextQuery {
     /// scanning raw source text. Encoded strings are not markup.
     #[serde(default)]
     pub exclude_html_comments: bool,
+    /// Ignore source-language comments (filefacts' comment bodies) when
+    /// scanning raw source text: commented-out code and prose are not code.
+    #[serde(default)]
+    pub exclude_comments: bool,
     #[serde(rename = "is", default)]
     pub is_check: Option<StringValidator>,
     #[serde(default)]

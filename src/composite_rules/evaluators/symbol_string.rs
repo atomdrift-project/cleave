@@ -887,15 +887,18 @@ pub(crate) fn eval_text<'a, 'b>(
 ) -> ConditionResult {
     let _mp = crate::mem_profile::phase(crate::mem_profile::Phase::EvalText);
     if ctx.file_type.uses_raw_text_search_for(ctx.binary_data) {
-        let comment_free_context = if params.exclude_html_comments {
-            ctx.html_comment_free_source().map(|source| {
-                let mut masked = ctx.clone();
-                masked.binary_data = source;
-                masked
-            })
+        let masked_source = if params.exclude_comments {
+            ctx.comment_free_source()
+        } else if params.exclude_html_comments {
+            ctx.html_comment_free_source()
         } else {
             None
         };
+        let comment_free_context = masked_source.map(|source| {
+            let mut masked = ctx.clone();
+            masked.binary_data = source;
+            masked
+        });
         let raw_context = comment_free_context.as_ref().unwrap_or(ctx);
         let location = ContentLocationParams {
             section: params.section.cloned(),

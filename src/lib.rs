@@ -1070,6 +1070,8 @@ pub fn analyze_file_with_mapper<P: AsRef<Path>>(
 
 #[cfg(test)]
 mod scheduling_size_tests;
+#[cfg(test)]
+mod exclude_comments_tests;
 
 /// Compute the findings formula string for an [`AnalysisReport`].
 ///

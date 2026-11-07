@@ -19,6 +19,7 @@ fn text_trait(id: &str, for_types: Vec<FileType>) -> TraitDefinition {
             length_min: None,
             length_max: None,
             exclude_html_comments: false,
+            exclude_comments: false,
             exact: None,
             substr: Some("ProjectDiscovery".to_string()),
             regex: None,

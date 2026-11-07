@@ -511,8 +511,11 @@ fn is_real_shell(value: &str) -> bool {
         return false;
     }
 
-    // Look for common shell keywords/patterns that are rare in natural language
-    let strong_keywords = [
+    // Shell syntax that prose does not produce.
+    const SYNTAX: &[&str] = &[" | sh", " | bash", "cat <<", "EOF"];
+    // Commands that are rare in natural language, but only where a shell
+    // would run them: "or chmod +x the file" is an instruction to a reader.
+    const COMMANDS: &[&str] = &[
         "sudo ",
         "grep ",
         "curl ",
@@ -526,16 +529,14 @@ fn is_real_shell(value: &str) -> bool {
         "export ",
         "unset ",
         "alias ",
-        " | sh",
-        " | bash",
         "rm -rf ",
         "mkdir -p ",
         "tail -f ",
-        "cat <<",
-        "EOF",
     ];
 
-    if strong_keywords.iter().any(|&k| value.contains(k)) {
+    if SYNTAX.iter().any(|&k| value.contains(k))
+        || COMMANDS.iter().any(|&k| has_command_at_position(value, k))
+    {
         return true;
     }
 
@@ -550,6 +551,24 @@ fn is_real_shell(value: &str) -> bool {
     }
 
     false
+}
+
+/// Whether `command` occurs where a shell would execute it: at the start of
+/// the string or a line, after a separator, opening quote, substitution or
+/// group, or after a word that runs its argument (`sudo`, `nohup`, `-c`).
+fn has_command_at_position(value: &str, command: &str) -> bool {
+    const RUNNERS: &[&str] = &[
+        "sudo", "nohup", "exec", "env", "time", "timeout", "xargs", "then", "do", "else", "-c",
+    ];
+    value.match_indices(command).any(|(at, _)| {
+        let before = value[..at].trim_end_matches([' ', '\t']);
+        before.is_empty()
+            || before.ends_with(['\n', ';', '&', '|', '(', '{', '`', '\'', '"'])
+            || before
+                .rsplit(|c: char| c.is_ascii_whitespace())
+                .next()
+                .is_some_and(|word| RUNNERS.contains(&word))
+    })
 }
 
 fn has_shell_variable_assignment(value: &str) -> bool {

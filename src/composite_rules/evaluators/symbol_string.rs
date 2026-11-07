@@ -894,11 +894,7 @@ pub(crate) fn eval_text<'a, 'b>(
         } else {
             None
         };
-        let comment_free_context = masked_source.map(|source| {
-            let mut masked = ctx.clone();
-            masked.binary_data = source;
-            masked
-        });
+        let comment_free_context = masked_source.map(|source| ctx.with_masked_source(source));
         let raw_context = comment_free_context.as_ref().unwrap_or(ctx);
         let location = ContentLocationParams {
             section: params.section.cloned(),
@@ -964,7 +960,6 @@ pub(crate) fn eval_text<'a, 'b>(
         super::raw_window_stats::bump(&super::raw_window_stats::DECODED_SWEPT);
         return merge_text_passes(raw, eval_text_encoded(params, trait_not, ctx));
     }
-
     // Past this point the scan runs over `report.strings`, which holds the
     // decoded layers alongside the literal ones, so `encoding: none` has to be
     // honoured here too -- the early return above only covers file types that

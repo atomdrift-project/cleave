@@ -534,6 +534,23 @@ impl<'a> EvaluationContext<'a> {
             .as_deref()
     }
 
+    /// This context over `source`, a masked copy of the file (comments
+    /// blanked). Text views derived from the original bytes are dropped so
+    /// every matcher reads the masked bytes; the masks keep byte offsets and
+    /// UTF-8 boundaries, so offsets into the original stay valid.
+    pub(crate) fn with_masked_source<'s>(&'s self, source: &'s [u8]) -> EvaluationContext<'s>
+    where
+        'a: 's,
+    {
+        let mut masked: EvaluationContext<'s> = self.clone();
+        masked.binary_data = source;
+        masked.cached_source_utf8 = self
+            .cached_source_utf8
+            .and_then(|_| std::str::from_utf8(source).ok());
+        masked.cached_lossy_utf8 = Arc::new(OnceLock::new());
+        masked
+    }
+
     /// Set the slow rule threshold
     pub(crate) fn with_slow_rule_ms(mut self, slow_rule_ms: u64) -> Self {
         self.slow_rule_ms = slow_rule_ms;

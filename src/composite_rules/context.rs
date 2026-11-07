@@ -241,6 +241,7 @@ pub(crate) struct FileEvalCaches {
     flow_call_index: Arc<OnceLock<FxHashMap<(u64, usize), Vec<usize>>>>,
     flow_targets: Arc<OnceLock<Vec<String>>>,
     html_comment_free_source: Arc<OnceLock<Option<Vec<u8>>>>,
+    comment_free_source: Arc<OnceLock<Option<Vec<u8>>>>,
     commentless_ast: Arc<OnceLock<Option<tree_sitter::Tree>>>,
 }
 
@@ -325,6 +326,9 @@ pub(crate) struct EvaluationContext<'a> {
     /// Lazily masked copy used only by `type: text` rules that explicitly
     /// ignore markup comments. `None` means the file had no such comments.
     pub cached_html_comment_free_source: Arc<OnceLock<Option<Vec<u8>>>>,
+    /// Lazily masked copy used only by `type: text` rules that ignore source
+    /// comments. `None` means the file had no comment spans to mask.
+    pub cached_comment_free_source: Arc<OnceLock<Option<Vec<u8>>>>,
     /// Offset-preserving AST view for queries that explicitly ignore comments.
     /// Only successful views (including no comments) are cached per input.
     pub cached_commentless_ast: Arc<OnceLock<Option<tree_sitter::Tree>>>,
@@ -473,6 +477,7 @@ impl<'a> EvaluationContext<'a> {
             flow_call_index: Arc::new(OnceLock::new()),
             flow_targets: Arc::new(OnceLock::new()),
             cached_html_comment_free_source: Arc::new(OnceLock::new()),
+            cached_comment_free_source: Arc::new(OnceLock::new()),
             cached_commentless_ast: Arc::new(OnceLock::new()),
             deadline: None,
             cancellation: None,
@@ -505,6 +510,7 @@ impl<'a> EvaluationContext<'a> {
         self.flow_call_index = Arc::clone(&caches.flow_call_index);
         self.flow_targets = Arc::clone(&caches.flow_targets);
         self.cached_html_comment_free_source = Arc::clone(&caches.html_comment_free_source);
+        self.cached_comment_free_source = Arc::clone(&caches.comment_free_source);
         self.cached_commentless_ast = Arc::clone(&caches.commentless_ast);
         self
     }
@@ -514,6 +520,17 @@ impl<'a> EvaluationContext<'a> {
     pub(crate) fn html_comment_free_source(&self) -> Option<&[u8]> {
         self.cached_html_comment_free_source
             .get_or_init(|| mask_markup_comments(self.binary_data))
+            .as_deref()
+    }
+
+    /// Raw bytes with source-comment bodies masked (filefacts' comment spans),
+    /// computed once per file and only when an opted-in text condition asks.
+    pub(crate) fn comment_free_source(&self) -> Option<&[u8]> {
+        self.cached_comment_free_source
+            .get_or_init(|| {
+                let spans = &self.report.filefacts.as_ref()?.comment_spans;
+                mask_spans(self.binary_data, spans)
+            })
             .as_deref()
     }
 
@@ -858,6 +875,7 @@ impl<'a> EvaluationContext<'a> {
             flow_call_index: Arc::new(OnceLock::new()),
             flow_targets: Arc::new(OnceLock::new()),
             cached_html_comment_free_source: Arc::new(OnceLock::new()),
+            cached_comment_free_source: Arc::new(OnceLock::new()),
             cached_commentless_ast: Arc::new(OnceLock::new()),
             deadline: None,
             cancellation: None,
@@ -990,6 +1008,7 @@ pub(crate) struct StringParams<'a> {
     pub length_min: Option<usize>,
     pub length_max: Option<usize>,
     pub exclude_html_comments: bool,
+    pub exclude_comments: bool,
     /// For CI conditions this finder was built from the lowercased pattern.
     pub is_check: Option<StringValidator>,
     pub section: Option<&'a String>,
@@ -1003,6 +1022,25 @@ pub(crate) struct StringParams<'a> {
 /// Return a same-length copy with HTML and ASP.NET server-side comments
 /// replaced by spaces, preserving line endings and all source offsets. Files
 /// without either opener return `None` and allocate nothing.
+/// `source` with every span's bytes blanked to spaces, keeping line breaks so
+/// line-based matching and evidence lines are unchanged. `None` when there is
+/// nothing to mask; spans past the end are clipped.
+fn mask_spans(source: &[u8], spans: &[(usize, usize)]) -> Option<Vec<u8>> {
+    if spans.is_empty() {
+        return None;
+    }
+    let mut masked = source.to_vec();
+    for &(start, len) in spans {
+        let end = start.saturating_add(len).min(masked.len());
+        for byte in masked.get_mut(start..end).into_iter().flatten() {
+            if !matches!(*byte, b'\n' | b'\r') {
+                *byte = b' ';
+            }
+        }
+    }
+    Some(masked)
+}
+
 fn mask_markup_comments(source: &[u8]) -> Option<Vec<u8>> {
     fn tag_end(source: &[u8], mut at: usize) -> Option<usize> {
         let mut quote = None;

@@ -125,6 +125,7 @@ fn test_condition_validate_string_location() {
         length_min: None,
         length_max: None,
         exclude_html_comments: false,
+        exclude_comments: false,
         exact: Some("test".to_string()),
         substr: None,
         regex: None,
@@ -218,6 +219,7 @@ fn text_yaml_parses_html_comment_exclusion() {
         cond,
         Condition::Text(TextQuery {
             exclude_html_comments: true,
+            exclude_comments: false,
             ..
         })
     ));

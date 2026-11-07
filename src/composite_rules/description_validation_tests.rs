@@ -50,6 +50,7 @@ mod description_validation_tests {
                 length_min: None,
                 length_max: None,
                 exclude_html_comments: false,
+                exclude_comments: false,
                 exact: Some("test".to_string()),
                 substr: None,
                 regex: None,

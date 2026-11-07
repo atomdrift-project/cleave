@@ -939,6 +939,7 @@ dependencies = [
  "tracing-subscriber",
  "tree-sitter",
  "unrar-ng",
+ "uuid",
  "walkdir",
  "windows-sys 0.59.0",
  "xz2",

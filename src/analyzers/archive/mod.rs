@@ -1347,7 +1347,7 @@ impl ArchiveAnalyzer {
         // scope. Now that container composites have been added to
         // report.findings, give every per-file finding a second chance to
         // apply downgrades that reference container-level traits (e.g.
-        // `metadata/signed/platform::mozilla-extension`). Pass empty bytes
+        // `metadata/file/format/browser-extension::mozilla-extension`). Pass empty bytes
         // and an empty SectionMap — id-reference conditions don't need them,
         // and re-reading every file's bytes here would be prohibitive.
         let container_file_type = mapper.detect_file_type(&report.target.file_type);

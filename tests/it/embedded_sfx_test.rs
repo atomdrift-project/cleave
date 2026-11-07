@@ -184,7 +184,6 @@ fn embedded_binary_scanning() {
         compact_metric(pe_host, "binary.embedded_binaries"),
         Some(1.0)
     );
-    assert_eq!(compact_metric(pe_host, "binary.embedded_files"), Some(1.0));
 
     // 2. Embedded PE in NSIS overlay should downgrade to notable (level 3).
     let mut nsis = minimal_pe_stub();
@@ -235,11 +234,6 @@ fn embedded_binary_scanning() {
     assert_eq!(
         compact_metric(elf_host, "binary.embedded_binaries"),
         Some(1.0)
-    );
-    assert_eq!(compact_metric(elf_host, "binary.embedded_files"), Some(1.0));
-    assert_eq!(
-        compact_metric(elf_host, "binary.embedded_archive_count"),
-        None
     );
 
     // 4. Child ELF is carved and analyzed: its own symbols (e.g. the `execve`

@@ -31,7 +31,7 @@ pub(crate) fn strings_from_filefacts(path: &std::path::Path, data: &[u8]) -> Vec
 pub(crate) fn scpt_literal_strings(
     ctx: &crate::analysis_context::AnalysisContext<'_>,
 ) -> Vec<StringInfo> {
-    if !scpt::is_scpt(ctx.content) {
+    if !crate::analyzers::applescript::is_compiled(ctx.content) {
         return Vec::new();
     }
     ctx.parsed

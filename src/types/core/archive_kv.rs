@@ -331,9 +331,8 @@ impl AnalysisReport {
             None => serde_json::Map::new(),
         };
         // Deep-merge into any existing namespace value when both
-        // sides are objects, so multiple contributors (e.g. filefacts
-        // adds `build.toolchain.*` while cleave's binary_extractors
-        // adds `build.username`) coexist instead of clobbering.
+        // sides are objects, so multiple contributors coexist instead
+        // of clobbering.
         // Falls back to outright replace for non-object values.
         let merged = match (root.remove(namespace), value) {
             (Some(serde_json::Value::Object(existing)), serde_json::Value::Object(incoming)) => {

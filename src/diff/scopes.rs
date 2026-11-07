@@ -365,13 +365,11 @@ fn identity_field_for(arr: &[Value]) -> Option<&'static str> {
 /// Mirrors the encoding accepted by `type: value` rules and `cleave value`,
 /// with smart array handling that doesn't fabricate diffs on reorder.
 ///
-/// `source.imports[]` and `source.exports[]` are dropped — they're
-/// kv-tree projections of `report.imports` / `report.exports`
-/// (load-bearing for trait authoring via `type: value`) but the diff
-/// already shows the same data through the dedicated `symbols` scope.
-/// Keeping them in the kv flatten would double-list every changed
-/// import. The kv tree on each report is unmodified — traits keep
-/// working.
+/// `source.imports[]` and `source.exports[]` are dropped — reports from
+/// before 2026-11 carry them as kv projections of `report.imports` /
+/// `report.exports`, which the diff already shows through the dedicated
+/// `symbols` scope. Keeping them would double-list every changed import
+/// when a stored report is compared.
 pub(crate) fn flatten_kv_for_diff(value: &Value) -> Vec<(String, Value)> {
     let mut flat = Vec::new();
     walk(value, "", &mut flat);
@@ -393,8 +391,8 @@ pub(crate) fn kv_flat_from_map(
 }
 
 /// `true` for value paths whose content is fully shown by another diff
-/// scope. Currently `source.imports[]` and `source.exports[]` (the
-/// `symbols` scope is the canonical view), plus `file.basename`/`file.stem`:
+/// scope. Currently `source.imports[]` and `source.exports[]` in stored
+/// reports (the `symbols` scope is the canonical view), plus `file.basename`/`file.stem`:
 /// those are derived from the path the user passed on the command line — the
 /// rename is already shown in the diff header, and counting it as a value
 /// change makes two byte-identical files under different names read as

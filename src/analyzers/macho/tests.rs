@@ -220,7 +220,9 @@ fn rebase_slice_offsets_shifts_file_offsets_only() {
 fn rebase_slice_offsets_shifts_finding_evidence() {
     let mut report = report_with_offsets();
     report.findings.push(Finding {
-        id: "metadata/signed/id::com.apple.ls".to_string().into(),
+        id: "metadata/signature/verified/id::com.apple.ls"
+            .to_string()
+            .into(),
         desc: "Identifier: com.apple.ls".to_string().into(),
         evidence: vec![
             Evidence {

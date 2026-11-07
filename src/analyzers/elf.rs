@@ -216,7 +216,6 @@ impl ElfAnalyzer {
         let mut report = AnalysisReport::new(target);
         let mut tools_used = vec![];
         let mut embedded_binary_count: u32 = 0;
-        let mut embedded_archive_count: u32 = 0;
 
         // Filefacts's ELF parse status drives the analyzer. A successful
         // parse populates `elf.machine`; a failed/panicked parse leaves
@@ -344,7 +343,6 @@ impl ElfAnalyzer {
                         source_file: None,
                         downgraded: false,
                     });
-                    embedded_archive_count = embedded_archive_count.saturating_add(1);
                 } else if let Ok(Some(ov)) = crate::analyzers::overlay::analyze_overlay(
                     overlay,
                     &report.target.path,
@@ -355,7 +353,6 @@ impl ElfAnalyzer {
                     report.findings.push(ov.sfx_finding);
                     report.findings.extend(ov.archive_report.findings);
                     report.files.extend(ov.archive_report.files);
-                    embedded_archive_count = embedded_archive_count.saturating_add(1);
                 }
             }
         } else {
@@ -582,24 +579,12 @@ impl ElfAnalyzer {
         // Emit recursive-scan counters. Mirrors pe.rs — embedded
         // payload discovery is cleave-side recursive work, not
         // filefacts's parse-time view.
-        if embedded_binary_count > 0 || embedded_archive_count > 0 {
+        if embedded_binary_count > 0 {
             use crate::types::core::MetricsExt;
-            let flat = report
+            report
                 .filefacts_metrics
-                .get_or_insert_with(Default::default);
-            if embedded_binary_count > 0 {
-                flat.set_f("binary.embedded_binaries", f64::from(embedded_binary_count));
-                flat.set_f(
-                    "binary.embedded_files",
-                    f64::from(embedded_binary_count.saturating_add(embedded_archive_count)),
-                );
-            }
-            if embedded_archive_count > 0 {
-                flat.set_f(
-                    "binary.embedded_archives",
-                    f64::from(embedded_archive_count),
-                );
-            }
+                .get_or_insert_with(Default::default)
+                .set_f("binary.embedded_binaries", f64::from(embedded_binary_count));
         }
 
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
@@ -972,13 +957,6 @@ impl ElfAnalyzer {
                         &unpacked_ctx,
                     );
                     let mut unpacked_report = unpacked_report;
-                    // Merge filefacts facts (incl. `elf.go.*`) so
-                    // `augment_report` can reshape the Go build-info;
-                    // idempotent with any later merge.
-                    crate::capabilities::merge_filefacts_context(
-                        &mut unpacked_report,
-                        &unpacked_ctx,
-                    );
                     crate::analyzers::binary_extractors::augment_report(
                         &mut unpacked_report,
                         &unpacked_data,

@@ -521,7 +521,7 @@ pub(crate) fn entitlement_category(key: &str) -> &'static str {
 /// which is exactly the kind of provenance signal an analyst reads in a
 /// diff. Dangerous entitlements escalate to Suspicious; nothing here returns
 /// Baseline. This mirrors the cross-format identity/permissions principle in
-/// traits/metadata/signed/trust-level/traits.yaml.
+/// traits/metadata/signature/ad-hoc/macho.yaml.
 pub(super) fn determine_entitlement_criticality(
     entitlement_key: &str,
     is_platform: bool,

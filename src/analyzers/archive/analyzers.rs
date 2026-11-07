@@ -705,48 +705,6 @@ fn pyinstaller_entry_kind(kind: pyinstx::EntryKind) -> &'static str {
     }
 }
 
-fn push_optional_string(
-    obj: &mut serde_json::Map<String, serde_json::Value>,
-    key: &str,
-    value: &Option<String>,
-) {
-    if let Some(value) = value {
-        obj.insert(key.to_string(), serde_json::Value::String(value.clone()));
-    }
-}
-
-fn archive_entry_json(entry: &ArchiveEntry) -> serde_json::Value {
-    let mut obj = serde_json::Map::new();
-    obj.insert("path".into(), serde_json::Value::String(entry.path.clone()));
-    obj.insert(
-        "type".into(),
-        serde_json::Value::String(entry.file_type.clone()),
-    );
-    obj.insert(
-        "sha256".into(),
-        serde_json::Value::String(entry.sha256.clone()),
-    );
-    obj.insert(
-        "size_bytes".into(),
-        serde_json::Value::Number(entry.size_bytes.into()),
-    );
-    push_optional_string(&mut obj, "declared_type", &entry.declared_type);
-    if entry.extension_type_mismatch {
-        obj.insert(
-            "extension_type_mismatch".into(),
-            serde_json::Value::Bool(true),
-        );
-    }
-    if let Some(entropy) = entry.entropy
-        && let Some(number) = serde_json::Number::from_f64(entropy)
-    {
-        obj.insert("entropy".into(), serde_json::Value::Number(number));
-    }
-    push_optional_string(&mut obj, "magic_prefix", &entry.magic_prefix);
-    push_optional_string(&mut obj, "container_kind", &entry.container_kind);
-    serde_json::Value::Object(obj)
-}
-
 /// Streaming accumulator for per-member analysis results.
 ///
 /// Rebuild a folded member's retained record into fresh allocations, dropping
@@ -1529,13 +1487,6 @@ impl ArchiveAnalyzer {
                 return false;
             }
         };
-        report.merge_kv_subtree(
-            "dotnet_bundle",
-            serde_json::json!({
-                "version": format!("{}.{}", bundle.major, bundle.minor),
-                "members": bundle.entries.len(),
-            }),
-        );
         for note in &bundle.notes {
             guard.add_extraction_note(note.clone());
         }

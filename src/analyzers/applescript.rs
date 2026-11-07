@@ -7,6 +7,14 @@ use crate::strings::StringExtractor;
 use crate::types::{AnalysisReport, TargetInfo};
 use anyhow::Result;
 
+/// Whether `data` is compiled AppleScript (`.scpt`, the `FasdUAS ` stream)
+/// rather than source. filefacts parses compiled scripts; cleave only needs
+/// to know which text view to search.
+#[must_use]
+pub(crate) fn is_compiled(data: &[u8]) -> bool {
+    data.starts_with(b"FasdUAS ")
+}
+
 #[derive(Debug)]
 pub(crate) struct AppleScriptAnalyzer {
     engine: crate::Engine,
@@ -35,7 +43,7 @@ impl AppleScriptAnalyzer {
         report: &mut AnalysisReport,
         compact_values: bool,
     ) {
-        if !scpt::is_scpt(ctx.content) {
+        if !is_compiled(ctx.content) {
             return;
         }
         report.imports = ctx.imports_from_filefacts();
@@ -151,7 +159,7 @@ mod tests {
 
     #[test]
     fn compiled_facts_reach_rule_inputs() {
-        let bytes = include_bytes!("../../crates/scpt/tests/fixtures/shell_script.scpt");
+        let bytes = include_bytes!("../../tests/fixtures/applescript/shell_script.scpt");
         let ctx =
             crate::analysis_context::AnalysisContext::open(Path::new("shell_script.scpt"), bytes);
         let mut report = AnalysisReport::new(TargetInfo {

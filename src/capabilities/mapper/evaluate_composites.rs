@@ -757,7 +757,7 @@ impl super::CapabilityMapper {
     /// per-file findings get a second chance to apply downgrades that
     /// reference container-level traits (e.g. a per-file `cookies-get-all`
     /// trait whose downgrade clause references the container-level
-    /// `metadata/signed/platform::mozilla-extension` composite).
+    /// `metadata/file/format/browser-extension::mozilla-extension` composite).
     ///
     /// Idempotent: each finding's downgrade is re-evaluated starting from
     /// the trait/composite's *declared* criticality (looked up in

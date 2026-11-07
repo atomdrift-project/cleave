@@ -1413,9 +1413,7 @@ pub(crate) fn kv_lookup_flattened<'a>(
 /// (with the right-hand-side winning on leaf collisions); non-object
 /// leaves are replaced by the right-hand value. Used by
 /// [`AnalysisReport::merge_kv_subtree`] so multiple writers under the
-/// same top-level namespace coexist (e.g. filefacts populates
-/// `build.toolchain.*` while cleave's `binary_extractors` populates
-/// `build.username`).
+/// same top-level namespace coexist instead of clobbering each other.
 fn deep_merge_objects(
     mut existing: serde_json::Map<String, serde_json::Value>,
     incoming: serde_json::Map<String, serde_json::Value>,

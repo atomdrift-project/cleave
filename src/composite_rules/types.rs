@@ -1175,7 +1175,9 @@ impl FileType {
     /// Select the text haystack for this file's content.
     #[must_use]
     pub(crate) fn uses_raw_text_search_for(&self, bytes: &[u8]) -> bool {
-        self.uses_raw_text_search() && !(*self == FileType::AppleScript && scpt::is_scpt(bytes))
+        self.uses_raw_text_search()
+            && !(*self == FileType::AppleScript
+                && crate::analyzers::applescript::is_compiled(bytes))
     }
 
     /// Returns true if this file type typically has a section structure (ELF, Mach-O, PE)

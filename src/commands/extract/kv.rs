@@ -41,10 +41,10 @@ struct KvEntry {
 ///    values (`lnk.*`, `pe.*`, `pdf.*`, `chm.*`, …). One call covers every
 ///    format filefacts has an extractor for.
 /// 2. Office (OLE2 / OOXML) — cleave-owned until filefacts Phase 2 lands.
-/// 3. Binary cross-format kv — cleave's `binary_extractors` layer
-///    augments filefacts's `pe|elf|macho.*` trees with cleave-derived
-///    fields (Rich header, imphash, ELF .comment, DWARF, …).
-/// 4. Source code analyzer — `source.*` / `metrics.*` are cleave-side.
+/// 3. Binary cross-format kv — filefacts' `pe|elf|macho.*` trees plus the
+///    `build.*` builder paths and `pe.version_info.*` that
+///    `binary_extractors` still adds (moving to filefacts).
+/// 4. Source code analyzer — the filefacts tree it merges for source files.
 /// 5. Generic structured fallback — JSON / YAML / TOML / plist /
 ///    PKG-INFO / systemd / desktop / XML manifests.
 pub fn run(
@@ -210,8 +210,8 @@ fn extract_binary_kv_via_analyzer(
     let analyzer = analyzers::analyzer_for_file_type_arc(&detected, engine)?;
     let mut report = analyzer.analyze(path).ok()?;
     // `pe.*` / `elf.*` / `macho.*` come exclusively from filefacts
-    // (single source of truth). `binary_extractors` augments with
-    // `.comment` / sanitizer detections.
+    // (single source of truth); `binary_extractors` still adds builder
+    // paths and the PE version-info scan.
     let ctx = crate::analysis_context::AnalysisContext::open_with(
         engine.filefacts_options(),
         path,
@@ -227,8 +227,7 @@ fn extract_binary_kv_via_analyzer(
 }
 
 /// Run the unified source-code analyzer (any tree-sitter–supported
-/// language) and return the synthesized values tree from `report.values_tree`,
-/// which the analyzer populates via `source_kv::attach_to_report`.
+/// language) and return the values tree it merged onto `report.values_tree`.
 /// Returns `None` for non-source input or when the analyzer fails.
 fn extract_source_kv_via_analyzer(
     path: &Path,
@@ -238,8 +237,8 @@ fn extract_source_kv_via_analyzer(
     let detected = analyzers::detect_file_type_from_data(path, content);
     // Skip file types already handled upstream — binaries, archives,
     // structured documents, and the unknown bucket.  Anything else
-    // routes through `UnifiedSourceAnalyzer` (or a generic fallback)
-    // which attaches `source.*` and `metrics.*` to `report.values_tree`.
+    // routes through `UnifiedSourceAnalyzer` (or a generic fallback),
+    // which merges the filefacts tree onto `report.values_tree`.
     if matches!(
         detected,
         FileType::Pe

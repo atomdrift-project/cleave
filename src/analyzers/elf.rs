@@ -717,9 +717,7 @@ impl ElfAnalyzer {
                 report.exports.push(exp);
             }
         }
-        // STT_GNU_IFUNC names are surfaced via the value path
-        // `elf.ifunc_symbols[]` (populated by binary_extractors) and
-        // matched by the YAML trait `metadata/binary/linking::ifunc`.
+        // STT_GNU_IFUNC names are surfaced by filefacts as `elf.ifuncs`.
     }
 
     /// Walk the section table from filefacts's typed `Sections` view,
@@ -957,10 +955,6 @@ impl ElfAnalyzer {
                         &unpacked_ctx,
                     );
                     let mut unpacked_report = unpacked_report;
-                    crate::analyzers::binary_extractors::augment_report(
-                        &mut unpacked_report,
-                        &unpacked_data,
-                    );
                     self.engine.evaluate_and_merge_findings_with_precomputed(
                         &mut unpacked_report,
                         &unpacked_data,

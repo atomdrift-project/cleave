@@ -947,7 +947,7 @@ pub(crate) enum Condition {
     /// Example: { type: value, path: "scripts.postinstall", substr: "curl" }
     /// Example: { type: value, path: "content_scripts[*].matches", is: "<all_urls>" }
     /// Example: { type: value, path: "maintainers", length_min: 1, length_max: 1 }
-    /// Example: { type: value, path: "file.basename", ne: "pe.version_info.original_filename" }
+    /// Example: { type: value, path: "file.basename", ne: "pe.version.original_filename" }
     Kv(KvQuery),
 }
 

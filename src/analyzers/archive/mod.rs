@@ -1159,68 +1159,11 @@ impl ArchiveAnalyzer {
                 .insert("consistency.unused_runtime_deps".to_string(), count as f64);
         }
 
-        // A manifest that lists its own name as a dependency. Same placement
-        // and the same reason: a cross-member judgement that no single file's
-        // matcher can make.
-        if let Some(count) = compute_self_dependency(report) {
-            report
-                .filefacts_metrics
-                .get_or_insert_with(Default::default)
-                .insert("consistency.self_dependency".to_string(), count as f64);
-        }
-
-        // A package that copied another project's identity and swapped only the
-        // name. Same cross-member shape: the declared name lives in one member,
-        // the advertised identity in the same and sibling members.
-        if let Some(count) = compute_metadata_identity_mismatch(report) {
-            report
-                .filefacts_metrics
-                .get_or_insert_with(Default::default)
-                .insert(
-                    "consistency.metadata_identity_mismatch".to_string(),
-                    count as f64,
-                );
-        }
-
-        // A distribution name one edit from a popular package. Name-only, but
-        // placed with the other consistency metrics: a package-level judgement
-        // the per-file matchers cannot make.
-        if let Some(count) = compute_name_typosquat(report) {
-            report
-                .filefacts_metrics
-                .get_or_insert_with(Default::default)
-                .insert("consistency.name_typosquat".to_string(), count as f64);
-        }
-
-        // A full library republished under a different name -- the clone
-        // advertises the target's distinctive summary while its own name is not
-        // the target's. Metadata-only, placed with the other consistency
-        // metrics for the same package-level reason.
-        if let Some(count) = compute_cloned_summary(report) {
-            report
-                .filefacts_metrics
-                .get_or_insert_with(Default::default)
-                .insert("consistency.cloned_summary".to_string(), count as f64);
-        }
-
-        // `consistency.name_repo_mismatch` and
-        // `consistency.publisher_repo_owner_mismatch` used to be recomputed
-        // here from the manifest member's kv. Both are cross-field judgements
-        // over one file's bytes, so filefacts emits them from its own
-        // `package.json` parse (`formats::npm::emit`) — on the npm tarball
-        // itself, and on a bare or in-archive manifest member.
-
-        // How a VS Code extension pack is composed. Only a list of marketplace
-        // ids, so nothing here is a behavior — but the ratio of borrowed
-        // reputation to the publisher's own entries is what separates a curated
-        // bundle from one assembled to carry something in.
-        if let Some((size, own)) = extension_pack_counts(report) {
-            let metrics = report
-                .filefacts_metrics
-                .get_or_insert_with(Default::default);
-            metrics.insert("vsix.extension_pack_size".to_string(), size as f64);
-            metrics.insert("vsix.extension_pack_self_entries".to_string(), own as f64);
-        }
+        // Every single-manifest judgement -- typosquat, copied identity,
+        // cloned summary, self-dependency, extension-pack composition,
+        // `name_repo_mismatch`, `publisher_repo_owner_mismatch` -- is a
+        // filefacts metric emitted with the manifest's parse, on the package
+        // itself and on a bare or in-archive manifest member.
 
         // Context is input to atomic value traits as well as composites.
         // Attach it before either pass (library callers need not re-evaluate).

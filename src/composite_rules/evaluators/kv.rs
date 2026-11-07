@@ -1,6 +1,8 @@
-//! Key-Value condition evaluator for structured manifest files and systemd units.
+//! Key-Value condition evaluator: path queries over a file's values tree.
 //!
-//! Supports querying JSON, YAML, TOML, and systemd service files using path expressions.
+//! The tree is what filefacts parsed and derived -- JSON/YAML/TOML manifests,
+//! property lists, PKG-INFO, systemd units, desktop entries, MSBuild projects,
+//! binary and document facts -- plus what cleave's analyzers merged into it.
 //!
 //! # Path Syntax
 //! - `key` - Access object key
@@ -26,36 +28,12 @@
 //! substr: "curl"
 //! ```
 
-use crate::analyzers::utils::{MAX_XML_DEPTH, parse_xml_safe};
 use crate::composite_rules::condition::{ArrayQuantifier, Condition, KvQuery};
 use crate::composite_rules::context::EvaluationContext;
+use crate::composite_rules::types::FileType;
 use crate::types::Evidence;
 use rustc_hash::FxHashMap;
 use serde_json::Value;
-use std::path::Path;
-
-/// Detected format of the structured data file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum StructuredFormat {
-    /// JSON format
-    Json,
-    /// YAML format
-    Yaml,
-    /// TOML format
-    Toml,
-    /// Apple Property List (XML or Binary)
-    Plist,
-    /// Python PKG-INFO / METADATA (RFC 822 format)
-    PkgInfo,
-    /// systemd service unit file (.service, .service.d/*.conf)
-    SystemdService,
-    /// freedesktop.org Desktop Entry (.desktop)
-    DesktopEntry,
-    /// Generic XML document (MSBuild project, SVG, XML config)
-    Xml,
-    /// Format could not be determined
-    Unknown,
-}
 
 /// A segment in a parsed path expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -337,201 +315,6 @@ fn value_to_string(value: &Value) -> String {
     }
 }
 
-/// Detect the format of a structured data file.
-///
-/// Only recognizes known manifest filenames plus explicit systemd service paths to avoid
-/// processing arbitrary structured data files.
-#[must_use]
-pub(crate) fn detect_format(path: &Path, content: &[u8]) -> StructuredFormat {
-    let path_str = path.to_string_lossy().to_lowercase();
-
-    // Check filename patterns for known manifests
-    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-        let name_lower = name.to_lowercase();
-
-        // Known JSON manifests
-        if name_lower == "package.json"
-            || name_lower == "package-lock.json"
-            || name_lower == "manifest.json"
-            || name_lower == "composer.json"
-        {
-            return StructuredFormat::Json;
-        }
-
-        // Known TOML manifests
-        if name_lower == "cargo.toml" || name_lower == "pyproject.toml" {
-            return StructuredFormat::Toml;
-        }
-
-        // Known YAML files - GitHub Actions workflows and composite actions
-        if (path_str.contains(".github/workflows/") || path_str.contains(".github\\workflows\\"))
-            && (name_lower.ends_with(".yml") || name_lower.ends_with(".yaml"))
-        {
-            return StructuredFormat::Yaml;
-        }
-        if name_lower == "action.yml" || name_lower == "action.yaml" {
-            return StructuredFormat::Yaml;
-        }
-
-        // systemd service units and drop-ins
-        if name_lower.ends_with(".service") {
-            return StructuredFormat::SystemdService;
-        }
-        if (path_str.contains(".service.d/") || path_str.contains(".service.d\\"))
-            && name_lower.ends_with(".conf")
-        {
-            return StructuredFormat::SystemdService;
-        }
-
-        // freedesktop.org Desktop Entry files
-        if name_lower.ends_with(".desktop") {
-            return StructuredFormat::DesktopEntry;
-        }
-
-        // Generic XML by extension (.xml, .csproj, .xaml, etc.)
-        if name_lower.ends_with(".xml")
-            || name_lower.ends_with(".csproj")
-            || name_lower.ends_with(".vbproj")
-            || name_lower.ends_with(".fsproj")
-            || name_lower.ends_with(".vcxproj")
-            || name_lower.ends_with(".proj")
-            || name_lower.ends_with(".props")
-            || name_lower.ends_with(".targets")
-            || name_lower.ends_with(".xaml")
-            || name_lower.ends_with(".svg")
-        {
-            return StructuredFormat::Xml;
-        }
-
-        // Python package metadata files (RFC 822 format)
-        if name_lower == "pkg-info" || name_lower == "metadata" {
-            return StructuredFormat::PkgInfo;
-        }
-
-        // Plist files - check by extension since they're commonly used in macOS apps
-        if name_lower.ends_with(".plist") {
-            return StructuredFormat::Plist;
-        }
-
-        // Xcode project files are OpenStep-style plists, which the plist
-        // parser reads alongside the XML and binary dialects. Routing them
-        // here is what lets a rule address build settings and build-phase
-        // scripts by path (`objects[*].shellScript`) instead of scraping the
-        // whole file as text.
-        if name_lower.ends_with(".pbxproj") {
-            return StructuredFormat::Plist;
-        }
-    }
-
-    // Limited content sniffing for special cases only
-    // Check binary magic bytes BEFORE UTF-8 conversion for performance
-
-    // Check for Binary Plist (binary format)
-    if content.starts_with(b"bplist") {
-        return StructuredFormat::Plist;
-    }
-
-    // OpenStep plist written by Xcode. The header comment is the format's only
-    // signature, and it is what identifies a `project.pbxproj` copied out of
-    // its `.xcodeproj` bundle under another name.
-    if content.starts_with(b"// !$*UTF8*$!") {
-        return StructuredFormat::Plist;
-    }
-
-    if looks_like_github_actions_workflow(content) {
-        return StructuredFormat::Yaml;
-    }
-
-    // Check for XML Plist (text format)
-    if content.starts_with(b"<?xml") {
-        // Only convert minimal bytes needed to check for plist
-        let preview = &content[..content.len().min(200)];
-        let preview_str = String::from_utf8_lossy(preview);
-        if preview_str.contains("<plist") || preview_str.contains("<!DOCTYPE plist") {
-            return StructuredFormat::Plist;
-        }
-        // Any other `<?xml`-prolog document is generic XML.
-        return StructuredFormat::Xml;
-    }
-    if content.starts_with(b"<plist") {
-        return StructuredFormat::Plist;
-    }
-
-    // Content-sniffed XML for extensionless files that start with a well-known
-    // root element. Matches the narrow set in filefacts::fileid XML detection, so the
-    // value evaluator sees the same files fileid classifies as Xml.
-    if content.starts_with(b"<Project ") || content.starts_with(b"<Project\t") {
-        let head = &content[..content.len().min(512)];
-        if memchr::memmem::find(head, b"schemas.microsoft.com/developer/msbuild").is_some() {
-            return StructuredFormat::Xml;
-        }
-    }
-    for prefix in [
-        &b"<svg "[..],
-        &b"<svg>"[..],
-        &b"<rss "[..],
-        &b"<feed "[..],
-        &b"<RDF "[..],
-        &b"<configuration>"[..],
-        &b"<configuration "[..],
-        &b"<manifest "[..],
-        &b"<Configuration "[..],
-    ] {
-        if content.starts_with(prefix) {
-            return StructuredFormat::Xml;
-        }
-    }
-
-    // Check for PKG-INFO/METADATA format (RFC 822 headers)
-    // Only convert first 200 bytes for header check
-    let preview = &content[..content.len().min(200)];
-    let preview_str = String::from_utf8_lossy(preview);
-    let trimmed = preview_str.trim_start();
-
-    if trimmed.starts_with("Metadata-Version:") {
-        return StructuredFormat::PkgInfo;
-    }
-
-    // No other content sniffing - only process known filenames / unit paths
-    StructuredFormat::Unknown
-}
-
-fn looks_like_github_actions_workflow(content: &[u8]) -> bool {
-    let Ok(text) = std::str::from_utf8(&content[..content.len().min(16 * 1024)]) else {
-        return false;
-    };
-
-    let mut has_on = false;
-    let mut has_jobs = false;
-
-    for line in text.lines() {
-        let line = line.trim_end();
-        if line.is_empty() || line.starts_with("---") || line.starts_with('#') {
-            continue;
-        }
-        if line.starts_with(' ') || line.starts_with('\t') {
-            continue;
-        }
-
-        let Some((key, _)) = line.split_once(':') else {
-            continue;
-        };
-        let key = key.trim_matches(|c| c == '\'' || c == '"' || c == ' ');
-
-        match key {
-            "on" => has_on = true,
-            "jobs" => has_jobs = true,
-            _ => {}
-        }
-
-        if has_on && has_jobs {
-            return true;
-        }
-    }
-
-    false
-}
-
 /// Split a path on the optional `<filename>::` sibling-file prefix.
 ///
 /// Returns `(sibling_basename, remaining_path)`. When `path` contains no
@@ -706,270 +489,9 @@ pub(crate) fn navigate<'a>(value: &'a Value, segments: &[PathSegment]) -> Vec<&'
     }
 }
 
-/// Parse PKG-INFO/METADATA format (RFC 822) into a JSON Value.
-///
-/// Format is simple key-value headers:
-/// ```text
-/// Metadata-Version: 2.1
-/// Name: my-package
-/// Version: 1.0.0
-/// Summary: A package description
-/// Author: Someone <someone@example.com>
-/// ```
-///
-/// Multi-line values use continuation lines (starting with whitespace).
-/// Multiple values for the same key become arrays.
-fn parse_pkginfo(content: &[u8]) -> Option<Value> {
-    let text = std::str::from_utf8(content).ok()?;
-    let mut map: serde_json::Map<String, Value> = serde_json::Map::new();
-    let mut current_key: Option<String> = None;
-    let mut current_value = String::new();
-
-    for line in text.lines() {
-        // A blank line ends the metadata headers. The description body can
-        // contain header-shaped examples, which must not become field values.
-        if line.is_empty() {
-            break;
-        }
-        if line.starts_with(' ') || line.starts_with('\t') {
-            // Continuation line - append to current value
-            if current_key.is_some() {
-                current_value.push('\n');
-                current_value.push_str(line.trim());
-            }
-        } else if let Some(colon_pos) = line.find(':') {
-            // New header - save previous if any
-            if let Some(key) = current_key.take() {
-                insert_pkginfo_value(&mut map, &key, current_value.trim().to_string());
-            }
-
-            let key = line[..colon_pos].trim().to_string();
-            let value = line[colon_pos + 1..].trim().to_string();
-            current_key = Some(key);
-            current_value = value;
-        }
-    }
-
-    // Don't forget the last header
-    if let Some(key) = current_key {
-        insert_pkginfo_value(&mut map, &key, current_value.trim().to_string());
-    }
-
-    Some(Value::Object(map))
-}
-
-/// Insert a value into PKG-INFO map, handling multiple values for same key.
-fn insert_pkginfo_value(map: &mut serde_json::Map<String, Value>, key: &str, value: String) {
-    if value.is_empty() {
-        return;
-    }
-
-    // Normalize key to lowercase with hyphens (like HTTP headers)
-    let normalized_key = key.to_lowercase();
-
-    if let Some(existing) = map.get_mut(&normalized_key) {
-        // Key already exists - convert to array or append
-        match existing {
-            Value::Array(arr) => {
-                arr.push(Value::String(value));
-            }
-            Value::String(s) => {
-                let old = s.clone();
-                *existing = Value::Array(vec![Value::String(old), Value::String(value)]);
-            }
-            _ => {}
-        }
-    } else {
-        map.insert(normalized_key, Value::String(value));
-    }
-}
-
-fn parse_systemd_service(content: &[u8]) -> Option<Value> {
-    let parsed = filefacts::OpenOptions::new()
-        .file_type(filefacts::FileType::SystemdService)
-        .open(content);
-    let root = parsed.values().as_json();
-    root.as_object()
-        .filter(|map| !map.is_empty())
-        .map(|_| root.clone())
-}
-
-/// Parse a freedesktop.org Desktop Entry file into a section-keyed JSON object.
-///
-/// Each section (e.g. `[Desktop Entry]`, `[Desktop Action foo]`) becomes a top-level
-/// key (normalized to snake_case). Inside each section, keys are normalized the same
-/// way as systemd keys, and known list-type values (`Categories`, `MimeType`,
-/// `Keywords`, `Actions`, `OnlyShowIn`, `NotShowIn`, `Implements`) are split on `;`.
-/// Localized key variants (e.g. `Name[cs]=...`) are dropped so only the canonical
-/// value is exposed to trait authors.
-fn parse_desktop_entry(content: &[u8]) -> Option<Value> {
-    let parsed = filefacts::OpenOptions::new()
-        .file_type(filefacts::FileType::DesktopEntry)
-        .open(content);
-    let root = parsed.values().as_json();
-    root.as_object()
-        .filter(|map| !map.is_empty())
-        .map(|_| root.clone())
-}
-
-/// Parse an XML document into a JSON value queryable by value paths.
-///
-/// Mapping rules:
-/// - Root element becomes a top-level key: `{"Project": {...}}`.
-/// - Attributes are prefixed with `@`: `{"@ToolsVersion": "4.0"}`.
-/// - A single child element with unique tag → nested object.
-/// - Multiple sibling elements with the same tag → array of objects.
-/// - Element text content → `_text` key (or scalar value if the element has no
-///   attributes and no children). Text from CDATA sections is included.
-/// - Element namespaces are dropped from paths; only the local name is used.
-///
-/// Trait authors query paths like
-/// `Project.UsingTask.@TaskFactory` (exact: `CodeTaskFactory`) to detect the
-/// MSBuild inline-task LOLBAS, or `Project.UsingTask.Task.Code._text` for the
-/// embedded source.
-fn parse_xml_to_json(content: &[u8]) -> Option<Value> {
-    let text = std::str::from_utf8(content).ok()?;
-    // `parse_xml_safe` refuses over-deep documents before roxmltree's recursive
-    // parser can overflow the stack; the per-node cap below is defense in depth
-    // for the conversion's own recursion and the `serde_json::Value` drop.
-    let doc = parse_xml_safe(text)?;
-    let root = doc.root_element();
-    let root_value = xml_element_to_json(root, 0);
-    let mut map = serde_json::Map::new();
-    map.insert(root.tag_name().name().to_string(), root_value);
-    Some(Value::Object(map))
-}
-
-fn xml_element_to_json(node: roxmltree::Node<'_, '_>, depth: usize) -> Value {
-    if depth >= MAX_XML_DEPTH {
-        return Value::Null;
-    }
-
-    let mut children: serde_json::Map<String, Value> = serde_json::Map::new();
-
-    for attr in node.attributes() {
-        let key = format!("@{}", attr.name());
-        children.insert(key, Value::String(attr.value().to_string()));
-    }
-
-    // Filefacts namespace declarations (xmlns=, xmlns:prefix=) ONLY at the point
-    // they are declared, not inherited into every descendant. Skip a
-    // declaration if the parent element already has it in scope.
-    let parent = node.parent();
-    for ns in node.namespaces() {
-        let already_in_parent = parent
-            .and_then(|p| p.lookup_namespace_uri(ns.name()))
-            .is_some_and(|uri| uri == ns.uri());
-        if already_in_parent {
-            continue;
-        }
-        let key = match ns.name() {
-            None => "@xmlns".to_string(),
-            Some(prefix) => format!("@xmlns:{}", prefix),
-        };
-        children
-            .entry(key)
-            .or_insert_with(|| Value::String(ns.uri().to_string()));
-    }
-
-    let mut text_parts: Vec<String> = Vec::new();
-    for child in node.children() {
-        if child.is_element() {
-            let name = child.tag_name().name().to_string();
-            let value = xml_element_to_json(child, depth + 1);
-            match children.get_mut(&name) {
-                Some(Value::Array(arr)) => arr.push(value),
-                Some(existing) => {
-                    let old = std::mem::replace(existing, Value::Null);
-                    *existing = Value::Array(vec![old, value]);
-                }
-                None => {
-                    children.insert(name, value);
-                }
-            }
-        } else if child.is_text()
-            && let Some(t) = child.text()
-        {
-            let trimmed = t.trim();
-            if !trimmed.is_empty() {
-                text_parts.push(trimmed.to_string());
-            }
-        }
-    }
-
-    let combined_text = if text_parts.is_empty() {
-        None
-    } else {
-        Some(text_parts.join(" "))
-    };
-
-    match (children.is_empty(), combined_text) {
-        (true, Some(t)) => Value::String(t),
-        (false, Some(t)) => {
-            children.insert("_text".to_string(), Value::String(t));
-            Value::Object(children)
-        }
-        (_, None) => Value::Object(children),
-    }
-}
-
-pub(crate) fn structured_format_from_file_type(
-    file_type: &crate::composite_rules::FileType,
-) -> StructuredFormat {
-    match file_type {
-        crate::composite_rules::FileType::PackageJson
-        | crate::composite_rules::FileType::PackageLockJson
-        | crate::composite_rules::FileType::ComposerJson
-        | crate::composite_rules::FileType::ChromeManifest => StructuredFormat::Json,
-        crate::composite_rules::FileType::CargoToml
-        | crate::composite_rules::FileType::PyProjectToml => StructuredFormat::Toml,
-        crate::composite_rules::FileType::GithubActions
-        | crate::composite_rules::FileType::Yaml => StructuredFormat::Yaml,
-        // An Xcode project is an OpenStep property list, which the plist
-        // parser reads alongside the XML and binary dialects. Without this arm
-        // a `project.pbxproj` reaching the evaluator by file type rather than
-        // by filename falls through to Unknown and no `type: value` path
-        // resolves against it. A keyed-archive nib is a binary plist too;
-        // the NIBArchive layout is not, and simply fails to parse here.
-        crate::composite_rules::FileType::Plist
-        | crate::composite_rules::FileType::Pbxproj
-        | crate::composite_rules::FileType::Nib => StructuredFormat::Plist,
-        crate::composite_rules::FileType::PkgInfo => StructuredFormat::PkgInfo,
-        crate::composite_rules::FileType::SystemdService => StructuredFormat::SystemdService,
-        crate::composite_rules::FileType::DesktopEntry => StructuredFormat::DesktopEntry,
-        crate::composite_rules::FileType::Xml => StructuredFormat::Xml,
-        _ => StructuredFormat::Unknown,
-    }
-}
-
-/// Parse structured file content into a generic JSON value.
-///
-/// Uses filename/magic-byte detection to pick a format, then runs the matching
-/// parser. Returns the detected format alongside the parsed value so callers
-/// can distinguish parse failures from unsupported formats.
-#[must_use]
-pub(crate) fn parse_structured_content(
-    path: &Path,
-    content: &[u8],
-) -> Option<(StructuredFormat, Value)> {
-    let format = detect_format(path, content);
-    let value = match format {
-        StructuredFormat::Json => serde_json::from_slice(content).ok()?,
-        StructuredFormat::Yaml => crate::yaml::from_slice(content).ok()?,
-        StructuredFormat::Toml => std::str::from_utf8(content)
-            .ok()
-            .and_then(|s| toml::from_str(s).ok())?,
-        StructuredFormat::Plist => crate::plist_guard::to_json(content)?,
-        StructuredFormat::PkgInfo => parse_pkginfo(content)?,
-        StructuredFormat::SystemdService => parse_systemd_service(content)?,
-        StructuredFormat::DesktopEntry => parse_desktop_entry(content)?,
-        StructuredFormat::Xml => parse_xml_to_json(content)?,
-        StructuredFormat::Unknown => return None,
-    };
-    Some((format, value))
-}
-
-/// Evaluate a kv condition against file content using cached format detection and parsing.
+/// Evaluate a kv condition against the file's values tree -- the document
+/// filefacts parsed (manifests, unit files, property lists, MSBuild
+/// projects) beside the facts it derived and those cleave's analyzers merged.
 ///
 /// Returns Some(Evidence) if the condition matches, None otherwise.
 #[must_use]
@@ -979,7 +501,7 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
         path,
         exact,
         substr,
-        regex: _,
+        regex,
         eq,
         ne,
         match_mode,
@@ -1003,88 +525,10 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
         return evaluate_kv_eq_ne(path, eq.as_deref(), ne.as_deref(), *match_mode, ctx);
     }
 
-    // Get the string regex pattern for debug
-    let regex_str = if let Condition::Kv(KvQuery { regex, .. }) = condition {
-        regex.clone()
-    } else {
-        None
-    };
-
+    let tree = ctx.report.values_tree.as_ref()?;
     let file_path = std::path::Path::new(&ctx.report.target.path);
-    let content = ctx.binary_data;
-
-    // Navigate path
     let segments = parse_path(path).ok()?;
-    let mut values = Vec::new();
-
-    // Files whose metadata isn't natively a manifest format (office
-    // documents, PDFs, filefacts-backed formats, etc.) can have a synthetic
-    // kv tree stashed on `report.values_tree`. Consult it first, but do not
-    // let it shadow the native parser for structured text formats. PKG-INFO
-    // is the motivating edge case: filefacts preserves header casing, while
-    // cleave's parser normalizes keys for stable lowercase rule paths.
-    let mut authoritative_flow = false;
-    if let Some(synthetic) = ctx.report.values_tree.as_ref() {
-        values.extend(navigate(synthetic.as_ref(), &segments));
-        // These namespaces are computed from executable command contexts.
-        // An empty computed array must not fall back to manifest-supplied
-        // lookalike facts. Native fields elsewhere retain parser fallback.
-        for (prefix, pointer) in [
-            (
-                "composer.install_hook_flows",
-                "/composer/install_hook_flows",
-            ),
-            (
-                "shell.literal_command_flows",
-                "/shell/literal_command_flows",
-            ),
-        ] {
-            if (path == prefix
-                || path
-                    .strip_prefix(prefix)
-                    .is_some_and(|tail| tail.starts_with('.') || tail.starts_with('[')))
-                && synthetic.pointer(pointer).is_some()
-            {
-                authoritative_flow = true;
-            }
-        }
-    }
-
-    let detected_format = ctx
-        .cached_kv_format
-        .get_or_init(|| detect_format(file_path, content));
-    let format = if *detected_format == StructuredFormat::Unknown {
-        structured_format_from_file_type(&ctx.file_type)
-    } else {
-        *detected_format
-    };
-
-    if format != StructuredFormat::Unknown && !authoritative_flow {
-        let cached = ctx.cached_kv_parsed.get_or_init(|| {
-            let parsed_value: Option<Value> = match format {
-                StructuredFormat::Json => serde_json::from_slice(content).ok(),
-                StructuredFormat::Yaml => crate::yaml::from_slice(content).ok(),
-                StructuredFormat::Toml => std::str::from_utf8(content)
-                    .ok()
-                    .and_then(|s| toml::from_str(s).ok()),
-                StructuredFormat::Plist => crate::plist_guard::to_json(content),
-                StructuredFormat::PkgInfo => parse_pkginfo(content),
-                StructuredFormat::SystemdService => parse_systemd_service(content),
-                StructuredFormat::DesktopEntry => parse_desktop_entry(content),
-                StructuredFormat::Xml => parse_xml_to_json(content),
-                StructuredFormat::Unknown => None,
-            };
-            Box::new(parsed_value.unwrap_or(Value::Null))
-        });
-        if !cached.is_null() {
-            values.extend(navigate(cached.as_ref(), &segments));
-        }
-    }
-
-    if values.is_empty() && ctx.report.values_tree.is_none() && format == StructuredFormat::Unknown
-    {
-        return None;
-    }
+    let values = navigate(tree.as_ref(), &segments);
 
     // Handle exists check
     let path_found = !values.is_empty();
@@ -1117,7 +561,7 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
     // `(?i)` when case-insensitive) rather than stored per condition.
     let resolved_regex_owned: Option<
         std::sync::Arc<crate::composite_rules::condition::TraitRegex>,
-    > = regex_str
+    > = regex
         .as_deref()
         .and_then(|r| crate::composite_rules::condition::lazy_regex(Some(r), *case_insensitive));
     let resolved_regex = resolved_regex_owned.as_ref();
@@ -1142,7 +586,7 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
                 method: "value".to_string(),
                 source: file_path.display().to_string(),
                 value: matched_value,
-                location: Some(kv_location(path, &segments, format, content, ctx)),
+                location: Some(kv_location(path, &segments, ctx)),
                 ..Default::default()
             });
         }
@@ -1162,21 +606,22 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
 ///    the file, unlike a `metric`, so this is where binary-fact matches anchor.
 ///
 /// Falls back to the semantic `value:<path>` label only when neither resolves.
-fn kv_location(
-    path: &str,
-    segments: &[PathSegment],
-    format: StructuredFormat,
-    content: &[u8],
-    ctx: &EvaluationContext<'_>,
-) -> String {
+fn kv_location(path: &str, segments: &[PathSegment], ctx: &EvaluationContext<'_>) -> String {
     let dotted = segments_dotted(segments);
     let offsets = ctx.cached_kv_offsets.get_or_init(|| {
         // Only JSON is indexed: package.json is the dominant supply-chain
         // workload and the win is measured. Other structured formats fall back
         // to the value-tree companion or the label — no hand-rolled re-scanner
         // per format (see docs/BINARY_METADATA_ANCHORING.md).
-        if format == StructuredFormat::Json {
-            std::str::from_utf8(content)
+        if matches!(
+            ctx.file_type,
+            FileType::Json
+                | FileType::PackageJson
+                | FileType::PackageLockJson
+                | FileType::ComposerJson
+                | FileType::ChromeManifest
+        ) {
+            std::str::from_utf8(ctx.binary_data)
                 .map(build_json_key_offsets)
                 .unwrap_or_default()
         } else {

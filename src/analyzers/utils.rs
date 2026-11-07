@@ -32,16 +32,10 @@ pub(crate) fn analyze_embedded_as_child(
     let temp = tempfile::Builder::new().suffix(suffix).tempfile().ok()?;
     std::fs::write(temp.path(), bytes).ok()?;
 
-    let metadata_name_from_bytes = if kind_str == "pe" {
-        embedded_pe_metadata_name_from_bytes(bytes)
-    } else {
-        None
-    };
-    let child_name = metadata_name_from_bytes
-        .as_deref()
-        .map(|name| format!("embedded:{}:{}@{:#x}", display_kind, name, offset))
-        .unwrap_or_else(|| format!("embedded:{}@{:#x}", display_kind, offset));
-    let child_path = crate::types::file_analysis::encode_archive_path(host_name, &child_name);
+    let child_path = crate::types::file_analysis::encode_archive_path(
+        host_name,
+        &format!("embedded:{}@{:#x}", display_kind, offset),
+    );
     let child_path_buf = PathBuf::from(&child_path);
 
     let file_type = if kind_str == "pe" {
@@ -87,15 +81,14 @@ pub(crate) fn analyze_embedded_as_child(
     let doomed = engine.rules().doomed_low_value_ids(&report.findings);
     crate::context::capture(&mut report, bytes, file_type, &doomed);
 
+    // A PE child is named after its own version info once filefacts has read it.
+    let metadata_name = if kind_str == "pe" {
+        embedded_pe_metadata_name(&report)
+    } else {
+        None
+    };
     let temp_path = temp.path().display().to_string();
     let (mut fa, nested, _) = report.into_file_analysis(0, &engine);
-    let metadata_name = metadata_name_from_bytes.or_else(|| {
-        if kind_str == "pe" {
-            embedded_pe_metadata_name(&fa)
-        } else {
-            None
-        }
-    });
     let child_path = metadata_name
         .as_deref()
         .map(|name| {
@@ -133,23 +126,16 @@ fn normalize_embedded_nested_path(path: &str, temp_path: &str, child_prefix: &st
     crate::types::file_analysis::encode_archive_path(child_prefix, path)
 }
 
-fn embedded_pe_metadata_name(file: &crate::types::FileAnalysis) -> Option<String> {
+fn embedded_pe_metadata_name(report: &crate::types::AnalysisReport) -> Option<String> {
+    let tree = report.values_tree.as_deref()?;
     [
-        "pe.version_info.original_filename",
-        "pe.version_info.product_name",
-        "pe.version_info.file_description",
+        "/pe/version/original_filename",
+        "/pe/version/product_name",
+        "/pe/version/description",
     ]
     .iter()
-    .filter_map(|key| file.kv.get(*key).and_then(serde_json::Value::as_str))
+    .filter_map(|pointer| tree.pointer(pointer).and_then(serde_json::Value::as_str))
     .find_map(sanitize_child_name)
-}
-
-fn embedded_pe_metadata_name_from_bytes(bytes: &[u8]) -> Option<String> {
-    let version_info = crate::analyzers::pe_extractors::extract_version_info(bytes);
-    ["OriginalFilename", "ProductName", "FileDescription"]
-        .iter()
-        .filter_map(|key| version_info.get(*key).map(String::as_str))
-        .find_map(sanitize_child_name)
 }
 
 fn sanitize_child_name(value: &str) -> Option<String> {

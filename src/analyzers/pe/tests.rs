@@ -5,56 +5,6 @@ fn test_pe_path() -> PathBuf {
     PathBuf::from("tests/fixtures/test.exe")
 }
 
-/// A section name reserved for one directory identifies that directory;
-/// the general-purpose names and any invented name claim nothing, which
-/// is what keeps `pe.directory_section_mismatch_count` from firing on
-/// ordinary packers.
-#[test]
-fn reserved_section_names_only_cover_single_purpose_sections() {
-    assert_eq!(section_name_reserved_for(".rsrc"), Some("resource"));
-    assert_eq!(section_name_reserved_for(".reloc"), Some("base_relocation"));
-    assert_eq!(section_name_reserved_for(".tls"), Some("tls"));
-    for shared in [".text", ".rdata", ".data", "UPX1", ".vmp0", ""] {
-        assert_eq!(
-            section_name_reserved_for(shared),
-            None,
-            "{shared} must claim no directory"
-        );
-    }
-}
-
-/// Prose vs. code, at the ratios measured on the sample that motivated
-/// the metric: its stuffed sections ran ~0.99 printable / ~0.15 space /
-/// ~0.80 letters, its real code section 0.32 / 0.005 / 0.19.
-#[test]
-fn prose_sections_separate_from_code_and_padding() {
-    let prose = b"You may make a single copy of the software for backup purposes, and use \
-            that backup copy as described in this agreement. If you are seeking a refund, and \
-            you cannot obtain one where you acquired the software, contact the manufacturer. "
-        .repeat(4);
-    assert!(section_is_prose(&prose));
-
-    // Alignment padding must not drag the ratios down: same content, then
-    // zeroes out to a 4 KiB page.
-    let mut padded = prose.clone();
-    padded.resize(4096, 0);
-    assert!(section_is_prose(&padded));
-
-    // x86 opcode soup: printable-ish bytes but almost no spaces.
-    let code: Vec<u8> = (0..2048u32)
-        .map(|i| (i.wrapping_mul(37) % 251) as u8)
-        .collect();
-    assert!(!section_is_prose(&code));
-
-    // An all-zero section trims to nothing rather than scoring as text.
-    assert!(!section_is_prose(&[0u8; 4096]));
-
-    // Too short to judge: a lone string, not a document.
-    assert!(!section_is_prose(
-        b"the quick brown fox jumps over the lazy dog"
-    ));
-}
-
 #[test]
 fn test_analyze_pe_file() {
     let analyzer = PEAnalyzer::new();

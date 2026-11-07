@@ -1033,6 +1033,31 @@ impl From<filefacts::FileType> for FileType {
 }
 
 impl FileType {
+    /// Whether the file's signal is its parsed document -- manifests, unit
+    /// files, property lists, XML projects -- which `type: value` rules read
+    /// from the values tree even when the file yields no strings.
+    #[must_use]
+    pub(crate) fn is_structured_manifest(&self) -> bool {
+        matches!(
+            self,
+            FileType::PackageJson
+                | FileType::PackageLockJson
+                | FileType::ComposerJson
+                | FileType::ChromeManifest
+                | FileType::CargoToml
+                | FileType::PyProjectToml
+                | FileType::GithubActions
+                | FileType::Yaml
+                | FileType::Plist
+                | FileType::Pbxproj
+                | FileType::Nib
+                | FileType::PkgInfo
+                | FileType::SystemdService
+                | FileType::DesktopEntry
+                | FileType::Xml
+        )
+    }
+
     /// Returns true if this file type is source code (not a compiled binary)
     #[must_use]
     pub(crate) fn is_source_code(&self) -> bool {

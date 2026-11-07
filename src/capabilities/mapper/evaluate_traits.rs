@@ -1074,12 +1074,10 @@ impl super::CapabilityMapper {
         // Structured manifests carry their signal as parsed KV fields, not
         // extracted strings: a 94-byte skeleton `package.json`
         // (`{"name","version","license"}`) has zero strings yet `value:`/kv
-        // traits match its fields by reparsing the content. Skipping it would
+        // traits match its fields in the values tree. Skipping it would
         // blind us to sub-100-byte namespace-squatting manifests — exactly the
         // supply-chain shape worth flagging — so never short-circuit them.
-        let is_structured_manifest =
-            crate::composite_rules::evaluators::kv::structured_format_from_file_type(&file_type)
-                != crate::composite_rules::evaluators::kv::StructuredFormat::Unknown;
+        let is_structured_manifest = file_type.is_structured_manifest();
         // On raw-text formats `type: text` searches the file's own bytes, and
         // the raw-source string index above only runs on files of 16 KiB or
         // more, so its emptiness says nothing here. A comment-only source file

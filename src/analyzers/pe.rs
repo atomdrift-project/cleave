@@ -43,157 +43,6 @@ pub struct PEAnalyzer {
     cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
-/// The data directory a standard PE section name is *reserved for*. Only
-/// names with a rigid, single-purpose convention are listed: `.text`,
-/// `.rdata` and `.data` are deliberately absent because real toolchains
-/// legitimately park imports, TLS, debug and load-config data in all three,
-/// and a packer's invented name (`UPX1`, `.vmp0`) is absent because an
-/// unfamiliar name claims nothing.
-///
-/// This is what makes `pe.directory_section_mismatch_count` a lie detector
-/// rather than a novelty detector: it fires only when a section's name is
-/// reserved for one directory while it actually holds a *different* one.
-fn section_name_reserved_for(name: &str) -> Option<&'static str> {
-    match name {
-        ".rsrc" => Some("resource"),
-        ".reloc" => Some("base_relocation"),
-        ".edata" => Some("export"),
-        ".idata" => Some("import"),
-        ".pdata" => Some("exception"),
-        ".tls" => Some("tls"),
-        ".didat" => Some("delay_import"),
-        _ => None,
-    }
-}
-
-/// Classify one section's bytes as natural-language prose rather than code
-/// or structured data.
-///
-/// Trailing zero padding to `FileAlignment` is trimmed first — it is an
-/// artifact of the layout, not content — and sections too short to judge
-/// return false. The three ratios separate the two populations by a wide
-/// margin on real binaries: prose runs ~0.99 printable, ~0.15 spaces,
-/// ~0.80 letters, while compiled code and structured tables sit below 0.67,
-/// 0.02 and 0.46 respectively. Thresholds are set in the empty middle.
-fn section_is_prose(bytes: &[u8]) -> bool {
-    let trimmed: &[u8] = bytes
-        .iter()
-        .rposition(|&b| b != 0)
-        .and_then(|last| bytes.get(..=last))
-        .unwrap_or_default();
-    // Below this a run of ASCII is as likely to be a string table fragment
-    // as a document, and the ratios get noisy.
-    if trimmed.len() < 256 {
-        return false;
-    }
-    let len = trimmed.len() as f64;
-    let mut printable = 0u64;
-    let mut spaces = 0u64;
-    let mut letters = 0u64;
-    for &b in trimmed {
-        if (0x20..0x7f).contains(&b) || b == b'\t' || b == b'\n' || b == b'\r' {
-            printable = printable.saturating_add(1);
-        }
-        if b == b' ' {
-            spaces = spaces.saturating_add(1);
-        }
-        if b.is_ascii_alphabetic() {
-            letters = letters.saturating_add(1);
-        }
-    }
-    printable as f64 / len >= 0.95 && spaces as f64 / len >= 0.08 && letters as f64 / len >= 0.60
-}
-
-/// Derived PE layout metrics: the shape of the *container*, independent of
-/// what the code inside it does.
-///
-/// These exist because a PE can be restructured — padded, renamed,
-/// stuffed — without a single instruction changing, and every behavioural
-/// signal cleave has will keep describing the original, benign program.
-/// For example, a genuine signed utility can be given a 10 MB
-/// `SizeOfHeaders` (a zero hole the loader maps), section names shuffled off
-/// their contents, sections stuffed with licence prose, its Authenticode
-/// stripped and its checksum zeroed: every behavioural signal still reads
-/// benign, and only the container's shape gives it away.
-///
-/// Emitted onto the flat metric map alongside filefacts's own `pe.*` keys,
-/// same as the recursive-scan counters below.
-fn layout_metrics(ctx: &Ctx<'_>, pe_data: &[u8], report: &mut AnalysisReport) {
-    use crate::types::core::MetricsExt;
-
-    let values = ctx.parsed.values();
-    let file_size = pe_data.len() as u64;
-
-    // SizeOfHeaders against the file. The PE spec only requires it to cover
-    // the headers and be a FileAlignment multiple; nothing bounds it above,
-    // so inflating it and inserting the matching filler moves every section
-    // deep into the file while leaving a loadable image. Even a PE with the
-    // conventional 96-section maximum needs under 8 KB of headers, so any
-    // large value here is a deliberate choice, and the ratio says whether
-    // the file is mostly program or mostly filler.
-    let headers_size = values
-        .get("pe.headers_size")
-        .and_then(serde_json::Value::as_u64);
-
-    // Data directories parked in a section reserved for a different one.
-    let mismatches = values
-        .get("pe.declared_data_directories")
-        .and_then(serde_json::Value::as_array)
-        .map_or(0u64, |dirs| {
-            dirs.iter()
-                .filter(|d| {
-                    let Some(name) = d.get("name").and_then(serde_json::Value::as_str) else {
-                        return false;
-                    };
-                    let Some(section) = d.get("section").and_then(serde_json::Value::as_str) else {
-                        return false;
-                    };
-                    section_name_reserved_for(section).is_some_and(|owner| owner != name)
-                })
-                .count() as u64
-        });
-
-    // Sections whose bytes are prose. Counted twice: once overall, and once
-    // for the sections the loader will map executable — text in a page
-    // marked CODE|EXECUTE is not a resource that happens to be misfiled, it
-    // is a section whose declared purpose its contents cannot serve.
-    let mut prose = 0u64;
-    let mut prose_exec = 0u64;
-    for section in ctx.parsed.sections() {
-        let start = usize::try_from(section.file_offset).unwrap_or(usize::MAX);
-        let len = usize::try_from(section.file_size).unwrap_or(0);
-        let Some(section_bytes) = start
-            .checked_add(len)
-            .and_then(|end| pe_data.get(start..end))
-        else {
-            continue;
-        };
-        if !section_is_prose(section_bytes) {
-            continue;
-        }
-        prose = prose.saturating_add(1);
-        if section.has_flag(filefacts::SectionFlag::Executable) {
-            prose_exec = prose_exec.saturating_add(1);
-        }
-    }
-
-    let flat = report
-        .filefacts_metrics
-        .get_or_insert_with(Default::default);
-    if let Some(headers_size) = headers_size {
-        flat.set_u("pe.headers_size", headers_size);
-        if file_size > 0 {
-            flat.set_f(
-                "pe.headers_size_ratio",
-                headers_size as f64 / file_size as f64,
-            );
-        }
-    }
-    flat.set_u("pe.directory_section_mismatch_count", mismatches);
-    flat.set_u("pe.prose_section_count", prose);
-    flat.set_u("pe.executable_prose_section_count", prose_exec);
-}
-
 /// The host's file name, which members it carries are filed under.
 fn host_file_name(report: &AnalysisReport) -> String {
     std::path::Path::new(&report.target.path)
@@ -800,10 +649,6 @@ impl PEAnalyzer {
                         None, // Hash will change after decompression
                         &unpacked_ctx,
                     );
-                    crate::analyzers::binary_extractors::augment_report(
-                        &mut unpacked_report,
-                        &unpacked_data,
-                    );
                     // Keep inline matches alongside ordinary YARA findings: trait
                     // evaluation needs the inline namespace evidence on this layer.
                     // Evaluate composites against the unpacked layer so that
@@ -1230,14 +1075,6 @@ impl PEAnalyzer {
                 &embedded,
                 pe_certificate_range_from_ctx(ctx, pe_data),
             );
-        }
-
-        // Container-shape metrics, on the same flat map for the same reason:
-        // filefacts reports the header fields verbatim, deriving what they mean
-        // against each other is cleave's job. Gated on a successful parse —
-        // the values these read are absent on the fallback path.
-        if filefacts_ok {
-            layout_metrics(ctx, pe_data, &mut report);
         }
 
         // Emit recursive-scan counters. Embedded-binary detection is

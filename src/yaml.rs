@@ -11,13 +11,6 @@ pub(crate) fn from_str<'de, T: serde::Deserialize<'de>>(
     serde_saphyr::from_str_with_options(input, options())
 }
 
-/// Deserialize `input` as YAML.
-pub(crate) fn from_slice<'de, T: serde::Deserialize<'de>>(
-    input: &'de [u8],
-) -> Result<T, serde_saphyr::Error> {
-    serde_saphyr::from_slice_with_options(input, options())
-}
-
 fn options() -> serde_saphyr::Options {
     serde_saphyr::options! { strict_booleans: true }
 }

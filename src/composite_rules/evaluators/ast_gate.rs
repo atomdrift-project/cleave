@@ -19,6 +19,10 @@ use tree_sitter::{CaptureQuantifier, Query};
 mod loop_gate;
 pub(super) use loop_gate::RequiredSubqueries;
 
+#[path = "ast_anchor.rs"]
+mod anchor;
+pub(super) use anchor::{Anchors, enabled as anchors_enabled};
+
 /// Compound text checks may run after structural matching only when a
 /// mandatory scalar capture inside that same node provides early pruning.
 /// Unguarded joins (for example mkfifo-command regexes) must keep their early

@@ -642,6 +642,7 @@ impl super::CapabilityMapper {
             }
             crate::validation_performance::confirm_outliers(
                 &report.target.path,
+                &report.target.sha256,
                 |query, full_count| {
                     let _mode =
                         crate::composite_rules::evaluators::symbol_string::MatchCountGuard::set(

@@ -89,7 +89,7 @@ pub(super) fn analyze_macho(
 
     let archive_config = analyzers::archive::ArchiveAnalyzerConfig::from_analysis_options(options)
         .with_depth(analysis_depth as usize);
-    analyzer.analyze_nuitka_payload(
+    analyzer.analyze_python_bundle_payload(
         path,
         arch_data,
         &mut report,

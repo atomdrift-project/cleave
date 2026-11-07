@@ -91,7 +91,7 @@ impl Analyzer for JavaClassAnalyzer {
         // once and thread it through structural analysis (constant-pool
         // facts), import projection, and the mapper.
         let fallback_ctx = input.open_ctx_fallback();
-        let filefacts_ctx = input.parsed_ctx.as_ref().or(fallback_ctx.as_ref());
+        let filefacts_ctx = input.parsed_ctx.or(fallback_ctx.as_ref());
         let mut report = self.analyze_structural_with_ctx(
             input.path,
             input.data,
@@ -108,7 +108,7 @@ impl Analyzer for JavaClassAnalyzer {
         report.strings = if input.strings.is_empty() {
             filefacts_ctx
                 .map(AnalysisContext::text_rows)
-                .map(|rows| string_extractor.convert_stng_strings(&rows))
+                .map(|rows| string_extractor.convert_stng_strings(rows))
                 .unwrap_or_default()
         } else {
             string_extractor.convert_stng_strings(input.strings)
@@ -142,7 +142,7 @@ impl Analyzer for JavaClassAnalyzer {
 
         if let Some(ctx) = filefacts_ctx.as_ref() {
             report.strings =
-                crate::strings::StringExtractor::default().convert_stng_strings(&ctx.text_rows());
+                crate::strings::StringExtractor::default().convert_stng_strings(ctx.text_rows());
             report.imports.extend(ctx.imports_from_filefacts());
         }
         self.engine.evaluate_and_merge_findings_with_precomputed(

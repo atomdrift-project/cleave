@@ -471,7 +471,7 @@ impl GenericAnalyzer {
             && (matches!(
                 self.file_type,
                 FileType::Data | FileType::Ani | FileType::Nrbf
-            ) || self.file_type.is_program())
+            ) || self.file_type.is_analyzed())
         {
             let file_types = if matches!(self.file_type, FileType::Ani | FileType::Nrbf) {
                 FileType::Data.yara_filetypes()
@@ -676,7 +676,8 @@ fn is_decoded_stng_method(method: stng::StringMethod) -> bool {
 }
 
 fn push_stng_string(report: &mut AnalysisReport, es: &stng::ExtractedString) {
-    let fragments = es.fragments.as_ref().map(|frags| {
+    let frags = es.fragments();
+    let fragments = (!frags.is_empty()).then(|| {
         frags
             .iter()
             .map(|f| format!("{:#x}+{}", f.offset, f.length))
@@ -761,23 +762,20 @@ impl Analyzer for GenericAnalyzer {
             && let Some(decoded) = crate::analyzers::cfml::decrypt_template(input.data)
         {
             let content = String::from_utf8_lossy(&decoded);
-            let source_ctx = Some(crate::analysis_context::AnalysisContext::open_with(
+            let source_ctx = crate::analysis_context::AnalysisContext::open_with(
                 filefacts::OpenOptions::new().file_type(filefacts::FileType::Cfml),
                 input.path,
                 &decoded,
-            ));
-            let decoded_strings = source_ctx
-                .as_ref()
-                .map(crate::analysis_context::AnalysisContext::text_rows);
+            );
             let mut report = self.analyze_source_internal(
                 input.path,
                 &content,
-                decoded_strings.as_deref(),
+                Some(source_ctx.text_rows()),
                 Some(input.data),
                 Some(&decoded),
                 input.sha256.clone(),
                 self.engine.compact_members(),
-                source_ctx.as_ref(),
+                Some(&source_ctx),
                 input.cancellation.as_ref(),
             );
             report
@@ -794,7 +792,7 @@ impl Analyzer for GenericAnalyzer {
         // Reuse the threaded context, else open one on the same `input.data`.
         let content = String::from_utf8_lossy(input.data);
         let fallback = input.open_ctx_fallback();
-        let source_ctx = input.parsed_ctx.as_ref().or(fallback.as_ref());
+        let source_ctx = input.parsed_ctx.or(fallback.as_ref());
         let mut report = self.analyze_source_internal(
             input.path,
             &content,
@@ -834,11 +832,10 @@ impl Analyzer for GenericAnalyzer {
                 .with_engine(self.engine.clone())
                 .without_embedded_detection();
             let text = String::from_utf8_lossy(&decoded);
-            let child_strings = child_ctx.text_rows();
             let child_report = child.analyze_source_internal(
                 path,
                 &text,
-                Some(child_strings.as_ref()),
+                Some(child_ctx.text_rows()),
                 Some(&decoded),
                 Some(&decoded),
                 None,

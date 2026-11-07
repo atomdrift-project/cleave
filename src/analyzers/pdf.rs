@@ -152,19 +152,11 @@ impl PdfAnalyzer {
             // filefacts is the string-extraction authority and the source
             // parser: open the JS payload once and thread it into the sub-file
             // analyzer so it is parsed a single time.
-            let js_ctx = Some(crate::analysis_context::AnalysisContext::open(
-                virtual_path,
-                js_bytes,
-            ));
-            let strings: std::sync::Arc<[stng::ExtractedString]> = js_ctx
-                .as_ref()
-                .map(crate::analysis_context::AnalysisContext::text_rows)
-                .unwrap_or_default();
-            let mut input =
-                AnalysisInput::with_strings(virtual_path, js_bytes, &strings, FileType::JavaScript);
-            if let Some(ctx) = js_ctx {
-                input = input.with_parsed_ctx(ctx);
-            }
+            let js_ctx = crate::analysis_context::AnalysisContext::open(virtual_path, js_bytes);
+            let strings = js_ctx.text_rows();
+            let input =
+                AnalysisInput::with_strings(virtual_path, js_bytes, strings, FileType::JavaScript)
+                    .with_parsed_ctx(&js_ctx);
 
             match analyzer.analyze_input(&input) {
                 Ok(sub_report) => super::subfile::attach_member(

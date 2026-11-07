@@ -566,7 +566,7 @@ mod tests {
         let ctx = crate::analysis_context::AnalysisContext::open(path, bytes);
         let cached = ctx.text_rows();
         let rows = scpt_literal_strings(&ctx);
-        assert!(std::sync::Arc::ptr_eq(&cached, &ctx.text_rows()));
+        assert!(std::ptr::eq(cached, ctx.text_rows()));
         let parent = rows
             .iter()
             .find(|s| s.value == "cHJpbnRmICclc1xuJyAnU0NQVF9CQVNFNjRfT0sn")

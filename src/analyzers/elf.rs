@@ -432,9 +432,7 @@ impl ElfAnalyzer {
         // Keep the binary's own symbol names ahead of the cap (Go pclntab
         // names in a large binary), then record what the caps left.
         self.string_extractor.prioritize_report_symbols(&report);
-        report.strings = self
-            .string_extractor
-            .convert_stng_strings(&raw_stng_strings);
+        report.strings = self.string_extractor.convert_stng_strings(raw_stng_strings);
         self.string_extractor.record_count_metrics(
             report
                 .filefacts_metrics
@@ -1086,7 +1084,7 @@ impl Analyzer for ElfAnalyzer {
         // a caller threaded in (an archive member's): opening again repeats
         // the whole extraction.
         let opened;
-        let ctx = match &input.parsed_ctx {
+        let ctx = match input.parsed_ctx {
             Some(ctx) => ctx,
             None => {
                 opened = input.open_ctx_with(self.engine.filefacts_options());
@@ -1120,24 +1118,15 @@ impl Analyzer for ElfAnalyzer {
         let data = fs::read(file_path).context("Failed to read file")?;
         // filefacts is the string-extraction authority; open the context once
         // and thread it into the input so analyze_input reuses this parse.
-        let ctx = Some(crate::analysis_context::AnalysisContext::open_with(
+        let ctx = crate::analysis_context::AnalysisContext::open_with(
             self.engine.filefacts_options(),
             file_path,
             &data,
-        ));
-        let strings: std::sync::Arc<[stng::ExtractedString]> = ctx
-            .as_ref()
-            .map(crate::analysis_context::AnalysisContext::text_rows)
-            .unwrap_or_default();
-        let mut input = AnalysisInput::with_strings(
-            file_path,
-            &data,
-            &strings,
-            crate::analyzers::FileType::Elf,
         );
-        if let Some(ctx) = ctx {
-            input = input.with_parsed_ctx(ctx);
-        }
+        let strings = ctx.text_rows();
+        let input =
+            AnalysisInput::with_strings(file_path, &data, strings, crate::analyzers::FileType::Elf)
+                .with_parsed_ctx(&ctx);
         self.analyze_input(&input)
     }
 

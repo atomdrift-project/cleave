@@ -669,24 +669,22 @@ impl ArchiveAnalyzer {
             // parsed a single time, regardless of member type. The analyzer
             // reuses this parse (`with_parsed_ctx`) rather than opening the
             // member again.
-            let member_ctx = Some(crate::analysis_context::AnalysisContext::open_with(
+            let member_ctx = crate::analysis_context::AnalysisContext::open_with(
                 crate::engine::filefacts_options(self.engine.settings()),
                 logical_path,
                 data,
-            ));
-            let stng_strings: std::sync::Arc<[stng::ExtractedString]> = member_ctx
-                .as_ref()
-                .map(crate::analysis_context::AnalysisContext::text_rows)
-                .unwrap_or_default();
+            );
+            let stng_strings = member_ctx.text_rows();
             crate::memory_tracker::clear_current_phase();
             let mut payloads = if extract_payloads {
-                crate::extractors::encoded_payload::extract_encoded_payloads(&stng_strings)
+                crate::extractors::encoded_payload::extract_encoded_payloads(stng_strings)
             } else {
                 Vec::new()
             };
-            payloads.extend(member_ctx.as_ref().and_then(|ctx| {
-                crate::extractors::encoded_payload::xor_encoded_pe(ctx.parsed.fileid(), data)
-            }));
+            payloads.extend(crate::extractors::encoded_payload::xor_encoded_pe(
+                member_ctx.parsed.fileid(),
+                data,
+            ));
             if matches!(
                 file_type,
                 FileType::Gif | FileType::Jpeg | FileType::Png | FileType::Bmp | FileType::Webp
@@ -704,22 +702,20 @@ impl ArchiveAnalyzer {
             if extract_payloads {
                 payloads.extend(crate::extractors::encoded_payload::xor_encoded_machos(
                     data,
-                    &stng_strings,
+                    stng_strings,
                 ));
             }
             let mut input = AnalysisInput::with_payloads(
                 logical_path,
                 data,
-                &stng_strings,
+                stng_strings,
                 &payloads,
                 *file_type,
             )
             .with_backing_path(file_path)
             .with_sha256(sha256.to_string())
-            .at_depth((self.current_depth + 1) as u32);
-            if let Some(ctx) = member_ctx {
-                input = input.with_parsed_ctx(ctx);
-            }
+            .at_depth((self.current_depth + 1) as u32)
+            .with_parsed_ctx(&member_ctx);
             input.cancellation = self.cancelled.clone();
 
             tracing::debug!(
@@ -752,7 +748,7 @@ impl ArchiveAnalyzer {
             // are never lost to an analyzer that forgets. Mirrors the standalone
             // safety net in `analyze`. Gated on `is_none` so analyzers that
             // already attach keep theirs.
-            if let Some(ctx) = input.parsed_ctx.as_ref() {
+            if let Some(ctx) = input.parsed_ctx {
                 if report.identity.is_none() {
                     report.identity = ctx.identity();
                 }
@@ -834,7 +830,7 @@ impl ArchiveAnalyzer {
             .analysis_options
             .as_ref()
             .is_some_and(|opts| opts.all_files)
-            || filefacts::has_named_reference_metadata(Path::new(relative_path))
+            || filefacts::package_context::has_named_reference_metadata(Path::new(relative_path))
         {
             // `all_files` promises analysis, not merely a path ledger. Treat an
             // unclassified blob as generic data so data-oriented facts and
@@ -863,7 +859,7 @@ impl ArchiveAnalyzer {
             ));
             if let Some(ctx) = ctx.as_ref() {
                 report.strings = crate::strings::StringExtractor::default()
-                    .convert_stng_strings(&ctx.text_rows());
+                    .convert_stng_strings(ctx.text_rows());
                 let view = crate::types::FilefactsView::of(ctx, self.engine.compact_members());
                 if !view.is_empty() {
                     report.filefacts = Some(view);

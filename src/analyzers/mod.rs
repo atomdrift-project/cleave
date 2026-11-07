@@ -309,17 +309,10 @@ pub trait Analyzer {
         // Strings come from filefacts' `text()` view — the single
         // string-extraction authority. Thread the context into the input so
         // an analyzer that reads it reuses this parse.
-        let ctx = Some(crate::analysis_context::AnalysisContext::open(
-            file_path, &data,
-        ));
-        let strings: std::sync::Arc<[stng::ExtractedString]> = ctx
-            .as_ref()
-            .map(crate::analysis_context::AnalysisContext::text_rows)
-            .unwrap_or_default();
-        let mut input = AnalysisInput::with_strings(file_path, &data, &strings, file_type);
-        if let Some(ctx) = ctx {
-            input = input.with_parsed_ctx(ctx);
-        }
+        let ctx = crate::analysis_context::AnalysisContext::open(file_path, &data);
+        let strings = ctx.text_rows();
+        let input =
+            AnalysisInput::with_strings(file_path, &data, strings, file_type).with_parsed_ctx(&ctx);
         self.analyze_input(&input)
     }
 
@@ -381,7 +374,7 @@ pub(crate) fn detect_file_type_from_detected(
         .then(|| filefacts::fileid::detect(Path::new("content"), file_data))
         .flatten()
         .map(|d| d.file_type)
-        .filter(|ft| ft.is_source_code() || ft.is_binary() || ft.is_archive())
+        .filter(|ft| ft.is_source_code() || ft.is_executable_code() || ft.is_archive())
         .or(detected);
     let detected = detected
         .filter(|ft| *ft != FileType::Pe || looks_like_pe_image(file_data))
@@ -626,7 +619,7 @@ pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
 /// truth for whether a file type is supported for analysis.
 #[must_use]
 pub(crate) fn is_analyzable(_path: &Path, file_type: &FileType) -> bool {
-    file_type.is_program()
+    file_type.is_analyzed()
 }
 
 // Extension/content mismatch detection moved to filefacts (the

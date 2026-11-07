@@ -79,7 +79,7 @@ pub(super) fn file_type_for_script_language(language: &str) -> Option<FileType> 
 pub(super) fn encoding_chain_for_deobfuscation(
     result: &stng::script::DeobfuscationResult,
 ) -> Vec<String> {
-    if result.language == stng::script::detect::ScriptLanguage::PowerShell
+    if result.language == stng::script::ScriptLanguage::PowerShell
         && result.chain_description.contains("utf16le")
     {
         vec!["base64-utf16le".to_string()]
@@ -127,8 +127,8 @@ pub(super) fn host_may_contain_script_obfuscation(content: &str) -> bool {
             .as_bytes()
             .windows(7)
             .any(|w| w.eq_ignore_ascii_case(b"execute"))
-        || stng::script::detect::detect_script_language(content.as_bytes())
-            == Some(stng::script::detect::ScriptLanguage::Lua)
+        || stng::script::detect_script_language(content.as_bytes())
+            == Some(stng::script::ScriptLanguage::Lua)
 }
 
 pub(super) fn encoded_powershell_finding(

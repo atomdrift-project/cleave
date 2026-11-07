@@ -494,8 +494,16 @@ pub fn log_all_memory_stats() {
     // Log archive analysis statistics
     crate::analyzers::archive::analyzers::log_archive_analysis_stats();
 
-    // Log filefacts extraction statistics
-    filefacts::log_stats();
+    // Log filefacts function-recovery statistics
+    let stats = filefacts::recovery_stats();
+    info!(
+        recovered = stats.recovered,
+        truncated = stats.truncated,
+        layout_only = stats.layout_only,
+        unreadable = stats.unreadable,
+        panicked = stats.panicked,
+        "Memory stats snapshot - filefacts function recovery"
+    );
 }
 
 /// Jemalloc allocator statistics — only available when compiled with `--features jemalloc`.

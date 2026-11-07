@@ -90,7 +90,7 @@ impl Analyzer for FontAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
         // Reuse the threaded context, else open one on the same `input.data`.
         let fallback = input.open_ctx_fallback();
-        let source_ctx = input.parsed_ctx.as_ref().or(fallback.as_ref());
+        let source_ctx = input.parsed_ctx.or(fallback.as_ref());
         Ok(self.analyze_font(input.path, input.data, Some(input.strings), source_ctx))
     }
 

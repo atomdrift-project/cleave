@@ -157,8 +157,8 @@ pub(crate) fn create_analysis_report(
     let report = if let Some(analyzer) = analyzers::analyzer_for_file_type_arc(file_type, engine) {
         let ctx = crate::analysis_context::AnalysisContext::open(path, binary_data);
         let strings = ctx.text_rows();
-        let input = analyzers::AnalysisInput::with_strings(path, binary_data, &strings, *file_type)
-            .with_parsed_ctx(ctx);
+        let input = analyzers::AnalysisInput::with_strings(path, binary_data, strings, *file_type)
+            .with_parsed_ctx(&ctx);
         analyzer.analyze_input(&input)?
     } else {
         // Fallback: create minimal report for unsupported types

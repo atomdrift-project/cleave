@@ -1658,7 +1658,7 @@ impl ArchiveAnalyzer {
         file_type: &FileType,
         path: &str,
     ) -> Option<&'static str> {
-        if filefacts::has_named_reference_metadata(Path::new(path)) {
+        if filefacts::package_context::has_named_reference_metadata(Path::new(path)) {
             return None;
         }
         if self
@@ -1696,7 +1696,7 @@ impl ArchiveAnalyzer {
             return None;
         }
 
-        if !file_type.is_program() {
+        if !file_type.is_analyzed() {
             return Some("non-program archive member and all_files is false");
         }
 

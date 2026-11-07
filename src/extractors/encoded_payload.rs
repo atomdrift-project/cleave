@@ -9,6 +9,7 @@
 
 use crate::analyzers::FileType;
 use crate::types::ExtractedPayload;
+use std::collections::HashMap;
 
 /// Maximum recursion depth for nested encoding
 const MAX_RECURSION_DEPTH: usize = 3;
@@ -261,12 +262,31 @@ pub(crate) fn extract_encoded_payloads(
 ) -> Vec<ExtractedPayload> {
     let mut payloads = Vec::new();
 
-    // Filter for decoded strings from ANY encoding method
-    let decoded_strings: Vec<_> = stng_strings
+    // Filter for decoded strings from ANY encoding method. stng can decode one
+    // blob twice (its obfuscation pass at the enclosing line, its plain pass
+    // at the literal); that is one payload, located at the literal.
+    let mut decoded_strings: Vec<&stng::ExtractedString> = Vec::new();
+    let mut seen: HashMap<(&str, &str), usize> = HashMap::new();
+    for s in stng_strings
         .iter()
         .filter(|s| DECODED_METHODS.contains(&s.method))
-        .filter(|s| s.value.len() >= MIN_PAYLOAD_LENGTH) // Minimum 24 bytes
-        .collect();
+        .filter(|s| s.value.len() >= MIN_PAYLOAD_LENGTH)
+    {
+        let key = (method_to_encoding_name(s.method), s.value.as_str());
+        match seen.get(&key) {
+            Some(&i) => {
+                if let Some(kept) = decoded_strings.get_mut(i)
+                    && kept.method == stng::StringMethod::Base64ObfuscatedDecode
+                {
+                    *kept = s;
+                }
+            }
+            None => {
+                seen.insert(key, decoded_strings.len());
+                decoded_strings.push(s);
+            }
+        }
+    }
 
     tracing::trace!(
         "Processing {} total strings from stng, {} decoded strings, {} meet size threshold",

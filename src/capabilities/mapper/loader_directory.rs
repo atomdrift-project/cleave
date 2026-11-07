@@ -1326,8 +1326,7 @@ impl super::CapabilityMapper {
         super::drop_unreferenced_support_rules(&mut trait_definitions, &composite_rules);
 
         // Save to cache for future runs (only if not in validation mode)
-        if use_cache && let Ok(cache_path) = crate::cache::mapper_cache_path_for(dir_path)
-        {
+        if use_cache && let Ok(cache_path) = crate::cache::mapper_cache_path_for(dir_path) {
             save_mapper_cache(
                 &cache_path,
                 &trait_definitions,

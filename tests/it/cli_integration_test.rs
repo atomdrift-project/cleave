@@ -96,7 +96,11 @@ fn test_rust_binary_analysis_is_silent() {
     let output = assert_cmd::cargo_bin_cmd!("cleave")
         .env("RUST_LOG", "error")
         .env("CLEAVE_TRAITS_DIR", traits.path())
-        .args(["--json", "analyze", "tests/fixtures/lang_strings/rust_native"])
+        .args([
+            "--json",
+            "analyze",
+            "tests/fixtures/lang_strings/rust_native",
+        ])
         .output()
         .unwrap();
 

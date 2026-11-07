@@ -17,13 +17,15 @@ traits:
       substr: cleave-packed-probe-marker
 "#;
 
+// Its own marker: the YARA sample must not also match the YAML trait, whose
+// suspicious finding would strip this baseline hit as unreferenced.
 const YARA: &str = r#"
 rule packed_probe_yara {
   meta:
     filetype = "php"
     score = 70
   strings:
-    $marker = "cleave-packed-probe-marker"
+    $marker = "cleave-packed-yara-marker"
   condition:
     $marker
 }
@@ -111,7 +113,7 @@ fn cli_scans_packed_yaml_yara_and_ignores_shipped_buckets() {
     fs::write(shipped.join("php.yrc"), b"not a compiled rule set").unwrap();
 
     let yara_sample = temp.path().join("yara-probe.php");
-    fs::write(&yara_sample, "<?php /* cleave-packed-probe-marker */ ?>").unwrap();
+    fs::write(&yara_sample, "<?php /* cleave-packed-yara-marker */ ?>").unwrap();
     let yaml_sample = temp.path().join("yaml-probe.php");
     fs::write(
         &yaml_sample,

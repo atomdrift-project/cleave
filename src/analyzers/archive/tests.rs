@@ -1085,14 +1085,27 @@ fn test_encrypted_zip_with_wrong_password() {
     zip.finish().unwrap();
 
     // Analyze with wrong password
+    // An encrypted archive is still analyzed: the central directory names the
+    // member and flags it encrypted, and the failure says why it was not read.
     let analyzer = ArchiveAnalyzer::new().with_zip_passwords(vec!["wrongpass".to_string()]);
-    let result = analyzer.analyze(&zip_path);
-    assert!(result.is_err(), "Should fail with wrong password");
+    let report = analyzer
+        .analyze(&zip_path)
+        .expect("encrypted archive keeps its listing");
     assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("tried 1 passwords")
+        report
+            .metadata
+            .errors
+            .iter()
+            .any(|e| e.contains("tried 1 passwords")),
+        "errors should record the failed password attempt: {:?}",
+        report.metadata.errors
+    );
+    assert!(
+        report
+            .archive_contents
+            .iter()
+            .any(|entry| entry.path == "test.txt" && entry.encrypted),
+        "listing should keep the encrypted member"
     );
 }
 
@@ -1115,10 +1128,23 @@ fn test_encrypted_zip_no_passwords_configured() {
     zip.write_all(b"hello world").unwrap();
     zip.finish().unwrap();
 
-    // Analyze with no passwords (default)
+    // Analyze with no passwords (default): the member cannot be read, but the
+    // archive still reports its encrypted listing and why extraction failed.
     let analyzer = ArchiveAnalyzer::new();
-    let result = analyzer.analyze(&zip_path);
-    assert!(result.is_err(), "Should fail when no passwords configured");
+    let report = analyzer
+        .analyze(&zip_path)
+        .expect("encrypted archive keeps its listing");
+    assert!(
+        !report.metadata.errors.is_empty(),
+        "errors should record why the member was not read"
+    );
+    assert!(
+        report
+            .archive_contents
+            .iter()
+            .any(|entry| entry.path == "test.txt" && entry.encrypted),
+        "listing should keep the encrypted member"
+    );
 }
 
 #[test]

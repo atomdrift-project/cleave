@@ -197,6 +197,12 @@ impl Drop for MatchLocationsGuard {
     }
 }
 
+/// Read the per-thread "a proximity consumer reads every match location"
+/// flag (set by [`MatchLocationsGuard`]).
+pub(crate) fn match_locations_needed() -> bool {
+    NEEDS_MATCH_LOCATIONS.with(std::cell::Cell::get)
+}
+
 /// Read the per-thread "needs exact match_count" flag.
 pub(crate) fn match_count_needed() -> bool {
     NEEDS_MATCH_COUNT.with(std::cell::Cell::get) || NEEDS_MATCH_LOCATIONS.with(std::cell::Cell::get)

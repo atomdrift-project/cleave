@@ -357,6 +357,10 @@ pub(super) fn is_benign_archive_symlink_escape(path: &str) -> bool {
         let system_target = target.starts_with("/usr/share/")
             || target.starts_with("/usr/bin/")
             || target.starts_with("/usr/sbin/")
+            // Locally installed tools: `usr/local/bin/yarn -> /opt/yarn/bin/yarn`.
+            || target.starts_with("/usr/local/bin/")
+            || target.starts_with("/usr/local/sbin/")
+            || (target.starts_with("/opt/") && !target.split('/').any(|part| part == ".."))
             || target.starts_with("/bin/")
             || target.starts_with("/lib/systemd/")
             || target.starts_with("/etc/alternatives/")
@@ -380,10 +384,21 @@ pub(super) fn is_benign_archive_symlink_escape(path: &str) -> bool {
 pub(super) fn carries_system_symlinks(archive_type: FileType, contents: &[ArchiveEntry]) -> bool {
     match archive_type {
         FileType::PkgArch => is_system_package(archive_type, contents),
+        // Alpine/Wolfi packages install into `/` as root and routinely ship
+        // absolute links (`usr/bin/foo -> /usr/lib/foo/bin`). Require the
+        // control segment's `.PKGINFO`, not just the apk magic.
+        FileType::ApkAlpine => has_root_member(contents, ".PKGINFO"),
         // Detected from content only: an OCI layout or a `docker save` manifest.
         FileType::OciImage => true,
         _ => false,
     }
+}
+
+fn has_root_member(contents: &[ArchiveEntry], name: &str) -> bool {
+    contents.iter().any(|entry| {
+        let leaf = entry.path.rsplit('!').next().unwrap_or(&entry.path);
+        leaf.trim_start_matches("./") == name
+    })
 }
 
 /// Whether this archive is an OS package by content: it carries the metadata
@@ -391,17 +406,57 @@ pub(super) fn carries_system_symlinks(archive_type: FileType, contents: &[Archiv
 /// package from a `.pkg` / `.pkg.tar.*` *name* when that metadata is absent,
 /// and the name is the archive author's choice.
 pub(super) fn is_system_package(archive_type: FileType, contents: &[ArchiveEntry]) -> bool {
-    let has_member = |name: &str| {
-        contents.iter().any(|entry| {
-            let leaf = entry.path.rsplit('!').next().unwrap_or(&entry.path);
-            leaf.trim_start_matches("./") == name
-        })
-    };
+    let has_member = |name: &str| has_root_member(contents, name);
     match archive_type {
         FileType::PkgArch => {
             has_member(".PKGINFO") && (has_member(".MTREE") || has_member(".BUILDINFO"))
         }
         FileType::PkgFreebsd => has_member("+COMPACT_MANIFEST") || has_member("+MANIFEST"),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entries(paths: &[&str]) -> Vec<ArchiveEntry> {
+        paths
+            .iter()
+            .map(|p| ArchiveEntry {
+                path: (*p).to_string(),
+                ..Default::default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn alpine_apk_with_pkginfo_carries_system_symlinks() {
+        let pkg = entries(&[".SIGN.RSA.wolfi.rsa.pub", ".PKGINFO", "usr/bin/placement"]);
+        assert!(carries_system_symlinks(FileType::ApkAlpine, &pkg));
+        // apk magic alone, without the control segment, is not an OS package.
+        let bare = entries(&["usr/bin/placement"]);
+        assert!(!carries_system_symlinks(FileType::ApkAlpine, &bare));
+        // A nested member called .PKGINFO does not count.
+        let nested = entries(&["data/.PKGINFO"]);
+        assert!(!carries_system_symlinks(FileType::ApkAlpine, &nested));
+        // Plain tarballs never get the allowance, whatever they contain.
+        assert!(!carries_system_symlinks(FileType::Tar, &pkg));
+    }
+
+    #[test]
+    fn local_tool_links_into_opt_are_benign() {
+        assert!(is_benign_archive_symlink_escape(
+            "usr/local/bin/yarn -> /opt/yarn-v1.22.22/bin/yarn"
+        ));
+        assert!(is_benign_archive_symlink_escape(
+            "usr/local/bin/nodejs -> /usr/local/bin/node"
+        ));
+        assert!(!is_benign_archive_symlink_escape(
+            "usr/local/bin/x -> /opt/../etc/shadow"
+        ));
+        assert!(!is_benign_archive_symlink_escape(
+            "data/evil -> /opt/app/key"
+        ));
     }
 }

@@ -1468,4 +1468,23 @@ mod proximity_offset_tests {
             );
         }
     }
+
+    /// A literal leg (`substr:`) whose first occurrence lies far outside the
+    /// window must still pair with a later occurrence inside it: proximity
+    /// reads every location, not just the first.
+    #[test]
+    fn near_lines_uses_later_occurrence_of_literal_leg() {
+        let source = format!(
+            "# uses b85decode below\n{}a=base64.b85decode(s[::-1])\n",
+            "y=1\n".repeat(50)
+        );
+        assert!(
+            reverse_near_decode(&source, false, None, Some(1)),
+            "a later b85decode beside the reversal must satisfy near_lines"
+        );
+        assert!(
+            reverse_near_decode(&source, false, Some(32), None),
+            "a later b85decode beside the reversal must satisfy near_bytes"
+        );
+    }
 }

@@ -205,6 +205,7 @@ pub(crate) fn eval_raw<'a>(
         is_check,
         not,
         needs_count: match_count_needed(),
+        needs_locations: super::match_locations_needed(),
     };
 
     let mut evidence = Vec::new();
@@ -312,20 +313,21 @@ fn raw_precision(
 }
 
 /// The one evidence row a literal raw match (word, exact, substr) reports:
-/// its first passing match, when there was one.
-fn push_first_match(
+/// its first passing match, plus every later one when a proximity consumer
+/// reads locations (see [`RawScan::keep_offset`]).
+fn push_literal_match(
     evidence: &mut Vec<Evidence>,
     match_count: usize,
     value: String,
-    offset: Option<u64>,
+    offsets: Vec<u64>,
 ) {
     if match_count > 0 && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
         evidence.push(Evidence {
             method: "raw".to_string(),
             source: "raw_content".to_string(),
             value,
-            location: Some(format!("0x{:x}", offset.unwrap_or(0))),
-            offsets: offset.into_iter().collect(),
+            location: Some(format!("0x{:x}", offsets.first().copied().unwrap_or(0))),
+            offsets,
             ..Default::default()
         });
     }
@@ -425,9 +427,27 @@ struct RawScan<'s, 'c> {
     /// id+level + evidence (the first match is identical); only the unused
     /// `match_count` value is truncated.
     needs_count: bool,
+    /// A `near_lines:`/`near_bytes:` consumer reads every match location, so
+    /// literal scans keep each accepted offset, not just the first. Without
+    /// them a word whose first occurrence lies outside the proximity window
+    /// fails a rule its later occurrences satisfy.
+    needs_locations: bool,
 }
 
+/// Most offsets one literal-match evidence row carries for proximity.
+const MAX_LITERAL_LOCATION_OFFSETS: usize = 256;
+
 impl RawScan<'_, '_> {
+    /// Record `offset` when it is the first match, or when proximity needs
+    /// every location (up to [`MAX_LITERAL_LOCATION_OFFSETS`]).
+    fn keep_offset(&self, offsets: &mut Vec<u64>, offset: u64) {
+        if offsets.is_empty()
+            || (self.needs_locations && offsets.len() < MAX_LITERAL_LOCATION_OFFSETS)
+        {
+            offsets.push(offset);
+        }
+    }
+
     /// Whether matches need their text or context checked at all.
     fn filtered(&self) -> bool {
         self.is_check.is_some() || self.not.is_some()
@@ -468,25 +488,24 @@ impl RawScan<'_, '_> {
             },
         );
         let mut match_count = 0;
-        let mut first = None;
+        let mut value = None;
+        let mut kept = Vec::new();
         for start in offsets {
             let bytes = &self.data[start..start + w.len()];
             if self.filtered() && !self.accepts(&String::from_utf8_lossy(bytes)) {
                 continue;
             }
-            if first.is_none() {
-                first = Some((
-                    String::from_utf8_lossy(bytes).into_owned(),
-                    (self.start + start) as u64,
-                ));
+            if value.is_none() {
+                value = Some(String::from_utf8_lossy(bytes).into_owned());
             }
+            self.keep_offset(&mut kept, (self.start + start) as u64);
             match_count += 1;
             if !self.needs_count {
                 break;
             }
         }
-        if let Some((value, offset)) = first {
-            push_first_match(evidence, match_count, value, Some(offset));
+        if let Some(value) = value {
+            push_literal_match(evidence, match_count, value, kept);
         }
         match_count
     }
@@ -609,7 +628,8 @@ impl RawScan<'_, '_> {
         let ascii_path = can_use_byte_matching(exact_str);
         let pat_bytes = exact_str.as_bytes();
         let mut match_count = 0;
-        let mut first: Option<(String, u64)> = None;
+        let mut value: Option<String> = None;
+        let mut kept = Vec::new();
 
         let mut line_start = 0usize;
         while line_start <= data.len() {
@@ -645,11 +665,12 @@ impl RawScan<'_, '_> {
                 })
             };
             if line_matches {
-                let value = String::from_utf8_lossy(line).into_owned();
-                if self.accepts(&value) {
+                let line_value = String::from_utf8_lossy(line).into_owned();
+                if self.accepts(&line_value) {
                     match_count += 1;
-                    if first.is_none() {
-                        first = Some((value, (self.start + s) as u64));
+                    self.keep_offset(&mut kept, (self.start + s) as u64);
+                    if value.is_none() {
+                        value = Some(line_value);
                     }
                     if !self.needs_count {
                         break;
@@ -661,8 +682,8 @@ impl RawScan<'_, '_> {
             }
             line_start = line_end + 1;
         }
-        let (value, offset) = first.map_or((exact_str.to_string(), None), |(v, o)| (v, Some(o)));
-        push_first_match(evidence, match_count, value, offset);
+        let value = value.unwrap_or_else(|| exact_str.to_string());
+        push_literal_match(evidence, match_count, value, kept);
         match_count
     }
 
@@ -675,26 +696,26 @@ impl RawScan<'_, '_> {
         case_insensitive: bool,
         evidence: &mut Vec<Evidence>,
     ) -> Option<usize> {
-        let (match_count, first) = if can_use_byte_matching(substr_str) {
+        let (match_count, kept) = if can_use_byte_matching(substr_str) {
             self.substr_ascii(substr_str, case_insensitive)
         } else {
             self.substr_unicode(substr_str, case_insensitive)?
         };
-        push_first_match(evidence, match_count, substr_str.to_string(), first);
+        push_literal_match(evidence, match_count, substr_str.to_string(), kept);
         Some(match_count)
     }
 
     /// ASCII `substr:` over raw bytes, without UTF-8 conversion. A validator
     /// or `not:` filter judges the 50 bytes on either side of each match.
-    fn substr_ascii(&self, substr_str: &str, case_insensitive: bool) -> (usize, Option<u64>) {
+    fn substr_ascii(&self, substr_str: &str, case_insensitive: bool) -> (usize, Vec<u64>) {
         let data = self.data;
         let mut match_count = 0;
-        let mut first = None;
+        let mut kept = Vec::new();
         if !self.filtered() {
             // Simple count - just count byte occurrences (fastest path).
             if case_insensitive {
                 for_each_ascii_ci_substr(data, substr_str, false, |abs_pos, _len| {
-                    first.get_or_insert((self.start + abs_pos) as u64);
+                    self.keep_offset(&mut kept, (self.start + abs_pos) as u64);
                     match_count += 1;
                     self.needs_count
                 });
@@ -703,14 +724,21 @@ impl RawScan<'_, '_> {
                 // per evaluation measured ~13 s of pool time per corpus.
                 let finder = crate::composite_rules::condition::cached_finder(substr_str);
                 let iter = finder.find_iter(data);
-                first = iter.clone().next().map(|o| (self.start + o) as u64);
-                match_count = if self.needs_count {
-                    iter.count()
+                if self.needs_locations {
+                    for o in iter {
+                        self.keep_offset(&mut kept, (self.start + o) as u64);
+                        match_count += 1;
+                    }
                 } else {
-                    usize::from(first.is_some())
-                };
+                    kept.extend(iter.clone().next().map(|o| (self.start + o) as u64));
+                    match_count = if self.needs_count {
+                        iter.count()
+                    } else {
+                        kept.len()
+                    };
+                }
             }
-            return (match_count, first);
+            return (match_count, kept);
         }
         let accepts_at = |abs_pos: usize, needle_len: usize| {
             let ctx_start = abs_pos.saturating_sub(50);
@@ -720,7 +748,7 @@ impl RawScan<'_, '_> {
         if case_insensitive {
             for_each_ascii_ci_substr(data, substr_str, true, |abs_pos, needle_len| {
                 if accepts_at(abs_pos, needle_len) {
-                    first.get_or_insert((self.start + abs_pos) as u64);
+                    self.keep_offset(&mut kept, (self.start + abs_pos) as u64);
                     match_count += 1;
                 }
                 self.needs_count || match_count == 0
@@ -731,7 +759,7 @@ impl RawScan<'_, '_> {
             while let Some(offset) = finder.find(&data[pos..]) {
                 let abs_pos = pos + offset;
                 if accepts_at(abs_pos, substr_str.len()) {
-                    first.get_or_insert((self.start + abs_pos) as u64);
+                    self.keep_offset(&mut kept, (self.start + abs_pos) as u64);
                     match_count += 1;
                 }
                 if !self.needs_count && match_count > 0 {
@@ -740,7 +768,7 @@ impl RawScan<'_, '_> {
                 pos = abs_pos + 1;
             }
         }
-        (match_count, first)
+        (match_count, kept)
     }
 
     /// Unicode `substr:` over the UTF-8 view. Case-insensitive search folds
@@ -756,7 +784,7 @@ impl RawScan<'_, '_> {
         &self,
         substr_str: &str,
         case_insensitive: bool,
-    ) -> Option<(usize, Option<u64>)> {
+    ) -> Option<(usize, Vec<u64>)> {
         if !case_insensitive
             && !substr_str.contains('\u{fffd}')
             && memchr::memmem::find(self.data, substr_str.as_bytes()).is_none()
@@ -782,23 +810,33 @@ impl RawScan<'_, '_> {
         };
         if !self.filtered() {
             // Simple count - no filter (fastest path).
-            let first = search_content.find(search_pattern.as_ref()).map(|o| {
+            let mut kept = Vec::new();
+            if self.needs_locations {
+                let mut starts = LoweredOffsets::new(&content, case_insensitive);
+                let mut match_count = 0;
+                for (o, _) in search_content.match_indices(search_pattern.as_ref()) {
+                    self.keep_offset(&mut kept, (self.start + starts.original(o)) as u64);
+                    match_count += 1;
+                }
+                return Some((match_count, kept));
+            }
+            kept.extend(search_content.find(search_pattern.as_ref()).map(|o| {
                 let o = LoweredOffsets::new(&content, case_insensitive).original(o);
                 (self.start + o) as u64
-            });
+            }));
             let match_count = if self.needs_count {
                 search_content.matches(search_pattern.as_ref()).count()
             } else {
-                usize::from(first.is_some())
+                kept.len()
             };
-            return Some((match_count, first));
+            return Some((match_count, kept));
         }
         // Hits are found in `search_content` but windows and offsets must be
         // in `content`'s coordinates (see `LoweredOffsets`).
         let mut starts = LoweredOffsets::new(&content, case_insensitive);
         let mut ends = LoweredOffsets::new(&content, case_insensitive);
         let mut match_count = 0;
-        let mut first = None;
+        let mut kept = Vec::new();
         let mut start = 0;
         while let Some(pos) = search_content[start..].find(search_pattern.as_ref()) {
             let abs_pos = start + pos;
@@ -812,7 +850,7 @@ impl RawScan<'_, '_> {
                 self.accepts(&match_window(&content, match_start, match_end, 50))
             };
             if accepted {
-                first.get_or_insert((self.start + match_start) as u64);
+                self.keep_offset(&mut kept, (self.start + match_start) as u64);
                 match_count += 1;
             }
             if !self.needs_count && match_count > 0 {
@@ -823,7 +861,7 @@ impl RawScan<'_, '_> {
                 .nth(1)
                 .map_or(search_content.len(), |(next, _)| abs_pos + next);
         }
-        Some((match_count, first))
+        Some((match_count, kept))
     }
 }
 

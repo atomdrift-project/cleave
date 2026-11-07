@@ -7,7 +7,6 @@
 //!
 //! Rules are compiled once at startup for performance.
 
-use crate::analyzers::{FileType, FileTypeExt};
 #[cfg(test)]
 use crate::capabilities::CapabilityMapper;
 use crate::types::{
@@ -103,6 +102,17 @@ use yara_classify::YaraTier;
 /// Bucket key for rules that apply to any file (EICAR-style). Always loaded by
 /// every scan in addition to the detected file type's buckets.
 const FALLBACK_BUCKET: &str = "fallback";
+
+/// Evidence for a YARA rule whose condition matched without any string hit.
+pub(crate) fn rule_level_evidence(rule_name: &str) -> Evidence {
+    Evidence {
+        method: "yara".to_string(),
+        source: "yara-x".to_string(),
+        value: format!("condition:{rule_name}"),
+        location: None,
+        ..Default::default()
+    }
+}
 
 /// Compiled regex for YARA rule header matching — shared across all preprocessing steps.
 fn rule_start_re() -> Option<&'static regex::Regex> {
@@ -396,7 +406,7 @@ rule cleave_engine_probe {
                 // The serialized compiler format alone does not capture our
                 // namespace and filetype routing semantics. Invalidate older
                 // caches that used short IDs or unnormalized language labels.
-                bytes.extend_from_slice(b"cleave-inline-routing-qualified-v3");
+                bytes.extend_from_slice(b"cleave-yara-routing-canonical-labels-v4");
                 crate::cache::digest_bytes(&bytes)
             }
             Err(_) => u64::MAX,
@@ -1239,66 +1249,35 @@ impl YaraEngine {
         }
     }
 
-    fn extract_rule_name_from_source(source: &str) -> Option<String> {
-        let re = rule_start_re()?;
-        let caps = re.captures(source)?;
-        caps.get(3).map(|m| m.as_str().to_string())
-    }
-
     /// Determine the filetype buckets an inline trait YARA rule belongs in.
     ///
-    /// Explicit `for:` filetypes (drawn from the same vocabulary as
-    /// [`crate::analyzers::FileTypeExt::yara_filetypes`]) take priority. Canonical
-    /// source-language labels are expanded into their scan buckets. Otherwise
-    /// the rule's derived [`RuleContext`] filetypes are
-    /// used, falling back to [`FALLBACK_BUCKET`] when nothing constrains it.
-    fn classify_inline_trait_yara_tiers(
-        source: &str,
-        namespace: &str,
-        declared_for: &[String],
-    ) -> Vec<String> {
-        // Reuse capability parsing so group names and exclusions have the
-        // same meaning here as in the trait that consumes the YARA match.
+    /// The buckets are the canonical labels of every identified file type the
+    /// trait's `for:` admits, or [`FALLBACK_BUCKET`] when it admits all.
+    fn classify_inline_trait_yara_tiers(declared_for: &[String]) -> Vec<String> {
+        // The trait's own `for:` is authoritative: reuse capability parsing so
+        // group names and exclusions mean the same here as in the trait, and
+        // bucket by each type's canonical label — the same key a scan of that
+        // type loads. A trait that names no concrete type (absent `for:`,
+        // `all`, `unknown`) applies everywhere and goes to the fallback bucket.
+        // The rule name never routes an inline trait.
+        use crate::composite_rules::FileType as RuleFileType;
         let parsed = crate::capabilities::parse_file_types(declared_for, &mut Vec::new());
-        let mut buckets: Vec<String> = parsed
-            .types
-            .into_iter()
-            .map(|ft| ft.label().to_string())
-            .filter(|ft| ft != "unknown" && ft != "all")
-            .flat_map(|ft| {
-                let canonical = yara_classify::canonical_binary_filetype(&ft);
-                if matches!(canonical, "pe" | "elf" | "macho" | "ne") {
-                    vec![canonical.to_string()]
-                } else if let Some(file_type) = FileType::from_label(&ft).or(match ft.as_str() {
-                    "class" => Some(FileType::JavaClass),
-                    "pyc" => Some(FileType::PythonBytecode),
-                    "objectivec" => Some(FileType::ObjectiveC),
-                    _ => None,
-                }) {
-                    file_type
-                        .yara_filetypes()
-                        .into_iter()
-                        .map(str::to_string)
-                        .collect()
-                } else {
-                    vec![ft]
-                }
-            })
+        let wanted: std::collections::HashSet<RuleFileType> = parsed.types.into_iter().collect();
+        if wanted.is_empty() || wanted.contains(&RuleFileType::All) {
+            return vec![FALLBACK_BUCKET.to_string()];
+        }
+        // Invert the identification → routing map trait gating uses, so the
+        // buckets are exactly the identified types this trait can apply to.
+        let buckets: Vec<String> = filefacts::FileType::ALL
+            .iter()
+            .filter(|ff| wanted.contains(&RuleFileType::from(**ff)))
+            .map(|ff| ff.label().to_string())
             .collect();
-        if !buckets.is_empty() {
-            let mut seen = std::collections::HashSet::new();
-            buckets.retain(|ft| seen.insert(ft.clone()));
-            return buckets;
+        if buckets.is_empty() {
+            vec![FALLBACK_BUCKET.to_string()]
+        } else {
+            buckets
         }
-
-        if let Some(rule_name) = Self::extract_rule_name_from_source(source) {
-            let context = Self::derive_rule_context(&rule_name, source, namespace);
-            if !context.filetypes.is_empty() {
-                return context.filetypes;
-            }
-        }
-
-        vec![FALLBACK_BUCKET.to_string()]
     }
 
     /// Parse trait YAML files and collect all `type: yara` conditions into tiered source lists.
@@ -1410,8 +1389,7 @@ impl YaraEngine {
                 };
                 let qualified_id = crate::traits_repo::qualify_trait_id(id, prefix.as_deref());
                 let namespace = format!("inline.{qualified_id}");
-                let buckets =
-                    Self::classify_inline_trait_yara_tiers(source, &namespace, &declared_for);
+                let buckets = Self::classify_inline_trait_yara_tiers(&declared_for);
                 tracing::trace!("Collected inline YARA rule for trait {}", id);
                 tracing::debug!(
                     trait_id = id,
@@ -1798,6 +1776,14 @@ impl YaraEngine {
             })
             .take(MAX_EVIDENCE_PER_TRAIT)
             .collect();
+        // YARA reported the rule as matched; a condition satisfied without
+        // string hits (no `strings:`, `not $x`, pure `uint32(...)` checks) is
+        // still a match, so record it by rule name.
+        let evidence = if evidence.is_empty() {
+            vec![rule_level_evidence(&raw.name)]
+        } else {
+            evidence
+        };
         let entry = inline_results.entry(raw.namespace.clone()).or_default();
         let remaining = MAX_EVIDENCE_PER_TRAIT.saturating_sub(entry.len());
         entry.extend(evidence.into_iter().take(remaining));

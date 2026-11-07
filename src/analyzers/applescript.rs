@@ -6,8 +6,6 @@ use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::strings::StringExtractor;
 use crate::types::{AnalysisReport, TargetInfo};
 use anyhow::Result;
-use std::fs;
-use std::path::Path;
 
 #[derive(Debug)]
 pub(crate) struct AppleScriptAnalyzer {
@@ -109,32 +107,13 @@ impl Analyzer for AppleScriptAnalyzer {
 
         Ok(report)
     }
-
-    fn can_analyze(&self, file_path: &Path) -> bool {
-        if let Ok(metadata) = fs::metadata(file_path)
-            && metadata.is_file()
-        {
-            // Check for compiled AppleScript magic bytes "Fasd" or file extension
-            if let Ok(mut file) = fs::File::open(file_path) {
-                use std::io::Read;
-                let mut magic = [0u8; 4];
-                if file.read_exact(&mut magic).is_ok() && &magic == b"Fasd" {
-                    return true;
-                }
-            }
-
-            if let Some(ext) = file_path.extension() {
-                return ext == "scpt";
-            }
-        }
-        false
-    }
 }
 
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn scpt_base64_facts_use_shared_literal_rows_once() {

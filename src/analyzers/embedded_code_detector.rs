@@ -4,7 +4,7 @@
 //! Detects Python, JavaScript, Shell, and PHP code in strings and re-analyzes them with full
 //! AST parsing and capability detection.
 
-use crate::analyzers::{FileType, detect_file_type_from_path, unified::UnifiedSourceAnalyzer};
+use crate::analyzers::{FileType, unified::UnifiedSourceAnalyzer};
 use crate::types::Evidence;
 use crate::types::binary::StringInfo;
 use crate::types::file_analysis::{FileAnalysis, encode_decoded_path};
@@ -742,7 +742,6 @@ fn is_probable_php(value: &str, is_encoded: bool) -> bool {
 }
 
 fn is_top_level_self_detection(
-    parent_path: &str,
     is_encoded: bool,
     offset: u64,
     file_type: &FileType,
@@ -751,8 +750,11 @@ fn is_top_level_self_detection(
     if is_encoded || offset != 0 {
         return false;
     }
-    let path_type = detect_file_type_from_path(Path::new(parent_path));
-    let host_type = host_file_type.unwrap_or(&path_type);
+    // The host's identity is its detected type; a name is never used in its
+    // place, so with no detected host there is nothing to call self-detection.
+    let Some(host_type) = host_file_type else {
+        return false;
+    };
     *host_type == *file_type
         || is_sibling_language(host_type, file_type)
         || host_type.is_source_code()
@@ -1011,7 +1013,7 @@ fn analyze_embedded_haystack(
             // Bail before analyzing the host as "embedded". Offset-0 plain
             // source is the host file; `is_source_code` hosts always
             // self-detect. Inline `python3 -c` unwrap above still runs.
-            if is_top_level_self_detection(parent_path, is_encoded, offset, &ft, host_file_type) {
+            if is_top_level_self_detection(is_encoded, offset, &ft, host_file_type) {
                 anyhow::bail!("Top-level source self-detected as embedded code");
             }
             (ft, value)

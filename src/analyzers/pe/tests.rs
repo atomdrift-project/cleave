@@ -56,21 +56,6 @@ fn prose_sections_separate_from_code_and_padding() {
 }
 
 #[test]
-fn test_can_analyze_pe() {
-    let analyzer = PEAnalyzer::new();
-    let test_file = test_pe_path();
-
-    assert!(analyzer.can_analyze(&test_file));
-}
-
-#[test]
-fn test_cannot_analyze_non_pe() {
-    let analyzer = PEAnalyzer::new();
-    assert!(!analyzer.can_analyze(&PathBuf::from("/dev/null")));
-    assert!(!analyzer.can_analyze(&PathBuf::from("tests/fixtures/test.elf")));
-}
-
-#[test]
 fn test_analyze_pe_file() {
     let analyzer = PEAnalyzer::new();
     let test_file = test_pe_path();

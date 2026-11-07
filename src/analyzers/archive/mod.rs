@@ -1661,12 +1661,6 @@ impl Analyzer for ArchiveAnalyzer {
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         self.analyze_archive(file_path)
     }
-
-    fn can_analyze(&self, file_path: &Path) -> bool {
-        crate::analyzers::detect_file_type(file_path)
-            .map(|ft| ft.is_archive())
-            .unwrap_or(false)
-    }
 }
 
 /// Overlay a filefacts archive listing onto `report.archive_contents`.

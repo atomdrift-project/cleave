@@ -1592,33 +1592,6 @@ impl Analyzer for OfficeAnalyzer {
         let file_type = crate::analyzers::detect_file_type_from_data(file_path, &data);
         Ok(self.analyze_office(file_path, &data, &file_type, 0, self.cancellation.as_ref()))
     }
-
-    fn can_analyze(&self, file_path: &Path) -> bool {
-        if let Some(ext) = file_path.extension() {
-            let ext_lower = ext.to_string_lossy().to_lowercase();
-            matches!(
-                ext_lower.as_str(),
-                "doc"
-                    | "xls"
-                    | "ppt"
-                    | "msg"
-                    | "dot"
-                    | "xlt"
-                    | "docx"
-                    | "xlsx"
-                    | "pptx"
-                    | "docm"
-                    | "xlsm"
-                    | "pptm"
-                    | "dotx"
-                    | "dotm"
-                    | "xltx"
-                    | "xltm"
-            )
-        } else {
-            false
-        }
-    }
 }
 
 /// Add metadata-based findings for OLE2 documents.

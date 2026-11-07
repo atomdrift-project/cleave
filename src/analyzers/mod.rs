@@ -315,15 +315,18 @@ pub trait Analyzer {
             AnalysisInput::with_strings(file_path, &data, strings, file_type).with_parsed_ctx(&ctx);
         self.analyze_input(&input)
     }
-
-    /// Check if this analyzer can handle the given file.
-    fn can_analyze(&self, file_path: &Path) -> bool;
 }
 
-/// Detect file type from path/extension only (no file access needed).
+/// The type a file's *name* claims (extension or well-known filename).
+///
+/// This is a claim, never an identity: use it to report what a name declares
+/// (`declared_type`, extension-mismatch metadata) or to retry a member whose
+/// detected format failed to parse. To know what a file *is*, use
+/// [`detect_file_type`] / [`detect_file_type_from_data`], which every command
+/// and the scan pipeline share.
 #[must_use]
 #[inline]
-pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
+pub(crate) fn declared_file_type_from_name(file_path: &Path) -> FileType {
     if is_dotenv_name(file_path) {
         return FileType::Text;
     }
@@ -604,13 +607,15 @@ fn is_routeros_script_name(file_path: &Path) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("rsc"))
 }
 
-/// Detect file type by reading the first 1KB from disk.
+/// Detect a file's type from its full contents, exactly as a scan does.
+///
+/// Identification can depend on bytes anywhere in the file (a shellcode
+/// `call` target past the first KiB, a zip directory at the end), so every
+/// command types a file from the same bytes the scan pipeline reads — never a
+/// prefix — and a subcommand can never disagree with `cleave scan`.
 pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
-    use std::io::Read;
-    let mut file = std::fs::File::open(file_path)?;
-    let mut buf = [0u8; 1024];
-    let bytes_read = file.read(&mut buf).unwrap_or(0);
-    Ok(detect_file_type_from_data(file_path, &buf[..bytes_read]))
+    let data = crate::file_io::read_file_smart(file_path)?;
+    Ok(detect_file_type_from_data(file_path, data.as_slice()))
 }
 
 /// Returns true if cleave can analyze this file.
@@ -638,8 +643,54 @@ pub(crate) trait FileTypeExt {
     /// Canonical file type string used in analysis reports.
     fn report_file_type(&self) -> String;
 
-    /// YARA rule filetypes relevant for this file type.
+    /// YARA buckets this file type scans (plus the always-on fallback).
+    ///
+    /// Buckets are keyed by the canonical filefacts label and nothing else, so
+    /// a rule routed by [`yara_buckets_for_tags`] always reaches the files it
+    /// names. Legacy YARA metadata spellings are translated on the rule side.
     fn yara_filetypes(&self) -> Vec<&'static str>;
+
+    /// Legacy YARA metadata spellings (`exe`, `js`, `archive`...) that
+    /// community rules use to mean this file type. Input vocabulary only:
+    /// never a bucket key.
+    fn yara_aliases(&self) -> Vec<&'static str>;
+}
+
+/// Canonical YARA buckets for a rule's filetype tags.
+///
+/// A tag that is a filefacts label routes to that type; any tag also routes to
+/// every type that lists it as a legacy alias. Tags that name no type
+/// contribute nothing, and an empty result means the rule belongs in the
+/// always-scanned fallback bucket — so no rule can be routed to a bucket that
+/// no file type scans.
+pub(crate) fn yara_buckets_for_tags<S: AsRef<str>>(tags: &[S]) -> Vec<String> {
+    static TAG_BUCKETS: std::sync::OnceLock<
+        std::collections::HashMap<&'static str, Vec<&'static str>>,
+    > = std::sync::OnceLock::new();
+    let index = TAG_BUCKETS.get_or_init(|| {
+        let mut index: std::collections::HashMap<&'static str, Vec<&'static str>> =
+            std::collections::HashMap::new();
+        for ft in FileType::ALL {
+            let label = ft.label();
+            for tag in std::iter::once(label).chain(ft.yara_aliases()) {
+                let entry = index.entry(tag).or_default();
+                if !entry.contains(&label) {
+                    entry.push(label);
+                }
+            }
+        }
+        index
+    });
+    let mut buckets: Vec<String> = Vec::new();
+    for tag in tags {
+        let tag = tag.as_ref().trim().to_ascii_lowercase();
+        for label in index.get(tag.as_str()).into_iter().flatten() {
+            if !buckets.iter().any(|b| b == label) {
+                buckets.push((*label).to_string());
+            }
+        }
+    }
+    buckets
 }
 
 impl FileTypeExt for FileType {
@@ -652,6 +703,14 @@ impl FileTypeExt for FileType {
     }
 
     fn yara_filetypes(&self) -> Vec<&'static str> {
+        // Unidentified input keeps the untyped-scan behavior of its callers.
+        if matches!(self, FileType::Unknown) {
+            return Vec::new();
+        }
+        vec![self.label()]
+    }
+
+    fn yara_aliases(&self) -> Vec<&'static str> {
         match self {
             FileType::MachO => vec!["macho", "dylib", "kext"],
             FileType::Elf => vec!["elf", "so", "ko"],

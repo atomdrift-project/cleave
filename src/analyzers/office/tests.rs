@@ -75,23 +75,6 @@ fn template_target_remoteness() {
     assert!(!target_is_remote("Normal.dotm"));
 }
 
-#[test]
-fn test_office_analyzer_can_analyze() {
-    let analyzer = OfficeAnalyzer::new();
-    assert!(analyzer.can_analyze(Path::new("test.doc")));
-    assert!(analyzer.can_analyze(Path::new("test.docx")));
-    assert!(analyzer.can_analyze(Path::new("test.xls")));
-    assert!(analyzer.can_analyze(Path::new("test.xlsx")));
-    assert!(analyzer.can_analyze(Path::new("test.ppt")));
-    assert!(analyzer.can_analyze(Path::new("test.pptx")));
-    assert!(analyzer.can_analyze(Path::new("test.docm")));
-    assert!(analyzer.can_analyze(Path::new("test.xlsm")));
-    assert!(analyzer.can_analyze(Path::new("test.msg")));
-    assert!(!analyzer.can_analyze(Path::new("test.pdf")));
-    assert!(!analyzer.can_analyze(Path::new("test.rtf")));
-    assert!(!analyzer.can_analyze(Path::new("test.txt")));
-}
-
 /// Per-module shape stats (logical-line count, random-name
 /// heuristic) thread through `populate_vba_symbols_and_metrics`
 /// even when no `AnalysisContext` is provided — symbol-side

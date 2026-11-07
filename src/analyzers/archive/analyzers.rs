@@ -34,7 +34,7 @@ use super::guards::{
     MAX_PATH_COMPONENT_LEN, sanitize_entry_path, symlink_escapes,
 };
 use super::utils::{calculate_sha256, find_main_class, is_benign_java_path};
-use crate::analyzers::{AnalysisInput, FileType, FileTypeExt, detect_file_type_from_path};
+use crate::analyzers::{AnalysisInput, FileType, FileTypeExt, declared_file_type_from_name};
 use crate::composite_rules::traits::nest_host;
 use crate::types::{
     ARCHIVE_DELIMITER, AnalysisReport, ArchiveEntry, ENCODING_DELIMITER, FileAnalysis, Finding,
@@ -662,7 +662,7 @@ fn archive_entry_metadata(
     data: &[u8],
     container_kind: Option<String>,
 ) -> ArchiveEntry {
-    let declared_file_type = detect_file_type_from_path(logical_path);
+    let declared_file_type = declared_file_type_from_name(logical_path);
     let declared_type =
         (declared_file_type != FileType::Unknown).then(|| declared_file_type.report_file_type());
     let extension_type_mismatch = declared_type.is_some() && declared_file_type != *file_type;
@@ -1450,16 +1450,15 @@ fn is_interesting_jar_non_class(path: &str) -> bool {
 /// below `META-INF/`. That directory is normally full of low-value Java
 /// metadata, but a nested JAR is a real analysis container: dropping it here
 /// prevents `analyze_extracted_member` from recursing into it and loses every
-/// trait from its classes/resources. The in-memory path can use the detected
-/// member type; the extracted-directory path also gets the extension fallback.
-fn is_nested_archive_member(path: &std::path::Path, file_type: Option<&FileType>) -> bool {
-    file_type.is_some_and(filefacts::FileType::is_archive)
-        || crate::analyzers::detect_file_type_from_path(path).is_archive()
+/// trait from its classes/resources. Both paths pass the member's detected
+/// type — never one guessed from its name — so a nested archive is recognized
+/// by what it is, whatever it is called.
+fn is_nested_archive_member(file_type: &FileType) -> bool {
+    file_type.is_archive()
 }
 
-fn is_interesting_jar_resource(path: &std::path::Path, file_type: Option<&FileType>) -> bool {
-    is_nested_archive_member(path, file_type)
-        || is_interesting_jar_non_class(&path.to_string_lossy())
+fn is_interesting_jar_resource(path: &std::path::Path, file_type: &FileType) -> bool {
+    is_nested_archive_member(file_type) || is_interesting_jar_non_class(&path.to_string_lossy())
 }
 
 /// Total number of successful archive member analyses (cumulative, for logging)
@@ -1708,14 +1707,11 @@ impl ArchiveAnalyzer {
         file_type: &FileType,
         size_bytes: usize,
     ) -> Option<&'static str> {
-        // Skip the YARA pass for any member with no filetype→tier mapping — an
-        // unidentified blob, or a type with no targeted tier (lockfiles, Clojure,
-        // Beam, ODF, …). Such a member would otherwise scan with a `None` filter
-        // and hit EVERY tier, materializing all per-filetype rule sets into memory
-        // (the cold-start blow-up) for little signal. The member's string / trait
-        // / encoded-payload analysis still runs; only the YARA scan is skipped.
-        // Mirrors the scan-side filter below, which also keys off
-        // `archive_member_yara_filetypes` being empty.
+        // Skip the YARA pass for an unidentified member: with no bucket it
+        // would scan with a `None` filter and hit EVERY tier, materializing all
+        // per-filetype rule sets (the cold-start blow-up). Identified members
+        // scan only their own label bucket plus fallback. The member's string /
+        // trait / encoded-payload analysis still runs either way.
         if Self::archive_member_yara_filetypes(file_type).is_empty() {
             return Some("no targeted YARA tier for file type");
         }

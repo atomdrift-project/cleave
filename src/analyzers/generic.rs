@@ -473,11 +473,11 @@ impl GenericAnalyzer {
                 FileType::Data | FileType::Ani | FileType::Nrbf
             ) || self.file_type.is_analyzed())
         {
-            let file_types = if matches!(self.file_type, FileType::Ani | FileType::Nrbf) {
-                FileType::Data.yara_filetypes()
-            } else {
-                self.file_type.yara_filetypes()
-            };
+            // Ani/Nrbf are analyzed as opaque data: they also take data rules.
+            let mut file_types = self.file_type.yara_filetypes();
+            if matches!(self.file_type, FileType::Ani | FileType::Nrbf) {
+                file_types.extend(FileType::Data.yara_filetypes());
+            }
             let result = self
                 .engine
                 .yara()
@@ -851,11 +851,6 @@ impl Analyzer for GenericAnalyzer {
             report.files.push(entry);
         }
         Ok(report)
-    }
-
-    fn can_analyze(&self, _file_path: &Path) -> bool {
-        // Generic analyzer can attempt to analyze any file
-        true
     }
 }
 

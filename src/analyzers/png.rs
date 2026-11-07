@@ -102,25 +102,4 @@ impl Analyzer for PngAnalyzer {
         ));
         Ok(self.analyze_png(file_path, &data, None, ctx.as_ref()))
     }
-
-    fn can_analyze(&self, file_path: &Path) -> bool {
-        if let Some(ext) = file_path.extension() {
-            ext.to_string_lossy().to_lowercase() == "png"
-        } else {
-            false
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_can_analyze() {
-        let analyzer = PngAnalyzer::new();
-        assert!(analyzer.can_analyze(Path::new("/tmp/test.png")));
-        assert!(analyzer.can_analyze(Path::new("/tmp/test.PNG")));
-        assert!(!analyzer.can_analyze(Path::new("/tmp/test.jpg")));
-    }
 }

@@ -293,21 +293,6 @@ fn shift_hex_offset_parses_and_preserves_none() {
 }
 
 #[test]
-fn test_can_analyze_macho() {
-    let analyzer = MachOAnalyzer::new();
-    let test_file = test_macho_path();
-
-    assert!(analyzer.can_analyze(&test_file));
-}
-
-#[test]
-fn test_cannot_analyze_non_macho() {
-    let analyzer = MachOAnalyzer::new();
-    assert!(!analyzer.can_analyze(&PathBuf::from("/dev/null")));
-    assert!(!analyzer.can_analyze(&PathBuf::from("tests/fixtures/test.elf")));
-}
-
-#[test]
 fn test_analyze_macho_file() {
     let analyzer = MachOAnalyzer::new();
     let test_file = test_macho_path();

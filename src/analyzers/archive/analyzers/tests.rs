@@ -369,18 +369,17 @@ fn jar_class_triage_prioritizes_salient_apis_over_archive_padding() {
 
 #[test]
 fn archive_member_yara_filetypes_use_detected_binary_type() {
-    assert_eq!(
-        ArchiveAnalyzer::archive_member_yara_filetypes(&FileType::Elf),
-        vec!["elf", "so", "ko"]
-    );
-    assert_eq!(
-        ArchiveAnalyzer::archive_member_yara_filetypes(&FileType::Pe),
-        vec!["pe", "exe", "dll", "bat", "ps1"]
-    );
-    assert_eq!(
-        ArchiveAnalyzer::archive_member_yara_filetypes(&FileType::Data),
-        vec!["dat", "bin", "payload", "raw", "map"]
-    );
+    for ft in [
+        FileType::Elf,
+        FileType::Pe,
+        FileType::Data,
+        FileType::Shellcode,
+    ] {
+        assert_eq!(
+            ArchiveAnalyzer::archive_member_yara_filetypes(&ft),
+            [ft.label()]
+        );
+    }
     assert!(ArchiveAnalyzer::archive_member_yara_filetypes(&FileType::Unknown).is_empty());
 }
 
@@ -411,25 +410,24 @@ fn archive_member_yara_skip_skips_yara_rule_sources() {
 }
 
 #[test]
-fn archive_member_yara_skip_skips_members_without_targeted_tier() {
-    // Members with no filetype→tier mapping (unidentified blobs, lockfiles,
-    // and types like Clojure/Beam/ODF that carry no targeted tier) would scan
-    // against every tier, so the YARA pass is skipped — their string / trait /
-    // payload analysis still runs. Members with a targeted tier are scanned.
+fn archive_member_yara_skip_skips_only_unidentified_members() {
+    // An unidentified member has no bucket and would scan every tier, so its
+    // YARA pass is skipped. Every identified type scans its own label bucket
+    // plus fallback, so rules written for it (lockfiles, Clojure, ...) run.
+    assert_eq!(
+        ArchiveAnalyzer::archive_member_yara_skip_reason("member", &FileType::Unknown, 1024),
+        Some("no targeted YARA tier for file type"),
+    );
     for ft in [
-        FileType::Unknown,
         FileType::YarnLock,
         FileType::CargoLock,
         FileType::RequirementsTxt,
         FileType::Clojure,
+        FileType::Shellcode,
+        FileType::Python,
+        FileType::Elf,
+        FileType::Pe,
     ] {
-        assert_eq!(
-            ArchiveAnalyzer::archive_member_yara_skip_reason("member", &ft, 1024),
-            Some("no targeted YARA tier for file type"),
-            "{ft:?} should skip YARA",
-        );
-    }
-    for ft in [FileType::Python, FileType::Elf, FileType::Pe] {
         assert_eq!(
             ArchiveAnalyzer::archive_member_yara_skip_reason("member", &ft, 1024),
             None,
@@ -570,16 +568,18 @@ fn nested_archive_stack_keeps_panic_as_an_analysis_error() {
 #[test]
 fn jar_resource_selector_keeps_nested_archives_under_meta_inf() {
     let nested = std::path::Path::new("META-INF/jars/loader.jar");
-    assert!(is_interesting_jar_resource(nested, Some(&FileType::Jar)));
-    // The extracted-directory path has no precomputed member type, so the
-    // extension fallback must preserve the same nested archive.
-    assert!(is_interesting_jar_resource(nested, None));
+    assert!(is_interesting_jar_resource(nested, &FileType::Jar));
+    // A nested archive is kept by its detected type whatever its name says.
+    assert!(is_interesting_jar_resource(
+        std::path::Path::new("META-INF/jars/loader.bin"),
+        &FileType::Zip
+    ));
 
     let service = std::path::Path::new("META-INF/services/example.Service");
-    assert!(!is_interesting_jar_resource(service, Some(&FileType::Text)));
+    assert!(!is_interesting_jar_resource(service, &FileType::Text));
     assert!(is_interesting_jar_resource(
         std::path::Path::new("META-INF/MANIFEST.MF"),
-        Some(&FileType::Text)
+        &FileType::Text
     ));
 }
 

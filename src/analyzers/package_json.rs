@@ -1592,13 +1592,6 @@ impl Analyzer for PackageJsonAnalyzer {
         let content = String::from_utf8_lossy(&bytes);
         self.analyze_package(file_path, &content)
     }
-
-    fn can_analyze(&self, file_path: &Path) -> bool {
-        file_path
-            .file_name()
-            .map(|n| n == "package.json")
-            .unwrap_or(false)
-    }
 }
 
 #[cfg(test)]

@@ -1807,10 +1807,6 @@ impl Analyzer for UnifiedSourceAnalyzer {
         let input = AnalysisInput::new(file_path, &data, self.file_type);
         self.analyze_input(&input)
     }
-
-    fn can_analyze(&self, _file_path: &Path) -> bool {
-        true
-    }
 }
 
 #[cfg(test)]

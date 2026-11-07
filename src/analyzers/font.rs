@@ -101,45 +101,4 @@ impl Analyzer for FontAnalyzer {
         ));
         Ok(self.analyze_font(file_path, &data, None, ctx.as_ref()))
     }
-
-    fn can_analyze(&self, file_path: &Path) -> bool {
-        file_path.extension().is_some_and(|ext| {
-            matches!(
-                ext.to_string_lossy().to_lowercase().as_str(),
-                "ttf" | "otf" | "ttc" | "otc" | "woff" | "woff2" | "eot"
-            )
-        })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn claims_every_font_container_extension() {
-        let analyzer = FontAnalyzer::new();
-        for name in [
-            "/tmp/x.ttf",
-            "/tmp/x.otf",
-            "/tmp/x.ttc",
-            "/tmp/x.otc",
-            "/tmp/x.woff",
-            "/tmp/x.woff2",
-            "/tmp/x.eot",
-            "/tmp/x.WOFF2",
-        ] {
-            assert!(analyzer.can_analyze(Path::new(name)), "{name}");
-        }
-    }
-
-    /// The masquerade path routes on the *extension*, so neighbouring asset
-    /// types must not be swept in — a `.png` is the PNG analyzer's job.
-    #[test]
-    fn ignores_non_font_extensions() {
-        let analyzer = FontAnalyzer::new();
-        for name in ["/tmp/x.png", "/tmp/x.jpg", "/tmp/x.js", "/tmp/x"] {
-            assert!(!analyzer.can_analyze(Path::new(name)), "{name}");
-        }
-    }
 }

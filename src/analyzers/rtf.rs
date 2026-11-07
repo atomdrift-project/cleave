@@ -81,12 +81,6 @@ impl Analyzer for RtfAnalyzer {
         let data = std::fs::read(file_path)?;
         Ok(self.analyze_rtf(file_path, &data))
     }
-
-    fn can_analyze(&self, file_path: &Path) -> bool {
-        file_path
-            .extension()
-            .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("rtf"))
-    }
 }
 
 #[cfg(test)]

@@ -102,29 +102,4 @@ impl Analyzer for JpegAnalyzer {
         ));
         Ok(self.analyze_jpeg(file_path, &data, None, ctx.as_ref()))
     }
-
-    fn can_analyze(&self, file_path: &Path) -> bool {
-        if let Some(ext) = file_path.extension() {
-            matches!(
-                ext.to_string_lossy().to_lowercase().as_str(),
-                "jpg" | "jpeg"
-            )
-        } else {
-            false
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_can_analyze() {
-        let analyzer = JpegAnalyzer::new();
-        assert!(analyzer.can_analyze(Path::new("/tmp/test.jpg")));
-        assert!(analyzer.can_analyze(Path::new("/tmp/test.jpeg")));
-        assert!(analyzer.can_analyze(Path::new("/tmp/test.JPG")));
-        assert!(!analyzer.can_analyze(Path::new("/tmp/test.png")));
-    }
 }

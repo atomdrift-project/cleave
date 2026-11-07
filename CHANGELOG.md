@@ -19,6 +19,7 @@ All notable changes to cleave. Versions follow [semantic versioning](https://sem
 - Treat a dependency held by its registry for security reasons as hostile on its own.
 - Add an experimental render command that redisplays a saved report without rescanning.
 - Add an index output format, one row per finding, selected with `--index`.
+- Add `exclude_comments` to `type: text`, so a rule can skip source comments in every language filefacts parses.
 - Breaking: replace rizin and radare2 with in-process binform analysis; the radare2 component is gone.
 - Breaking: bump the JSON schema to 9, and emit `--format json` as one object per line.
 - Breaking: retire the tiny output format; terminal and jsonl remain as aliases.
@@ -27,6 +28,9 @@ All notable changes to cleave. Versions follow [semantic versioning](https://sem
 
 ### Fixes
 
+- Evaluate text rules on source files under 100 bytes: a comment-only file or a short decoded command layer was skipped by every rule without a trait reference.
+- Stop reading prose that mentions a command ("or chmod +x the file") as embedded shell code.
+- Mask comments for every matcher of a comment-excluding text rule; Unicode patterns read the unmasked text.
 - Restore YARA bindings on cached rules, so inline traits and YARA composite legs keep matching after warm-up.
 - Drop the fully compiled DFA, which made regex-automata miss byte-mode matches in text and raw rules.
 - Keep every member of an explicit union alive in `any` composites instead of dropping alternatives.

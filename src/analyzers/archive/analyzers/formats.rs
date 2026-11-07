@@ -27,7 +27,7 @@ impl ArchiveAnalyzer {
         }
 
         for entry in indexed_entries {
-            if entry.entry_type.as_deref() == Some("directory") {
+            if entry.entry_type.as_deref() == Some("directory") && entry.size_bytes == 0 {
                 continue;
             }
             if entry.data_offset.is_none()
@@ -94,7 +94,17 @@ impl ArchiveAnalyzer {
                 let entry_type_label = entry.entry_type.as_deref().unwrap_or("regular");
 
                 if entry_type_label == "directory" {
-                    continue;
+                    if entry.size_bytes == 0 {
+                        continue;
+                    }
+                    // A "directory" entry that carries data is a file to the
+                    // JVM: ZipFile.getEntry("a/B.class") falls back to
+                    // "a/B.class/", and class-hiding obfuscators (Caesium)
+                    // store every class that way so extractors skip it.
+                    guard.add_extraction_note(format!(
+                        "{entry_name}: directory entry carries {} bytes; analyzed as a file",
+                        entry.size_bytes
+                    ));
                 }
 
                 // One encrypted member does not make the rest unreadable.
@@ -411,9 +421,19 @@ impl ArchiveAnalyzer {
                             continue;
                         }
                     };
-                } else if entry.is_dir() {
+                } else if entry.is_dir() && entry.size() == 0 {
                     continue;
                 } else {
+                    // A "directory" entry that carries data is a file to the
+                    // JVM: ZipFile.getEntry("a/B.class") falls back to
+                    // "a/B.class/", and class-hiding obfuscators (Caesium)
+                    // store every class that way so extractors skip it.
+                    if entry_is_dir {
+                        guard.add_extraction_note(format!(
+                            "{entry_name}: directory entry carries {} bytes; analyzed as a file",
+                            entry.size()
+                        ));
+                    }
                     guard.record_member_metadata(super::super::guards::ExtractedMemberMetadata {
                         archive_path: relative_path.clone(),
                         compressed_size: Some(entry_compressed_size),

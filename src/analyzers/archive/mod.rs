@@ -851,10 +851,9 @@ impl ArchiveAnalyzer {
                 if self.is_cancelled() {
                     return Err(e);
                 }
-                report
-                    .metadata
-                    .errors
-                    .push(format!("ZIP members unreadable; container analyzed only: {e:#}"));
+                report.metadata.errors.push(format!(
+                    "ZIP members unreadable; container analyzed only: {e:#}"
+                ));
             }
             let member_metadata = guard.take_member_metadata();
             if !member_metadata.is_empty() {
@@ -988,7 +987,9 @@ impl ArchiveAnalyzer {
             // encryption flags are themselves evidence. Keep them rather than
             // reporting nothing for the archive.
             let preserved_zip_metadata = is_zip_container(file_type)
-                && filefacts_archive_entries.iter().any(|entry| entry.encrypted);
+                && filefacts_archive_entries
+                    .iter()
+                    .any(|entry| entry.encrypted);
             if preserved_zip_metadata {
                 merge_filefacts_archive_listing(&mut report, &filefacts_archive_entries);
                 report.metadata.errors.push(format!(

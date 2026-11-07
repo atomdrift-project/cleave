@@ -833,16 +833,28 @@ impl ArchiveAnalyzer {
                     &[],
                     false,
                 )?;
-            } else {
-                self.analyze_zip_archive_in_memory(
-                    data,
-                    archive_path,
-                    &mut report,
-                    start,
-                    &guard,
-                    &filefacts_archive_entries,
-                    file_type == FileType::Jar,
-                )?;
+            } else if let Err(e) = self.analyze_zip_archive_in_memory(
+                data,
+                archive_path,
+                &mut report,
+                start,
+                &guard,
+                &filefacts_archive_entries,
+                file_type == FileType::Jar,
+            ) {
+                // A ZIP no library will open is often built that way on
+                // purpose: concatenated archives or a damaged EOCD that
+                // Explorer tolerates but scanners reject. Failing the whole
+                // analysis would report nothing for exactly that file, so
+                // keep the container-level facts and byte rules, and record
+                // why no member was read.
+                if self.is_cancelled() {
+                    return Err(e);
+                }
+                report
+                    .metadata
+                    .errors
+                    .push(format!("ZIP members unreadable; container analyzed only: {e:#}"));
             }
             let member_metadata = guard.take_member_metadata();
             if !member_metadata.is_empty() {
@@ -971,6 +983,18 @@ impl ArchiveAnalyzer {
                     "RAR extraction failed; preserved header listing: {e}"
                 ));
             }
+            // A ZIP whose every member is encrypted under an unknown password
+            // still has a readable central directory: names, sizes and the
+            // encryption flags are themselves evidence. Keep them rather than
+            // reporting nothing for the archive.
+            let preserved_zip_metadata = is_zip_container(file_type)
+                && filefacts_archive_entries.iter().any(|entry| entry.encrypted);
+            if preserved_zip_metadata {
+                merge_filefacts_archive_listing(&mut report, &filefacts_archive_entries);
+                report.metadata.errors.push(format!(
+                    "ZIP extraction failed; preserved central-directory listing: {e}"
+                ));
+            }
             let extracted_count = walkdir::WalkDir::new(temp_dir.path())
                 .min_depth(1)
                 .into_iter()
@@ -990,6 +1014,7 @@ impl ArchiveAnalyzer {
                     || preserved_rpm_facts
                     || preserved_rpa_facts
                     || preserved_rar_metadata
+                    || preserved_zip_metadata
                 {
                     drain_extraction_notes(&mut report, &guard);
                     let suppress_path_traversal = should_suppress_path_traversal_findings(

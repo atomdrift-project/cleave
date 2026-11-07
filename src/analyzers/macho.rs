@@ -110,9 +110,12 @@ impl MachOAnalyzer {
         self
     }
 
-    /// Inspect an embedded Nuitka distribution on both the direct and
-    /// top-level Mach-O paths. Only the preferred thin slice is passed here.
-    pub(crate) fn analyze_nuitka_payload(
+    /// Inspect an embedded Nuitka or PyInstaller distribution on both the
+    /// direct and top-level Mach-O paths. Only the preferred thin slice is
+    /// passed here. PE hosts reach the same extractors through the PE
+    /// analyzer; macOS app bundles built by either tool carry the program's
+    /// Python code only inside this payload.
+    pub(crate) fn analyze_python_bundle_payload(
         &self,
         path: &Path,
         data: &[u8],
@@ -120,14 +123,15 @@ impl MachOAnalyzer {
         config: &crate::analyzers::archive::ArchiveAnalyzerConfig,
         yara: Option<std::sync::Arc<crate::yara_engine::YaraEngine>>,
     ) {
-        if crate::analyzers::sfx_detector::detect_sfx(data, &[])
-            != Some(crate::analyzers::sfx_detector::SfxKind::Nuitka)
-        {
+        use crate::analyzers::sfx_detector::SfxKind;
+        let Some(kind @ (SfxKind::Nuitka | SfxKind::PyInstaller)) =
+            crate::analyzers::sfx_detector::detect_sfx(data, &[])
+        else {
             return;
-        }
+        };
         let sfx = crate::analyzers::sfx_detector::analyze_sfx(
             path,
-            crate::analyzers::sfx_detector::SfxKind::Nuitka,
+            kind,
             data,
             &self.engine,
             yara,
@@ -1435,7 +1439,7 @@ impl Analyzer for MachOAnalyzer {
         let archive_config = crate::analyzers::archive::ArchiveAnalyzerConfig::default()
             .with_depth(input.depth as usize)
             .with_cancellation(input.cancellation.clone());
-        self.analyze_nuitka_payload(
+        self.analyze_python_bundle_payload(
             input.path,
             preferred_data,
             &mut report,

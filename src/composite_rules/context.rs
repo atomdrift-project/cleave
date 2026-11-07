@@ -2,12 +2,10 @@
 
 use super::condition::StringValidator;
 use super::debug::{DebugCollector, EvaluationDebug, SkipReason};
-use super::evaluators::kv::StructuredFormat;
 use super::section_map::SectionMap;
 use super::types::{Arch, FileType, Platform, TypeMask};
 use crate::types::{AnalysisReport, Evidence, Finding};
 use rustc_hash::FxHashMap;
-use serde_json::Value;
 use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -224,14 +222,12 @@ impl<'a> FindingScope<'a> {
 /// member. A member's evaluation constructs several contexts (the trait pass,
 /// then each composite fixed-point iteration, then downgrade re-evaluation);
 /// each used to start with fresh `OnceLock`s, so the string exact indexes, KV
-/// parse, lowercased binary, and lossy-UTF-8 projections were rebuilt per
+/// key offsets, lowercased binary, and lossy-UTF-8 projections were rebuilt per
 /// context even though the underlying bytes and `report.strings` are fixed
 /// for the member's lifetime. One `FileEvalCaches` per member makes every
 /// later context a cache hit.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct FileEvalCaches {
-    kv_format: Arc<OnceLock<StructuredFormat>>,
-    kv_parsed: Arc<OnceLock<Box<Value>>>,
     kv_offsets: Arc<OnceLock<FxHashMap<String, u64>>>,
     lossy_utf8: Arc<OnceLock<String>>,
     string_exact_index: Arc<OnceLock<FxHashMap<String, Vec<u32>>>>,
@@ -279,10 +275,6 @@ pub(crate) struct EvaluationContext<'a> {
     pub section_map: Option<&'a SectionMap>,
     /// Pre-scanned inline YARA results from the combined engine
     pub inline_yara_results: Option<&'a HashMap<String, Vec<Evidence>>>,
-    /// Cached detected format for KV evaluations (detect once per file)
-    pub cached_kv_format: Arc<OnceLock<StructuredFormat>>,
-    /// Cached parsed KV data (parse once per file, reuse for all KV conditions)
-    pub cached_kv_parsed: Arc<OnceLock<Box<Value>>>,
     /// Cached map of structured-key dotted path → byte offset in the raw file,
     /// built once per file (lazily, only when a KV match needs to anchor) so
     /// value-match findings carry a real location instead of re-scanning the
@@ -461,8 +453,6 @@ impl<'a> EvaluationContext<'a> {
             suppressions: None,
             section_map: None,
             inline_yara_results: None,
-            cached_kv_format: Arc::new(OnceLock::new()),
-            cached_kv_parsed: Arc::new(OnceLock::new()),
             cached_kv_offsets: Arc::new(OnceLock::new()),
             cached_lossy_utf8: Arc::new(OnceLock::new()),
             cached_ast_source_utf8: Arc::new(OnceLock::new()),
@@ -499,8 +489,6 @@ impl<'a> EvaluationContext<'a> {
     /// for it (see [`FileEvalCaches`]). Must only be used for contexts over
     /// the same `binary_data`, `report.strings`, and filefacts flow graph.
     pub(crate) fn with_file_caches(mut self, caches: &FileEvalCaches) -> Self {
-        self.cached_kv_format = Arc::clone(&caches.kv_format);
-        self.cached_kv_parsed = Arc::clone(&caches.kv_parsed);
         self.cached_kv_offsets = Arc::clone(&caches.kv_offsets);
         self.cached_lossy_utf8 = Arc::clone(&caches.lossy_utf8);
         self.string_exact_index = Arc::clone(&caches.string_exact_index);
@@ -876,8 +864,6 @@ impl<'a> EvaluationContext<'a> {
             suppressions: None,
             section_map: None,
             inline_yara_results: None,
-            cached_kv_format: Arc::new(OnceLock::new()),
-            cached_kv_parsed: Arc::new(OnceLock::new()),
             cached_kv_offsets: Arc::new(OnceLock::new()),
             cached_lossy_utf8: Arc::new(OnceLock::new()),
             cached_ast_source_utf8: Arc::new(OnceLock::new()),

@@ -471,8 +471,17 @@ fn debug_value_condition_honours_not_exclusions() {
         sha256: "test".to_string(),
         architectures: None,
     };
-    let report = AnalysisReport::new(target);
+    let mut report = AnalysisReport::new(target);
     let json = br#"{"name":"p","files":["report.accreport.html"]}"#;
+    // The values tree an analyzed report carries for these bytes.
+    report.values_tree = Some(Box::new(
+        filefacts::OpenOptions::new()
+            .path(std::path::Path::new("package.json"))
+            .open(json)
+            .values()
+            .as_json()
+            .clone(),
+    ));
     let mapper = CapabilityMapper::empty();
     let debugger = RuleDebugger::new(&mapper, &report, json, vec![Platform::All], None);
 

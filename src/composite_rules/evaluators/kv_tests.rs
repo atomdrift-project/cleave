@@ -4,7 +4,7 @@
 //! Tests for key-value condition evaluator
 //!
 //! Comprehensive test coverage for:
-//! - Format detection (JSON, YAML, TOML, Plist, PKG-INFO)
+//! - Routing: structured documents reach the values tree
 //! - Path parsing (keys, indexes, wildcards)
 //! - Value navigation (nested objects, arrays)
 //! - Pattern matching (exact, substr, regex, case-insensitive)
@@ -18,80 +18,92 @@ use std::path::Path;
 
 /// Evaluate `condition` against `content` as if it were the file at `path`.
 fn evaluate_kv_at(condition: &Condition, content: &[u8], path: &Path) -> Option<Evidence> {
-    let report = AnalysisReport::new(TargetInfo {
+    let mut report = AnalysisReport::new(TargetInfo {
         path: path.display().to_string(),
         file_type: "test".to_string(),
         size_bytes: content.len() as u64,
         sha256: "test".to_string(),
         architectures: None,
     });
+    report.values_tree = Some(Box::new(
+        filefacts::OpenOptions::new()
+            .path(path)
+            .open(content)
+            .values()
+            .as_json()
+            .clone(),
+    ));
     let ctx = EvaluationContext::test_only_new(&report, content, FileType::All);
     evaluate_kv(condition, &ctx)
 }
 
-// ==================== Format Detection Tests ====================
+// ==================== Routing ====================
 
+/// Every file shape cleave's own structured-format router used to parse
+/// reaches `type: value` rules through filefacts' values tree: identified by
+/// name or content, parsed, and addressable by the path a rule would use.
 #[test]
-fn test_detect_format_json() {
-    let content = br#"{"name": "test", "version": "1.0"}"#;
-    let path = Path::new("package.json");
-    assert_eq!(detect_format(path, content), StructuredFormat::Json);
-}
+fn structured_documents_reach_the_values_tree() {
+    const MSBUILD: &str =
+        r#"<Project><Target Name="t"><Exec Command="curl x"/></Target></Project>"#;
+    const PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.example</string></dict></plist>"#;
+    const PBXPROJ: &str = "// !$*UTF8*$!\n{ objects = { A1 = { isa = PBXShellScriptBuildPhase; shellScript = \"curl x\"; }; }; }\n";
+    const UNIT: &str = "[Service]\nExecStart=/bin/x\n";
+    const PKGINFO: &str = "Metadata-Version: 2.1\nName: declared\n";
+    let mut binary_plist = Vec::new();
+    let mut dict = plist::Dictionary::new();
+    dict.insert("CFBundleIdentifier".into(), "com.example".into());
+    plist::Value::Dictionary(dict)
+        .to_writer_binary(&mut binary_plist)
+        .unwrap();
 
-#[test]
-fn test_detect_format_yaml_github_workflow() {
-    let content = b"name: test\nversion: 1.0\n";
-    let path = Path::new(".github/workflows/ci.yaml");
-    assert_eq!(detect_format(path, content), StructuredFormat::Yaml);
-}
-
-#[test]
-fn test_detect_format_yml_github_workflow() {
-    let content = b"name: test\nversion: 1.0\n";
-    let path = Path::new(".github/workflows/build.yml");
-    assert_eq!(detect_format(path, content), StructuredFormat::Yaml);
-}
-
-#[test]
-fn test_detect_format_toml() {
-    let content = b"[package]\nname = \"test\"\nversion = \"1.0\"\n";
-    let path = Path::new("Cargo.toml");
-    assert_eq!(detect_format(path, content), StructuredFormat::Toml);
-}
-
-#[test]
-fn test_detect_format_plist_extension() {
-    let content = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist";
-    let path = Path::new("Info.plist");
-    assert_eq!(detect_format(path, content), StructuredFormat::Plist);
-}
-
-#[test]
-fn test_detect_format_pkg_info() {
-    let content = b"Metadata-Version: 2.1\nName: test-package\nVersion: 1.0.0\n";
-    let path = Path::new("PKG-INFO");
-    assert_eq!(detect_format(path, content), StructuredFormat::PkgInfo);
-}
-
-#[test]
-fn test_detect_format_metadata() {
-    let content = b"Metadata-Version: 2.1\nName: test\n";
-    let path = Path::new("METADATA");
-    assert_eq!(detect_format(path, content), StructuredFormat::PkgInfo);
-}
-
-#[test]
-fn test_detect_format_composer_json() {
-    let content = br#"{"name": "package", "version": "1.0"}"#;
-    let path = Path::new("composer.json");
-    assert_eq!(detect_format(path, content), StructuredFormat::Json);
-}
-
-#[test]
-fn test_detect_format_unknown() {
-    let content = b"random binary data \x00\x01\x02";
-    let path = Path::new("unknown.bin");
-    assert_eq!(detect_format(path, content), StructuredFormat::Unknown);
+    let cases: &[(&str, &[u8], &str, serde_json::Value)] = &[
+        ("package.json", br#"{"name":"p","scripts":{"postinstall":"x"}}"#, "scripts.postinstall", json!("x")),
+        ("package-lock.json", br#"{"name":"p","lockfileVersion":3}"#, "lockfileVersion", json!(3)),
+        ("manifest.json", br#"{"manifest_version":3,"name":"e","permissions":["tabs"]}"#, "permissions[0]", json!("tabs")),
+        ("composer.json", br#"{"name":"v/p","scripts":{"post-install-cmd":"x"}}"#, "scripts.post-install-cmd", json!("x")),
+        (".github/workflows/ci.yaml", b"on: push\njobs:\n  b:\n    runs-on: ubuntu-latest\n", "jobs.b.runs-on", json!("ubuntu-latest")),
+        (".github/workflows/ci.yml", b"on: push\njobs:\n  b:\n    runs-on: ubuntu-latest\n", "jobs.b.runs-on", json!("ubuntu-latest")),
+        ("action.yml", b"name: a\nruns:\n  using: node20\n", "runs.using", json!("node20")),
+        ("Cargo.toml", b"[package]\nname = \"c\"\nbuild = \"build.rs\"\n", "package.build", json!("build.rs")),
+        ("pyproject.toml", b"[project]\nname = \"p\"\n", "project.name", json!("p")),
+        ("evil.service", UNIT.as_bytes(), "service.exec_start", json!("/bin/x")),
+        ("evil.service.d/override.conf", UNIT.as_bytes(), "service.exec_start", json!("/bin/x")),
+        ("app.desktop", b"[Desktop Entry]\nExec=x\n", "desktop_entry.exec", json!("x")),
+        ("PKG-INFO", PKGINFO.as_bytes(), "name", json!("declared")),
+        ("METADATA", PKGINFO.as_bytes(), "name", json!("declared")),
+        ("Info.plist", PLIST.as_bytes(), "CFBundleIdentifier", json!("com.example")),
+        ("unnamed", PLIST.as_bytes(), "CFBundleIdentifier", json!("com.example")),
+        ("unnamed", &binary_plist, "CFBundleIdentifier", json!("com.example")),
+        ("project.pbxproj", PBXPROJ.as_bytes(), "objects[*].shellScript", json!("curl x")),
+        ("unnamed", PBXPROJ.as_bytes(), "objects[*].shellScript", json!("curl x")),
+        ("unnamed", br#"<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003"><Target Name="t"><Exec Command="curl x"/></Target></Project>"#, "Project.Target.Exec.@Command", json!("curl x")),
+    ];
+    for &(name, content, path, ref expected) in cases {
+        let tree = filefacts::OpenOptions::new()
+            .path(Path::new(name))
+            .open(content)
+            .values()
+            .as_json()
+            .clone();
+        let found = navigate(&tree, &parse_path(path).unwrap());
+        assert_eq!(found, vec![expected], "{name}: {path} in {tree}");
+    }
+    for ext in [
+        "xml", "csproj", "vbproj", "fsproj", "vcxproj", "proj", "props", "targets", "xaml",
+    ] {
+        let name = format!("build.{ext}");
+        let tree = filefacts::OpenOptions::new()
+            .path(Path::new(&name))
+            .open(MSBUILD.as_bytes())
+            .values()
+            .as_json()
+            .clone();
+        let found = navigate(&tree, &parse_path("Project.Target.Exec.@Command").unwrap());
+        assert_eq!(found, vec![&json!("curl x")], "{name}");
+    }
 }
 
 // ==================== Path Parsing Tests ====================

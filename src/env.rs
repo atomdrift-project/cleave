@@ -179,6 +179,11 @@ pub const VARIABLES: &[Variable] = &[
         "0 evaluates syntax-tree queries one at a time.",
     ),
     var(
+        "CLEAVE_AST_ANCHORS",
+        Tuning,
+        "0 walks the whole syntax tree for every query instead of only the nodes its literals place.",
+    ),
+    var(
         "CLEAVE_AST_BATCH_CPU_MS",
         Tuning,
         "CPU budget for the shared syntax-tree query walk.",

@@ -340,57 +340,6 @@ fn archive_manifest_retains_filefacts_identity_claims() {
     );
 }
 
-fn pack_manifest(publisher: &str, entries: &[&str]) -> AnalysisReport {
-    let mut f = FileAnalysis::new(
-        0,
-        "extension/package.json".into(),
-        "package.json".into(),
-        String::new(),
-        0,
-    );
-    f.kv.insert("publisher".into(), serde_json::json!(publisher));
-    for (i, e) in entries.iter().enumerate() {
-        f.kv.insert(format!("extensionPack[{i}]"), serde_json::json!(e));
-    }
-    report_with(vec![f])
-}
-
-#[test]
-fn extension_pack_counts_separates_borrowed_from_own() {
-    // The laundering shape: one of the publisher's own extensions carried
-    // in by three well-known third-party ones.
-    assert_eq!(
-        extension_pack_counts(&pack_manifest(
-            "krabt",
-            &[
-                "krabt.krabt-proto",
-                "eamodio.gitlens",
-                "golang.go",
-                "ms-python.python",
-            ],
-        )),
-        Some((4, 1)),
-    );
-    // A vendor pack of its own extensions.
-    assert_eq!(
-        extension_pack_counts(&pack_manifest(
-            "ms-python",
-            &["ms-python.python", "ms-python.debugpy"],
-        )),
-        Some((2, 2)),
-    );
-}
-
-#[test]
-fn extension_pack_counts_abstains_without_a_pack_or_publisher() {
-    assert_eq!(extension_pack_counts(&pack_manifest("krabt", &[])), None);
-    // Entries but no publisher: nothing to compare ownership against.
-    assert_eq!(
-        extension_pack_counts(&pack_manifest("", &["eamodio.gitlens"])),
-        None,
-    );
-}
-
 fn pkg_json_member(deps: &[&str]) -> FileAnalysis {
     let mut f = FileAnalysis::new(
         0,

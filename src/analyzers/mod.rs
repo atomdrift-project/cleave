@@ -41,12 +41,9 @@ pub(crate) mod utils;
 // Source-code kv-tree synthesis (imports/exports/functions).
 // Python `.pyc` bytecode kv-tree synthesis (header + co_filename).
 // B0.5 quick-win extractors: ELF .comment, sanitizer detection, etc.
-pub(crate) mod binary_extractors;
 // B1: Go buildinfo extractor (cross-format PE/ELF/Mach-O/raw).
 // Cross-format builder-path / builder-username recovery.
-pub(crate) mod builder_paths;
 // B2: PE-specific extractors (Rich header, imphash, VERSIONINFO).
-pub(crate) mod pe_extractors;
 
 // Dedicated analyzers for binary/bytecode/manifest formats
 pub(crate) mod chrome_manifest;

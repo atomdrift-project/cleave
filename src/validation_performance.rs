@@ -20,10 +20,15 @@ struct ActiveFlag(AtomicBool);
 static ACTIVE: ActiveFlag = ActiveFlag(AtomicBool::new(false));
 static ISSUES: Mutex<BTreeMap<(String, String), ValidationIssue>> = Mutex::new(BTreeMap::new());
 
-/// Per fixture and count mode, each rule's costliest AST query: the query
-/// text, so the fixture's outliers can be run again (see
-/// [`confirm_outliers`]), and what it cost.
-static QUERY_COSTS: Mutex<BTreeMap<(String, bool), BTreeMap<String, QueryCost>>> =
+/// Per file and count mode, each rule's costliest AST query: the query text,
+/// so the file's outliers can be run again (see [`confirm_outliers`]), and
+/// what it cost. A file is its path and content hash: archive members are
+/// named by their path inside the archive, and two fixtures can both hold an
+/// `extension/out/extension.js` that share nothing else -- keyed by path
+/// alone, one fixture's cold cost landed on the other's confirmed record and
+/// its peers became the other file's queries.
+type CostKey = (String, String, bool);
+static QUERY_COSTS: Mutex<BTreeMap<CostKey, BTreeMap<String, QueryCost>>> =
     Mutex::new(BTreeMap::new());
 
 struct QueryCost {
@@ -123,6 +128,7 @@ pub(crate) struct QueryTimer<'a> {
     id: &'a str,
     query: &'a str,
     path: &'a str,
+    sha256: &'a str,
     runs: u64,
     full_count: bool,
     execution_cost: Duration,
@@ -137,6 +143,7 @@ impl<'a> QueryTimer<'a> {
             id,
             query,
             path: &ctx.report.target.path,
+            sha256: &ctx.report.target.sha256,
             runs: QUERY_RUNS.with(Cell::get),
             full_count: crate::composite_rules::evaluators::symbol_string::match_count_needed(),
             execution_cost: QUERY_EXECUTION_COST.with(Cell::get),
@@ -153,7 +160,11 @@ impl Drop for QueryTimer<'_> {
             .saturating_sub(self.execution_cost);
         let mut costs = QUERY_COSTS.lock();
         let rules = costs
-            .entry((self.path.to_owned(), self.full_count))
+            .entry((
+                self.path.to_owned(),
+                self.sha256.to_owned(),
+                self.full_count,
+            ))
             .or_default();
         match rules.get_mut(self.id) {
             Some(cost) if cost.cost >= elapsed => {}
@@ -196,8 +207,10 @@ const CONFIRMATION_ROUNDS: usize = 4;
 /// keeps a bundle-sized source from costing minutes in validation.
 pub(crate) fn confirm_outliers(
     path: &str,
+    sha256: &str,
     mut remeasure: impl FnMut(&str, bool) -> Option<Duration>,
 ) {
+    let key = |full_count: bool| (path.to_owned(), sha256.to_owned(), full_count);
     if !active() {
         return;
     }
@@ -207,17 +220,16 @@ pub(crate) fn confirm_outliers(
             .into_iter()
             .flat_map(|full_count| {
                 let costs = QUERY_COSTS.lock();
-                let over_fence: Option<Vec<_>> =
-                    costs.get(&(path.to_owned(), full_count)).and_then(|rules| {
-                        let (_, fence) = outlier_fence(rules)?;
-                        Some(
-                            rules
-                                .iter()
-                                .filter(|(_, c)| c.cost > fence && !c.confirmed)
-                                .map(|(id, c)| (full_count, id.clone(), c.query.clone(), c.cost))
-                                .collect(),
-                        )
-                    });
+                let over_fence: Option<Vec<_>> = costs.get(&key(full_count)).and_then(|rules| {
+                    let (_, fence) = outlier_fence(rules)?;
+                    Some(
+                        rules
+                            .iter()
+                            .filter(|(_, c)| c.cost > fence && !c.confirmed)
+                            .map(|(id, c)| (full_count, id.clone(), c.query.clone(), c.cost))
+                            .collect(),
+                    )
+                });
                 drop(costs);
                 over_fence.unwrap_or_default()
             })
@@ -235,7 +247,7 @@ pub(crate) fn confirm_outliers(
             }
             let mut costs = QUERY_COSTS.lock();
             if let Some(cost) = costs
-                .get_mut(&(path.to_owned(), full_count))
+                .get_mut(&key(full_count))
                 .and_then(|rules| rules.get_mut(&id))
             {
                 cost.cost = cost.cost.min(best);
@@ -307,7 +319,7 @@ impl Session {
     #[cfg(feature = "lint")]
     pub(crate) fn issues(&self) -> Vec<ValidationIssue> {
         let mut issues = ISSUES.lock().clone();
-        for ((path, _full_count), costs) in QUERY_COSTS.lock().iter() {
+        for ((path, _sha256, _full_count), costs) in QUERY_COSTS.lock().iter() {
             let Some((median, fence)) = outlier_fence(costs) else {
                 continue;
             };
@@ -336,6 +348,31 @@ fn issue(id: &str, path: &str, detail: &str) -> ValidationIssue {
     let mut issue = ValidationIssue::new(VALIDATOR, format!("rule '{id}' on '{path}': {detail}"));
     issue.rule_id = Some(id.to_owned());
     issue
+}
+
+/// Run `check` outside every measurement: not counted as a query run, not
+/// charged to the rule's time. `None` while a probe is already measuring,
+/// since a nested probe would overwrite the cost it is taking.
+pub(crate) fn unmeasured<T>(check: impl FnOnce() -> T) -> Option<T> {
+    if PROBING_AST.with(Cell::get) {
+        return None;
+    }
+    let _probe = AstProbe::begin();
+    Some(check())
+}
+
+/// Record that anchored evaluation of `query` on `path` found different
+/// matches than the whole-tree walk (see `ast_gate::Anchors`).
+pub(crate) fn anchoring_diverged(query: &str, path: &str, detail: &str) {
+    let query = query.split_whitespace().collect::<Vec<_>>().join(" ");
+    let shown: String = query.chars().take(160).collect();
+    let issue = ValidationIssue::new(
+        "ast-anchor-soundness",
+        format!(
+            "anchored evaluation diverged from the whole-tree walk on '{path}': {detail}; query `{shown}`"
+        ),
+    );
+    record(&query, path, issue);
 }
 
 fn record(id: &str, path: &str, issue: ValidationIssue) {
@@ -529,5 +566,34 @@ mod tests {
         assert_eq!(p.severity, validation_controls::Severity::Soft);
         assert!(p.severity >= validation_controls::Severity::Soft);
         assert!(p.severity < validation_controls::Severity::Hard);
+    }
+
+    /// A divergence between anchored and whole-tree evaluation drops or
+    /// invents detections: it is recorded under its own registered validator,
+    /// which fails even `validate --soft`.
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn anchoring_divergence_is_a_hard_registered_issue() {
+        assert!(validation_controls::validator_spec("ast-anchor-soundness").is_some());
+        let query = "((identifier) @i (#eq? @i \"zz-anchor-test\"))";
+        anchoring_diverged(
+            query,
+            "zz-anchor-test.js",
+            "1 anchored matches, 2 whole-tree matches",
+        );
+        let recorded = ISSUES
+            .lock()
+            .remove(&(
+                query.split_whitespace().collect::<Vec<_>>().join(" "),
+                "zz-anchor-test.js".to_owned(),
+            ))
+            .expect("recorded");
+        assert_eq!(recorded.validator_id, "ast-anchor-soundness");
+        assert_eq!(recorded.severity, validation_controls::Severity::Hard);
+        assert!(
+            recorded
+                .message
+                .contains("1 anchored matches, 2 whole-tree matches")
+        );
     }
 }

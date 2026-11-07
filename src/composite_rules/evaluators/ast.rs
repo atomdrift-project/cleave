@@ -6,7 +6,7 @@
 //! - Safe AST traversal with depth limits
 
 use super::ast_gate::{
-    DeferredPredicates, NodeTextIndex, RequiredLiterals, RequiredNodes, RequiredSubqueries,
+    Anchors, DeferredPredicates, NodeTextIndex, RequiredLiterals, RequiredNodes, RequiredSubqueries,
 };
 use super::{build_regex, truncate_evidence};
 use crate::analyzers::ast_walker::{AST_QUERY_CPU_BUDGET, thread_cpu_time};
@@ -107,6 +107,9 @@ struct CompiledAstQuery {
     /// node (see [`super::ast_gate::pattern_root_kinds`]): the query can then
     /// run per node of those kinds. Sorted for binary search.
     root_kinds: Option<Box<[u16]>>,
+    /// Where every pattern's matches must be rooted, read from a capture
+    /// whose predicate requires a literal (see [`super::ast_gate::Anchors`]).
+    anchors: Option<Anchors>,
 }
 
 impl CompiledAstQuery {
@@ -618,6 +621,30 @@ fn eval_ast_query_once<'a>(
     cpu_budget: std::time::Duration,
     per_root: bool,
 ) -> ConditionResult {
+    let mut anchored = false;
+    let result = run_ast_query(query_str, ctx, cpu_budget, per_root, &mut anchored);
+    if anchored
+        && crate::validation_performance::judges(query_str, ctx)
+        && ctx
+            .ast_source()
+            .is_some_and(|source| source.len() <= anchor_check::ANCHOR_CHECK_MAX_BYTES)
+    {
+        crate::validation_performance::unmeasured(|| {
+            anchor_check::check_anchoring(query_str, ctx, cpu_budget);
+        });
+    }
+    result
+}
+
+/// One evaluation of `query_str` on `ctx`. `per_root` allows the rooted
+/// runs; `anchored` reports whether anchoring placed the roots.
+fn run_ast_query<'a>(
+    query_str: &str,
+    ctx: &EvaluationContext<'a>,
+    cpu_budget: std::time::Duration,
+    per_root: bool,
+    anchored_used: &mut bool,
+) -> ConditionResult {
     if let Some(cache) = ctx.ast_query_cache
         && let Some(cached) = cache.get(query_str)
     {
@@ -818,50 +845,74 @@ fn eval_ast_query_once<'a>(
         false
     };
     let mut exceeded_match_limit = false;
-    match compiled.root_kinds.as_deref().filter(|_| per_root) {
-        // One cursor run per node the patterns can be rooted at, each
-        // confined to starting there (`max_start_depth` 0), so the cursor
-        // only descends as far as that node's own match needs. A whole-tree
-        // walk keeps one in-progress state per open candidate root, and on
-        // a deeply nested tree -- a 5 MB JSFuck expression nests calls and
-        // subscripts thousands of levels -- a self-nesting pattern such as
+    // Rooted runs need no whole-tree walk: where the matches can start is
+    // known, either from the literal occurrences an anchor capture needs or
+    // from the node kinds every pattern is rooted at.
+    let anchors = per_root
+        .then_some(compiled.anchors.as_ref())
+        .flatten()
+        .filter(|_| super::ast_gate::anchors_enabled());
+    let anchored = anchors.and_then(|anchors| anchors.roots(tree, source.as_bytes()));
+    *anchored_used = anchored.as_ref().is_some_and(|roots| !roots.is_empty());
+    let root_kinds = compiled.root_kinds.as_deref().filter(|_| per_root);
+    if anchored.is_some() || root_kinds.is_some() {
+        // One cursor run per candidate root, each confined to starting there
+        // (`max_start_depth` 0), so the cursor only descends as far as that
+        // node's own match needs. A whole-tree walk keeps one in-progress
+        // state per open candidate root, and on a deeply nested tree -- a
+        // 5 MB JSFuck expression nests calls and subscripts thousands of
+        // levels -- a self-nesting pattern such as
         // `(call_expression function: (subscript_expression))` holds
         // thousands of states at once: the shared batch drops it at its
         // state cap, and the walk alone then spends its whole CPU budget on
         // a partial result (87 s to finish). Per root, each run holds one
-        // state and the file costs the walk. The matches are the same set:
-        // a rooted pattern matches at exactly the nodes of its root kind.
-        // Only their order differs (an enclosing root now comes before the
-        // roots inside it), which matters to nothing but which of more
-        // than MAX_EVIDENCE_PER_TRAIT matches are kept as evidence.
-        Some(root_kinds) => {
-            query_cursor.set_max_start_depth(Some(0));
+        // state. The matches are the same set: a pattern matches only at its
+        // candidate roots. Only their order differs (an enclosing root now
+        // comes before the roots inside it), which matters to nothing but
+        // which of more than MAX_EVIDENCE_PER_TRAIT matches are kept as
+        // evidence. Anchored runs of a wildcard-rooted pattern start one level
+        // down, and keep only the matches rooted at their node (see
+        // `Anchors::rooted_at`).
+        let anchors = anchors.filter(|_| anchored.is_some());
+        query_cursor.set_max_start_depth(Some(anchors.map_or(0, Anchors::start_depth)));
+        // `true` once the evaluation should stop.
+        let mut run_at = |node: tree_sitter::Node<'_>| -> bool {
+            let options = tree_sitter::QueryCursorOptions::default()
+                .progress_callback(&mut progress_cb)
+                .capture_match_predicate(&mut capture_predicate);
+            let mut matches =
+                query_cursor.matches_with_options(query, node, source.as_bytes(), options);
+            while let Some(m) = matches.next() {
+                if anchors.is_some_and(|anchors| {
+                    !anchors.rooted_at(m.pattern_index, node, m.captures(), |name| {
+                        query.capture_index_for_name(name)
+                    })
+                }) {
+                    continue;
+                }
+                if stop() || sink.accept(m).is_break() {
+                    return true;
+                }
+            }
+            drop(matches);
+            exceeded_match_limit |= query_cursor.did_exceed_match_limit();
+            timed_out.get() || ctx.is_cancelled()
+        };
+        if let Some(roots) = anchored {
+            for node in roots {
+                // Nodes starting past the byte limit cannot intersect it.
+                if node.start_byte() < byte_limit && run_at(node) {
+                    break;
+                }
+            }
+        } else if let Some(root_kinds) = root_kinds {
             let mut walk = tree.walk();
             let mut visited: usize = 0;
             'roots: loop {
                 let node = walk.node();
-                // Nodes starting past the byte limit cannot intersect it.
                 if node.start_byte() < byte_limit {
-                    if root_kinds.binary_search(&node.kind_id()).is_ok() {
-                        let options = tree_sitter::QueryCursorOptions::default()
-                            .progress_callback(&mut progress_cb)
-                            .capture_match_predicate(&mut capture_predicate);
-                        let mut matches = query_cursor.matches_with_options(
-                            query,
-                            node,
-                            source.as_bytes(),
-                            options,
-                        );
-                        while let Some(m) = matches.next() {
-                            if stop() || sink.accept(m).is_break() {
-                                break 'roots;
-                            }
-                        }
-                        drop(matches);
-                        exceeded_match_limit |= query_cursor.did_exceed_match_limit();
-                        if timed_out.get() || ctx.is_cancelled() {
-                            break 'roots;
-                        }
+                    if root_kinds.binary_search(&node.kind_id()).is_ok() && run_at(node) {
+                        break 'roots;
                     }
                     visited += 1;
                     if visited.is_multiple_of(4096) && stop() {
@@ -881,24 +932,19 @@ fn eval_ast_query_once<'a>(
                 }
             }
         }
-        None => {
-            let options = tree_sitter::QueryCursorOptions::default()
-                .progress_callback(&mut progress_cb)
-                .capture_match_predicate(&mut capture_predicate);
-            let mut matches = query_cursor.matches_with_options(
-                query,
-                tree.root_node(),
-                source.as_bytes(),
-                options,
-            );
-            while let Some(m) = matches.next() {
-                if stop() || sink.accept(m).is_break() {
-                    break;
-                }
+    } else {
+        let options = tree_sitter::QueryCursorOptions::default()
+            .progress_callback(&mut progress_cb)
+            .capture_match_predicate(&mut capture_predicate);
+        let mut matches =
+            query_cursor.matches_with_options(query, tree.root_node(), source.as_bytes(), options);
+        while let Some(m) = matches.next() {
+            if stop() || sink.accept(m).is_break() {
+                break;
             }
-            drop(matches);
-            exceeded_match_limit = query_cursor.did_exceed_match_limit();
         }
+        drop(matches);
+        exceeded_match_limit = query_cursor.did_exceed_match_limit();
     }
     let MatchSink {
         evidence,
@@ -929,85 +975,6 @@ fn eval_ast_query_once<'a>(
         warnings,
         precision: 2.0, // Tree-sitter queries are complex and specific
         matched_trait_ids: Vec::new(),
-    }
-}
-
-/// Collects one standalone query's matches into evidence and counts, the
-/// same way whether the cursor ran once over the tree or once per root.
-struct MatchSink<'s> {
-    evidence_capture: Option<u32>,
-    source: &'s [u8],
-    evidence: Vec<Evidence>,
-    match_count: usize,
-    capture_count: usize,
-    capture_limited: bool,
-}
-
-impl MatchSink<'_> {
-    /// `Break` once no further match can change the result.
-    fn accept(&mut self, m: &tree_sitter::QueryMatch<'_, '_>) -> ControlFlow<()> {
-        // Standalone predicate patterns can yield empty-capture matches.
-        // They are not an observed source occurrence and must not satisfy a trait.
-        if m.captures().is_empty()
-            || self.evidence_capture.is_some_and(|selected| {
-                !m.captures().iter().any(|capture| capture.index == selected)
-            })
-        {
-            return ControlFlow::Continue(());
-        }
-        // QueryMatches already checks the built-in text predicates.
-
-        // Count complete query matches once; captures provide evidence and
-        // have their own work bound. A four-capture query is one occurrence.
-        if self.capture_count >= AST_QUERY_CAPTURE_LIMIT {
-            self.capture_limited = true;
-            return ControlFlow::Break(());
-        }
-        self.match_count += 1;
-        for capture in m.captures() {
-            if self.capture_count >= AST_QUERY_CAPTURE_LIMIT {
-                self.capture_limited = true;
-                return ControlFlow::Break(());
-            }
-            self.capture_count += 1;
-            if self
-                .evidence_capture
-                .is_some_and(|selected| capture.index != selected)
-            {
-                continue;
-            }
-            if let Ok(text) = capture.node.utf8_text(self.source)
-                && self.evidence.len() < MAX_EVIDENCE_PER_TRAIT
-            {
-                self.evidence.push(Evidence {
-                    method: "ast_query".to_string(),
-                    source: "tree-sitter".to_string(),
-                    value: truncate_evidence(text, 100),
-                    location: Some(format!(
-                        "{}:{}",
-                        capture.node.start_position().row + 1,
-                        capture.node.start_position().column + 1
-                    )),
-                    offsets: vec![capture.node.start_byte() as u64],
-                    ..Default::default()
-                });
-            }
-        }
-        // Queries without count or proximity consumers only need to prove one
-        // match. Some sibling-wildcard patterns have combinatorial result sets;
-        // continuing to enumerate every valid alignment can burn the whole
-        // per-query CPU budget after the trait has already matched.
-        if !super::symbol_string::match_count_needed() {
-            return ControlFlow::Break(());
-        }
-        // Floor-only count filters already satisfied and the evidence list
-        // full: later matches change neither verdict nor output.
-        if self.match_count >= super::symbol_string::match_count_bound()
-            && self.evidence.len() >= MAX_EVIDENCE_PER_TRAIT
-        {
-            return ControlFlow::Break(());
-        }
-        ControlFlow::Continue(())
     }
 }
 
@@ -1079,6 +1046,7 @@ fn cached_ast_query(
         let deferred = DeferredPredicates::of(&query, query_str);
         let ignore_comments = super::ast_comment_view::requested(&query);
         let root_kinds = per_root_kinds(lang, &query, query_str);
+        let anchors = Anchors::of(lang, &query, query_str);
         Arc::new(CompiledAstQuery {
             query,
             deferred,
@@ -1087,6 +1055,7 @@ fn cached_ast_query(
             subqueries,
             ignore_comments,
             root_kinds,
+            anchors,
         })
     });
     if let Some(started) = compile_started {
@@ -1301,7 +1270,14 @@ fn batch_ast_bank(
     let lang = &*tree.language();
     let mut compiling: Vec<(&str, Arc<CompiledAstQuery>)> = Vec::new();
     let mut active = Vec::new();
+    // Per query: whether it joins the shared walk (an anchored query does not).
+    let mut walked = Vec::new();
+    // Per combined pattern: whether it can match, and the start depth of its
+    // anchored runs when it runs anchored (see `Anchors::start_depth`).
     let mut pattern_active = Vec::new();
+    let mut pattern_anchored: Vec<Option<u32>> = Vec::new();
+    // Where the anchored queries' matches can start, by start depth.
+    let mut anchored_roots: [Vec<tree_sitter::Node<'_>>; 2] = [Vec::new(), Vec::new()];
     let owned_node_text;
     let node_text = match node_text {
         Some(index) => index,
@@ -1359,7 +1335,26 @@ fn batch_ast_bank(
             if count_unbounded_any_wildcards(q) >= 2 {
                 continue;
             }
+            // A query anchored on its literals (see `Anchors`) sits out the
+            // shared walk and runs after it at just the nodes its literals
+            // place. The bank's query set stays the same for every file.
+            let anchoring = possible
+                .then_some(compiled.anchors.as_ref())
+                .flatten()
+                .filter(|_| super::ast_gate::anchors_enabled())
+                .and_then(|anchors| {
+                    let roots = anchors.roots(tree, source.as_bytes())?;
+                    Some((anchors.start_depth(), roots))
+                });
+            let depth = anchoring.as_ref().map(|(depth, _)| *depth);
+            if let Some((depth, roots)) = anchoring
+                && let Some(bucket) = anchored_roots.get_mut(depth as usize)
+            {
+                bucket.extend(roots);
+            }
             active.push(possible);
+            walked.push(possible && depth.is_none());
+            pattern_anchored.extend(enabled.iter().map(|&enabled| depth.filter(|_| enabled)));
             pattern_active.extend(enabled);
             compiling.push((q, compiled));
         }
@@ -1436,9 +1431,15 @@ fn batch_ast_bank(
     // literal gates only disable patterns on a private copy; they must not
     // create another expensive ts_query_new for each surviving subset, or
     // mutate the shared query observed by concurrent archive workers.
-    let mut narrowed = pattern_active.iter().any(|&enabled| !enabled).then(|| {
+    // The shared walk's patterns: those that can match and are not anchored.
+    let pattern_walked: Vec<bool> = pattern_active
+        .iter()
+        .zip(&pattern_anchored)
+        .map(|(&active, anchored)| active && anchored.is_none())
+        .collect();
+    let mut narrowed = pattern_walked.iter().any(|&enabled| !enabled).then(|| {
         let mut query = combined.query.deep_clone();
-        for (pattern, &enabled) in pattern_active.iter().enumerate() {
+        for (pattern, &enabled) in pattern_walked.iter().enumerate() {
             if !enabled {
                 query.disable_pattern(pattern);
             }
@@ -1455,7 +1456,7 @@ fn batch_ast_bank(
             .unwrap_or_else(|| combined.query.deep_clone());
         let mut kinds = Vec::new();
         for (qi, (_, compiled)) in compiling.iter().enumerate() {
-            if !active[qi] {
+            if !walked[qi] {
                 continue;
             }
             match compiled.root_kinds.as_deref() {
@@ -1668,7 +1669,10 @@ fn batch_ast_bank(
             }
         }
     };
-    match per_root_kinds.as_deref() {
+    // Every pattern may sit out the walk: all anchored, or none can match.
+    let walk_any = pattern_walked.iter().any(|&enabled| enabled);
+    match per_root_kinds.as_deref().filter(|_| walk_any) {
+        None if !walk_any => {}
         None => {
             let options = tree_sitter::QueryCursorOptions::default()
                 .progress_callback(&mut progress_cb)
@@ -1757,6 +1761,81 @@ fn batch_ast_bank(
                         break 'roots;
                     }
                 }
+            }
+        }
+    }
+    // Then the anchored queries, at the roots their literals place: those
+    // rooted at their root node confined to start there, and wildcard-rooted
+    // ones one level down, keeping only matches rooted at the run's node
+    // (see `Anchors`). Each pass runs only its own patterns at its own roots.
+    let first_pattern: Vec<usize> = compiling
+        .iter()
+        .scan(0, |next, (_, compiled)| {
+            let first = *next;
+            *next += compiled.query.pattern_count();
+            Some(first)
+        })
+        .collect();
+    let byte_limit = source.len().min(AST_QUERY_BYTE_LIMIT);
+    'passes: for (depth, roots) in (0_u32..).zip(anchored_roots.iter_mut()) {
+        if timed_out.get() || roots.is_empty() {
+            continue;
+        }
+        roots.sort_by_key(|node| (node.start_byte(), std::cmp::Reverse(node.end_byte())));
+        roots.dedup_by_key(|node| node.id());
+        let mut anchored_query = combined.query.deep_clone();
+        for (pattern, &anchored) in pattern_anchored.iter().enumerate() {
+            if anchored != Some(depth) {
+                anchored_query.disable_pattern(pattern);
+            }
+        }
+        query_cursor.set_max_start_depth(Some(depth));
+        for &node in roots.iter() {
+            if node.start_byte() >= byte_limit {
+                continue;
+            }
+            let options = tree_sitter::QueryCursorOptions::default()
+                .progress_callback(&mut progress_cb)
+                .capture_match_predicate(&mut capture_predicate);
+            let mut matches = query_cursor.matches_with_options(
+                &anchored_query,
+                node,
+                source.as_bytes(),
+                options,
+            );
+            while let Some(m) = matches.next() {
+                if cancelled() || deadline.is_some_and(|dl| Instant::now() > dl) {
+                    return None;
+                }
+                if over_budget() {
+                    timed_out.set(true);
+                    break 'passes;
+                }
+                if depth > 0 {
+                    let rooted = combined
+                        .pattern_to_query
+                        .get(m.pattern_index)
+                        .and_then(|&qi| {
+                            let anchors = compiling.get(qi)?.1.anchors.as_ref()?;
+                            let local = m.pattern_index.checked_sub(*first_pattern.get(qi)?)?;
+                            Some(anchors.rooted_at(local, node, m.captures(), |name| {
+                                anchored_query.capture_index_for_name(name)
+                            }))
+                        })
+                        .unwrap_or(false);
+                    if !rooted {
+                        continue;
+                    }
+                }
+                accept(m, &mut disable);
+                for pattern in disable.drain(..) {
+                    matches.disable_pattern(pattern);
+                }
+            }
+            drop(matches);
+            note_exceeded(&query_cursor, &mut exceeded);
+            if timed_out.get() {
+                break 'passes;
             }
         }
     }
@@ -1865,3 +1944,7 @@ mod batch_design_exclusion_tests;
 
 #[cfg(test)]
 mod cache_lock_tests;
+
+mod anchor_check;
+mod match_sink;
+use match_sink::MatchSink;

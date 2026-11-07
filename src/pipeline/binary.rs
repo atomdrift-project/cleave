@@ -102,7 +102,6 @@ pub(super) fn analyze_macho(
         prefetched_yara,
         engine.yara().map(AsRef::as_ref),
     );
-    analyzers::binary_extractors::augment_report(&mut report, eval_data);
     set_phase(options, "macho:traits");
     rules.evaluate_and_merge_findings_with_precomputed(
         &mut report,
@@ -155,9 +154,6 @@ pub(super) fn analyze_elf(b: BinaryInput<'_, '_>) -> AnalysisReport {
         prefetched_yara,
         engine.yara().map(AsRef::as_ref),
     );
-    // Format-specific extractors (.comment, DWARF) layer on top of the
-    // `report.filefacts.values.elf.*` facts trait authors read.
-    analyzers::binary_extractors::augment_report(&mut report, file_data);
     set_phase(options, "elf:traits");
     rules.evaluate_and_merge_findings_with_precomputed(
         &mut report,
@@ -217,9 +213,6 @@ pub(super) fn analyze_pe(b: BinaryInput<'_, '_>) -> Result<AnalysisReport> {
         prefetched_yara,
         engine.yara().map(AsRef::as_ref),
     );
-    // VERSIONINFO, Rich header and imphash layer on top of the
-    // `report.filefacts.values.pe.*` facts trait authors read.
-    analyzers::binary_extractors::augment_report(&mut report, file_data);
     set_phase(options, "pe:traits");
     rules.evaluate_and_merge_findings_with_precomputed(
         &mut report,

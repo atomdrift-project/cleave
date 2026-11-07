@@ -106,6 +106,9 @@ const HARD_VALIDATOR_IDS: &[&str] = &[
     // An `exempt:` entry names no validator, or gives no reason: the rule
     // would silently keep a problem its author meant to justify.
     "invalid-exemption",
+    // Anchored tree-sitter evaluation found different matches than the
+    // whole-tree walk: an engine fault that drops or invents detections.
+    "ast-anchor-soundness",
 ];
 
 /// The severity of a validator, looked up by id. Unknown/legacy ids default to
@@ -1022,6 +1025,16 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: r"Exclude the start byte from the counted class or anchor the run to the last delimiter before the literal (`[\/][^
 ]{1,120}` -> `[\/][^
 \/]{0,120}`), keeping a `^` case as its own branch.",
+    },
+    ValidatorSpec {
+        id: "ast-anchor-soundness",
+        category: ValidatorCategory::Regression,
+        display_id: "ast-anchor",
+        description: "Anchored tree-sitter evaluation (running a query only at the nodes its \
+                      required literals place) found different matches than the whole-tree \
+                      walk on a fixture.",
+        fix: "An engine fault, not a rule fault: report it with the fixture and query. \
+              CLEAVE_AST_ANCHORS=0 restores the whole-tree walk meanwhile.",
     },
     ValidatorSpec {
         id: "ast-query-compile",

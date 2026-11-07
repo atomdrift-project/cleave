@@ -192,17 +192,6 @@ pub(crate) fn prepare_test_analysis(
         report.strings = crate::strings::StringExtractor::default().convert_stng_strings(&rows);
     }
 
-    // Attach the binary values tree so value-sourced traits (`type: value,
-    // path: …`) evaluate the same way as the production analyze
-    // pipeline. Without this, value conditions silently fail and rules
-    // like `metadata/binary/linking::ifunc` show NOT MATCHED in
-    // test-rules even when they fire in `cleave analyze`.
-    // Mirrors `lib.rs::analyze_file_with_resources`: trait authors
-    // read cross-format facts from `report.filefacts.values.*`; cleave
-    // only layers on raw extractors here (ELF .comment, DWARF,
-    // ifunc_symbols, init_array entries, …).
-    crate::analyzers::binary_extractors::augment_report(&mut report, &full_data);
-
     Ok(PreparedTestAnalysis {
         file_type,
         full_data,

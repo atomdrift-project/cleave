@@ -21,7 +21,7 @@ use crate::analyzers;
 use crate::analyzers::FileType;
 use crate::cli;
 use crate::commands::shared::dev_engine;
-use crate::composite_rules::evaluators::kv::{navigate, parse_path, parse_structured_content};
+use crate::composite_rules::evaluators::kv::{navigate, parse_path};
 use anyhow::Result;
 use serde::Serialize;
 use serde_json::Value;
@@ -41,12 +41,9 @@ struct KvEntry {
 ///    values (`lnk.*`, `pe.*`, `pdf.*`, `chm.*`, …). One call covers every
 ///    format filefacts has an extractor for.
 /// 2. Office (OLE2 / OOXML) — cleave-owned until filefacts Phase 2 lands.
-/// 3. Binary cross-format kv — filefacts' `pe|elf|macho.*` trees plus the
-///    `build.*` builder paths and `pe.version_info.*` that
-///    `binary_extractors` still adds (moving to filefacts).
+/// 3. Binary cross-format kv — filefacts' `pe|elf|macho.*` and `build.*`
+///    trees, merged onto the analyzer's report.
 /// 4. Source code analyzer — the filefacts tree it merges for source files.
-/// 5. Generic structured fallback — JSON / YAML / TOML / plist /
-///    PKG-INFO / systemd / desktop / XML manifests.
 pub fn run(
     target: &str,
     path_filter: Option<&str>,
@@ -67,8 +64,6 @@ pub fn run(
         binary_value
     } else if let Some(source_value) = extract_source_kv_via_analyzer(path, &content, &engine) {
         source_value
-    } else if let Some((_, structured_value)) = parse_structured_content(path, &content) {
-        structured_value
     } else {
         anyhow::bail!(
             "File is not a recognized structured format (expected JSON/YAML/TOML/plist/PKG-INFO/systemd/desktop manifest, OLE2/OOXML office document, or a format with a filefacts extractor — LNK, PE/ELF/Mach-O, PDF, RTF, JPEG/PNG, JAR, CHM, ...): {}",
@@ -167,23 +162,7 @@ fn filefacts_values(path: &Path, content: &[u8], engine: &crate::Engine) -> Opti
         path,
         content,
     );
-    let mut value = ctx.values_tree();
-    if value.get("pe").is_some()
-        && let Some(resource_data) = ctx.parsed.sections().iter().find_map(|section| {
-            if !section
-                .name
-                .trim_start_matches('.')
-                .eq_ignore_ascii_case("rsrc")
-            {
-                return None;
-            }
-            let start = section.file_offset as usize;
-            let end = start.checked_add(section.file_size as usize)?;
-            content.get(start..end)
-        })
-    {
-        analyzers::pe_extractors::augment_version_info_tree(&mut value, resource_data);
-    }
+    let value = ctx.values_tree();
     if has_only_path_derived(&value) {
         return None;
     }
@@ -209,9 +188,8 @@ fn extract_binary_kv_via_analyzer(
     }
     let analyzer = analyzers::analyzer_for_file_type_arc(&detected, engine)?;
     let mut report = analyzer.analyze(path).ok()?;
-    // `pe.*` / `elf.*` / `macho.*` come exclusively from filefacts
-    // (single source of truth); `binary_extractors` still adds builder
-    // paths and the PE version-info scan.
+    // `pe.*` / `elf.*` / `macho.*` and `build.*` come exclusively from
+    // filefacts (single source of truth).
     let ctx = crate::analysis_context::AnalysisContext::open_with(
         engine.filefacts_options(),
         path,
@@ -222,7 +200,6 @@ fn extract_binary_kv_via_analyzer(
             report.merge_kv_subtree(&namespace, subtree);
         }
     }
-    analyzers::binary_extractors::augment_report(&mut report, content);
     report.values_tree.as_deref().cloned()
 }
 

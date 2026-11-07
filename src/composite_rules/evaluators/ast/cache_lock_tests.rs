@@ -25,6 +25,7 @@ fn ast_cache_hit_does_not_wait_for_compiler() {
         ignore_comments: false,
         deferred: DeferredPredicates::of(&query, pattern),
         root_kinds: per_root_kinds(&language, &query, pattern),
+        anchors: None,
         query,
     });
     QUERY_CACHE.write().insert(key, Some(compiled.clone()));

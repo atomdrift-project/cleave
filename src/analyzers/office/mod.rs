@@ -1,88 +1,25 @@
 //! Microsoft Office document analyzer.
 //!
-//! Handles both legacy OLE2/CFBF formats (.doc, .xls, .ppt) and modern
-//! OOXML formats (.docx, .xlsx, .pptx). Extracts VBA macros as sub-files
-//! for analysis through the standard pipeline, and detects Office-specific
-//! malware techniques (template injection, DDE, embedded executables).
+//! filefacts parses legacy OLE2 (.doc, .xls, .ppt, .msg, .msi) and OOXML
+//! (.docx, .xlsx, .pptx) documents into `office.*` facts and metrics, which
+//! traits judge. This analyzer feeds the parts of a document cleave analyzes
+//! as sub-files back through the pipeline: VBA modules, embedded executables
+//! and scripts, OLE1 Packager payloads and Outlook attachments.
 
 pub(crate) mod ole2;
-pub(crate) mod ooxml;
 pub(crate) mod vba;
-pub(crate) mod vba_symbols;
 
 use super::subfile::attach_member;
 use super::{AnalysisInput, Analyzer, FileType, analyzer_for_file_type_arc};
 use crate::types::file_analysis::ARCHIVE_DELIMITER;
-use crate::types::office_metrics::{OleMetrics, OoxmlMetrics, XlmMetrics};
-use crate::types::{AnalysisReport, ArchiveEntry, Criticality, Finding, FindingKind, TargetInfo};
-
-/// Cross-format counts surfaced from a parsed OLE2/OOXML document.
-///
-/// These map onto the top-level `OfficeMetrics` fields (rather than
-/// the per-container `ole`/`ooxml` sub-structs) so a trait keyed on
-/// `office.external_template_count` resolves regardless of whether
-/// the doc is legacy or modern.
-#[derive(Debug, Default, Clone, Copy)]
-struct OfficeCrossCounts {
-    embedded_executable_count: u32,
-    external_ref_count: u32,
-    external_template_count: u32,
-    external_oleobject_count: u32,
-    external_frame_count: u32,
-    external_image_count: u32,
-    dde_link_count: u32,
-    is_encrypted: bool,
-}
+use crate::types::{AnalysisReport, TargetInfo};
 use anyhow::Result;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
-/// True when an external-relationship target points at a remote location.
-///
-/// Office writes `TargetMode="External"` attachedTemplate/oleObject/frame
-/// relationships for two very different reasons: a remote template-injection
-/// payload (`http://attacker/x.dotm`, `\\10.0.0.1\share\x.dotm`) — the
-/// CVE-2017-0199 vector — and the perfectly ordinary case of a document
-/// created from a *local* custom template, where Word records a
-/// `file:///C:\Users\me\AppData\Roaming\Microsoft\Templates\Report.dot`
-/// back-reference. Only the former is an attack; the discriminator is whether
-/// the target resolves off-host, so gate the hostile verdict on remoteness.
-fn target_is_remote(target: &str) -> bool {
-    let t = target.trim();
-    let lower = t.to_ascii_lowercase();
-    // Explicit network URL schemes.
-    if lower.starts_with("http://")
-        || lower.starts_with("https://")
-        || lower.starts_with("ftp://")
-        || lower.starts_with("ftps://")
-        || lower.starts_with("smb://")
-        || lower.starts_with("webdav://")
-    {
-        return true;
-    }
-    // UNC / authority-relative paths: \\host\share or //host/share. A `file:`
-    // scheme is excluded here and judged on its authority just below, so
-    // `file:///C:/...` and `file:///path` (empty authority) read as local.
-    if (t.starts_with("\\\\") || t.starts_with("//")) && !lower.starts_with("file:") {
-        return true;
-    }
-    // file://host/... — non-empty authority that isn't a drive letter or
-    // localhost is a remote host.
-    // strip_prefix already implies starts_with("file://").
-    if let Some(rest) = lower.strip_prefix("file://") {
-        // rest is "host/..." for remote, "" or "/path" / "localhost/" for local.
-        if !rest.is_empty() && !rest.starts_with('/') {
-            let host = rest.split(['/', '\\']).next().unwrap_or("");
-            let is_drive = host.len() == 2 && host.ends_with(':');
-            if !host.is_empty() && host != "localhost" && !is_drive {
-                return true;
-            }
-        }
-    }
-    false
-}
+/// The compound-file signature every OLE2 document starts with.
+const CFB_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
 
 /// Microsoft Office document analyzer.
 ///
@@ -127,175 +64,98 @@ impl OfficeAnalyzer {
         depth: u32,
         cancellation: Option<&Arc<std::sync::atomic::AtomicBool>>,
     ) -> AnalysisReport {
-        let mut hasher = Sha256::new();
-        hasher.update(data);
-        let sha256 = hex::encode(hasher.finalize());
+        let sha256 = hex::encode(Sha256::digest(data));
+        let office_ctx = crate::analysis_context::AnalysisContext::open(file_path, data);
+        let values = office_ctx.parsed.values();
+        let kind = values
+            .get("office.kind")
+            .and_then(serde_json::Value::as_str);
+        let is_ole2 = matches!(file_type, FileType::OleDoc | FileType::Msi);
+        // `office.kind` names the variant (`doc`, `xlsx`, `msg`, ...); the
+        // generic compound file is `ole`, the spelling file-type parsing
+        // knows, so container composites resolve against it.
+        let type_str = match kind {
+            Some("ole2") | None if is_ole2 => "ole",
+            Some(kind) => kind,
+            None if matches!(file_type, FileType::Ooxml) => "ooxml",
+            None => "unknown",
+        }
+        .to_string();
 
-        let office_ctx = Some(crate::analysis_context::AnalysisContext::open(
-            file_path, data,
-        ));
-        let office_archive_entries = if matches!(file_type, FileType::Ooxml) {
-            office_ctx
-                .as_ref()
-                .map(crate::analysis_context::AnalysisContext::archive_entries)
-                .unwrap_or_default()
+        // VBA module source is decompressed by filefacts.
+        let vba_modules = vba::modules_from_ctx(Some(&office_ctx));
+
+        // Payload bytes for sub-analysis. fileid routes some non-documents
+        // here by extension (Python's Tcl `msgs/*.msg` catalogs are text), so
+        // only a real compound file is opened.
+        let payloads = if is_ole2 && data.starts_with(&CFB_MAGIC) {
+            let located = located_payloads(values.get("office.embedded"));
+            ole2::extract_payloads(data, kind == Some("msg"), &located).unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "Failed to read OLE2 payloads");
+                ole2::Ole2Payloads::default()
+            })
         } else {
-            Vec::new()
+            ole2::Ole2Payloads::default()
         };
 
-        // VBA module source is decompressed by filefacts and read back
-        // from the shared parse opened above; the per-format parsers only
-        // flag macro presence (filefacts covers both OLE2 and OOXML).
-        let vba_modules = vba::modules_from_ctx(office_ctx.as_ref());
-
-        // Route to appropriate parser
-        let (
-            type_str,
-            findings,
-            embedded_execs,
-            msg_attachments,
-            ole_metrics,
-            ooxml_metrics,
-            xlm_metrics,
-            cross_counts,
-            values_tree,
-        ) = match file_type {
-            FileType::OleDoc | FileType::Msi => {
-                let (t, f, e, a, om, cc, kv) = self.analyze_ole2(data, &vba_modules);
-                (t, f, e, a, Some(om), None, None, cc, kv)
-            }
-            FileType::Ooxml => {
-                let (t, f, om, xm, cc, kv) =
-                    self.analyze_ooxml(data, file_path, &office_archive_entries, &vba_modules);
-                (t, f, Vec::new(), Vec::new(), None, om, xm, cc, kv)
-            }
-            _ => (
-                "unknown".to_string(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                None,
-                None,
-                None,
-                OfficeCrossCounts::default(),
-                serde_json::Value::Null,
-            ),
-        };
-
-        let target = TargetInfo {
+        let mut report = AnalysisReport::new(TargetInfo {
             path: file_path.display().to_string(),
             file_type: type_str,
             size_bytes: data.len() as u64,
             sha256,
             architectures: None,
-        };
-
-        let mut report = AnalysisReport::new(target);
+        });
         report
             .metadata
             .tools_used
             .push("office-analyzer".to_string());
-        report.findings.extend(findings);
 
         // Surface the filefacts string corpus on the report so `type: text`
-        // conditions can search container bytes. The office parsers never
-        // populated `report.strings`, leaving every text trait inert on
-        // Msi/OleDoc/Ooxml leaves — only `type: raw` could reach them.
-        report.strings = office_ctx
-            .as_ref()
-            .map(|ctx| crate::strings::StringExtractor::new().convert_stng_strings(ctx.text_rows()))
-            .unwrap_or_default();
+        // conditions can search container bytes.
+        report.strings =
+            crate::strings::StringExtractor::new().convert_stng_strings(office_ctx.text_rows());
 
-        // Stash the synthesized office values tree on the report so the
-        // value evaluator can consult it (`type: value path: summary.author`
-        // etc.). Empty/null trees are dropped so JSON output stays
-        // clean for non-office or unparsable files.
-        if !values_tree.is_null() && values_tree.as_object().is_none_or(|m| !m.is_empty()) {
-            report.values_tree = Some(Box::new(values_tree));
+        // VBA `Declare` imports, `CreateObject` ProgIDs and Sub/Function
+        // declarations, before the capability mapper runs, so `type: symbol`
+        // traits with `for: [oledoc, ooxml]` see them.
+        if !vba_modules.is_empty() {
+            report.imports.extend(office_ctx.imports_from_filefacts());
+            report
+                .functions
+                .extend(office_ctx.functions_from_filefacts());
         }
 
-        // Reuse the shared filefacts-side parse opened before structural parsing.
-
-        // Surface VBA-extracted imports/functions on the parent report
-        // BEFORE the capability mapper runs, so `type: symbol` traits with
-        // `for: [oledoc, ooxml]` see the Declare-imported APIs and
-        // CreateObject ProgIDs.  Aggregates land on `OfficeMetrics::vba`.
-        self.populate_vba_symbols_and_metrics(
-            &mut report,
-            file_path,
-            &vba_modules,
-            office_ctx.as_ref(),
-        );
-
-        // Emit OLE2 / OOXML / XLM structural sub-metrics under the
-        // flat `office.ole.*` / `office.ooxml.*` / `office.xlm.*`
-        // keys (post-#41, all metric resolution goes through filefacts's
-        // flat map — `filefacts_metrics`). Container-format-specific
-        // counts (stream count, zip entry count, content-type flags,
-        // XLM substring counts) come from the parsers; cross-format
-        // counts (embedded executable count, external relationship
-        // breakdown) are folded in here.
-        self.populate_structure_metrics(
-            &mut report,
-            ole_metrics,
-            ooxml_metrics,
-            xlm_metrics,
-            cross_counts,
-            embedded_execs
-                .iter()
-                .filter(|e| e.kind != ole2::EmbeddedExecKind::Cab)
-                .count() as u32,
-        );
-
-        // Analyze VBA modules as sub-files through the standard Vbs pipeline
         let doc_name = file_path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("document");
         let findings_before_subfiles = report.findings.len();
         self.analyze_vba_subfiles(&mut report, &vba_modules, doc_name, cancellation);
-
-        // Recursively analyze binary, cabinet, and script payloads in OLE2
-        // streams through their standard analyzers and merge findings upward.
-        let embedded_count = embedded_execs
-            .iter()
-            .filter(|e| e.kind != ole2::EmbeddedExecKind::Cab)
-            .count() as u32;
         self.analyze_embedded_executables(
             &mut report,
-            &embedded_execs,
+            &payloads.executables,
             doc_name,
             depth,
             cancellation,
         );
-
         // Outlook attachments -- the phishing payload of a .msg (HTML/SVG
         // smuggling pages, archives, shortcuts, documents) -- go through the
         // same type detection and analyzer dispatch as archive members, and
         // attach as `<msg>!!<filename>` with their findings lifted here.
         // An attached message recurses through this analyzer again.
-        for attachment in &msg_attachments {
+        for attachment in &payloads.msg_attachments {
             if cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Acquire)) {
                 break;
             }
             self.analyze_msg_attachment(&mut report, attachment, doc_name, depth, cancellation);
         }
 
-        // Surface count on the cross-format binary metric so ML/scoring can use it.
-        if embedded_count > 0 {
-            use crate::types::core::MetricsExt;
-            let flat = report
-                .filefacts_metrics
-                .get_or_insert_with(Default::default);
-            flat.set_u("binary.embedded_binaries", u64::from(embedded_count));
-        }
-
         // Delegate pattern detection to capability mapper (YAML traits + YARA),
-        // reusing the filefacts parse already opened for VBA symbols.
+        // reusing the filefacts parse already opened.
         self.engine.evaluate_and_merge_findings_with_precomputed(
             &mut report,
             data,
-            crate::capabilities::AnalysisBorrow::with_filefacts(None, office_ctx.as_ref()),
+            crate::capabilities::AnalysisBorrow::with_filefacts(None, Some(&office_ctx)),
             None,
             None,
             None,
@@ -318,8 +178,7 @@ impl OfficeAnalyzer {
             report.findings.extend(container_findings);
         }
 
-        // The office analyzer assembles its report in stages: `analyze_ole2` /
-        // `analyze_ooxml` findings, then the trait engine, then sub-file
+        // The report is assembled in stages: the trait engine, then sub-file
         // analysis, then container composites. A trait whose `unless:` names
         // something produced by a later stage was evaluated when that
         // suppressor did not exist yet, and nothing revisits it -- so
@@ -336,210 +195,6 @@ impl OfficeAnalyzer {
             .apply_retroactive_unless_suppression_to_findings(&mut report.findings, None);
 
         report
-    }
-
-    /// Pull `Declare`-imported APIs, `CreateObject`/`GetObject` ProgIDs,
-    /// and Sub/Function declarations from filefacts's typed views and
-    /// attach them to the parent report's `imports`/`functions` lists.
-    /// Folds aggregates into `OfficeMetrics::vba` and sets the cross-
-    /// format `office.*` flags (has_macros, vba_module_count,
-    /// vba_source_size, doc_type).
-    ///
-    /// The symbol surface flows entirely through
-    /// `AnalysisContext` — filefacts already
-    /// ran the regex extractor across every VBA module while building
-    /// the typed `Imports`/`Functions` views. Per-module shape stats
-    /// (logical lines, comments, random-name heuristic) stay
-    /// cleave-side because they aren't symbol extraction.
-    ///
-    /// Runs before the capability mapper so `type: symbol` traits keyed
-    /// on the document type fire on the populated symbol set.
-    fn populate_vba_symbols_and_metrics(
-        &self,
-        report: &mut AnalysisReport,
-        file_path: &Path,
-        modules: &[vba::VbaModule],
-        ctx: Option<&crate::analysis_context::AnalysisContext<'_>>,
-    ) {
-        // Seed the macro-enabled-extension flag regardless of whether
-        // VBA modules were recovered. Document format identity itself
-        // comes from filefacts (`office.kind`), so we don't duplicate it
-        // here.
-        use crate::types::{MetricsExt, flatten_into_metrics};
-        let flat = report
-            .filefacts_metrics
-            .get_or_insert_with(Default::default);
-        if flat.as_bool("office.is_macro_enabled_extension").is_none()
-            && let Some(ext) = file_path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(str::to_ascii_lowercase)
-        {
-            flat.set_b(
-                "office.is_macro_enabled_extension",
-                matches!(
-                    ext.as_str(),
-                    "docm"
-                        | "xlsm"
-                        | "pptm"
-                        | "dotm"
-                        | "xltm"
-                        | "potm"
-                        | "xla"
-                        | "xlam"
-                        | "xll"
-                        | "xlsb"
-                        | "ppam"
-                ),
-            );
-        }
-
-        if modules.is_empty() {
-            return;
-        }
-
-        flat.set_b("office.has_macros", true);
-        let prev_module_count = flat.as_u64("office.vba_module_count").unwrap_or(0);
-        flat.set_u(
-            "office.vba_module_count",
-            prev_module_count.saturating_add(modules.len() as u64),
-        );
-
-        let mut vba_source_size: u64 = 0;
-        let mut agg = crate::types::office_metrics::VbaMetrics::default();
-
-        // Per-module shape stats are NOT symbol extraction — keep
-        // them cleave-side. Logical lines, comments, and the
-        // random-named-module heuristic only need the raw module
-        // source plus the module name.
-        for module in modules {
-            vba_source_size = vba_source_size.saturating_add(module.source_code.len() as u64);
-            if vba_symbols::looks_random_module_name(&module.name) {
-                agg.random_named_module_count = agg.random_named_module_count.saturating_add(1);
-            }
-            let shape = vba_symbols::compute_module_shape(&module.source_code);
-            agg.total_logical_lines = agg.total_logical_lines.saturating_add(shape.logical_lines);
-            agg.comment_lines = agg.comment_lines.saturating_add(shape.comment_lines);
-        }
-
-        // Symbol surface comes from filefacts's typed views — one pass
-        // over each, filtered by the `vba-*` source-tag family.
-        // When ctx is unavailable (rare; only if filefacts fails to
-        // open the document), the symbol-driven aggregates stay at
-        // their defaults and the shape stats above are the only
-        // signal we surface.
-        if let Some(c) = ctx {
-            // Push VBA symbols into the report for trait matching. The VBA
-            // metrics (`office.vba.*`) are owned and emitted by filefacts —
-            // cleave reads them, it does not recompute them.
-            report.imports.extend(c.imports_from_filefacts());
-            report.functions.extend(c.functions_from_filefacts());
-
-            let m = c.parsed.metrics();
-            let counter = |key: &str| -> u32 { m.get(key).map(|v| v as u32).unwrap_or(0) };
-            agg.declare_count = counter("office.vba.declare_count");
-            agg.declare_non_literal_count = counter("office.vba.declare_non_literal_count");
-            agg.createobject_count = counter("office.vba.createobject_count");
-            agg.createobject_non_literal_count =
-                counter("office.vba.createobject_non_literal_count");
-            agg.getobject_count = counter("office.vba.getobject_count");
-            agg.getobject_non_literal_count = counter("office.vba.getobject_non_literal_count");
-            agg.trigger_handler_count = counter("office.vba.trigger_handler_count");
-            agg.distinct_trigger_count = counter("office.vba.distinct_trigger_count");
-            agg.mean_identifier_length =
-                m.get("office.vba.avg_identifier_length").unwrap_or(0.0) as f32;
-            agg.identifier_entropy = m.get("office.vba.identifier_entropy").unwrap_or(0.0) as f32;
-        }
-
-        let prev_source_size = flat.as_u64("office.vba_source_size").unwrap_or(0);
-        flat.set_u(
-            "office.vba_source_size",
-            prev_source_size.saturating_add(vba_source_size),
-        );
-        // Flatten the VbaMetrics aggregator into `office.vba.*`.
-        flatten_into_metrics(&agg, "office.vba", flat);
-    }
-
-    /// Emit structure-level metrics produced by `analyze_ole2` /
-    /// `analyze_ooxml` under flat `office.{ole,ooxml,xlm}.*` keys
-    /// (in `filefacts_metrics`) and fold cross-format counts
-    /// (`embedded_executable_count`, the external-relationship
-    /// breakdown, `dde_link_count`) into the per-file metric map.
-    ///
-    /// Called from `analyze_office` after the parser tuple unpacks,
-    /// before `capability_mapper.evaluate` runs so traits keyed on
-    /// `office.*` metrics resolve.
-    fn populate_structure_metrics(
-        &self,
-        report: &mut AnalysisReport,
-        ole_metrics: Option<OleMetrics>,
-        ooxml_metrics: Option<OoxmlMetrics>,
-        xlm_metrics: Option<XlmMetrics>,
-        cross: OfficeCrossCounts,
-        embedded_executable_count: u32,
-    ) {
-        use crate::types::{MetricsExt, flatten_into_metrics};
-        let flat = report
-            .filefacts_metrics
-            .get_or_insert_with(Default::default);
-
-        // Cross-format counts derived from the parsed doc.  The
-        // `embedded_executable_count` argument is what the office
-        // analyzer actually routed for sub-analysis (after MSI
-        // exemption / size limits), and overrides the raw doc count
-        // captured in `cross.embedded_executable_count` so the metric
-        // reflects the *analyzed* payload count.
-        let exec_count = if embedded_executable_count > 0 {
-            embedded_executable_count
-        } else {
-            cross.embedded_executable_count
-        };
-        if exec_count > 0 {
-            let prev = flat.as_u64("office.embedded_executable_count").unwrap_or(0) as u32;
-            flat.set_u(
-                "office.embedded_executable_count",
-                prev.saturating_add(exec_count).into(),
-            );
-        }
-        for (key, value) in [
-            ("office.external_ref_count", cross.external_ref_count),
-            (
-                "office.external_template_count",
-                cross.external_template_count,
-            ),
-            (
-                "office.external_oleobject_count",
-                cross.external_oleobject_count,
-            ),
-            ("office.external_frame_count", cross.external_frame_count),
-            ("office.external_image_count", cross.external_image_count),
-            ("office.dde_link_count", cross.dde_link_count),
-        ] {
-            if value > 0 {
-                let prev = flat.as_u64(key).unwrap_or(0) as u32;
-                flat.set_u(key, prev.saturating_add(value).into());
-            }
-        }
-        // Boolean is_encrypted ORs in across format passes — emit
-        // the count-style bool only when at least one side flagged it.
-        let already_encrypted = flat.as_bool("office.is_encrypted").unwrap_or(false);
-        if cross.is_encrypted || already_encrypted {
-            flat.set_b("office.is_encrypted", true);
-        }
-
-        // Flatten sub-struct typed carriers (ole/ooxml/xlm) directly
-        // into `office.<sub>.*` keys. Producers still build the
-        // typed structs internally; this is the seam where they
-        // collapse into the flat map.
-        if let Some(om) = ole_metrics {
-            flatten_into_metrics(&om, "office.ole", flat);
-        }
-        if let Some(om) = ooxml_metrics {
-            flatten_into_metrics(&om, "office.ooxml", flat);
-        }
-        if let Some(xm) = xlm_metrics {
-            flatten_into_metrics(&xm, "office.xlm", flat);
-        }
     }
 
     /// Analyze extracted VBA modules as sub-files through the standard pipeline.
@@ -764,809 +419,6 @@ impl OfficeAnalyzer {
             }
         }
     }
-
-    fn analyze_ole2(
-        &self,
-        data: &[u8],
-        vba_modules: &[vba::VbaModule],
-    ) -> (
-        String,
-        Vec<Finding>,
-        Vec<ole2::EmbeddedExecutable>,
-        Vec<ole2::MsgAttachment>,
-        OleMetrics,
-        OfficeCrossCounts,
-        serde_json::Value,
-    ) {
-        let mut findings = Vec::new();
-
-        // CFB magic. fileid routes by extension, so e.g. Python's Tcl
-        // `_tcl_data/msgs/*.msg` (plain-text message catalogs) lands here. Skip
-        // quietly when the bytes can't be a CFB document at all; only log when
-        // the magic matches but parsing still fails (a real malformed CFB).
-        const CFB_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
-        if !data.starts_with(&CFB_MAGIC) {
-            return (
-                "ole".to_string(),
-                findings,
-                Vec::new(),
-                Vec::new(),
-                OleMetrics::default(),
-                OfficeCrossCounts::default(),
-                serde_json::Value::Null,
-            );
-        }
-
-        let doc = match ole2::parse_ole2(data) {
-            Ok(doc) => doc,
-            Err(e) => {
-                tracing::warn!(error = %e, "Failed to parse OLE2 document");
-                return (
-                    "ole".to_string(),
-                    findings,
-                    Vec::new(),
-                    Vec::new(),
-                    OleMetrics::default(),
-                    OfficeCrossCounts::default(),
-                    serde_json::Value::Null,
-                );
-            }
-        };
-
-        let type_str = doc.doc_subtype.as_str().to_string();
-
-        // VBA presence — metadata finding
-        if doc.has_vba {
-            let module_count = vba_modules.len();
-            let module_names: Vec<&str> = vba_modules.iter().map(|m| m.name.as_str()).collect();
-
-            findings.push(Finding {
-                precomputed_spans: None,
-                src: None,
-                id: "metadata/format/macro::ole2-has-vba".to_string().into(),
-                kind: FindingKind::Structural,
-                desc: format!(
-                    "OLE2 document contains VBA macros ({module_count} modules: {})",
-                    module_names.join(", ")
-                )
-                .into(),
-                conf: 1.0,
-                // Notable, not suspicious. That a document carries VBA is a
-                // structural fact declared by the package itself -- a .docm or
-                // .xlsm is macro-enabled by definition -- and macro-bearing
-                // documents are ordinary enterprise content. `suspicious` is
-                // for hiding intent or crossing a boundary, which the mere
-                // presence of a module does not do, and because this finding
-                // is emitted here rather than by a trait, no `unless:` can
-                // moderate it: LibreOffice's own format test corpus
-                // (sw/qa/core/data/docm/, sc/qa/extras/testdocuments/) scored
-                // suspicious on dozens of fixtures whose entire purpose is to
-                // carry a macro for the importer to round-trip. The verdict
-                // belongs to the trait composites that look at what the macro
-                // does -- auto-exec entry points, shell, download, obfuscated
-                // identifiers -- which still fire alongside this.
-                crit: Criticality::Notable,
-                mbc: None,
-                attack: Some("T1059.005".into()),
-                trait_refs: vec![],
-                evidence: vec![],
-                match_count: 0,
-                source_file: None,
-                downgraded: false,
-            });
-        }
-
-        // Encryption → emitted by the YAML trait
-        // metadata/document/office/container::office-encrypted (office.is_encrypted).
-
-        // Embedded executables are structural evidence. MSI installers
-        // legitimately contain embedded PE DLLs as custom-action components,
-        // so skip the generic finding for them and rely on sub-analysis of the
-        // extracted payload for actual behavioral classification.
-        // The actual payload is also routed through analyze_embedded_executables
-        // for full sub-analysis; this finding is the structural marker.
-        let is_msi = doc.doc_subtype == ole2::Ole2Subtype::Msi;
-        for exec in &doc.embedded_executables {
-            if is_msi || exec.kind == ole2::EmbeddedExecKind::Cab {
-                // MSI custom-action DLLs are normal; the sub-analysis covers
-                // any actual malicious behavior in the embedded binary.
-                continue;
-            }
-            findings.push(Finding {
-                precomputed_spans: None,
-                src: None,
-                id: "objectives/command-and-control/dropper/payload::embedded-executable"
-                    .to_string()
-                    .into(),
-                kind: FindingKind::Indicator,
-                desc: format!(
-                    "Embedded {:?} payload in OLE2 stream: {} ({} bytes)",
-                    exec.kind,
-                    exec.stream_path,
-                    exec.data.len()
-                )
-                .into(),
-                conf: 0.95,
-                crit: Criticality::Notable,
-                mbc: None,
-                attack: Some("T1027.006".into()),
-                trait_refs: vec![],
-                evidence: vec![],
-                match_count: 0,
-                source_file: None,
-                downgraded: false,
-            });
-        }
-
-        // OLE10Native embedded objects — notable structural indicator
-        for obj in &doc.ole10_native_objects {
-            let desc = if let Some(ref fname) = obj.embedded_filename {
-                format!(
-                    "OLE10Native embedded object: {} ({} bytes) in {}",
-                    fname, obj.embedded_size, obj.stream_path
-                )
-            } else {
-                format!(
-                    "OLE10Native embedded object: {} bytes in {}",
-                    obj.embedded_size, obj.stream_path
-                )
-            };
-            findings.push(Finding {
-                precomputed_spans: None,
-                src: None,
-                id: "metadata/format/embedded::ole10-native-object"
-                    .to_string()
-                    .into(),
-                kind: FindingKind::Structural,
-                desc: desc.into(),
-                conf: 1.0,
-                crit: Criticality::Notable,
-                mbc: None,
-                attack: None,
-                trait_refs: vec![],
-                evidence: vec![],
-                match_count: 0,
-                source_file: None,
-                downgraded: false,
-            });
-        }
-
-        // Dangerous CLSIDs — suspicious structural indicator (known exploit vectors)
-        for clsid_match in &doc.dangerous_clsids {
-            findings.push(Finding {
-                precomputed_spans: None,
-                src: None,
-                id: "metadata/format/clsid::dangerous-clsid".to_string().into(),
-                kind: FindingKind::Structural,
-                desc: format!(
-                    "{} (CLSID: {}) on {}",
-                    clsid_match.description, clsid_match.clsid, clsid_match.storage_path
-                )
-                .into(),
-                conf: 1.0,
-                // `module_count` is only in scope inside the
-                // `if doc.has_vba` block above; for dangerous-CLSID
-                // findings we default to Suspicious.
-                crit: Criticality::Suspicious,
-                mbc: None,
-                attack: None,
-                trait_refs: vec![],
-                evidence: vec![],
-                match_count: 0,
-                source_file: None,
-                downgraded: false,
-            });
-        }
-
-        // Document metadata
-        add_metadata_findings(&doc.metadata, &mut findings);
-
-        // Read-only metric population.  Counts come straight off `doc`;
-        // CompObj parsing and SummaryInfo expansion (page_count,
-        // word_count, revision, edit_time, security_flag) land in a
-        // later sub-step.
-        let mut stream_count: u32 = 0;
-        let mut storage_count: u32 = 0;
-        for name in &doc.stream_names {
-            if name.ends_with('/') {
-                storage_count = storage_count.saturating_add(1);
-            } else {
-                stream_count = stream_count.saturating_add(1);
-            }
-        }
-        // `max_stream_size` is populated by the CompObj/SummaryInfo
-        // pass that has access to per-entry sizes — left at 0 here so
-        // the field stays empty in JSON until that pass lands.
-        let (compobj_user_type, compobj_clipboard_format, compobj_app_version) = doc
-            .compobj
-            .as_ref()
-            .map_or((String::new(), String::new(), String::new()), |c| {
-                (
-                    c.user_type.clone(),
-                    c.clipboard_format.clone(),
-                    c.app_version.clone(),
-                )
-            });
-        let ole_metrics = OleMetrics {
-            stream_count,
-            storage_count,
-            dangerous_clsid_count: doc.dangerous_clsids.len() as u32,
-            compobj_user_type,
-            compobj_clipboard_format,
-            compobj_app_version,
-            // SummaryInformation / DocumentSummaryInformation numerics.
-            // None values stay zero per `is_zero_*` skip rules so JSON
-            // output doesn't carry unset properties.
-            page_count: doc.metadata.page_count.unwrap_or(0),
-            word_count: doc.metadata.word_count.unwrap_or(0),
-            char_count: doc.metadata.char_count.unwrap_or(0),
-            revision_number: doc.metadata.revision_number.unwrap_or(0),
-            total_edit_time_minutes: doc.metadata.total_edit_time_minutes.unwrap_or(0),
-            security_flag: doc.metadata.security_flag.unwrap_or(0),
-            ..Default::default()
-        };
-
-        let cross = OfficeCrossCounts {
-            // OLE2 currently only surfaces embedded execs and OLE10Native
-            // through finding emission; cross-format counts mirror that
-            // for the metrics path so a `.doc` and `.docx` look uniform
-            // to downstream traits.
-            embedded_executable_count: doc
-                .embedded_executables
-                .iter()
-                .filter(|e| e.kind != ole2::EmbeddedExecKind::Cab)
-                .count() as u32,
-            is_encrypted: doc.has_encryption,
-            ..Default::default()
-        };
-
-        // Synthetic kv-tree population is retired — filefacts's
-        // `ole2::extract` populates `office.*` via the AnalysisContext
-        // dual-emit, and trait rules target the unified schema there
-        // (`office.kind`, `office.core.*`, `office.vba.modules[]`, …).
-        // We hand back `Value::Null` so the caller's `is_null` guard
-        // skips overwriting `report.values_tree`.
-        let kv = serde_json::Value::Null;
-
-        (
-            type_str,
-            findings,
-            doc.embedded_executables,
-            doc.msg_attachments,
-            ole_metrics,
-            cross,
-            kv,
-        )
-    }
-
-    fn analyze_ooxml(
-        &self,
-        data: &[u8],
-        file_path: &Path,
-        archive_entries: &[ArchiveEntry],
-        vba_modules: &[vba::VbaModule],
-    ) -> (
-        String,
-        Vec<Finding>,
-        Option<OoxmlMetrics>,
-        Option<XlmMetrics>,
-        OfficeCrossCounts,
-        serde_json::Value,
-    ) {
-        let mut findings = Vec::new();
-
-        let doc = match ooxml::parse_ooxml_with_archive_entries(data, archive_entries) {
-            Ok(doc) => doc,
-            Err(e) => {
-                tracing::warn!(error = %e, "Failed to parse OOXML document");
-                let ext = file_path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("ooxml");
-                return (
-                    ext.to_string(),
-                    findings,
-                    None,
-                    None,
-                    OfficeCrossCounts::default(),
-                    serde_json::Value::Null,
-                );
-            }
-        };
-
-        let type_str = doc.doc_subtype.as_str().to_string();
-
-        // VBA presence — metadata finding
-        let mut has_word_vba_doc = false;
-        if doc.has_vba {
-            let module_count = vba_modules.len();
-            let module_names: Vec<&str> = vba_modules.iter().map(|m| m.name.as_str()).collect();
-
-            findings.push(Finding {
-                precomputed_spans: None,
-                src: None,
-                id: "metadata/format/macro::ooxml-has-vba".to_string().into(),
-                kind: FindingKind::Structural,
-                desc: format!(
-                    "OOXML document contains VBA macros ({module_count} modules: {})",
-                    module_names.join(", ")
-                )
-                .into(),
-                conf: 1.0,
-                // Notable, not suspicious. That a document carries VBA is a
-                // structural fact declared by the package itself -- a .docm or
-                // .xlsm is macro-enabled by definition -- and macro-bearing
-                // documents are ordinary enterprise content. `suspicious` is
-                // for hiding intent or crossing a boundary, which the mere
-                // presence of a module does not do, and because this finding
-                // is emitted here rather than by a trait, no `unless:` can
-                // moderate it: LibreOffice's own format test corpus
-                // (sw/qa/core/data/docm/, sc/qa/extras/testdocuments/) scored
-                // suspicious on dozens of fixtures whose entire purpose is to
-                // carry a macro for the importer to round-trip. The verdict
-                // belongs to the trait composites that look at what the macro
-                // does -- auto-exec entry points, shell, download, obfuscated
-                // identifiers -- which still fire alongside this.
-                crit: Criticality::Notable,
-                mbc: None,
-                attack: Some("T1059.005".into()),
-                trait_refs: vec![],
-                evidence: vec![],
-                match_count: 0,
-                source_file: None,
-                downgraded: false,
-            });
-
-            if doc.doc_subtype == ooxml::OoxmlSubtype::Word {
-                has_word_vba_doc = true;
-                findings.push(Finding {
-                    precomputed_spans: None,
-                    src: None,
-                    id: "metadata/document/office/markup::ooxml-word-vba-document"
-                        .to_string()
-                        .into(),
-                    kind: FindingKind::Structural,
-                    desc: "OOXML Word VBA document".to_string().into(),
-                    conf: 0.99,
-                    crit: Criticality::Baseline,
-                    mbc: None,
-                    attack: None,
-                    trait_refs: vec![],
-                    evidence: vec![],
-                    match_count: 0,
-                    source_file: None,
-                    downgraded: false,
-                });
-            }
-        }
-
-        let vba_surface = if vba_modules.is_empty() {
-            doc.vba_project_strings.join("\n")
-        } else {
-            vba_modules
-                .iter()
-                .map(|m| m.source_code.as_str())
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
-        let word_xml = doc.word_document_xml.as_deref().unwrap_or("");
-        let content_types_xml = doc.content_types_xml.as_deref().unwrap_or("");
-        let workbook_xml = doc.workbook_xml.as_deref().unwrap_or("");
-        let excel_macrosheet_xml = doc.excel_macrosheet_xml.as_deref().unwrap_or("");
-        let raw_surface = String::from_utf8_lossy(data);
-
-        // XLM (Excel 4.0 macro) substring counts, exposed as `office.xlm.*`
-        // metrics for traits.
-        let xlm_formula_fill = excel_macrosheet_xml.matches("FORMULA.FILL").count();
-        let xlm_run = excel_macrosheet_xml.matches("RUN(").count();
-        let xlm_char = excel_macrosheet_xml.matches("CHAR(").count();
-        let xlm_get_cell = excel_macrosheet_xml.matches("GET.CELL(").count();
-        let xlm_day_now = excel_macrosheet_xml.matches("DAY(NOW())").count();
-        let xlm_exec = excel_macrosheet_xml.matches("EXEC(").count();
-        let xlm_register = excel_macrosheet_xml.matches("REGISTER(").count();
-        let xlm_call = excel_macrosheet_xml.matches("CALL(").count();
-        let xlm_very_hidden = workbook_xml.matches("state=\"veryHidden\"").count();
-        let xlm_auto_open = workbook_xml.matches("_xlnm.Auto_open").count();
-
-        let mut has_concealed_script = false;
-        if !word_xml.is_empty() {
-            let white_count = word_xml
-                .matches("w:color w:val=\"FFFFFF\" w:themeColor=\"background1\"")
-                .count();
-            let bracket_count = word_xml.matches("indexOf('[')").count();
-            let has_function = static_regex!(r"function\s+[A-Za-z_][A-Za-z0-9_]{3,}\s*\(")
-                .is_some_and(|re| re.is_match(word_xml));
-            let has_charcode_builder =
-                static_regex!(r"String\[[^\]]{1,40}\['Char'\]\+\['Code'\]\]")
-                    .is_some_and(|re| re.is_match(word_xml));
-            if white_count >= 20 && has_function && (bracket_count >= 20 || has_charcode_builder) {
-                // The concealed-wordprocessingml-script finding is now
-                // emitted by the composite in
-                // `objectives/anti-static/obfuscation/document/office-wordprocessingml.yaml`,
-                // which combines white-on-white-runs / bracket-probe /
-                // charcode-builder atomics on the same evidence
-                // surface. The local boolean stays so the inline
-                // TrickBot composite below can still consume it.
-                has_concealed_script = true;
-            }
-        }
-
-        let mut has_lifecycle_mix = false;
-        let mut has_callbyname = false;
-        let mut has_createobject = false;
-        let mut has_open_for_output = false;
-        let mut has_accept_conflict = false;
-        if !vba_surface.is_empty() {
-            let has_open = vba_surface.contains("Document_Open");
-            let has_new = vba_surface.contains("Document_New");
-            let has_close = vba_surface.contains("Document_Close");
-            if has_open && has_new && has_close {
-                // The lifecycle-mix finding itself is now emitted by the
-                // composite in `compat_missing.yaml` (three symbol-typed
-                // atomics). The local boolean stays so the inline
-                // TrickBot composite below can still factor lifecycle
-                // mix into its behavior count.
-                has_lifecycle_mix = true;
-            }
-            // The callbyname-call / createobject-call-universal /
-            // vba-open-for-output finding emits below previously lived
-            // here as inline pushes; they're now handled by the trait
-            // base (char-code/vba.yaml, shell/lang/office-vba-ooxml.yaml,
-            // fs/write/vba/traits.yaml). Local booleans stay so the
-            // inline TrickBot composite below can still consume them.
-            if vba_surface.contains("CallByName") {
-                has_callbyname = true;
-            }
-            if vba_surface.contains("CreateObject") {
-                has_createobject = true;
-            }
-            if static_regex!(r"Open.{0,80}For O ?utput").is_some_and(|re| re.is_match(&vba_surface))
-            {
-                has_open_for_output = true;
-            }
-            if vba_surface.contains("AcceptConflictAndAdvance") {
-                has_accept_conflict = true;
-                findings.push(Finding {
-                    precomputed_spans: None,
-                    src: None,
-                    id: "well-known/malware/trojan/trickbot::accept-conflict-and-advance-marker"
-                        .to_string()
-                        .into(),
-                    kind: FindingKind::Indicator,
-                    desc: "AcceptConflictAndAdvance marker".to_string().into(),
-                    conf: 0.99,
-                    crit: Criticality::Component,
-                    mbc: None,
-                    attack: None,
-                    trait_refs: vec![],
-                    evidence: vec![],
-                    match_count: 0,
-                    source_file: None,
-                    downgraded: false,
-                });
-            }
-        }
-
-        let ip_re = static_regex!(r"\b(?:\d{1,3}\.){3}\d{1,3}:\d{2,5}\b");
-        let mut endpoints = BTreeSet::new();
-        if let Some(re) = ip_re {
-            for text in [word_xml, vba_surface.as_str(), raw_surface.as_ref()] {
-                if self
-                    .cancellation
-                    .as_ref()
-                    .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
-                {
-                    break;
-                }
-                for m in re.find_iter(text) {
-                    endpoints.insert(m.as_str().to_string());
-                }
-            }
-        }
-        let has_ip_list = endpoints.len() >= 3;
-        if endpoints.len() >= 3 {
-            findings.push(Finding {
-                precomputed_spans: None,
-                src: None,
-                id:
-                    "objectives/command-and-control/infrastructure/ip::hardcoded-ipv4-port-list-any"
-                        .to_string()
-                        .into(),
-                kind: FindingKind::Indicator,
-                desc: format!(
-                    "Multiple hardcoded external IPv4 endpoints ({})",
-                    endpoints.len()
-                )
-                .into(),
-                conf: 0.9,
-                crit: Criticality::Suspicious,
-                mbc: Some("B0030".into()),
-                attack: Some("T1071.001".into()),
-                trait_refs: vec![],
-                evidence: vec![],
-                match_count: endpoints.len(),
-                source_file: None,
-                downgraded: false,
-            });
-        }
-
-        let behavior_count = [
-            has_lifecycle_mix,
-            has_callbyname,
-            has_open_for_output,
-            has_createobject,
-        ]
-        .into_iter()
-        .filter(|b| *b)
-        .count();
-        if has_word_vba_doc
-            && has_concealed_script
-            && has_ip_list
-            && has_accept_conflict
-            && behavior_count >= 2
-        {
-            findings.push(Finding {
-                precomputed_spans: None,
-                src: None,
-                id: "well-known/malware/trojan/trickbot::concealed-word-vba-loader"
-                    .to_string()
-                    .into(),
-                kind: FindingKind::Indicator,
-                desc: "TrickBot concealed Word VBA loader".to_string().into(),
-                conf: 0.995,
-                crit: Criticality::Hostile,
-                mbc: None,
-                attack: Some("T1204.002".into()),
-                trait_refs: vec![],
-                evidence: vec![],
-                match_count: 0,
-                source_file: None,
-                downgraded: false,
-            });
-        }
-
-        // External template references — objective (template injection attack)
-        for ext_ref in &doc.external_refs {
-            // Skip hyperlinks — normal in documents, not a template injection vector
-            if ext_ref.rel_type.contains("hyperlink") {
-                continue;
-            }
-
-            // A chart part links the workbook it plots through an oleObject
-            // relationship, and when that workbook lives on SharePoint or
-            // OneDrive the target is an ordinary https URL. That is the most
-            // common linked-chart shape in enterprise decks -- LibreOffice
-            // even ships one as chart2 import test data. The CVE-2017-0199
-            // oleObject vector is declared from the *document* body's rels,
-            // not from a chart's, so let the chart case fall through to the
-            // remote-but-not-a-template tier below.
-            let chart_data_link =
-                ext_ref.rel_type.contains("oleObject") && ext_ref.source.contains("/charts/");
-            let is_template = ext_ref.rel_type.contains("attachedTemplate")
-                || (ext_ref.rel_type.contains("oleObject") && !chart_data_link)
-                || ext_ref.rel_type.contains("frame");
-            // A template/oleObject/frame ref is only an injection vector when it
-            // fetches from a remote host. A local-template back-reference
-            // (file:///C:\Users\…\Templates\X.dot) is what Word writes for every
-            // document built from a custom template — notable, not hostile.
-            let remote = target_is_remote(&ext_ref.target);
-            let crit = match (is_template, remote) {
-                (true, true) => Criticality::Hostile,
-                (false, true) => Criticality::Suspicious,
-                // Local target: surface it, but it does not indicate an attack.
-                (_, false) => Criticality::Notable,
-            };
-
-            findings.push(Finding {
-                precomputed_spans: None,
-                src: None,
-                id: "objectives/execution/interpreter::template-injection"
-                    .to_string()
-                    .into(),
-                kind: FindingKind::Indicator,
-                desc: format!(
-                    "External reference in {}: {} (type: {})",
-                    ext_ref.source,
-                    ext_ref.target,
-                    ext_ref
-                        .rel_type
-                        .rsplit('/')
-                        .next()
-                        .unwrap_or(&ext_ref.rel_type)
-                )
-                .into(),
-                conf: 0.9,
-                crit,
-                mbc: None,
-                attack: Some("T1221".into()),
-                trait_refs: vec![],
-                evidence: vec![],
-                match_count: 0,
-                source_file: None,
-                downgraded: false,
-            });
-        }
-
-        // DDE links — objective (execution via DDE)
-        for dde in &doc.dde_links {
-            findings.push(Finding {
-                precomputed_spans: None,
-                src: None,
-                id: "objectives/execution/interpreter::dde-execution"
-                    .to_string()
-                    .into(),
-                kind: FindingKind::Indicator,
-                desc: format!("DDE field code detected: {dde}").into(),
-                conf: 0.85,
-                crit: Criticality::Hostile,
-                mbc: None,
-                attack: Some("T1559.002".into()),
-                trait_refs: vec![],
-                evidence: vec![],
-                match_count: 0,
-                source_file: None,
-                downgraded: false,
-            });
-        }
-
-        // Embedded executables are structural evidence. Malicious delivery intent
-        // needs loader or execution behavior from companion traits.
-        for entry in &doc.embedded_executables {
-            findings.push(Finding {
-                precomputed_spans: None,
-                src: None,
-                id: "objectives/command-and-control/dropper/payload::embedded-executable"
-                    .to_string()
-                    .into(),
-                kind: FindingKind::Indicator,
-                desc: format!("Embedded executable in OOXML entry: {entry}").into(),
-                conf: 0.95,
-                crit: Criticality::Notable,
-                mbc: None,
-                attack: Some("T1027.006".into()),
-                trait_refs: vec![],
-                evidence: vec![],
-                match_count: 0,
-                source_file: None,
-                downgraded: false,
-            });
-        }
-
-        // Encryption → emitted by the YAML trait
-        // metadata/document/office/container::office-encrypted (office.is_encrypted).
-
-        // ZIP topology and content-type flag metric population.
-        let suspicious_exts = ["exe", "dll", "hta", "lnk", "bat", "js", "scr", "vbs"];
-        let mut suspicious_extension_count: u32 = 0;
-        for name in &doc.entry_names {
-            if let Some(ext) = name.rsplit('.').next()
-                && suspicious_exts.iter().any(|s| ext.eq_ignore_ascii_case(s))
-            {
-                suspicious_extension_count = suspicious_extension_count.saturating_add(1);
-            }
-        }
-        let image_part_count = doc
-            .entry_names
-            .iter()
-            .filter(|n| {
-                n.starts_with("ppt/media/")
-                    || n.starts_with("word/media/")
-                    || n.starts_with("xl/media/")
-            })
-            .count() as u32;
-        let embedded_part_count = doc
-            .entry_names
-            .iter()
-            .filter(|n| n.contains("/embeddings/") && n.ends_with(".bin"))
-            .count() as u32;
-        let ooxml_metrics = OoxmlMetrics {
-            entry_count: doc.entry_names.len() as u32,
-            max_entry_size: doc.max_entry_size,
-            image_part_count,
-            embedded_part_count,
-            suspicious_extension_count,
-            declares_macro_enabled: content_types_xml
-                .contains("application/vnd.ms-word.document.macroEnabled")
-                || content_types_xml.contains("application/vnd.ms-excel.sheet.macroEnabled")
-                || content_types_xml
-                    .contains("application/vnd.ms-powerpoint.presentation.macroEnabled"),
-            declares_vba_project: content_types_xml
-                .contains("application/vnd.ms-office.vbaProject"),
-            declares_macrosheet: content_types_xml
-                .contains("application/vnd.ms-excel.macrosheet+xml")
-                || content_types_xml.contains("application/vnd.ms-excel.intlmacrosheet"),
-            // word/vbaProject.bin = Word doc with VBA macros.
-            is_word_vba_document: doc.entry_names.iter().any(|n| n == "word/vbaProject.bin"),
-            // Template-injection: any external ref that targets an
-            // attached-template / oleObject / frame relationship.
-            has_template_injection: doc.external_refs.iter().any(|r| {
-                !r.rel_type.contains("hyperlink")
-                    && (r.rel_type.contains("attachedTemplate")
-                        || r.rel_type.contains("oleObject")
-                        || r.rel_type.contains("frame"))
-                    && target_is_remote(&r.target)
-            }),
-            // DDE execution: any DDE field code observed.
-            has_dde_execution: !doc.dde_links.is_empty(),
-        };
-
-        // XLM count vector — only emitted when the doc is actually
-        // an Excel workbook *and* at least one count is non-zero, so
-        // benign .docx/.pptx files don't carry an empty `office.xlm`
-        // sub-object.
-        let xlm_metrics = if doc.doc_subtype == ooxml::OoxmlSubtype::Excel
-            && (xlm_formula_fill
-                | xlm_run
-                | xlm_char
-                | xlm_get_cell
-                | xlm_day_now
-                | xlm_exec
-                | xlm_register
-                | xlm_call
-                | xlm_very_hidden
-                | xlm_auto_open)
-                != 0
-        {
-            Some(XlmMetrics {
-                formula_fill_count: xlm_formula_fill as u32,
-                run_count: xlm_run as u32,
-                char_count: xlm_char as u32,
-                get_cell_count: xlm_get_cell as u32,
-                day_now_count: xlm_day_now as u32,
-                exec_count: xlm_exec as u32,
-                register_count: xlm_register as u32,
-                call_count: xlm_call as u32,
-                very_hidden_sheet_count: xlm_very_hidden as u32,
-                auto_open_name_count: xlm_auto_open as u32,
-            })
-        } else {
-            None
-        };
-
-        // External-relationship breakdown for the cross-format
-        // OfficeMetrics fields. Each rel_type is counted separately so
-        // a trait keyed on `office.external_template_count` fires
-        // independently of `office.external_image_count`.
-        let mut cross = OfficeCrossCounts::default();
-        for ext_ref in &doc.external_refs {
-            cross.external_ref_count = cross.external_ref_count.saturating_add(1);
-            // The template/oleObject/frame counts feed injection-vector traits
-            // (CVE-2017-0199 et al.), which only matter for remote targets. A
-            // local-template back-reference is benign, so it must not inflate
-            // these counts. Image refs stay a raw total (tracking-pixel signal).
-            let remote = target_is_remote(&ext_ref.target);
-            if remote && ext_ref.rel_type.contains("attachedTemplate") {
-                cross.external_template_count = cross.external_template_count.saturating_add(1);
-            }
-            if remote && ext_ref.rel_type.contains("oleObject") {
-                cross.external_oleobject_count = cross.external_oleobject_count.saturating_add(1);
-            }
-            if remote
-                && (ext_ref.rel_type.contains("frame") || ext_ref.rel_type.contains("subDocument"))
-            {
-                cross.external_frame_count = cross.external_frame_count.saturating_add(1);
-            }
-            if ext_ref.rel_type.contains("image") {
-                cross.external_image_count = cross.external_image_count.saturating_add(1);
-            }
-        }
-        cross.dde_link_count = doc.dde_links.len() as u32;
-        cross.embedded_executable_count = doc.embedded_executables.len() as u32;
-        cross.is_encrypted = doc.has_encryption;
-
-        // See OLE2 path: synthetic kv emission is retired (filefacts's
-        // `ooxml::extract` populates the canonical `office.*` shape).
-        let kv = serde_json::Value::Null;
-
-        (
-            type_str,
-            findings,
-            Some(ooxml_metrics),
-            xlm_metrics,
-            cross,
-            kv,
-        )
-    }
 }
 
 impl Default for OfficeAnalyzer {
@@ -1594,44 +446,34 @@ impl Analyzer for OfficeAnalyzer {
     }
 }
 
-/// Add metadata-based findings for OLE2 documents.
-fn add_metadata_findings(meta: &ole2::DocumentMetadata, findings: &mut Vec<Finding>) {
-    let mut meta_parts = Vec::new();
-    if let Some(ref title) = meta.title {
-        meta_parts.push(format!("title: {title}"));
-    }
-    if let Some(ref author) = meta.author {
-        meta_parts.push(format!("author: {author}"));
-    }
-    if let Some(ref app) = meta.application {
-        meta_parts.push(format!("app: {app}"));
-    }
-    if let Some(ref last) = meta.last_author {
-        meta_parts.push(format!("last_author: {last}"));
-    }
-
-    if !meta_parts.is_empty() {
-        findings.push(Finding {
-            precomputed_spans: None,
-            src: None,
-            id: "metadata/format/properties::doc-properties"
-                .to_string()
-                .into(),
-            kind: FindingKind::Structural,
-            desc: format!("Document metadata: {}", meta_parts.join(", ")).into(),
-            conf: 1.0,
-            crit: Criticality::Baseline,
-            mbc: None,
-            attack: None,
-            trait_refs: vec![],
-            evidence: vec![],
-            match_count: 0,
-            source_file: None,
-            downgraded: false,
-        });
-    }
+/// The executable payloads filefacts located inside streams: the
+/// `office.embedded[]` entries that carry a `data_offset` (OLE1 Packager
+/// objects) and a native-executable `kind`.
+fn located_payloads(embedded: Option<&serde_json::Value>) -> Vec<ole2::LocatedPayload> {
+    embedded
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let kind = match entry.get("kind")?.as_str()? {
+                "pe" => ole2::EmbeddedExecKind::Pe,
+                "elf" => ole2::EmbeddedExecKind::Elf,
+                _ => return None,
+            };
+            Some(ole2::LocatedPayload {
+                stream: entry.get("stream")?.as_str()?.to_string(),
+                filename: entry
+                    .get("filename")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                offset: entry.get("data_offset")?.as_u64()?,
+                size: entry.get("size_bytes")?.as_u64()?,
+                kind,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests;

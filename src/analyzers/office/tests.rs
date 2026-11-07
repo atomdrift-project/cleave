@@ -55,165 +55,48 @@ fn msg_attachments_attach_as_named_members() {
     );
 }
 
+/// An executable an OLE1 Packager object wraps is carved at the offset
+/// filefacts reports and analyzed as a member of the document.
 #[test]
-fn template_target_remoteness() {
-    // Remote injection vectors.
-    assert!(target_is_remote("http://attacker.example/x.dotm"));
-    assert!(target_is_remote("HTTPS://Attacker.example/x.dotm"));
-    assert!(target_is_remote("\\\\10.0.0.1\\share\\x.dotm"));
-    assert!(target_is_remote("//host/share/x.dotm"));
-    assert!(target_is_remote("file://server/share/x.dot"));
-    // Benign local-template back-references and in-package paths.
-    assert!(!target_is_remote(
-        "file:///C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Templates\\Report.dot"
-    ));
-    assert!(!target_is_remote(
-        "file://localhost/Users/me/Templates/Report.dot"
-    ));
-    assert!(!target_is_remote("C:\\Users\\me\\Templates\\Report.dot"));
-    assert!(!target_is_remote("../templates/base.dotx"));
-    assert!(!target_is_remote("Normal.dotm"));
-}
-
-/// Per-module shape stats (logical-line count, random-name
-/// heuristic) thread through `populate_vba_symbols_and_metrics`
-/// even when no `AnalysisContext` is provided — symbol-side
-/// aggregates require filefacts, but the shape side is cleave-only
-/// and runs from raw module source.
-#[test]
-fn populate_vba_threads_shape_stats_without_ctx() {
-    let analyzer = OfficeAnalyzer::new();
-    let target = TargetInfo {
-        path: "evil.docm".into(),
-        file_type: "docm".into(),
-        size_bytes: 4096,
-        sha256: "0".repeat(64),
-        architectures: None,
-    };
-    let mut report = AnalysisReport::new(target);
-
-    let modules = vec![
-        vba::VbaModule {
-            name: "ThisDocument".into(),
-            source_code: "Sub Document_Open()\n  ' comment\n  x = 1\nEnd Sub\n".into(),
-        },
-        vba::VbaModule {
-            name: "qWeRty12Ab".into(), // matches random-name heuristic
-            source_code: "Sub Helper()\n  y = 2\nEnd Sub\n".into(),
-        },
-    ];
-
-    // No AnalysisContext — symbol-side aggregates stay default
-    // but the shape pass still runs.
-    analyzer.populate_vba_symbols_and_metrics(&mut report, Path::new("evil.docm"), &modules, None);
-
-    use crate::types::MetricsExt;
-    let flat = report
-        .filefacts_metrics
-        .as_ref()
-        .expect("filefacts_metrics populated");
-    assert_eq!(
-        flat.as_bool("office.is_macro_enabled_extension"),
-        Some(true)
-    );
-    assert_eq!(flat.as_bool("office.has_macros"), Some(true));
-    assert_eq!(flat.as_u64("office.vba_module_count"), Some(2));
-
-    assert!(flat.as_u64("office.vba.total_logical_lines").unwrap_or(0) >= 6);
-    assert!(flat.as_u64("office.vba.comment_lines").unwrap_or(0) >= 1);
-    assert_eq!(
-        flat.as_u64("office.vba.random_named_module_count"),
-        Some(1),
-        "qWeRty12Ab should match the random-name heuristic",
-    );
-}
-
-/// Verify `populate_structure_metrics` threads sub-struct metrics
-/// and cross-format counts onto the flat `office.*` keys in
-/// `filefacts_metrics`.
-#[test]
-fn populate_structure_metrics_wires_subobjects_and_cross_counts() {
-    let analyzer = OfficeAnalyzer::new();
-    let target = TargetInfo {
-        path: "evil.docx".into(),
-        file_type: "docx".into(),
-        size_bytes: 1024,
-        sha256: "0".repeat(64),
-        architectures: None,
-    };
-    let mut report = AnalysisReport::new(target);
-
-    let cross = OfficeCrossCounts {
-        embedded_executable_count: 0,
-        external_ref_count: 4,
-        external_template_count: 1,
-        external_oleobject_count: 1,
-        external_frame_count: 1,
-        external_image_count: 1,
-        dde_link_count: 2,
-        is_encrypted: true,
-    };
-    let xlm = XlmMetrics {
-        char_count: 250,
-        ..Default::default()
-    };
-    let ooxml = OoxmlMetrics {
-        entry_count: 18,
-        declares_macro_enabled: true,
-        ..Default::default()
-    };
-    let ole = OleMetrics {
-        stream_count: 9,
-        dangerous_clsid_count: 1,
-        ..Default::default()
-    };
-
-    analyzer.populate_structure_metrics(
-        &mut report,
-        Some(ole.clone()),
-        Some(ooxml.clone()),
-        Some(xlm.clone()),
-        cross,
-        /* embedded_executable_count = */ 2,
-    );
-
-    use crate::types::MetricsExt;
-    let flat = report
-        .filefacts_metrics
-        .as_ref()
-        .expect("filefacts_metrics populated");
-    assert_eq!(flat.as_u64("office.embedded_executable_count"), Some(2));
-    assert_eq!(flat.as_u64("office.external_ref_count"), Some(4));
-    assert_eq!(flat.as_u64("office.external_template_count"), Some(1));
-    assert_eq!(flat.as_u64("office.external_oleobject_count"), Some(1));
-    assert_eq!(flat.as_u64("office.external_frame_count"), Some(1));
-    assert_eq!(flat.as_u64("office.external_image_count"), Some(1));
-    assert_eq!(flat.as_u64("office.dde_link_count"), Some(2));
-    assert_eq!(flat.as_bool("office.is_encrypted"), Some(true));
-    // Sub-struct fields flattened into dotted keys.
-    assert_eq!(flat.as_u64("office.ole.stream_count"), Some(9));
-    assert_eq!(flat.as_u64("office.ooxml.entry_count"), Some(18));
-    assert_eq!(flat.as_u64("office.xlm.char_count"), Some(250));
-}
-
-#[test]
-fn test_finding_ids_follow_taxonomy() {
-    // Verify all finding IDs use the taxonomy :: separator format
-    let ids = [
-        "metadata/format/macro::ole2-has-vba",
-        "metadata/format/macro::ooxml-has-vba",
-        "metadata/format/properties::doc-properties",
-        "objectives/execution/interpreter::template-injection",
-        "objectives/execution/interpreter::dde-execution",
-        "objectives/command-and-control/dropper/payload::embedded-executable",
-    ];
-    for id in &ids {
-        assert!(id.contains("::"), "Finding ID missing :: separator: {id}");
-        assert!(
-            id.starts_with("metadata/")
-                || id.starts_with("objectives/")
-                || id.starts_with("micro-behaviors/"),
-            "Finding ID not in taxonomy tier: {id}"
-        );
+fn packaged_executables_are_analyzed_as_members() {
+    use ole2::tests::build_cfb;
+    let mut pe = vec![0u8; 2048];
+    pe[..2].copy_from_slice(b"MZ");
+    pe[0x3C] = 0x80;
+    pe[0x80..0x84].copy_from_slice(b"PE\0\0");
+    let mut body = 2_u16.to_le_bytes().to_vec();
+    for s in ["payload.exe", "C:\\Users\\Public\\payload.exe"] {
+        body.extend_from_slice(s.as_bytes());
+        body.push(0);
     }
+    body.extend_from_slice(&[0, 0, 3, 0]);
+    let temp = b"C:\\Temp\\payload.exe\0";
+    body.extend_from_slice(&(temp.len() as u32).to_le_bytes());
+    body.extend_from_slice(temp);
+    body.extend_from_slice(&(pe.len() as u32).to_le_bytes());
+    body.extend_from_slice(&pe);
+    let mut native = (body.len() as u32).to_le_bytes().to_vec();
+    native.extend_from_slice(&body);
+    let doc = build_cfb(&[
+        ("/WordDocument", &[0xEC, 0xA5, 0xC1, 0x00]),
+        ("/ObjectPool/_1000/\u{1}Ole10Native", &native),
+    ]);
+
+    let report = OfficeAnalyzer::new().analyze_office(
+        Path::new("/samples/invoice.doc"),
+        &doc,
+        &FileType::OleDoc,
+        0,
+        None,
+    );
+    assert_eq!(report.target.file_type, "doc");
+    let files: Vec<(&str, &str)> = report
+        .files
+        .iter()
+        .map(|f| (f.path.as_str(), f.file_type.as_str()))
+        .collect();
+    assert!(
+        files.contains(&("invoice.doc!!ole/ObjectPool__1000_payload.exe", "pe")),
+        "packaged payload missing: {files:?}"
+    );
 }

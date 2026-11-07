@@ -12,10 +12,6 @@ pub(crate) fn is_zero_u32(n: &u32) -> bool {
     *n == 0
 }
 
-pub(crate) fn is_zero_u64(n: &u64) -> bool {
-    *n == 0
-}
-
 pub(crate) fn is_zero_f32(n: &f32) -> bool {
     *n == 0.0
 }
@@ -44,7 +40,6 @@ pub mod istr;
 // pdf_metrics, text_metrics, language_metrics.
 pub(crate) mod byte_text;
 pub(crate) mod ml_features;
-pub(crate) mod office_metrics;
 pub(crate) mod paths_env;
 pub(crate) mod reference_graph;
 pub(crate) mod scores;
@@ -59,7 +54,7 @@ pub use compact::{
 };
 pub use core::{
     AnalysisReport, ArchiveEntry, Criticality, ExtractedPayload, MetricsExt, TargetInfo,
-    flatten_into_metrics, kv_set_path,
+    kv_set_path,
 };
 pub use istr::Istr;
 

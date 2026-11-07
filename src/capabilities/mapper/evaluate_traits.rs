@@ -1080,9 +1080,20 @@ impl super::CapabilityMapper {
         let is_structured_manifest =
             crate::composite_rules::evaluators::kv::structured_format_from_file_type(&file_type)
                 != crate::composite_rules::evaluators::kv::StructuredFormat::Unknown;
+        // On raw-text formats `type: text` searches the file's own bytes, and
+        // the raw-source string index above only runs on files of 16 KiB or
+        // more, so its emptiness says nothing here. A comment-only source file
+        // has no strings, imports or symbols, yet its text is exactly what
+        // text rules read. Short-circuiting it dropped those matches, but only
+        // for rules without trait dependencies: the dependent pass and
+        // `test-rules` never short-circuit, so a rule's verdict flipped with
+        // an unrelated `unless:` entry.
+        let has_raw_text = file_type.uses_raw_text_search_for(binary_data)
+            && binary_data.iter().any(|b| !b.is_ascii_whitespace());
         if !dependent_only
             && !has_any_matches
             && !has_strings
+            && !has_raw_text
             && !inline_yara.is_some_and(|results| results.values().any(|e| !e.is_empty()))
             && !is_structured_manifest
             // The follow phase has retained facts but no source bytes. Its

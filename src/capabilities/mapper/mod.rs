@@ -26,6 +26,8 @@ use std::sync::{Arc, OnceLock};
 
 #[cfg(test)]
 mod compiled_text_tests;
+#[cfg(test)]
+mod tiny_text_tests;
 
 use crate::capabilities::indexes::{
     RawContentRegexIndex, StringMatchIndex, SymbolMatchIndex, TraitIndex,

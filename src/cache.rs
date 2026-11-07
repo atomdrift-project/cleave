@@ -98,7 +98,7 @@ pub fn skip_cache() -> bool {
 /// and is NOT skipped by `CLEAVE_SKIP_CACHE` — tests that want fresh per-file
 /// analysis still benefit from reusing the compiled trait set.
 ///
-/// Also gates the stat-verified traits-tree index ([`indexed_scan`]).
+/// Also gates the stat-verified traits-tree index (`indexed_scan`).
 ///
 /// - `CLEAVE_SKIP_MAPPER_CACHE=1` / `true` → skip
 /// - Env var unset                         → don't skip (always use the cache)
@@ -749,7 +749,11 @@ pub(crate) fn source_tag_from_snapshot(
 /// a test's temporary traits), and every miss re-reads all rule text.
 fn source_tag_memo_path(traits_dir: &Path) -> Option<PathBuf> {
     let tag = digest_bytes(traits_dir.as_os_str().as_encoded_bytes());
-    Some(cache_dir().ok()?.join(format!("yara-source-tag-{tag:016x}")))
+    Some(
+        cache_dir()
+            .ok()?
+            .join(format!("yara-source-tag-{tag:016x}")),
+    )
 }
 
 /// The stored tag, if it was computed for this traits directory at exactly this
@@ -1203,7 +1207,9 @@ pub(crate) fn mapper_build_lock(traits_dir: &Path) -> Option<fs::File> {
         return None;
     }
     let slot = digest_bytes(traits_dir_tag(traits_dir).as_bytes()) % SLOTS;
-    let path = cache_dir().ok()?.join(format!("mapper-build-{slot:02}.lock"));
+    let path = cache_dir()
+        .ok()?
+        .join(format!("mapper-build-{slot:02}.lock"));
     let file = fs::OpenOptions::new()
         .create(true)
         .truncate(false)

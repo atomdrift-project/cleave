@@ -120,6 +120,12 @@ yara-classify = { path = "crates/yara-classify" }
 # over every bucket it touches (seconds of CPU per process). The cache is
 # private to this host and never filled from a download; see `TierSource`.
 yara-x = { version = "1.23", features = ["native-code-serialization"] }
+# Not used directly. rsa 0.10.0-rc.22 put `Pkcs1v15Sign` behind a new
+# `pkcs1v15` feature, but yara-x 1.23 depends on `rsa = "0.10.0-rc.19"`
+# without enabling it, so yara-x fails to compile against rc.22. Cargo
+# unifies features, so enabling it here fixes yara-x's build. Remove once
+# yara-x enables `pkcs1v15` itself.
+rsa = { version = "0.10.0-rc.22", default-features = false, features = ["pkcs1v15"] }
 
 # Tree-sitter core types only. Per-language grammars (and their parsers)
 # live in filefacts; cleave consumes the cached `tree_sitter::Tree`
@@ -254,6 +260,10 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["e
 
 fs_squashfs = { package = "rust-fs-squashfs", version = "0.4" }
 fs_core = { package = "rust-fs-core", version = "0.3" }
+
+# Feature-only dependencies that no source file imports.
+[package.metadata.cargo-machete]
+ignored = ["rsa"]
 
 [lib]
 name = "cleave"

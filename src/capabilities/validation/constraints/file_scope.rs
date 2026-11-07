@@ -11,7 +11,7 @@ use super::*;
 /// nothing when it resolves to zero traits.
 ///
 /// Namespaces the analyzers synthesize at runtime are NOT dangling and must be
-/// skipped: `metadata/import/<ecosystem>/<target>::<local-name>`, `metadata/signed/…`,
+/// skipped: `metadata/import/<ecosystem>/<target>::<local-name>`, `metadata/signature/…`,
 /// `metadata/entitlement/…`
 /// and the rest are built from the file's own imports, code signature and
 /// entitlements, so they never appear as static YAML and resolve only during a

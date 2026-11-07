@@ -1057,7 +1057,7 @@ composite_rules:
 
 /// Cross-scope downgrade pass — the central behavior used to demote
 /// per-file findings (e.g. `cookies-get-all`) when a container-level
-/// gate (e.g. `metadata/signed/platform::mozilla-extension`) is in
+/// gate (e.g. `metadata/file/format/browser-extension::mozilla-extension`) is in
 /// scope. The mapper builds findings from per-file evaluation only;
 /// the gate lives in `extra_findings`.
 #[allow(clippy::expect_used)]
@@ -1119,7 +1119,7 @@ traits:
 /// composite matched must still apply once every finding is in.
 ///
 /// Regression guard: pass 3 only re-evaluated container-scoped downgrades,
-/// so when `metadata/signed/platform::microsoft` resolved late (its own
+/// so when the Microsoft platform signature resolved late (its own
 /// `unless:` waits on a retroactively-suppressed atom), a hostile
 /// `av-product-killer` on a Microsoft installer kept its declared tier.
 #[test]

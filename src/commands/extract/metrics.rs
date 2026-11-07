@@ -79,15 +79,7 @@ fn run_direct(target: &str, format: &cli::OutputFormat, engine: &Engine) -> Resu
         }
     };
 
-    // Layer binary_extractors metric writes (e.g. .comment counts,
-    // stripped-section inventory) so the metrics command sees the
-    // same fields as a full `cleave analyze` run.
-    let data = std::fs::read(path)?;
-    let mut full_report = report;
-    if matches!(file_type, FileType::Elf | FileType::Pe | FileType::MachO) {
-        crate::analyzers::binary_extractors::augment_report(&mut full_report, &data);
-    }
-    let metrics = full_report.filefacts_metrics.unwrap_or_default();
+    let metrics = report.filefacts_metrics.unwrap_or_default();
 
     format_metrics_output(&metrics, target, &file_type, format)
 }

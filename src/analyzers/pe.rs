@@ -800,14 +800,6 @@ impl PEAnalyzer {
                         None, // Hash will change after decompression
                         &unpacked_ctx,
                     );
-                    // Merge filefacts facts (incl. `pe.go.*`) into the
-                    // unpacked report so `augment_report` can reshape the Go
-                    // build-info; idempotent with the merge during the
-                    // composite evaluation below.
-                    crate::capabilities::merge_filefacts_context(
-                        &mut unpacked_report,
-                        &unpacked_ctx,
-                    );
                     crate::analyzers::binary_extractors::augment_report(
                         &mut unpacked_report,
                         &unpacked_data,
@@ -989,7 +981,6 @@ impl PEAnalyzer {
         let mut report = AnalysisReport::new(target);
         let mut tools_used = Vec::new();
         let mut embedded_binary_count: u32 = 0;
-        let mut embedded_archive_count: u32 = 0;
         if filefacts_ok {
             tools_used.push("filefacts".to_string());
         }
@@ -1170,7 +1161,6 @@ impl PEAnalyzer {
                 Some(&self.archive_config),
             )
         {
-            embedded_archive_count = embedded_archive_count.saturating_add(1);
             adopt_overlay(&mut report, &mut tools_used, overlay_analysis);
         }
 
@@ -1201,7 +1191,6 @@ impl PEAnalyzer {
             report.findings.push(sfx_result.sfx_finding);
             report.findings.extend(sfx_result.extraction_findings);
             if let Some(archive_report) = sfx_result.archive_report {
-                embedded_archive_count = embedded_archive_count.saturating_add(1);
                 report.findings.extend(archive_report.findings);
                 report.files.extend(archive_report.files);
                 // Preserve the complete extracted-member inventory, including
@@ -1209,9 +1198,9 @@ impl PEAnalyzer {
                 // --all-files is enabled. Prefixing here records the installer
                 // as the immediate provenance parent.
                 adopt_member_inventory(&mut report, archive_report.archive_contents);
-                // Merge per-format kv subtrees from the inner archive report
-                // (e.g. `pyinstaller.*`) into the host PE's values_tree so they
-                // surface in the host's `k` field at finalize time.
+                // Merge the inner archive report's kv subtrees (e.g.
+                // `archive.*`) into the host PE's values_tree so they surface
+                // in the host's `k` field at finalize time.
                 if let Some(inner_kv) = archive_report.values_tree
                     && let serde_json::Value::Object(map) = *inner_kv
                 {
@@ -1231,9 +1220,7 @@ impl PEAnalyzer {
             if let Some(yara) = &self.yara_engine {
                 bundle_analyzer = bundle_analyzer.with_yara_arc(yara.clone());
             }
-            if bundle_analyzer.analyze_dotnet_bundle(pe_data, &mut report) {
-                embedded_archive_count = embedded_archive_count.saturating_add(1);
-            }
+            if bundle_analyzer.analyze_dotnet_bundle(pe_data, &mut report) {}
         }
 
         if !self.skip_embedded_scan {
@@ -1257,24 +1244,12 @@ impl PEAnalyzer {
         // cleave's job (it spawns child analyses on each find), so
         // these counts live on cleave's flat metric map alongside the
         // filefacts-emitted `binary.*` keys.
-        if embedded_binary_count > 0 || embedded_archive_count > 0 {
+        if embedded_binary_count > 0 {
             use crate::types::core::MetricsExt;
-            let flat = report
+            report
                 .filefacts_metrics
-                .get_or_insert_with(Default::default);
-            if embedded_binary_count > 0 {
-                flat.set_f("binary.embedded_binaries", f64::from(embedded_binary_count));
-                flat.set_f(
-                    "binary.embedded_files",
-                    f64::from(embedded_binary_count.saturating_add(embedded_archive_count)),
-                );
-            }
-            if embedded_archive_count > 0 {
-                flat.set_f(
-                    "binary.embedded_archives",
-                    f64::from(embedded_archive_count),
-                );
-            }
+                .get_or_insert_with(Default::default)
+                .set_f("binary.embedded_binaries", f64::from(embedded_binary_count));
         }
 
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;

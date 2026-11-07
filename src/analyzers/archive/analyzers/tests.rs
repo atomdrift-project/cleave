@@ -190,10 +190,9 @@ fn owned_members_release_inputs_before_ordered_fold() {
 }
 
 use super::{
-    ArchiveAnalyzer, archive_entry_json, archive_entry_metadata, is_interesting_jar_resource,
-    jar_class_triage_score, jar_inline_alert_ids, jar_nest_companion_indices,
-    jar_should_retain_class, keep_top_ranked, rebase_nested_archive_entry_path,
-    rebase_nested_file_path,
+    ArchiveAnalyzer, archive_entry_metadata, is_interesting_jar_resource, jar_class_triage_score,
+    jar_inline_alert_ids, jar_nest_companion_indices, jar_should_retain_class, keep_top_ranked,
+    rebase_nested_archive_entry_path, rebase_nested_file_path,
 };
 use crate::analyzers::FileType;
 use std::sync::Arc;
@@ -646,11 +645,6 @@ fn archive_entry_metadata_records_extension_type_mismatch() {
     assert_eq!(entry.magic_prefix.as_deref(), Some("6e6f742061207661"));
     assert_eq!(entry.container_kind.as_deref(), Some("binary"));
     assert!(entry.entropy.is_some());
-
-    let value = archive_entry_json(&entry);
-    assert_eq!(value["declared_type"], "pe");
-    assert_eq!(value["extension_type_mismatch"], true);
-    assert_eq!(value["container_kind"], "binary");
 }
 
 /// What the extracted-tree walk cannot reach is recorded, not dropped: a

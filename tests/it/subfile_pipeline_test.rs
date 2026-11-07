@@ -140,9 +140,9 @@ fn pdf_javascript_subfile_lands_at_depth_one() {
         js_entry.is_some(),
         "expected a depth-1 javascript sub-file under !!pdf/, got {subfiles:?}",
     );
-    // The sub-file must carry the parsed JS source — `source.language`
-    // and `source.functions[]` are the canonical "the JS analyzer
-    // actually ran" markers.
+    // The sub-file must carry the parsed JS source — filefacts'
+    // `source.language` is the canonical "the JS analyzer actually ran"
+    // marker.
     let js_file = report
         .files
         .iter()

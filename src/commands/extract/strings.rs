@@ -82,7 +82,7 @@ fn run_direct(
 
     // Compiled SCPT stores UTF-16BE literals that raw stng rows cannot expose.
     // Use the same parsed-literal conversion as the AppleScript analyzer.
-    if scpt::is_scpt(&data) {
+    if crate::analyzers::applescript::is_compiled(&data) {
         let mut rows = strings::strings_from_filefacts(path, &data);
         rows.retain(|s| s.value.len() >= min_length);
         return format_strings_output(&rows, format);

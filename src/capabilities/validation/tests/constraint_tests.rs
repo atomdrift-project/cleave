@@ -600,17 +600,18 @@ fn test_redundant_any_refs_flags_metadata_directory() {
 /// Eight references into a large directory is not redundancy — it is the
 /// rule being specific. Collapsing to `id: <dir>` there would match the
 /// other 295 members too. `generic-bundle-id-pattern` enumerates 8 of
-/// ~303 ids under `metadata/signed/id`; naming the directory would have
+/// ~303 ids under `metadata/signature/verified/id`; naming the directory would have
 /// matched every signed application, `com.apple.*` included.
 #[test]
 fn enumerating_a_small_slice_of_a_large_directory_is_not_redundant() {
     let refs: Vec<String> = (0..8)
-        .map(|i| format!("metadata/signed/id::t{i}"))
+        .map(|i| format!("metadata/signature/verified/id::t{i}"))
         .collect();
     let refs: Vec<&str> = refs.iter().map(String::as_str).collect();
     let rule = create_composite_any("other/dir::rule", &refs);
 
-    let violations = find_redundant_any_refs(&rule, &fully_covered("metadata/signed/id", 303));
+    let violations =
+        find_redundant_any_refs(&rule, &fully_covered("metadata/signature/verified/id", 303));
 
     assert!(
         violations.is_empty(),

@@ -1061,7 +1061,7 @@ impl TraitDefinition {
     /// evaluation context, returning the new criticality that should be applied.
     ///
     /// Used by the cross-scope downgrade pass: a per-file trait that references
-    /// a container-level finding (e.g. `metadata/signed/platform::mozilla-extension`)
+    /// a container-level finding (e.g. `metadata/file/format/browser-extension::mozilla-extension`)
     /// gets a second chance to apply its downgrade once container composites
     /// have been evaluated and merged into the report.
     ///

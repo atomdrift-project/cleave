@@ -51,33 +51,6 @@ impl ArchiveAnalyzer {
             || self.is_cancelled(),
         ));
 
-        // Find the SHA-256 of the bundled Python shared library, if present.
-        // Identifies the exact CPython distribution (official, embeddable,
-        // conda, custom rebuild) — strong "who built this" signal.
-        let bundled_python_lib_sha256 = mem.provenance.python_lib.as_deref().and_then(|name| {
-            members
-                .iter()
-                .find(|m| m.relative_path == name)
-                .map(|m| m.sha256.clone())
-        });
-
-        // The inventory is the only later consumer of member bytes. Capture
-        // its small metadata now so analysis can release each owned buffer.
-        let entries: Vec<_> = members
-            .iter()
-            .map(|member| {
-                let entry_path = self.format_entry_path(&member.relative_path);
-                let metadata = archive_entry_metadata(
-                    entry_path,
-                    Path::new(&member.relative_path),
-                    &member.file_type,
-                    member.sha256.clone(),
-                    &member.data,
-                    member.container_kind.clone(),
-                );
-                archive_entry_json(&metadata)
-            })
-            .collect();
         self.analyze_in_memory_members(
             members,
             archive_path,
@@ -87,99 +60,6 @@ impl ArchiveAnalyzer {
             "memory PyInstaller",
             vec!["archive_analyzer".to_string(), "pyinstx".to_string()],
         );
-
-        // Build the `pyinstaller.*` KV subtree. Surfaces every provenance
-        // signal we recovered from the cookie + TOC: who (entry-point script
-        // names, bundled python-lib sha), what (per-type counts, totals,
-        // dependencies, splash flag), when (python version, cookie format
-        // version), where (runtime options that hint at intent — e.g.
-        // `pyi-hide-console`).
-        let prov = &mem.provenance;
-        let mut kv = serde_json::Map::new();
-        if let Some((maj, min)) = prov.python_version {
-            kv.insert(
-                "python_version".into(),
-                serde_json::Value::String(format!("{maj}.{min}")),
-            );
-        }
-        if let Some(lib) = &prov.python_lib {
-            kv.insert("python_lib".into(), serde_json::Value::String(lib.clone()));
-        }
-        if let Some(sha) = bundled_python_lib_sha256 {
-            kv.insert("python_lib_sha256".into(), serde_json::Value::String(sha));
-        }
-        kv.insert(
-            "cookie_version".into(),
-            serde_json::Value::String(prov.cookie_version.to_string()),
-        );
-        kv.insert(
-            "toc_entry_count".into(),
-            serde_json::Value::from(prov.toc_entry_count),
-        );
-        kv.insert(
-            "compressed_size".into(),
-            serde_json::Value::from(prov.compressed_size),
-        );
-        kv.insert(
-            "uncompressed_size".into(),
-            serde_json::Value::from(prov.uncompressed_size),
-        );
-        if prov.uncompressed_size > 0 {
-            let ratio = prov.compressed_size as f64 / prov.uncompressed_size as f64;
-            kv.insert(
-                "compression_ratio".into(),
-                serde_json::Value::from((ratio * 1000.0).round() / 1000.0),
-            );
-        }
-        kv.insert(
-            "has_splash".into(),
-            serde_json::Value::Bool(prov.has_splash),
-        );
-        if !prov.entry_points.is_empty() {
-            kv.insert(
-                "entry_points".into(),
-                serde_json::Value::Array(
-                    prov.entry_points
-                        .iter()
-                        .map(|s| serde_json::Value::String(s.clone()))
-                        .collect(),
-                ),
-            );
-        }
-        if !prov.runtime_options.is_empty() {
-            kv.insert(
-                "runtime_options".into(),
-                serde_json::Value::Array(
-                    prov.runtime_options
-                        .iter()
-                        .map(|s| serde_json::Value::String(s.clone()))
-                        .collect(),
-                ),
-            );
-        }
-        if !prov.dependencies.is_empty() {
-            kv.insert(
-                "dependencies".into(),
-                serde_json::Value::Array(
-                    prov.dependencies
-                        .iter()
-                        .map(|s| serde_json::Value::String(s.clone()))
-                        .collect(),
-                ),
-            );
-        }
-        if !prov.type_counts.is_empty() {
-            let mut counts = serde_json::Map::new();
-            for (tb, n) in &prov.type_counts {
-                let key = String::from_utf8_lossy(&[*tb]).into_owned();
-                counts.insert(key, serde_json::Value::from(*n));
-            }
-            kv.insert("type_counts".into(), serde_json::Value::Object(counts));
-        }
-        if !entries.is_empty() {
-            kv.insert("entries".into(), serde_json::Value::Array(entries));
-        }
-        report.merge_kv_subtree("pyinstaller", serde_json::Value::Object(kv));
 
         if let Some((maj, min)) = mem.py_version {
             report

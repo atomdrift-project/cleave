@@ -334,7 +334,8 @@ const VALIDATORS: &[(&str, Check)] = &[
 ///
 /// Keep this in sync with the analyzers that synthesize these IDs:
 /// `imports.rs` (`metadata/import/…`, `metadata/dylib…`), `macho.rs`/`pe.rs`
-/// (`metadata/signed/…`, `metadata/entitlement/…`, `metadata/binary/linking::macho-*`),
+/// (`metadata/entitlement/…`, `metadata/binary/linking::macho-*`), `signature.rs`
+/// (`metadata/signature/<state>/…`),
 /// `embedded_code_detector.rs` (`metadata/lang/embedded::…`, `metadata/lang/encoding/layer::…`),
 /// and the debug-info analyzer (`metadata/build/debug::elf-debuglink`). The trailing ids below are
 /// specific, not prefixes, because their directories also hold static YAML traits

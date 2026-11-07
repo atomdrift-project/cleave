@@ -20,7 +20,7 @@ default-run = "cleave"
 workspace = true
 
 [workspace]
-members = [".", "crates/scpt", "crates/sysmem", "crates/yara-classify", "crates/pyinstx", "crates/lzx", "cleave-macros"]
+members = [".", "crates/sysmem", "crates/yara-classify", "crates/pyinstx", "crates/lzx", "cleave-macros"]
 
 [workspace.package]
 edition = "2024"
@@ -104,7 +104,6 @@ filefacts = { git = "https://github.com/atomdrift-project/filefacts.git", defaul
 cfb = "0.14"  # Microsoft OLE2/CFBF compound document parsing
 
 # AppleScript parsing
-scpt = { path = "crates/scpt" }
 
 
 # System memory queries

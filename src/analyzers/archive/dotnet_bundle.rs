@@ -22,8 +22,6 @@ pub(super) struct Entry {
 
 #[derive(Debug)]
 pub(super) struct Bundle {
-    pub major: u32,
-    pub minor: u32,
     pub header: usize,
     pub entries: Vec<Entry>,
     pub notes: Vec<String>,
@@ -75,8 +73,6 @@ fn manifest(data: &[u8], header: usize) -> Result<Bundle> {
         reader.read_exact(&mut locations_and_flags)?;
     }
     let mut bundle = Bundle {
-        major,
-        minor,
         header,
         entries: Vec::new(),
         notes: Vec::new(),
@@ -243,7 +239,6 @@ mod tests {
         for (version, compressed) in [(1, false), (2, false), (6, false), (6, true)] {
             let data = fixture(version, compressed);
             let bundle = parse(&data).unwrap().unwrap();
-            assert_eq!(bundle.major, version);
             assert_eq!(bundle.entries.len(), 1);
             assert!(bundle.notes.is_empty());
             assert_eq!(

@@ -1121,11 +1121,6 @@ impl UnifiedSourceAnalyzer {
             }
         }
 
-        // Build the `source.*` kv tree from already-extracted
-        // imports/exports/functions before the trait engine runs so
-        // `type: value, path: source.imports, ...` traits can resolve.
-        super::source_kv::attach_to_report(&mut report, Some(content.as_bytes()));
-
         if let Some(ctx) = source_ctx {
             let view = crate::types::FilefactsView::of(ctx, compact_filefacts_values);
             if !view.is_empty() {

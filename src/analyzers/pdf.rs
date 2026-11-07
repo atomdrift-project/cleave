@@ -432,22 +432,15 @@ mod tests {
             "sub-file should be tagged as JS, was {:?}",
             js_file.file_type,
         );
-        // The unified JS analyzer routes through filefacts which emits
-        // `source.language`, `source.functions[]`, `source.imports[]`
-        // for any parsed JS file. Their presence is proof the sub-file
-        // went through real source-code extraction (and not, say, a
-        // generic binary path that wouldn't tree-sitter-parse).
+        // The unified JS analyzer routes through filefacts' source
+        // extractor, which emits `source.language` for a parsed JS file.
+        // Its presence is proof the sub-file went through real
+        // source-code extraction (and not, say, a generic binary path).
         let language = js_file.kv.get("source.language").and_then(|v| v.as_str());
         assert_eq!(
             language,
             Some("javascript"),
             "expected `source.language=javascript` after JS sub-analysis; got {:?}",
-            js_file.kv.keys().collect::<Vec<_>>(),
-        );
-        let has_function_extraction = js_file.kv.keys().any(|k| k.starts_with("source.functions"));
-        assert!(
-            has_function_extraction,
-            "expected `source.functions[]` from tree-sitter parse; got {:?}",
             js_file.kv.keys().collect::<Vec<_>>(),
         );
     }

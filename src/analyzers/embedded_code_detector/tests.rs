@@ -109,7 +109,7 @@ traits:
 /// must be listed so its `metadata/lang/encoding/layer::<name>` id validates.
 #[test]
 fn deobfuscation_layers_are_known_encoded_layer_names() {
-    use stng::script::detect::ScriptLanguage;
+    use stng::script::ScriptLanguage;
     for (language, chain) in [
         (
             ScriptLanguage::PowerShell,
@@ -119,12 +119,8 @@ fn deobfuscation_layers_are_known_encoded_layer_names() {
         (ScriptLanguage::Python, "python:base64+zlib"),
         (ScriptLanguage::Php, "php:gzinflate+base64_decode"),
     ] {
-        let result = stng::script::DeobfuscationResult {
-            decoded: String::new(),
-            offset: 0,
-            chain_description: chain.to_string(),
-            language,
-        };
+        let result =
+            stng::script::DeobfuscationResult::new(String::new(), 0, chain.to_string(), language);
         for step in encoding_chain_for_deobfuscation(&result) {
             assert!(
                 ENCODED_LAYER_NAMES.contains(&step.as_str()),

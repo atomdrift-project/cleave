@@ -29,9 +29,10 @@ pub(super) fn append(
                 .record(AnalysisGap::EmbeddedSourceIncomplete);
             break;
         }
-        // A layer is the host's length, mostly blank, so only the total
-        // budget bounds it; an independent body also has its own cap.
-        let body_cap = if script.layer {
+        // A page script is part of its host, so only the total budget bounds
+        // it; an independent body also has its own cap.
+        let layer = matches!(script.origin, filefacts::Origin::Script { .. });
+        let body_cap = if layer {
             MAX_TOTAL_BYTES
         } else {
             MAX_SCRIPT_BYTES
@@ -64,7 +65,7 @@ pub(super) fn append(
         } else {
             script.source
         };
-        let path = if script.layer {
+        let path = if layer {
             // A layer is part of this file: `##` files it as one of this
             // file's decoded layers, so this file's composites see what it
             // holds and `scope: file` pools it. The pointer is filefacts' own
@@ -216,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    fn inline_page_scripts_are_one_javascript_layer_of_the_page() {
+    fn inline_page_scripts_are_javascript_layers_of_the_page() {
         let page = "<html><body>\n<script>var ua = navigator.userAgent;</script>\n\
             <script type=\"application/json\">{}</script>\n\
             <script>if (ua.includes('FBAN')) { leave(); }</script>\n</body></html>";
@@ -233,10 +234,14 @@ mod tests {
             .filter(|f| f.depth == 1)
             .map(|f| (f.path.as_str(), f.file_type.as_str(), f.encoding.is_none()))
             .collect();
-        // One `##` layer, so the page's own composites see what it holds.
+        // A `##` layer per script element (the JSON block is data, not one),
+        // so the page's own composites see what each holds.
         assert_eq!(
             layers,
-            vec![("page.html##html-scripts", "javascript", true)]
+            vec![
+                ("page.html##html-scripts-0", "javascript", true),
+                ("page.html##html-scripts-2", "javascript", true),
+            ]
         );
         assert!(report.analysis_gaps.is_empty());
     }

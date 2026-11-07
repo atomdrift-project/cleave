@@ -53,7 +53,12 @@ pub(super) fn attach_go(
     } else {
         Coverage::Complete
     };
-    let context = filefacts::go_source_context(&files, coverage, &ContextLimits::default(), None);
+    let context = filefacts::package_context::go_source_context(
+        &files,
+        coverage,
+        &ContextLimits::default(),
+        None,
+    );
     if (context.truncated || !context.packages.is_empty())
         && let Ok(facts) = serde_json::to_value(&context)
     {

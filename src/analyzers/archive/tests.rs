@@ -272,7 +272,7 @@ fn archive_go_workspace_metadata_reaches_dependency_context() {
     let members: Vec<_> = report
         .files
         .iter()
-        .map(|f| filefacts::ReferenceMember {
+        .map(|f| filefacts::package_context::ReferenceMember {
             path: &f.path,
             references: f
                 .filefacts
@@ -280,7 +280,7 @@ fn archive_go_workspace_metadata_reaches_dependency_context() {
                 .map_or(&[][..], |v| v.references.as_slice()),
         })
         .collect();
-    let context = filefacts::go_dependency_context(
+    let context = filefacts::package_context::go_dependency_context(
         &members,
         &filefacts::package_context::ContextLimits::default(),
     );

@@ -20,8 +20,13 @@ impl Collector {
         let candidate = matches!(
             member.file_type,
             FileType::Python | FileType::PythonBytecode
-        ) || filefacts::pyarmor::is_container(data);
-        if !runtime && !(candidate && data.windows(8).any(filefacts::pyarmor::is_container)) {
+        ) || filefacts::recover::pyarmor::is_container(data);
+        if !runtime
+            && !(candidate
+                && data
+                    .windows(8)
+                    .any(filefacts::recover::pyarmor::is_container))
+        {
             return;
         }
         if self.retained.saturating_add(data.len()) > 32 * 1024 * 1024
@@ -35,7 +40,7 @@ impl Collector {
             self.retained += data.len();
             self.runtimes.push(data.to_vec());
         } else {
-            let mut containers = filefacts::pyarmor::python_containers(data);
+            let mut containers = filefacts::recover::pyarmor::python_containers(data);
             if containers.is_empty() && member.file_type != FileType::Python {
                 containers.push(data.to_vec());
             }
@@ -84,7 +89,8 @@ impl Collector {
                         note("PyArmor pairing reached the 256-attempt budget".into());
                         return out;
                     }
-                    let Some(recovery) = filefacts::pyarmor::recover(runtime, container) else {
+                    let Some(recovery) = filefacts::recover::pyarmor::recover(runtime, container)
+                    else {
                         continue;
                     };
                     let pyc = match recovery.pyc() {

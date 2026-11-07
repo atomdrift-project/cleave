@@ -1351,7 +1351,7 @@ impl Analyzer for MachOAnalyzer {
         // threaded one in; open it once otherwise.
         let opened_full_ctx = (is_fat_macho(input.data) && input.parsed_ctx.is_none())
             .then(|| input.open_ctx_with(self.engine.filefacts_options()));
-        let full_ctx = input.parsed_ctx.as_ref().or(opened_full_ctx.as_ref());
+        let full_ctx = input.parsed_ctx.or(opened_full_ctx.as_ref());
         let slices = FatSlices::of(input.data, full_ctx, &self.engine.filefacts_options());
 
         // Get all architecture slices (for FAT binaries) or the single slice (for thin binaries)
@@ -1391,7 +1391,7 @@ impl Analyzer for MachOAnalyzer {
             ))
         };
         let preferred_ctx = if preferred_is_full_file {
-            input.parsed_ctx.as_ref().or(opened_preferred_ctx.as_ref())
+            input.parsed_ctx.or(opened_preferred_ctx.as_ref())
         } else {
             opened_preferred_ctx.as_ref()
         };
@@ -1480,24 +1480,19 @@ impl Analyzer for MachOAnalyzer {
         let data = fs::read(file_path).context("Failed to read file")?;
         // filefacts is the string-extraction authority. Harvest its full-file
         // `text()` view and thread the same context into the structural pass.
-        let parsed_ctx = Some(crate::analysis_context::AnalysisContext::open_with(
+        let parsed_ctx = crate::analysis_context::AnalysisContext::open_with(
             self.engine.filefacts_options(),
             file_path,
             &data,
-        ));
-        let strings: std::sync::Arc<[stng::ExtractedString]> = parsed_ctx
-            .as_ref()
-            .map(crate::analysis_context::AnalysisContext::text_rows)
-            .unwrap_or_default();
-        let mut input = AnalysisInput::with_strings(
+        );
+        let strings = parsed_ctx.text_rows();
+        let input = AnalysisInput::with_strings(
             file_path,
             &data,
-            &strings,
+            strings,
             crate::analyzers::FileType::MachO,
-        );
-        if let Some(ctx) = parsed_ctx {
-            input = input.with_parsed_ctx(ctx);
-        }
+        )
+        .with_parsed_ctx(&parsed_ctx);
         self.analyze_input(&input)
     }
 

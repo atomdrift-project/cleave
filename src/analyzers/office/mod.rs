@@ -203,9 +203,7 @@ impl OfficeAnalyzer {
         // Msi/OleDoc/Ooxml leaves — only `type: raw` could reach them.
         report.strings = office_ctx
             .as_ref()
-            .map(|ctx| {
-                crate::strings::StringExtractor::new().convert_stng_strings(&ctx.text_rows())
-            })
+            .map(|ctx| crate::strings::StringExtractor::new().convert_stng_strings(ctx.text_rows()))
             .unwrap_or_default();
 
         // Stash the synthesized office values tree on the report so the
@@ -572,19 +570,11 @@ impl OfficeAnalyzer {
 
             // filefacts is the string-extraction authority and source parser:
             // open the VBA module once and thread it into the sub-file analyzer.
-            let vba_ctx = Some(crate::analysis_context::AnalysisContext::open(
-                virtual_path,
-                vba_bytes,
-            ));
-            let strings: std::sync::Arc<[stng::ExtractedString]> = vba_ctx
-                .as_ref()
-                .map(crate::analysis_context::AnalysisContext::text_rows)
-                .unwrap_or_default();
+            let vba_ctx = crate::analysis_context::AnalysisContext::open(virtual_path, vba_bytes);
+            let strings = vba_ctx.text_rows();
             let mut input =
-                AnalysisInput::with_strings(virtual_path, vba_bytes, &strings, FileType::Vbs);
-            if let Some(ctx) = vba_ctx {
-                input = input.with_parsed_ctx(ctx);
-            }
+                AnalysisInput::with_strings(virtual_path, vba_bytes, strings, FileType::Vbs)
+                    .with_parsed_ctx(&vba_ctx);
             input.cancellation = cancellation.cloned();
 
             match analyzer.analyze_input(&input) {
@@ -655,22 +645,17 @@ impl OfficeAnalyzer {
 
             // filefacts is the string-extraction authority: open the embedded
             // payload once and thread it into the sub-file analyzer.
-            let exec_ctx = Some(crate::analysis_context::AnalysisContext::open_with(
+            let exec_ctx = crate::analysis_context::AnalysisContext::open_with(
                 self.engine
                     .filefacts_options()
                     .fileid(filefacts::FileId::forced(file_type)),
                 virtual_path,
                 &exec.data,
-            ));
-            let strings: std::sync::Arc<[stng::ExtractedString]> = exec_ctx
-                .as_ref()
-                .map(crate::analysis_context::AnalysisContext::text_rows)
-                .unwrap_or_default();
+            );
+            let strings = exec_ctx.text_rows();
             let mut input =
-                AnalysisInput::with_strings(virtual_path, &exec.data, &strings, file_type);
-            if let Some(ctx) = exec_ctx {
-                input = input.with_parsed_ctx(ctx);
-            }
+                AnalysisInput::with_strings(virtual_path, &exec.data, strings, file_type)
+                    .with_parsed_ctx(&exec_ctx);
             input.cancellation = cancellation.cloned();
             input.depth = child_depth;
 
@@ -747,19 +732,14 @@ impl OfficeAnalyzer {
         };
 
         // Reuse the detection above rather than running it a second time.
-        let ctx = Some(crate::analysis_context::AnalysisContext::open_with(
+        let ctx = crate::analysis_context::AnalysisContext::open_with(
             filefacts::OpenOptions::new().fileid(fileid),
             virtual_path,
             data,
-        ));
-        let strings: std::sync::Arc<[stng::ExtractedString]> = ctx
-            .as_ref()
-            .map(crate::analysis_context::AnalysisContext::text_rows)
-            .unwrap_or_default();
-        let mut input = AnalysisInput::with_strings(virtual_path, data, &strings, file_type);
-        if let Some(ctx) = ctx {
-            input = input.with_parsed_ctx(ctx);
-        }
+        );
+        let strings = ctx.text_rows();
+        let mut input = AnalysisInput::with_strings(virtual_path, data, strings, file_type)
+            .with_parsed_ctx(&ctx);
         input.cancellation = cancellation.cloned();
         input.depth = child_depth;
 

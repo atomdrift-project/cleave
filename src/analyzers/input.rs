@@ -54,9 +54,9 @@ pub struct AnalysisInput<'a> {
 
     /// Filefacts context opened once on `data` by the caller and threaded in
     /// so the analyzer reuses it instead of re-parsing. When `None` the
-    /// analyzer opens its own. Owned (same `'a` as `data`) to avoid forcing a
-    /// second lifetime through the `Analyzer` trait.
-    pub parsed_ctx: Option<crate::analysis_context::AnalysisContext<'a>>,
+    /// analyzer opens its own. Borrowed, so `strings` can borrow the same
+    /// context's rows without copying them.
+    pub parsed_ctx: Option<&'a crate::analysis_context::AnalysisContext<'a>>,
 }
 
 impl<'a> AnalysisInput<'a> {
@@ -139,7 +139,10 @@ impl<'a> AnalysisInput<'a> {
     /// Thread in a filefacts context the caller already opened on `data`, so
     /// the analyzer reuses it instead of re-parsing the same bytes.
     #[must_use]
-    pub fn with_parsed_ctx(mut self, ctx: crate::analysis_context::AnalysisContext<'a>) -> Self {
+    pub fn with_parsed_ctx(
+        mut self,
+        ctx: &'a crate::analysis_context::AnalysisContext<'a>,
+    ) -> Self {
         self.parsed_ctx = Some(ctx);
         self
     }
@@ -150,7 +153,7 @@ impl<'a> AnalysisInput<'a> {
     ///
     /// ```ignore
     /// let fallback = input.open_ctx_fallback();
-    /// let ctx = input.parsed_ctx.as_ref().or(fallback.as_ref());
+    /// let ctx = input.parsed_ctx.or(fallback.as_ref());
     /// ```
     ///
     /// The owned fallback lives in the caller's scope so the borrow can point at

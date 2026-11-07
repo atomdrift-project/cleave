@@ -207,7 +207,7 @@ impl ArchiveAnalyzer {
                             .analysis_gaps
                             .record(crate::types::AnalysisGap::EmbeddedSourceIncomplete);
                     },
-                    || self.is_cancelled(),
+                    self.cancelled.as_deref(),
                 ) {
                     if !guard.check_file_count()
                         || !guard.check_bytes(
@@ -517,7 +517,7 @@ impl ArchiveAnalyzer {
                             .analysis_gaps
                             .record(crate::types::AnalysisGap::EmbeddedSourceIncomplete);
                     },
-                    || self.is_cancelled(),
+                    self.cancelled.as_deref(),
                 ) {
                     if !guard.check_file_count()
                         || !guard.check_bytes(
@@ -895,7 +895,7 @@ impl ArchiveAnalyzer {
         // Preserve the carrier and expose bounded, structurally parsed children.
         let mut jphp_classes = Vec::new();
         for member in members.iter().filter(|m| m.relative_path.ends_with(".phb")) {
-            let (frames, incomplete) = filefacts::jphp_class_frames(&member.data);
+            let (frames, incomplete) = filefacts::recover::jphp_class_frames(&member.data);
             if incomplete {
                 report
                     .analysis_gaps

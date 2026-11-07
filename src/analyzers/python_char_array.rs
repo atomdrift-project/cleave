@@ -239,8 +239,8 @@ pub(crate) fn decode(source: &str) -> Option<(String, Vec<(usize, String)>)> {
             });
             if is_write_argument
                 && decoded.len() >= 64
-                && stng::script::detect::detect_script_language(decoded.as_bytes())
-                    == Some(stng::script::detect::ScriptLanguage::JavaScript)
+                && stng::script::detect_script_language(decoded.as_bytes())
+                    == Some(stng::script::ScriptLanguage::JavaScript)
             {
                 written_scripts.push((node.start_byte(), decoded.clone()));
             }

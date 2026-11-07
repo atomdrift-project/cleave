@@ -2832,7 +2832,7 @@ fn file_composites_do_not_repeat_a_layers_own() {
 #[test]
 fn file_composites_still_judge_what_a_view_fired() {
     let ids = evaluate_with_layer(view_record(
-        "app.js##html-scripts",
+        "app.js##html-scripts-0",
         &["test/layer::fetch-call", "test/layer::js-fetch"],
     ));
     assert!(ids.iter().any(|id| id == "test/layer::js-fetch"), "{ids:?}");

@@ -929,24 +929,22 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     };
     // Open filefacts on the full file and harvest its `text()` rows — the same
     // string scan cleave used to run standalone, but now sourced from the one
-    // authority. Returns the context too so the caller can thread it into the
-    // analyzer (avoiding a second parse). Mirrors `stng_scan`'s `(_, elapsed)`.
+    // authority. The rows are extracted here, inside the timed (and possibly
+    // YARA-overlapped) closure, and borrowed from the context below; the
+    // caller threads the same context into the analyzer (avoiding a second
+    // parse). Mirrors `stng_scan`'s `(_, elapsed)`.
     let open_ctx_strings = || {
         let t = std::time::Instant::now();
-        let ctx = Some(crate::analysis_context::AnalysisContext::open_with(
+        let ctx = crate::analysis_context::AnalysisContext::open_with(
             facts_options.clone(),
             path,
             file_data,
-        ));
-        let strings = ctx
-            .as_ref()
-            .map(crate::analysis_context::AnalysisContext::text_rows)
-            .unwrap_or_default();
-        (ctx, strings, t.elapsed().as_millis() as u64)
+        );
+        let _ = ctx.text_rows();
+        (Some(ctx), t.elapsed().as_millis() as u64)
     };
-    let (mut file_ctx, stng_strings, stage_stng_ms, prefetched_yara) = if file_type.is_archive() {
-        let empty: std::sync::Arc<[stng::ExtractedString]> = Vec::new().into();
-        (None, empty, 0u64, None)
+    let (file_ctx, stage_stng_ms, prefetched_yara) = if file_type.is_archive() {
+        (None, 0u64, None)
     } else if let Some(ftypes) = binary_yara_ftypes {
         // A lone binary benefits from overlapping filefacts with YARA. In a
         // worker, however, every top-level analysis already runs on its own
@@ -955,29 +953,31 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         // uruk-hai drove 111/128 cores while completing fewer files than 24).
         // Keep the overlap only on the single-analysis fast path.
         if crate::rayon_nest::inner_work_parallel() {
-            let ((ctx, strings, ms), yara) =
-                rayon::join(open_ctx_strings, || yara_prefetch(ftypes));
-            (ctx, strings, ms, yara)
+            let ((ctx, ms), yara) = rayon::join(open_ctx_strings, || yara_prefetch(ftypes));
+            (ctx, ms, yara)
         } else {
-            let (ctx, strings, ms) = open_ctx_strings();
+            let (ctx, ms) = open_ctx_strings();
             let yara = yara_prefetch(ftypes);
-            (ctx, strings, ms, yara)
+            (ctx, ms, yara)
         }
     } else {
         // Every other type sources strings from the same filefacts view.
         // Source + image types additionally thread the context into their
         // analyzer (below) so the file is parsed a single time.
-        let (ctx, strings, ms) = open_ctx_strings();
-        (ctx, strings, ms, None)
+        let (ctx, ms) = open_ctx_strings();
+        (ctx, ms, None)
     };
+    let stng_strings = file_ctx
+        .as_ref()
+        .map_or(&[][..], crate::analysis_context::AnalysisContext::text_rows);
 
-    let encoded_payloads = encoded_payloads(file_type, file_data, &stng_strings, file_ctx.as_ref());
+    let encoded_payloads = encoded_payloads(file_type, file_data, stng_strings, file_ctx.as_ref());
 
     // Create unified analysis input - all analyzers receive the same pre-extracted data
     let mut input = analyzers::AnalysisInput::with_payloads(
         path,
         file_data,
-        &stng_strings,
+        stng_strings,
         &encoded_payloads,
         file_type,
     )
@@ -986,9 +986,9 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
 
     // Hand the source/image analyzer the context we already opened so it
     // reuses the filefacts parse instead of opening its own. Binary arms use
-    // `file_ctx` directly (below), so only the threaded path moves it into the
+    // `file_ctx` directly (below), so only the threaded path lends it to the
     // input.
-    if threads_ctx && let Some(ctx) = file_ctx.take() {
+    if threads_ctx && let Some(ctx) = file_ctx.as_ref() {
         input = input.with_parsed_ctx(ctx);
     }
 
@@ -1022,7 +1022,7 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 engine,
                 prefetched_yara,
             },
-            &stng_strings,
+            stng_strings,
             &facts_options,
             analysis_depth,
         )),
@@ -1120,10 +1120,7 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         } else {
             None
         };
-        let ctx = file_ctx
-            .as_ref()
-            .or(input.parsed_ctx.as_ref())
-            .or(fresh.as_ref());
+        let ctx = file_ctx.as_ref().or(input.parsed_ctx).or(fresh.as_ref());
         if let Some(ctx) = ctx {
             if report.identity.is_none() {
                 report.identity = ctx.identity();
@@ -1193,7 +1190,7 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             .any(|tool| tool == "yara-x")
         && !is_yara_rule_source
         && yara_engine.is_some_and(|yara| yara.is_loaded())
-        && file_type.is_program()
+        && file_type.is_analyzed()
     {
         // This fallback also uses the shared stage, so inline results support
         // traits instead of being discarded by a late findings-only scan.

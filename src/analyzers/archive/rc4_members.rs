@@ -3,6 +3,7 @@
 //! bounded cross-member context, provenance, cancellation and archive limits.
 use super::{FileType, MemoryArchiveMember, calculate_sha256};
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const MAX_DEX_BYTES: usize = 32 * 1024 * 1024;
 const MAX_ASSET_BYTES: usize = 32 * 1024 * 1024;
@@ -51,7 +52,7 @@ impl Recovered {
 
 fn opaque_asset(path: &str, data: &[u8]) -> bool {
     if !path.starts_with("assets/")
-        || !(128..=filefacts::rc4_container::MAX_INPUT).contains(&data.len())
+        || !(128..=filefacts::recover::rc4::MAX_INPUT).contains(&data.len())
         || std::str::from_utf8(data).is_ok()
     {
         return false;
@@ -135,8 +136,9 @@ impl Collector {
     pub(super) fn recover(
         self,
         mut diagnostic: impl FnMut(String),
-        cancelled: impl Fn() -> bool,
+        cancellation: Option<&AtomicBool>,
     ) -> Vec<Recovered> {
+        let cancelled = || cancellation.is_some_and(|flag| flag.load(Ordering::Acquire));
         let mut out = Vec::new();
         if self.assets.is_empty() || self.keys.is_empty() {
             return out;
@@ -159,7 +161,7 @@ impl Collector {
                     return out;
                 }
                 let Some(decoded) =
-                    filefacts::rc4_container::recover(&data, &key.bytes, &cancelled)
+                    filefacts::recover::rc4::recover(&data, &key.bytes, cancellation)
                 else {
                     continue;
                 };
@@ -169,8 +171,8 @@ impl Collector {
                 }
                 output += decoded.data.len();
                 let (file_type, suffix) = match decoded.kind {
-                    filefacts::rc4_container::Kind::Dex => (FileType::Dex, "dex"),
-                    filefacts::rc4_container::Kind::Zip => (FileType::Zip, "zip"),
+                    filefacts::recover::rc4::Kind::Dex => (FileType::Dex, "dex"),
+                    filefacts::recover::rc4::Kind::Zip => (FileType::Zip, "zip"),
                 };
                 out.push(Recovered {
                     key_path: self.sources[key.source].clone(),
@@ -225,7 +227,7 @@ mod tests {
             for member in &members {
                 collector.observe(member, &|| false);
             }
-            let recovered = collector.recover(|_| {}, || false);
+            let recovered = collector.recover(|_| {}, None);
             assert_eq!(recovered.len(), 1);
             assert_eq!(
                 &*recovered[0].member.data,
@@ -260,7 +262,7 @@ mod tests {
         let mut notes = Vec::new();
         assert!(
             collector
-                .recover(|message| notes.push(message), || false)
+                .recover(|message| notes.push(message), None)
                 .is_empty()
         );
         assert!(
@@ -279,7 +281,7 @@ mod tests {
         );
         let mut collector = Collector::default();
         collector.observe(&asset, &|| false);
-        assert!(collector.recover(|_| {}, || false).is_empty());
+        assert!(collector.recover(|_| {}, None).is_empty());
         let mut collector = Collector::default();
         let dex = member(
             "classes.dex",
@@ -288,7 +290,11 @@ mod tests {
         );
         collector.observe(&dex, &|| false);
         collector.observe(&asset, &|| false);
-        assert!(collector.recover(|_| {}, || true).is_empty());
+        assert!(
+            collector
+                .recover(|_| {}, Some(&AtomicBool::new(true)))
+                .is_empty()
+        );
         let mut collector = Collector::default();
         for _ in 0..17 {
             collector.observe(&dex, &|| false);

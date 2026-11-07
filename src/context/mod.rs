@@ -67,7 +67,8 @@ pub(crate) fn capture(
     }
 
     let total = data.len() as u64;
-    let textual = file_type.is_source_code() || (!file_type.is_binary() && looks_textual(data));
+    let textual =
+        file_type.is_source_code() || (!file_type.is_executable_code() && looks_textual(data));
     let whole = textual && total <= SMALL_TEXT_WHOLE_BYTES;
     let windows = place(&shown, &by_id, &Ranker::new(&shown))
         .into_iter()

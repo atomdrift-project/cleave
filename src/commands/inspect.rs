@@ -94,7 +94,7 @@ fn inspect_one(
             let mut facts = bundle(&parsed);
             let layers: Vec<Value> = parsed
                 .embedded_sources()
-                .filter(|source| source.layer)
+                .filter(|source| matches!(source.origin, filefacts::Origin::Script { .. }))
                 .filter_map(|source| {
                     let file_type = source.file_type?;
                     // Named and typed as the analyzer names and types it.
@@ -221,7 +221,10 @@ mod tests {
         let facts = inspect_one(target, None, &filefacts::OpenOptions::new()).unwrap();
         let layers = facts["layers"].as_array().unwrap();
         assert_eq!(layers.len(), 1);
-        assert_eq!(layers[0]["path"], json!(format!("{target}##html-scripts")));
+        assert_eq!(
+            layers[0]["path"],
+            json!(format!("{target}##html-scripts-0"))
+        );
         let calls = layers[0]["symbols"].to_string();
         assert!(calls.contains("navigator.userAgent.includes"), "{calls}");
         assert!(calls.contains("FBAN"), "{calls}");

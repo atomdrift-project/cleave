@@ -949,9 +949,11 @@ fn options_hash_with(
     // v=29: compact members retain bounded Yarn workspace declarations.
     // v=28: rizin severed — recovery is now unconditional binform, so the
     // standalone `rizin` on/off flag is gone and `recovery=` carries the policy.
+    // v=30: filefacts 3.0 renamed people, hash, summary and archive-member keys
+    // (schema v11); older reports carry the old names.
     let zip_passwords = Sha256::digest(options.zip_passwords.join("\0").as_bytes());
     let key = format!(
-        "v=29,cm={},3p={},yara={},yskip={},ybuiltin={},zpw={},upx={},plat={},hp={},sp={},ps={},fv={},recovery={}",
+        "v=30,cm={},3p={},yara={},yskip={},ybuiltin={},zpw={},upx={},plat={},hp={},sp={},ps={},fv={},recovery={}",
         settings.compact_members,
         settings.third_party_yara,
         settings.yara,
@@ -964,7 +966,7 @@ fn options_hash_with(
         settings.min_suspicious_precision,
         settings.precision_scoring,
         settings.full_validation,
-        crate::engine::filefacts_options(settings).recovery_fingerprint(),
+        filefacts::RECOVERY_FINGERPRINT,
     );
     let hash = Sha256::digest(key.as_bytes());
     // First 16 hex chars is plenty for a small option space

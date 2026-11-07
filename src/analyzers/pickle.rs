@@ -80,7 +80,7 @@ impl PickleAnalyzer {
         // string-extraction authority — converted to cleave's StringInfo.
         if let Some(ctx) = filefacts_ctx.as_ref() {
             report.strings =
-                crate::strings::StringExtractor::new().convert_stng_strings(&ctx.text_rows());
+                crate::strings::StringExtractor::new().convert_stng_strings(ctx.text_rows());
         }
 
         // `pickle.*` kv comes from filefacts's dual emission in the

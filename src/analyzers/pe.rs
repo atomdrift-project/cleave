@@ -1064,9 +1064,7 @@ impl PEAnalyzer {
         // Keep the binary's own symbol names ahead of the cap (Go pclntab
         // names in a large binary), then record what the caps left.
         self.string_extractor.prioritize_report_symbols(&report);
-        report.strings = self
-            .string_extractor
-            .convert_stng_strings(&raw_stng_strings);
+        report.strings = self.string_extractor.convert_stng_strings(raw_stng_strings);
         self.string_extractor.record_count_metrics(
             report
                 .filefacts_metrics
@@ -1521,7 +1519,7 @@ impl Analyzer for PEAnalyzer {
         // Reuse the parse a caller threaded in (an archive member's): opening
         // again repeats the whole extraction, recovery included.
         let opened;
-        let ctx = match &input.parsed_ctx {
+        let ctx = match input.parsed_ctx {
             Some(ctx) => ctx,
             None => {
                 opened = input.open_ctx_with(self.engine.filefacts_options());

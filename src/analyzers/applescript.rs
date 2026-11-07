@@ -68,7 +68,7 @@ impl Analyzer for AppleScriptAnalyzer {
 
         // Reuse the threaded context, else open one on the same `input.data`.
         let fallback = input.open_ctx_fallback();
-        let filefacts_ctx = input.parsed_ctx.as_ref().or(fallback.as_ref());
+        let filefacts_ctx = input.parsed_ctx.or(fallback.as_ref());
 
         // Use pre-extracted strings if available, otherwise source them from
         // filefacts (the string-extraction authority).

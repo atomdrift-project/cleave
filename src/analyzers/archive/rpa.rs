@@ -11,7 +11,7 @@ use std::io::Write;
 use std::path::Path;
 
 pub(crate) fn extract_from_data(data: &[u8], dest: &Path, guard: &ExtractionGuard) -> Result<()> {
-    let members = filefacts::rpa::members(data).map_err(anyhow::Error::msg)?;
+    let members = filefacts::recover::rpa::members(data).map_err(anyhow::Error::msg)?;
     for member in members {
         if guard.is_cancelled() {
             anyhow::bail!("cancelled");

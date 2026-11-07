@@ -533,24 +533,6 @@ impl UnifiedSourceAnalyzer {
             ));
 
         let has_preextracted = !preextracted_stng.is_empty();
-        let mut owned_stng: std::sync::Arc<[stng::ExtractedString]> = Vec::new().into();
-
-        // Run stng extraction first (sequential). Previously this used
-        // rayon::in_place_scope to overlap stng with tree-sitter parsing,
-        // but that deadlocks when nested inside a saturated rayon pool
-        // (e.g., scan_directory's par_iter): the spawned stng task waits
-        // for a free rayon thread, while the current thread blocks on
-        // recv() and can't process rayon work. stng on scripts is fast
-        // (single-digit ms), so the parallelism gain was negligible.
-        if !has_preextracted {
-            // No caller-supplied strings: source them from the threaded
-            // filefacts context (the string-extraction authority). When the
-            // caller didn't open one, there are simply no pre-extracted strings.
-            owned_stng = source_ctx
-                .map(crate::analysis_context::AnalysisContext::text_rows)
-                .unwrap_or_default();
-        }
-
         // `source_ctx` is resolved by the caller — the threaded context when it
         // was opened on these exact bytes, else one opened on the normalized
         // `content` (UTF-16/lossy inputs diverge from the original bytes).
@@ -595,11 +577,13 @@ impl UnifiedSourceAnalyzer {
             symbol_extraction::ingest_filefacts_calls(&ctx.parsed, &mut report);
         }
 
-        // Use pre-extracted stng strings if available, otherwise use parallel extracted ones
+        // Use caller-supplied strings if any; otherwise source them from the
+        // threaded filefacts context (the string-extraction authority). When
+        // the caller didn't open one, there are simply no pre-extracted strings.
         let stng_strings: &[stng::ExtractedString] = if has_preextracted {
             preextracted_stng
         } else {
-            &owned_stng
+            source_ctx.map_or(&[], crate::analysis_context::AnalysisContext::text_rows)
         };
 
         // Convert stng decoded strings to StringInfo and add to report
@@ -672,9 +656,8 @@ impl UnifiedSourceAnalyzer {
             preextracted_payloads
         } else {
             // Payload extraction needs min_length=16 strings.  We already have
-            // a min_length=4 extraction in `stng_strings` above (either from
-            // the caller's pre-extraction, or freshly produced into
-            // `owned_stng`).  Filtering that existing vec by length is
+            // a min_length=4 extraction in `stng_strings` above (from the
+            // caller or the filefacts context).  Filtering that existing vec by length is
             // equivalent to a second full extraction at min_length=16 for
             // every extractor stng runs — raw scan uses `min_length` as a
             // hard threshold, decoders use their own MIN_*_LENGTH constants,
@@ -1787,7 +1770,7 @@ impl Analyzer for UnifiedSourceAnalyzer {
         // decoded bytes. The two contexts have different byte lifetimes,
         // so each branch makes its own call rather than merging into one option.
         let reuse = bytes.as_ref() == input.data;
-        match input.parsed_ctx.as_ref() {
+        match input.parsed_ctx {
             Some(ctx) if reuse => Ok(self.analyze_source_impl(
                 input.path,
                 &content,

@@ -1,0 +1,11 @@
+# Top-level domains given away free or for cents, and so favoured for
+# throwaway infrastructure. `is: sus_hostname` flags any host under one.
+entries:
+  - cf
+  - ga
+  - gq
+  - ml
+  - pw
+  - tk
+  - top
+  - xyz

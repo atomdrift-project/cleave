@@ -90,73 +90,10 @@ pub(super) fn scheduling_size(path: &std::path::Path) -> u64 {
     if !(22..=PROBE_MAX_BYTES).contains(&on_disk) {
         return on_disk;
     }
-    inflated_size(path, on_disk).map_or(on_disk, |n| n.max(on_disk))
-}
-
-/// What a gzip or zip at `path` inflates to, read from the gzip trailer
-/// (`ISIZE`, modulo 2^32) or summed over the zip central directory; `None`
-/// for any other container, an unreadable one, or one the directory walk
-/// declines (see `zip_inflated_size`). Costs one open plus a tail read.
-pub(super) fn inflated_size(path: &std::path::Path, on_disk: u64) -> Option<u64> {
-    use std::io::{Read, Seek, SeekFrom};
-    if on_disk < 22 {
-        return None;
-    }
-    let mut file = std::fs::File::open(path).ok()?;
-    let mut magic = [0u8; 4];
-    file.read_exact(&mut magic).ok()?;
-    match magic {
-        [0x1f, 0x8b, _, _] => {
-            file.seek(SeekFrom::End(-4)).ok()?;
-            let mut trailer = [0u8; 4];
-            file.read_exact(&mut trailer).ok()?;
-            Some(u64::from(u32::from_le_bytes(trailer)))
-        }
-        [b'P', b'K', 3, 4] => zip_inflated_size(&mut file, on_disk),
-        [b'M', b'S', b'C', b'F'] => cab_inflated_size(&mut file, on_disk),
-        _ => None,
-    }
-}
-
-/// Sum of the uncompressed sizes a cabinet's CFFILE table records. A 23 KB
-/// `.cab` around one 826 KB script cost 15 CPU-seconds yet queued by its
-/// on-disk size behind every larger file, starting at t=75 s of an 80 s
-/// hostile-corpus scan and finishing last. `None` for a truncated header or
-/// table, or more entries than are worth reading for a scheduling hint.
-pub(super) fn cab_inflated_size(file: &mut std::fs::File, on_disk: u64) -> Option<u64> {
-    use std::io::{Read, Seek, SeekFrom};
-    const HEADER_LEN: usize = 36;
-    const MAX_FILES: usize = 20_000;
-    // CFFILE: cbFile u32, uoffFolderStart u32, iFolder u16, date u16, time u16,
-    // attribs u16, then a NUL-terminated name of at most 256 bytes.
-    const MAX_ENTRY_LEN: usize = 16 + 257;
-    file.seek(SeekFrom::Start(0)).ok()?;
-    let mut header = [0u8; HEADER_LEN];
-    file.read_exact(&mut header).ok()?;
-    let u16_at = |at: usize| u16::from_le_bytes([header[at], header[at + 1]]);
-    let files_offset = u64::from(u32::from_le_bytes([
-        header[16], header[17], header[18], header[19],
-    ]));
-    let entries = usize::from(u16_at(28));
-    if entries == 0 || entries > MAX_FILES || files_offset >= on_disk {
-        return None;
-    }
-    let table_len = (entries * MAX_ENTRY_LEN).min(usize::try_from(on_disk - files_offset).ok()?);
-    file.seek(SeekFrom::Start(files_offset)).ok()?;
-    let mut table = vec![0u8; table_len];
-    file.read_exact(&mut table).ok()?;
-    let mut at = 0usize;
-    let mut total = 0u64;
-    for _ in 0..entries {
-        let size = table.get(at..at + 4)?;
-        total = total.saturating_add(u64::from(u32::from_le_bytes([
-            size[0], size[1], size[2], size[3],
-        ])));
-        let name_start = at + 16;
-        let name_len = memchr::memchr(0, table.get(name_start..)?)?;
-        at = name_start + name_len + 1;
-    }
-    Some(total)
+    std::fs::File::open(path)
+        .ok()
+        .and_then(|mut file| filefacts::size_probe::inflated_size(&mut file, on_disk))
+        .map_or(on_disk, |n| n.max(on_disk))
 }
 
 /// What the memory gate can learn about `path` from its magic alone: that
@@ -172,71 +109,11 @@ pub(super) fn footprint_hint(path: &std::path::Path) -> scan_mem_gate::Footprint
     if read.is_err() {
         return FootprintHint::Unknown;
     }
-    match magic {
-        [b'M', b'Z', ..]
-        | [0x7f, b'E', b'L', b'F', ..]
-        | [0xfe, 0xed, 0xfa, 0xce | 0xcf, ..]
-        | [0xce | 0xcf, 0xfa, 0xed, 0xfe, ..]
-        | [0xca, 0xfe, 0xba, 0xbe, ..]
-        | [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1] => FootprintHint::Flat,
-        _ => FootprintHint::Unknown,
+    if filefacts::size_probe::is_flat_image(&magic) {
+        FootprintHint::Flat
+    } else {
+        FootprintHint::Unknown
     }
-}
-
-/// Sum of the uncompressed sizes a zip's central directory records. `None`
-/// for a zip64 directory, a truncated one, or one with more entries than
-/// are worth walking for a scheduling hint; the on-disk size then stands.
-pub(super) fn zip_inflated_size(file: &mut std::fs::File, on_disk: u64) -> Option<u64> {
-    use std::io::{Read, Seek, SeekFrom};
-    const EOCD_MIN: u64 = 22;
-    const EOCD_SEARCH_MAX: u64 = EOCD_MIN + 0xFFFF;
-    const MAX_ENTRIES: usize = 20_000;
-    let tail_len = on_disk.min(EOCD_SEARCH_MAX);
-    file.seek(SeekFrom::End(-(tail_len as i64))).ok()?;
-    let mut tail = vec![0u8; tail_len as usize];
-    file.read_exact(&mut tail).ok()?;
-    let eocd = tail
-        .windows(4)
-        .rposition(|w| w == [b'P', b'K', 5, 6])
-        .filter(|&at| at + 22 <= tail.len())?;
-    let u16_at = |at: usize| u16::from_le_bytes([tail[at], tail[at + 1]]);
-    let u32_at =
-        |at: usize| u32::from_le_bytes([tail[at], tail[at + 1], tail[at + 2], tail[at + 3]]);
-    let entries = usize::from(u16_at(eocd + 10));
-    let dir_len = u64::from(u32_at(eocd + 12));
-    let dir_offset = u64::from(u32_at(eocd + 16));
-    if entries == 0 || entries > MAX_ENTRIES || entries == 0xFFFF || dir_offset == 0xFFFF_FFFF {
-        return None;
-    }
-    if dir_offset.checked_add(dir_len)? > on_disk {
-        return None;
-    }
-    file.seek(SeekFrom::Start(dir_offset)).ok()?;
-    let mut dir = vec![0u8; usize::try_from(dir_len).ok()?];
-    file.read_exact(&mut dir).ok()?;
-    let mut at = 0usize;
-    let mut total = 0u64;
-    for _ in 0..entries {
-        if at + 46 > dir.len() || dir[at..at + 4] != [b'P', b'K', 1, 2] {
-            return None;
-        }
-        let field32 = |o: usize| {
-            u32::from_le_bytes([
-                dir[at + o],
-                dir[at + o + 1],
-                dir[at + o + 2],
-                dir[at + o + 3],
-            ])
-        };
-        let field16 = |o: usize| u16::from_le_bytes([dir[at + o], dir[at + o + 1]]);
-        let uncompressed = field32(24);
-        if uncompressed == 0xFFFF_FFFF {
-            return None;
-        }
-        total = total.saturating_add(u64::from(uncompressed));
-        at += 46 + usize::from(field16(28)) + usize::from(field16(30)) + usize::from(field16(32));
-    }
-    Some(total)
 }
 
 /// Run `f` over `paths` on the rayon pool, admitting them strictly in

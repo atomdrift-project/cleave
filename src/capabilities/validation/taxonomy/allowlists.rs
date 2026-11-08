@@ -258,6 +258,11 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // matchers run regardless of which file type carries the package.
     "value:metadata/registry/",
     "metrics:metadata/registry/",
+    // cleave's extraction guards run on every archive type; their outcomes
+    // (`archive_guard.*`, `archive.guard.*`) mean the same in each.
+    "value:objectives/anti-analysis/anti-tampering/archive-guard.yaml",
+    "metrics:objectives/anti-analysis/anti-tampering/archive-guard.yaml",
+    "metrics:metadata/archive/layout/member-limit.yaml",
 ];
 
 /// Reviewed directory contracts where OS-independent evidence may declare

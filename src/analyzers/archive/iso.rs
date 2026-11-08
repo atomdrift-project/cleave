@@ -86,19 +86,7 @@ pub(crate) fn extract_iso_from_data(
 
         guard.record_member_metadata(ExtractedMemberMetadata {
             archive_path: rel_path,
-            // Stored verbatim: there is no compressed size distinct from the
-            // real one, and no per-member codec.
-            compressed_size: None,
-            compression_method: None,
-            mtime_unix: member.mtime_unix,
-            mode_octal: member.mode_octal,
-            uid: member.uid,
-            gid: member.gid,
-            uname: None,
-            gname: None,
             entry_type: member.entry_type.clone(),
-            linkname: member.linkname.clone(),
-            host_os: member.host_os.clone(),
         });
 
         match member.entry_type.as_deref() {

@@ -404,7 +404,8 @@ pub(crate) fn find_needs_zero(composite_rules: &[CompositeTrait]) -> Vec<String>
 
 /// Find string/content conditions with no actual search pattern.
 ///
-/// A condition needs at least one of: exact, substr, regex, word.
+/// A condition needs at least one of: exact, substr, regex, word (or, on a
+/// symbol condition, an `is:` validator).
 ///
 /// Returns: `Vec<trait_id>`
 #[must_use]
@@ -442,13 +443,16 @@ pub(crate) fn find_missing_search_patterns(trait_definitions: &[TraitDefinition]
                 ..
             }) => exact.is_some() || substr.is_some() || regex.is_some() || word.is_some(),
             Condition::Hex(HexQuery { pattern, .. }) => !pattern.is_empty(),
+            // A symbol set is bounded, so a validator alone is a search:
+            // `kind: import, is: {typo_of: top-npm-packages}` tests each name.
             Condition::Symbol(SymbolQuery {
                 exact,
                 substr,
                 regex,
+                is_check,
                 ..
-            })
-            | Condition::Path(PathQuery {
+            }) => exact.is_some() || substr.is_some() || regex.is_some() || is_check.is_some(),
+            Condition::Path(PathQuery {
                 exact,
                 substr,
                 regex,

@@ -66,17 +66,7 @@ pub(crate) const MAX_EXTRACTION_NOTES: usize = 32;
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ExtractedMemberMetadata {
     pub archive_path: String,
-    pub compressed_size: Option<u64>,
-    pub compression_method: Option<String>,
-    pub mtime_unix: Option<i64>,
-    pub mode_octal: Option<u32>,
-    pub uid: Option<u64>,
-    pub gid: Option<u64>,
-    pub uname: Option<String>,
-    pub gname: Option<String>,
     pub entry_type: Option<String>,
-    pub linkname: Option<String>,
-    pub host_os: Option<String>,
 }
 
 /// Reasons an archive may be considered hostile

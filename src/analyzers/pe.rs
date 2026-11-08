@@ -83,7 +83,7 @@ fn adopt_overlay(
 ) {
     use crate::types::file_analysis::ARCHIVE_DELIMITER;
     let host = host_file_name(report);
-    report.findings.push(overlay.sfx_finding);
+    report.findings.extend(overlay.extraction_failure);
     let archive = overlay.archive_report;
     for mut finding in archive.findings {
         for evidence in &mut finding.evidence {
@@ -103,165 +103,6 @@ fn adopt_overlay(
     report.files.extend(archive.files);
     report.strings.extend(archive.strings);
     adopt_tools(tools_used, archive.metadata.tools_used);
-}
-
-/// Report a PE that filefacts could not identify, or parsed only down to its
-/// headers. The exact failure is not surfaced by filefacts's metrics; the
-/// absence of `pe.machine` or presence of `pe.partial_parse` is the signal.
-///
-/// A header-only parse means the COFF header was readable but a downstream
-/// walker failed (resource-only DLLs and resource-table errors land there),
-/// so it is informational. An unidentifiable PE that is not a plain DOS
-/// executable is suspicious, more surely when nothing was recovered from it.
-fn report_corrupted_header(report: &mut AnalysisReport, pe_data: &[u8], filefacts_ok: bool) {
-    let (crit, conf) = if !filefacts_ok && !looks_like_dos_executable(pe_data) {
-        let recovered_hidden_content = !report.sections.is_empty() || !report.imports.is_empty();
-        (
-            Criticality::Suspicious,
-            if recovered_hidden_content { 0.8 } else { 0.85 },
-        )
-    } else {
-        (Criticality::Baseline, 0.3)
-    };
-    let msg = if filefacts_ok {
-        "PE parsed with header-only fallback (downstream walker failed)"
-    } else {
-        "PE could not be identified by filefacts"
-    };
-    let evidence = || Evidence {
-        method: "parse-failure".to_string(),
-        source: "filefacts".to_string(),
-        value: msg.to_string(),
-        location: Some("0x0".to_string()),
-        ..Default::default()
-    };
-    report.findings.push(Finding {
-        precomputed_spans: None,
-        src: None,
-        id: "objectives/anti-analysis/pe-tampering/corrupted-header"
-            .to_string()
-            .into(),
-        kind: FindingKind::Structural,
-        desc: msg.to_string().into(),
-        conf,
-        crit,
-        mbc: Some("B0001".into()),
-        attack: Some("T1027".into()),
-        trait_refs: vec![],
-        evidence: vec![evidence()],
-        match_count: 1,
-        source_file: None,
-        downgraded: false,
-    });
-    report.structure.push(StructuralFeature {
-        id: "pe/corrupted".to_string(),
-        desc: "Corrupted/tampered PE binary (header parsing failed)".to_string(),
-        evidence: vec![evidence()],
-    });
-    report.metadata.errors.push(msg.to_string());
-}
-
-/// The bytes of an embedded image: its estimated extent, or for a base64
-/// image the decoded run starting at its offset (trimmed to whole quads), so
-/// the child analyzer reads the binary rather than its encoding. `None` when
-/// the offset is past the data or the base64 does not decode.
-fn embedded_image<'d>(
-    pe_data: &'d [u8],
-    binary: &crate::analyzers::embedded_binary_detector::EmbeddedBinary,
-) -> Option<std::borrow::Cow<'d, [u8]>> {
-    let rest = pe_data
-        .get(binary.offset..)
-        .filter(|rest| !rest.is_empty())?;
-    if binary.encoding == Some("base64") {
-        let run = rest
-            .iter()
-            .take_while(|&&b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'='))
-            .count();
-        let encoded = rest.get(..run & !3).unwrap_or_default();
-        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
-            .ok()
-            .map(std::borrow::Cow::Owned)
-    } else {
-        Some(std::borrow::Cow::Borrowed(
-            rest.get(..binary.estimated_size.min(rest.len()))
-                .unwrap_or_default(),
-        ))
-    }
-}
-
-/// Read the certificate-table range `(offset, end)` from filefacts's
-/// emitted `pe.data_directories[]`. Returns `None` when the
-/// directory is absent, empty, or extends past the file end.
-fn pe_certificate_range_from_ctx(ctx: &Ctx<'_>, data: &[u8]) -> Option<(usize, usize)> {
-    let arr = ctx.parsed.values().get("pe.data_directories")?.as_array()?;
-    for node in arr {
-        if node.get("name")?.as_str()? != "certificate" {
-            continue;
-        }
-        let offset = node.get("rva")?.as_u64()? as usize;
-        let size = node.get("size")?.as_u64()? as usize;
-        let end = offset.checked_add(size)?;
-        if offset == 0 || size == 0 || end > data.len() {
-            return None;
-        }
-        return Some((offset, end));
-    }
-    None
-}
-
-fn le_u16(data: &[u8], at: usize) -> Option<u16> {
-    Some(u16::from_le_bytes(
-        data.get(at..at.checked_add(2)?)?.try_into().ok()?,
-    ))
-}
-
-fn le_u32(data: &[u8], at: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(
-        data.get(at..at.checked_add(4)?)?.try_into().ok()?,
-    ))
-}
-
-/// The 4 bytes at `e_lfanew`, where a PE signature belongs.
-fn pe_signature_at_lfanew(data: &[u8]) -> Option<(usize, &[u8])> {
-    let offset = le_u32(data, 0x3c)? as usize;
-    Some((offset, data.get(offset..offset.checked_add(4)?)?))
-}
-
-fn looks_like_dos_executable(data: &[u8]) -> bool {
-    if data.len() < 0x40 || !data.starts_with(b"MZ") {
-        return false;
-    }
-
-    if pe_signature_at_lfanew(data).is_some_and(|(_, sig)| sig == b"PE\x00\x00") {
-        return false;
-    }
-
-    let (Some(last_page_bytes), Some(page_count), Some(header_paragraphs)) =
-        (le_u16(data, 2), le_u16(data, 4), le_u16(data, 8))
-    else {
-        return false;
-    };
-    let (last_page_bytes, page_count, header_paragraphs) = (
-        usize::from(last_page_bytes),
-        usize::from(page_count),
-        usize::from(header_paragraphs),
-    );
-    if page_count == 0 || header_paragraphs == 0 {
-        return false;
-    }
-
-    let declared_size = page_count
-        .saturating_sub(1)
-        .saturating_mul(512)
-        .saturating_add(if last_page_bytes == 0 {
-            512
-        } else {
-            last_page_bytes
-        });
-    let header_size = header_paragraphs.saturating_mul(16);
-    declared_size >= header_size
-        && declared_size <= data.len().saturating_add(512)
-        && header_size < data.len()
 }
 
 impl PEAnalyzer {
@@ -472,46 +313,32 @@ impl PEAnalyzer {
         &self,
         report: &mut AnalysisReport,
         pe_data: &[u8],
-        embedded: &[crate::analyzers::embedded_binary_detector::EmbeddedBinary],
-        cert_range: Option<(usize, usize)>,
-    ) -> u32 {
+        embedded: &[crate::analyzers::embedded_images::EmbeddedImage],
+    ) {
         let host_name = std::path::Path::new(&report.target.path)
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("binary.exe")
             .to_string();
-        let mut count: u32 = 0;
-        for binary in embedded {
+        for image in embedded {
             if self.is_cancelled() {
                 break;
             }
-            if cert_range.is_some_and(|(start, end)| binary.offset >= start && binary.offset < end)
-            {
-                continue;
-            }
-            count = count.saturating_add(1);
-            let finding = crate::analyzers::embedded_binary_detector::finding_for(
-                binary,
-                &report.target.path,
-            );
-            let Some(embedded_bytes) = embedded_image(pe_data, binary) else {
-                report.findings.push(finding);
+            let Some(bytes) = image.bytes(pe_data) else {
                 continue;
             };
             if let Some(files) = crate::analyzers::utils::analyze_embedded_as_child(
-                &embedded_bytes,
+                &bytes,
                 &host_name,
-                binary.kind.as_str(),
-                &binary.display_kind(),
-                binary.offset,
+                &image.family,
+                &image.display_kind(),
+                image.offset,
                 self.engine.clone(),
                 self.yara_engine.clone(),
             ) {
                 report.files.extend(files);
             }
-            report.findings.push(finding);
         }
-        count
     }
 
     pub(crate) fn analyze_structural_with_ctx<'a>(
@@ -752,20 +579,24 @@ impl PEAnalyzer {
     ) -> AnalysisReport {
         let start = std::time::Instant::now();
 
-        // Detect and handle tampered PE (junk prefix before MZ header).
-        // The ctx was opened on `data`; when stripping moves the MZ
-        // header, the ctx still describes the original layout (which
-        // is what trait authors want to see — the tampering itself
-        // is the signal). The bytes we hand to downstream helpers
-        // remain `data`.
-        let (pe_data, tamper_findings) = self.detect_and_strip_tampering(data);
+        // Bytes prepended before `MZ` (filefacts' `pe.header.mz_offset`)
+        // are peeled off for the overlay and embedded-binary passes. The
+        // ctx still describes the original layout, which is what traits
+        // see: the prefix itself is the signal.
+        let prefix = ctx
+            .parsed
+            .values()
+            .get("pe.header.mz_offset")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|offset| usize::try_from(offset).ok())
+            .unwrap_or(0);
+        let pe_data = data.get(prefix..).unwrap_or(data);
 
         self.analyze_pe(
             logical_path,
             analysis_path,
             data,
             pe_data,
-            tamper_findings,
             start,
             precomputed_sha256,
             ctx,
@@ -779,10 +610,9 @@ impl PEAnalyzer {
     /// recovers, and the sections and imports it reads when goblin cannot
     /// (e.g. corrupted import directories).
     ///
-    /// `pe_data` is the post-tamper-strip slice; `original_data` is
-    /// the caller's bytes verbatim. The two diverge only when
-    /// `detect_and_strip_tampering` peeled a junk prefix off the
-    /// front — overlay extraction and embedded-binary scanning
+    /// `pe_data` is the image from its `MZ`; `original_data` is the
+    /// caller's bytes verbatim. The two diverge only when bytes were
+    /// prepended before `MZ` — overlay extraction and embedded-binary scanning
     /// operate on `pe_data`, while file-size metrics use
     /// `original_data`.
     #[allow(clippy::too_many_arguments)]
@@ -792,7 +622,6 @@ impl PEAnalyzer {
         analysis_path: &Path,
         original_data: &[u8],
         pe_data: &'a [u8],
-        mut tamper_findings: Vec<Finding>,
         start: std::time::Instant,
         precomputed_sha256: Option<&str>,
         ctx: &Ctx<'a>,
@@ -825,13 +654,9 @@ impl PEAnalyzer {
 
         let mut report = AnalysisReport::new(target);
         let mut tools_used = Vec::new();
-        let mut embedded_binary_count: u32 = 0;
         if filefacts_ok {
             tools_used.push("filefacts".to_string());
         }
-
-        // Add any tampering findings detected during preprocessing
-        report.findings.append(&mut tamper_findings);
 
         // Project structural views from filefacts's typed accessors.
         // Recovery (for stripped / packed PEs) already ran inside
@@ -872,13 +697,19 @@ impl PEAnalyzer {
             .filter_map(crate::analysis_context::project_filefacts_function)
             .collect();
 
-        // --- Corrupted-header findings (filefacts's PE parse fell back
-        // to header-only, or failed entirely). The exact failure
-        // detail isn't surfaced by filefacts's metrics; the absence of
-        // `pe.machine` or presence of `pe.partial_parse` IS the
-        // signal.
-        if !filefacts_ok || partial_parse {
-            report_corrupted_header(&mut report, pe_data, filefacts_ok);
+        // A PE filefacts could not identify, or parsed only down to its
+        // headers, is an analysis limit; the traits judge it from the
+        // absence of `pe.machine` or the presence of `pe.partial_parse`.
+        if !filefacts_ok {
+            report
+                .metadata
+                .errors
+                .push("PE could not be identified by filefacts".to_string());
+        } else if partial_parse {
+            report
+                .metadata
+                .errors
+                .push("PE parsed with header-only fallback (downstream walker failed)".to_string());
         }
 
         // Surface "filefacts couldn't be trusted on this binary" via
@@ -998,8 +829,14 @@ impl PEAnalyzer {
         // Overlay archive analysis
         if let Some((overlay_start, overlay_end)) = overlay_bounds
             && let Some(overlay_data) = pe_data.get(overlay_start..overlay_end)
-            && let Ok(Some(overlay_analysis)) = crate::analyzers::overlay::analyze_overlay(
+            && let Some(archive_type) = ctx
+                .parsed
+                .values()
+                .get("binary.overlay_archive")
+                .and_then(serde_json::Value::as_str)
+            && let Ok(overlay_analysis) = crate::analyzers::overlay::analyze_overlay(
                 overlay_data,
+                archive_type,
                 &report.target.path,
                 &self.engine,
                 self.yara_engine.clone(),
@@ -1014,26 +851,33 @@ impl PEAnalyzer {
         // identifying SFX markers. A nested Inno installer must be analyzed
         // as the embedded child; its marker must not make the host itself look
         // like an Inno setup or trigger extraction of the wrong byte range.
+        // filefacts located images and installer markers in the whole file; a
+        // junk prefix before the PE moves them by its length, and the host's
+        // own header is not one of them.
+        let prefix = (pe_data.as_ptr() as usize).saturating_sub(original_data.as_ptr() as usize);
         let embedded = if self.skip_embedded_scan {
             Vec::new()
         } else {
-            crate::analyzers::embedded_binary_detector::scan_for_embedded_binaries(
-                pe_data,
-                self.cancellation.as_deref(),
-            )
+            crate::analyzers::embedded_images::EmbeddedImage::from_values(ctx.parsed.values())
+                .into_iter()
+                .filter_map(|mut image| {
+                    image.offset = image.offset.checked_sub(prefix).filter(|&at| at > 0)?;
+                    Some(image)
+                })
+                .collect()
         };
-        let detected_sfx_kind = crate::analyzers::sfx_detector::detect_sfx(pe_data, &embedded);
-        if let Some(sfx_kind) = detected_sfx_kind {
+        if let Some((sfx_kind, marker_offset)) =
+            crate::analyzers::sfx_detector::installer_from_values(ctx.parsed.values(), prefix)
+        {
             let sfx_result = crate::analyzers::sfx_detector::analyze_sfx(
                 analysis_path,
                 sfx_kind,
+                marker_offset,
                 pe_data,
                 &self.engine,
                 self.yara_engine.clone(),
                 Some(&self.archive_config),
-                &embedded,
             );
-            report.findings.push(sfx_result.sfx_finding);
             report.findings.extend(sfx_result.extraction_findings);
             if let Some(archive_report) = sfx_result.archive_report {
                 report.findings.extend(archive_report.findings);
@@ -1065,28 +909,13 @@ impl PEAnalyzer {
             if let Some(yara) = &self.yara_engine {
                 bundle_analyzer = bundle_analyzer.with_yara_arc(yara.clone());
             }
-            if bundle_analyzer.analyze_dotnet_bundle(pe_data, &mut report) {}
+            // filefacts read the manifest from the bytes the ctx was opened
+            // on, so its offsets index `original_data`.
+            bundle_analyzer.analyze_dotnet_bundle(original_data, ctx.parsed.values(), &mut report);
         }
 
         if !self.skip_embedded_scan {
-            embedded_binary_count = self.analyze_embedded_binaries(
-                &mut report,
-                pe_data,
-                &embedded,
-                pe_certificate_range_from_ctx(ctx, pe_data),
-            );
-        }
-
-        // Emit recursive-scan counters. Embedded-binary detection is
-        // cleave's job (it spawns child analyses on each find), so
-        // these counts live on cleave's flat metric map alongside the
-        // filefacts-emitted `binary.*` keys.
-        if embedded_binary_count > 0 {
-            use crate::types::core::MetricsExt;
-            report
-                .filefacts_metrics
-                .get_or_insert_with(Default::default)
-                .set_f("binary.embedded_binaries", f64::from(embedded_binary_count));
+            self.analyze_embedded_binaries(&mut report, pe_data, &embedded);
         }
 
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
@@ -1106,215 +935,6 @@ impl PEAnalyzer {
             .and_then(|x| x.as_str())
             .map(str::to_string)
             .unwrap_or_else(|| "unknown".to_string())
-    }
-
-    fn detect_and_strip_tampering<'a>(&self, data: &'a [u8]) -> (&'a [u8], Vec<Finding>) {
-        let mut findings = Vec::new();
-
-        // Check if MZ is at offset 0
-        if data.starts_with(b"MZ") {
-            // Normal PE, but still check for other tampering
-            self.detect_header_tampering(data, 0, &mut findings);
-            return (data, findings);
-        }
-
-        // Search for an MZ header within the first 64 bytes.
-        let mz_offset = data
-            .get(..64)
-            .unwrap_or(data)
-            .windows(2)
-            .position(|pair| pair == b"MZ");
-
-        if let Some(offset) = mz_offset {
-            // Found MZ at a non-zero offset inside `data`: junk prefix.
-            let prefix = data.get(..offset).unwrap_or_default();
-            let prefix_display = if prefix.len() <= 32 {
-                String::from_utf8_lossy(prefix).to_string()
-            } else {
-                format!(
-                    "{}... ({} bytes)",
-                    String::from_utf8_lossy(prefix.get(..32).unwrap_or(prefix)),
-                    prefix.len()
-                )
-            };
-
-            findings.push(Finding {
-                precomputed_spans: None,
-                src: None,
-                id: "objectives/anti-analysis/pe-tampering/junk-prefix"
-                    .to_string()
-                    .into(),
-                kind: FindingKind::Structural,
-                desc: format!(
-                    "PE has {} bytes prepended before MZ header (anti-analysis)",
-                    offset
-                )
-                .into(),
-                conf: 1.0,
-                crit: Criticality::Hostile,
-                mbc: Some("B0001".into()),    // Executable Code Obfuscation
-                attack: Some("T1027".into()), // Obfuscated Files or Information
-                trait_refs: vec![],
-                evidence: vec![Evidence {
-                    method: "header-analysis".to_string(),
-                    source: "cleave".to_string(),
-                    value: format!("MZ at offset {:#x}, prefix: {:?}", offset, prefix_display),
-                    location: Some(format!("0x0-{:#x}", offset)),
-                    ..Default::default()
-                }],
-                match_count: 1,
-                source_file: None,
-                downgraded: false,
-            });
-
-            // Check for additional tampering in the actual PE data
-            let pe_data = data.get(offset..).unwrap_or(data);
-            self.detect_header_tampering(pe_data, offset, &mut findings);
-
-            return (pe_data, findings);
-        }
-
-        // No MZ found - check for BSJB (.NET) signature without valid PE
-        if let Some(bsjb_offset) = data.windows(4).position(|window| window == b"BSJB") {
-            findings.push(Finding {
-                precomputed_spans: None,
-                src: None,
-                id: "objectives/anti-analysis/pe-tampering/dotnet-invalid-pe"
-                    .to_string()
-                    .into(),
-                kind: FindingKind::Structural,
-                desc: ".NET assembly (BSJB signature) with corrupted/missing PE header"
-                    .to_string()
-                    .into(),
-                conf: 0.95,
-                crit: Criticality::Hostile,
-                mbc: Some("B0001".into()),
-                attack: Some("T1027".into()),
-                trait_refs: vec![],
-                evidence: vec![Evidence {
-                    method: "signature".to_string(),
-                    source: "cleave".to_string(),
-                    value: format!("BSJB at offset {:#x}, no valid MZ header", bsjb_offset),
-                    location: Some(format!("{:#x}", bsjb_offset)),
-                    ..Default::default()
-                }],
-                match_count: 1,
-                source_file: None,
-                downgraded: false,
-            });
-        }
-
-        // Return original data (downstream parse will fail, which
-        // is expected — the tampering finding already accompanies
-        // the bytes).
-        (data, findings)
-    }
-
-    /// Detect tampering within PE header area
-    fn detect_header_tampering(
-        &self,
-        data: &[u8],
-        base_offset: usize,
-        findings: &mut Vec<Finding>,
-    ) {
-        if data.len() < 64 {
-            return;
-        }
-
-        // Check for systematic byte injection (e.g., 0x20 padding)
-        let header_area = data.get(..512).unwrap_or(data);
-        let mut byte_counts = [0u32; 256];
-        for &b in header_area {
-            if let Some(count) = byte_counts.get_mut(usize::from(b)) {
-                *count = count.saturating_add(1);
-            }
-        }
-
-        let header_len = header_area.len() as u32;
-        for (byte_val, &count) in byte_counts.iter().enumerate() {
-            // Skip 0x00 (common in headers) and check if any byte is >40% of
-            // header (`5·count > 2·len` is `count > 2·len/5` without truncation).
-            if byte_val != 0 && count.saturating_mul(5) > header_len.saturating_mul(2) {
-                findings.push(Finding {
-                    precomputed_spans: None,
-                    src: None,
-                    id: "objectives/anti-analysis/pe-tampering/byte-injection"
-                        .to_string()
-                        .into(),
-                    kind: FindingKind::Structural,
-                    desc: format!(
-                        "PE header has excessive 0x{:02X} bytes ({} of {} = {:.1}%)",
-                        byte_val,
-                        count,
-                        header_len,
-                        count as f32 / header_len as f32 * 100.0
-                    )
-                    .into(),
-                    conf: 0.9,
-                    crit: Criticality::Suspicious,
-                    mbc: Some("B0001".into()),
-                    attack: Some("T1027".into()),
-                    trait_refs: vec![],
-                    evidence: vec![Evidence {
-                        method: "frequency-analysis".to_string(),
-                        source: "cleave".to_string(),
-                        value: format!("byte 0x{:02X} appears {} times in header", byte_val, count),
-                        location: Some(format!(
-                            "{:#x}-{:#x}",
-                            base_offset,
-                            base_offset.saturating_add(512)
-                        )),
-                        ..Default::default()
-                    }],
-                    match_count: 1,
-                    source_file: None,
-                    downgraded: false,
-                });
-                break; // Only report the most prominent injection
-            }
-        }
-
-        // Check the actual PE signature location from the DOS header, not the first
-        // incidental `PE` byte sequence anywhere in the file.
-        if let Some((pe_sig_offset, sig)) = pe_signature_at_lfanew(data)
-            && sig != b"PE\x00\x00"
-            && !looks_like_dos_executable(data)
-        {
-            findings.push(Finding {
-                src: None,
-                precomputed_spans: None,
-                id: "objectives/anti-analysis/pe-tampering/pe-signature-corrupted"
-                    .to_string()
-                    .into(),
-                kind: FindingKind::Structural,
-                desc: format!(
-                    "PE signature corrupted: expected PE\\x00\\x00, got {}",
-                    sig.iter()
-                        .map(|b| format!("{b:02X}"))
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                )
-                .into(),
-                conf: 0.85,
-                crit: Criticality::Suspicious,
-                mbc: Some("B0001".into()),
-                attack: Some("T1027".into()),
-                trait_refs: vec![],
-                evidence: vec![Evidence {
-                    method: "signature".to_string(),
-                    source: "cleave".to_string(),
-                    value: format!("PE signature at {:#x}: {:?}", pe_sig_offset, sig),
-                    location: Some(format!("{:#x}", base_offset.saturating_add(pe_sig_offset))),
-                    ..Default::default()
-                }],
-                match_count: 1,
-                source_file: None,
-                downgraded: false,
-            });
-        }
-
-        // .NET BSJB CLR metadata signature is detected by the YAML trait
-        // metadata/binary/framework::dotnet-metadata (raw "BSJB" scan).
     }
 }
 

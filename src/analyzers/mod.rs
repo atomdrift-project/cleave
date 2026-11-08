@@ -46,10 +46,9 @@ pub(crate) mod utils;
 // B2: PE-specific extractors (Rich header, imphash, VERSIONINFO).
 
 // Dedicated analyzers for binary/bytecode/manifest formats
-pub(crate) mod chrome_manifest;
 pub(crate) mod dos_word_xor;
 pub(crate) mod elf;
-pub(crate) mod embedded_binary_detector;
+pub(crate) mod embedded_images;
 pub(crate) mod font;
 pub(crate) mod java_class;
 pub(crate) mod jpeg;
@@ -205,10 +204,6 @@ pub(crate) fn analyzer_for_file_type_arc(
         FileType::PackageJson => Some(Box::new(
             package_json::PackageJsonAnalyzer::new().with_engine(engine.clone()),
         )),
-        FileType::ChromeManifest => Some(Box::new(
-            chrome_manifest::ChromeManifestAnalyzer::new()
-                .with_engine(engine.clone()),
-        )),
 
         // Text-based formats without tree-sitter - use generic analyzer
         FileType::PkgInfo
@@ -216,6 +211,7 @@ pub(crate) fn analyzer_for_file_type_arc(
         | FileType::GoMod
         | FileType::PyProjectToml
         | FileType::PackageLockJson
+        | FileType::ChromeManifest
         | FileType::Json
         | FileType::Plist
         | FileType::Nib
@@ -374,9 +370,7 @@ pub(crate) fn detect_file_type_from_detected(
         .map(|d| d.file_type)
         .filter(|ft| ft.is_source_code() || ft.is_executable_code() || ft.is_archive())
         .or(detected);
-    let detected = detected
-        .filter(|ft| *ft != FileType::Pe || looks_like_pe_image(file_data))
-        .filter(|ft| *ft != FileType::Unknown);
+    let detected = detected.filter(|ft| *ft != FileType::Unknown);
 
     detected
         .or_else(|| sniff_script_type_from_content(file_data))
@@ -474,96 +468,6 @@ fn is_dotenv_name(path: &Path) -> bool {
         return false;
     };
     name == ".env" || name == ".env.backup" || name.starts_with(".env.backup.")
-}
-
-fn looks_like_pe_image(data: &[u8]) -> bool {
-    if data.len() < 0x40 || &data[0..2] != b"MZ" {
-        return false;
-    }
-
-    let e_lfanew = u32::from_le_bytes([data[60], data[61], data[62], data[63]]) as usize;
-    if data.get(e_lfanew..e_lfanew.saturating_add(4)) == Some(b"PE\0\0") {
-        return true;
-    }
-
-    // A reflective loader can replace the NT signature while retaining a
-    // coherent image. Do not discard it before PEAnalyzer can report header
-    // tampering and scan the original bytes. MZ-prefixed text and truncated
-    // DOS headers still need to fail this gate: require bounded COFF/optional
-    // headers, all raw sections, and an entry point in executable content.
-    coherent_pe_with_damaged_signature(data, e_lfanew)
-}
-
-fn coherent_pe_with_damaged_signature(data: &[u8], nt: usize) -> bool {
-    fn u16_at(data: &[u8], at: usize) -> Option<u16> {
-        Some(u16::from_le_bytes(
-            data.get(at..at.checked_add(2)?)?.try_into().ok()?,
-        ))
-    }
-    fn u32_at(data: &[u8], at: usize) -> Option<u32> {
-        Some(u32::from_le_bytes(
-            data.get(at..at.checked_add(4)?)?.try_into().ok()?,
-        ))
-    }
-    let check = || -> Option<bool> {
-        if nt < 0x40 {
-            return Some(false);
-        }
-        let coff = nt.checked_add(4)?;
-        let machine = u16_at(data, coff)?;
-        let count = usize::from(u16_at(data, coff.checked_add(2)?)?);
-        let opt_size = usize::from(u16_at(data, coff.checked_add(16)?)?);
-        let characteristics = u16_at(data, coff.checked_add(18)?)?;
-        let opt = coff.checked_add(20)?;
-        let magic = u16_at(data, opt)?;
-        let min_opt = match (machine, magic) {
-            (0x014c, 0x010b) => 0xe0,
-            (0x8664 | 0xaa64, 0x020b) => 0xf0,
-            _ => return Some(false),
-        };
-        if !(1..=96).contains(&count) || opt_size < min_opt || characteristics & 2 == 0 {
-            return Some(false);
-        }
-        let entry = u32_at(data, opt.checked_add(16)?)?;
-        let image_size = u32_at(data, opt.checked_add(56)?)?;
-        let headers_size = usize::try_from(u32_at(data, opt.checked_add(60)?)?).ok()?;
-        let table = opt.checked_add(opt_size)?;
-        let table_end = table.checked_add(count.checked_mul(40)?)?;
-        if entry == 0
-            || entry >= image_size
-            || table_end > headers_size
-            || headers_size > data.len()
-        {
-            return Some(false);
-        }
-        let sections = data.get(table..table_end)?;
-        let mut executable_entry = false;
-        for section in sections.as_chunks::<40>().0 {
-            let virtual_size = u32_at(section, 8)?;
-            let virtual_start = u32_at(section, 12)?;
-            let raw_size = u32_at(section, 16)?;
-            let raw_start = u32_at(section, 20)?;
-            let flags = u32_at(section, 36)?;
-            let virtual_end = virtual_start.checked_add(virtual_size.max(raw_size))?;
-            if virtual_end > image_size {
-                return Some(false);
-            }
-            if raw_size != 0 {
-                let start = usize::try_from(raw_start).ok()?;
-                let end = start.checked_add(usize::try_from(raw_size).ok()?)?;
-                if start < headers_size || end > data.len() {
-                    return Some(false);
-                }
-                // Require actual stored executable bytes at the entry point,
-                // not a virtual-only zero-fill section with fabricated flags.
-                executable_entry |= flags & 0x2000_0000 != 0
-                    && entry >= virtual_start
-                    && entry < virtual_start.checked_add(raw_size)?;
-            }
-        }
-        Some(executable_entry)
-    };
-    check().unwrap_or(false)
 }
 
 fn known_manifest_type_from_basename(file_path: &Path) -> Option<FileType> {

@@ -51,23 +51,6 @@ pub(crate) fn extract_tar_entries_safe<R: Read>(
         };
 
         let entry_type = entry.header().entry_type();
-        let header = entry.header();
-        let mode_octal = header.mode().ok();
-        let uid = header.uid().ok();
-        let gid = header.gid().ok();
-        let mtime_unix = header.mtime().ok().map(|m| m as i64);
-        let uname = header
-            .username()
-            .ok()
-            .flatten()
-            .filter(|s| !s.is_empty())
-            .map(ToString::to_string);
-        let gname = header
-            .groupname()
-            .ok()
-            .flatten()
-            .filter(|s| !s.is_empty())
-            .map(ToString::to_string);
         // A file whose name a previous member already claimed
         // (case-insensitively) is renamed rather than left to overwrite it.
         // Directories keep their sanitized name so members extracted beneath
@@ -95,17 +78,7 @@ pub(crate) fn extract_tar_entries_safe<R: Read>(
 
         guard.record_member_metadata(ExtractedMemberMetadata {
             archive_path: rel_path,
-            compressed_size: None,
-            compression_method: None,
-            mtime_unix,
-            mode_octal,
-            uid,
-            gid,
-            uname,
-            gname,
             entry_type: Some(entry_type_str.to_string()),
-            linkname: linkname_opt.clone(),
-            host_os: None,
         });
 
         if entry_type.is_symlink() || entry_type.is_hard_link() {

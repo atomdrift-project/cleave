@@ -4,54 +4,6 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-pub(super) fn archive_finding(
-    id: &str,
-    desc: String,
-    _source: &str,
-    evidence: Vec<Evidence>,
-    match_count: usize,
-) -> Finding {
-    let crit = if id.starts_with("metadata/archive/")
-        || id == "anti-analysis/archive/excessive-size"
-        || id == "anti-analysis/archive/long-entry-name"
-        || id == "anti-analysis/archive/excessive-nesting"
-    {
-        Criticality::Notable
-    } else {
-        Criticality::Suspicious
-    };
-
-    Finding {
-        precomputed_spans: None,
-        src: None,
-        kind: if id.starts_with("metadata/archive/") {
-            FindingKind::Structural
-        } else {
-            FindingKind::Capability
-        },
-        trait_refs: vec![],
-        id: id.into(),
-        desc: desc.into(),
-        conf: 0.9,
-        crit,
-        mbc: None,
-        attack: None,
-        evidence,
-        match_count,
-        source_file: None,
-        downgraded: false,
-    }
-}
-
-pub(super) fn has_builtin_anti_analysis_finding(findings: &[Finding]) -> bool {
-    findings.iter().any(|finding| {
-        finding.id.starts_with("anti-analysis/archive/")
-            || finding
-                .id
-                .starts_with("objectives/anti-analysis/pe-tampering/")
-    })
-}
-
 /// Drain the guard's non-fatal extraction notes into the report, raising one
 /// finding when any were recorded.
 ///
@@ -115,266 +67,109 @@ pub(super) fn drain_extraction_notes(report: &mut AnalysisReport, guard: &Extrac
     report.metadata.errors.extend(notes);
 }
 
+/// Record what the extraction guards observed, for traits to judge: the
+/// `archive_guard` values (`path_traversals[]`, `symlink_escapes[]`,
+/// `large_files[]`, `long_entry_names[]`, `zip_bomb`) and the
+/// `archive.guard.*` metrics (`compression_ratio`, `total_size`,
+/// `longest_entry_name`, `member_limit_reached`).
+///
+/// Only what defines the observation is decided here: an entry that names
+/// the extraction root is not a traversal, and an OS package's absolute
+/// member names are its format, not an escape (`suppress_path_traversal`).
+/// Severity, thresholds and known-benign link shapes are traits
+/// (`objectives/anti-analysis/anti-tampering/archive-guard.yaml`).
 pub(super) fn push_archive_hostile_findings(
     report: &mut AnalysisReport,
     hostile_reasons: Vec<HostileArchiveReason>,
     _archive_path: &Path,
-    source: &str,
+    _source: &str,
     suppress_path_traversal: bool,
 ) {
-    let mut path_evidence = Vec::new();
+    use serde_json::{Value, json};
+    let mut traversals = Vec::new();
+    let mut traversal_count = 0usize;
+    let mut symlinks = Vec::new();
+    let mut large_files = Vec::new();
+    let mut entry_names = Vec::new();
+    let mut zip_bomb = None;
+    let mut metrics: Vec<(&str, f64)> = Vec::new();
 
     for reason in hostile_reasons {
         match reason {
             HostileArchiveReason::PathTraversal(path) => {
-                if suppress_path_traversal {
+                // Extractors reject an entry resolving to the extraction root
+                // as they reject `../`, but every `tar -cf x.tar .` has one.
+                if suppress_path_traversal || names_extraction_root(&path) {
                     continue;
                 }
-
-                // An entry that resolves to the extraction root is not an
-                // escape. Extractors reject it for the same reason they reject
-                // `../`, so it arrives here as the same variant -- but every
-                // `tar -cf x.tar .` produces one, and reporting it as zip-slip
-                // flags a large share of ordinary source tarballs.
-                if names_extraction_root(&path) {
-                    continue;
+                traversal_count += 1;
+                if traversals.len() < MAX_ARCHIVE_PATH_TRAVERSAL_EVIDENCE {
+                    traversals.push(Value::String(path));
                 }
-
-                path_evidence.push(Evidence {
-                    method: "archive_extraction".to_string(),
-                    source: source.to_string(),
-                    value: format!("path:{}", path),
-                    location: None,
-                    ..Default::default()
-                });
             }
             HostileArchiveReason::ZipBomb {
                 compressed,
                 uncompressed,
             } => {
-                report.findings.push(archive_finding(
-                    "anti-analysis/archive/zip-bomb",
-                    "Archive has suspicious compression ratio (potential zip bomb)".to_string(),
-                    source,
-                    vec![Evidence {
-                        method: "archive_extraction".to_string(),
-                        source: source.to_string(),
-                        value: format!(
-                            "ratio:{}:1 ({}B -> {}B)",
-                            uncompressed / compressed.max(1),
-                            compressed,
-                            uncompressed
-                        ),
-                        location: None,
-                        ..Default::default()
-                    }],
-                    1,
-                ));
+                let ratio = uncompressed / compressed.max(1);
+                metrics.push(("archive.guard.compression_ratio", ratio as f64));
+                zip_bomb = Some(json!({
+                    "compressed": compressed,
+                    "uncompressed": uncompressed,
+                    "ratio": ratio,
+                }));
             }
             HostileArchiveReason::ExcessiveFileCount(count) => {
-                // Reaching a configured analysis bound is structural telemetry,
-                // not anti-analysis intent. Keep the guard and visible count,
-                // without package-name exemptions or a malware severity.
-                report.findings.push(archive_finding(
-                    "metadata/archive/layout::archive-member-limit-reached",
-                    "Archive analysis reached member-count limit".to_string(),
-                    source,
-                    vec![Evidence {
-                        method: "archive_extraction".to_string(),
-                        source: source.to_string(),
-                        value: format!("count:{} limit:{}", count, MAX_FILE_COUNT),
-                        location: None,
-                        ..Default::default()
-                    }],
-                    1,
-                ));
+                metrics.push(("archive.guard.member_limit_reached", count as f64));
             }
             HostileArchiveReason::ExcessiveTotalSize(size) => {
-                report.findings.push(archive_finding(
-                    "anti-analysis/archive/excessive-size",
-                    "Archive expands to excessive total size".to_string(),
-                    source,
-                    vec![Evidence {
-                        method: "archive_extraction".to_string(),
-                        source: source.to_string(),
-                        value: format!("size:{} bytes (limit:{})", size, MAX_TOTAL_SIZE),
-                        location: None,
-                        ..Default::default()
-                    }],
-                    1,
-                ));
+                metrics.push(("archive.guard.total_size", size as f64));
             }
             HostileArchiveReason::ExcessiveFileSize { file, size } => {
-                report.findings.push(Finding {
-                    precomputed_spans: None,
-                    src: None,
-                    kind: FindingKind::Capability,
-                    trait_refs: vec![],
-                    id: "anti-analysis/archive/large-file".to_string().into(),
-                    desc: "Archive contains excessively large file".to_string().into(),
-                    conf: 0.9,
-                    crit: Criticality::Notable,
-                    mbc: None,
-                    attack: None,
-                    evidence: vec![Evidence {
-                        method: "archive_extraction".to_string(),
-                        source: source.to_string(),
-                        value: format!("file:{} size:{} (limit:{})", file, size, MAX_FILE_SIZE),
-                        location: None,
-                        ..Default::default()
-                    }],
-                    match_count: 1,
-                    source_file: None,
-                    downgraded: false,
-                });
+                large_files.push(json!({"file": file, "size": size}));
             }
             HostileArchiveReason::ExcessiveEntryName { len, preview } => {
-                let (id, desc) = if len > 1024 {
-                    (
-                        "anti-analysis/archive/hostile-entry-name",
-                        format!("Archive entry has hostile-length name ({len} bytes)"),
-                    )
-                } else {
-                    (
-                        "anti-analysis/archive/long-entry-name",
-                        format!("Archive entry has excessively long name ({len} bytes)"),
-                    )
-                };
-                report.findings.push(archive_finding(
-                    id,
-                    desc,
-                    source,
-                    vec![Evidence {
-                        method: "archive_extraction".to_string(),
-                        source: source.to_string(),
-                        value: format!("name_len:{len} preview:{preview}"),
-                        location: None,
-                        ..Default::default()
-                    }],
-                    1,
-                ));
-            }
-            HostileArchiveReason::SymlinkEscape(path) => {
-                if !is_benign_archive_symlink_escape(&path) {
-                    report.findings.push(archive_finding(
-                        "anti-analysis/archive/symlink-escape",
-                        "Archive contains symlink that may escape extraction directory".to_string(),
-                        source,
-                        vec![Evidence {
-                            method: "archive_extraction".to_string(),
-                            source: source.to_string(),
-                            value: format!("symlink:{}", path),
-                            location: None,
-                            ..Default::default()
-                        }],
-                        1,
-                    ));
+                entry_names.push(json!({"length": len, "preview": preview}));
+                let longest = metrics
+                    .iter_mut()
+                    .find(|(key, _)| *key == "archive.guard.longest_entry_name");
+                match longest {
+                    Some((_, value)) => *value = value.max(len as f64),
+                    None => metrics.push(("archive.guard.longest_entry_name", len as f64)),
                 }
             }
+            HostileArchiveReason::SymlinkEscape(path) => symlinks.push(Value::String(path)),
         }
     }
 
-    if !path_evidence.is_empty() {
-        let match_count = path_evidence.len();
-        path_evidence.truncate(MAX_ARCHIVE_PATH_TRAVERSAL_EVIDENCE);
-        report.findings.push(archive_finding(
-            "anti-analysis/archive/path-traversal",
-            "Archive contains path traversal entries (zip slip)".to_string(),
-            source,
-            path_evidence,
-            match_count,
-        ));
-    }
-}
-
-/// Whether a symlink escape (`path` is `link -> target`) has a known-benign
-/// shape: a Python interpreter shim (node-gyp's `node_gyp_bins`, a virtualenv's
-/// `bin/`), or a system location linking to a system target.
-///
-/// Judged on the link alone. Where the archive or member sits (a `testdata/`
-/// directory, a `.pkg.tar.zst` or `docker.io_` file name) is chosen by whoever
-/// built the archive, so it must not excuse an escape; whole-container
-/// allowances key on the content-detected type instead, see
-/// [`carries_system_symlinks`].
-pub(super) fn is_benign_archive_symlink_escape(path: &str) -> bool {
-    let path = path.trim();
-
-    if let Some((link_name, target)) = path.split_once("->") {
-        let link_name = link_name.trim().trim_start_matches("./");
-        let target = target.trim();
-        let interpreter_shim = matches!(link_name.rsplit('/').next(), Some("python" | "python3"))
-            && matches!(target, "/usr/bin/python" | "/usr/bin/python3");
-        if interpreter_shim {
-            return true;
-        }
-        // Shared-library development links and loader shims in rootfs exports.
-        // Keep both sides constrained; a user-data link to a system library is
-        // still an escape, as is a library path pointing to a sensitive file.
-        let library_link = [
-            "usr/lib/",
-            "usr/lib32/",
-            "usr/lib64/",
-            "usr/libx32/",
-            "lib/",
-            "lib32/",
-            "lib64/",
-            "libx32/",
-        ]
-        .iter()
-        .any(|prefix| link_name.starts_with(prefix));
-        let library_target = ["/lib/", "/lib32/", "/lib64/", "/libx32/"]
-            .iter()
-            .any(|prefix| target.starts_with(prefix));
-        let normal_library_path = !link_name.split('/').any(|part| part == "..")
-            && !target.split('/').any(|part| part == "..");
-        if library_link && library_target && normal_library_path {
-            return true;
-        }
-        let standard_system_link = matches!(
-            (link_name, target),
-            ("bin/pidof" | "usr/bin/pidof", "/sbin/killall5")
-                | ("dev/core", "/proc/kcore")
-                | ("dev/fd", "/proc/self/fd")
-                | ("etc/sgml/catalog", "/var/lib/sgml-base/supercatalog")
-                | ("usr/share/locale/locale.alias", "/etc/locale.alias")
-        );
-        let masked_service = link_name.starts_with("lib/systemd/system/")
-            && link_name.ends_with(".service")
-            && target == "/dev/null"
-            && !link_name.split('/').any(|part| part == "..");
-        if standard_system_link || masked_service {
-            return true;
-        }
-        let system_link = link_name.starts_with("etc/")
-            || ["lib/", "lib32/", "lib64/", "libx32/"]
-                .iter()
-                .any(|dir| link_name.starts_with(dir))
-            || link_name.starts_with("bin/")
-            || link_name.starts_with("sbin")
-            || link_name.starts_with("usr/")
-            || link_name == "var/lock"
-            || link_name.starts_with("var/run");
-        let system_target = target.starts_with("/usr/share/")
-            || target.starts_with("/usr/bin/")
-            || target.starts_with("/usr/sbin/")
-            // Locally installed tools: `usr/local/bin/yarn -> /opt/yarn/bin/yarn`.
-            || target.starts_with("/usr/local/bin/")
-            || target.starts_with("/usr/local/sbin/")
-            || (target.starts_with("/opt/") && !target.split('/').any(|part| part == ".."))
-            || target.starts_with("/bin/")
-            || target.starts_with("/lib/systemd/")
-            || target.starts_with("/etc/alternatives/")
-            || target.starts_with("/etc/ssl/")
-            || target.starts_with("/etc/dpkg/")
-            || target == "/etc/localtime"
-            || target == "/run"
-            || target == "/run/lock";
-        if system_link && system_target {
-            return true;
+    let mut guard = serde_json::Map::new();
+    for (key, list) in [
+        ("path_traversals", traversals),
+        ("symlink_escapes", symlinks),
+        ("large_files", large_files),
+        ("long_entry_names", entry_names),
+    ] {
+        if !list.is_empty() {
+            guard.insert(key.into(), Value::Array(list));
         }
     }
-
-    false
+    if traversal_count > 0 {
+        metrics.push(("archive.guard.path_traversal_count", traversal_count as f64));
+    }
+    if let Some(bomb) = zip_bomb {
+        guard.insert("zip_bomb".into(), bomb);
+    }
+    if !guard.is_empty() {
+        report.merge_kv_subtree("archive_guard", Value::Object(guard));
+    }
+    if !metrics.is_empty() {
+        let map = report
+            .filefacts_metrics
+            .get_or_insert_with(Default::default);
+        for (key, value) in metrics {
+            map.insert(key.to_string(), value);
+        }
+    }
 }
 
 /// Whether this archive is a kind whose contents routinely link out of the
@@ -515,21 +310,5 @@ mod tests {
         let mut nested = no_release.clone();
         nested.push("payload/etc/os-release");
         assert!(!carries_system_symlinks(FileType::Tar, &entries(&nested)));
-    }
-
-    #[test]
-    fn local_tool_links_into_opt_are_benign() {
-        assert!(is_benign_archive_symlink_escape(
-            "usr/local/bin/yarn -> /opt/yarn-v1.22.22/bin/yarn"
-        ));
-        assert!(is_benign_archive_symlink_escape(
-            "usr/local/bin/nodejs -> /usr/local/bin/node"
-        ));
-        assert!(!is_benign_archive_symlink_escape(
-            "usr/local/bin/x -> /opt/../etc/shadow"
-        ));
-        assert!(!is_benign_archive_symlink_escape(
-            "data/evil -> /opt/app/key"
-        ));
     }
 }

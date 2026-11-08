@@ -190,8 +190,8 @@ fn owned_members_release_inputs_before_ordered_fold() {
 }
 
 use super::{
-    ArchiveAnalyzer, archive_entry_metadata, is_interesting_jar_resource, jar_class_triage_score,
-    jar_inline_alert_ids, jar_nest_companion_indices, jar_should_retain_class, keep_top_ranked,
+    ArchiveAnalyzer, is_interesting_jar_resource, jar_class_triage_score, jar_inline_alert_ids,
+    jar_nest_companion_indices, jar_should_retain_class, keep_top_ranked,
     rebase_nested_archive_entry_path, rebase_nested_file_path,
 };
 use crate::analyzers::FileType;
@@ -626,25 +626,6 @@ fn nested_archive_entry_paths_keep_the_inventory_separator() {
         rebase_nested_archive_entry_path("bundle.zip!setup.exe", "setup.exe!!app/bin/payload.dll"),
         "bundle.zip!setup.exe!app/bin/payload.dll"
     );
-}
-
-#[test]
-fn archive_entry_metadata_records_extension_type_mismatch() {
-    let data = b"not a valid PE";
-    let entry = archive_entry_metadata(
-        "stage/uusd.exe".to_string(),
-        std::path::Path::new("stage/uusd.exe"),
-        &FileType::Unknown,
-        "sha".to_string(),
-        data,
-        Some("binary".to_string()),
-    );
-
-    assert_eq!(entry.declared_type.as_deref(), Some("pe"));
-    assert!(entry.extension_type_mismatch);
-    assert_eq!(entry.magic_prefix.as_deref(), Some("6e6f742061207661"));
-    assert_eq!(entry.container_kind.as_deref(), Some("binary"));
-    assert!(entry.entropy.is_some());
 }
 
 /// What the extracted-tree walk cannot reach is recorded, not dropped: a

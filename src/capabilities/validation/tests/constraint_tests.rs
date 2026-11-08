@@ -1580,3 +1580,21 @@ fn test_needs_one_is_not_flagged_by_needs_zero() {
     let result = find_needs_zero(&rules);
     assert!(result.is_empty());
 }
+
+#[test]
+fn a_symbol_validator_is_a_search_pattern() {
+    use crate::capabilities::validation::constraints::find_missing_search_patterns;
+    use crate::composite_rules::condition::{StringValidator, SymbolQuery};
+    let symbol = |is_check| {
+        let mut t = create_base_trait("t::symbol", Criticality::Notable);
+        t.r#if = Condition::Symbol(SymbolQuery {
+            is_check,
+            ..Default::default()
+        });
+        t
+    };
+    let typo = "top-npm-packages".parse().ok().map(StringValidator::TypoOf);
+    assert!(typo.is_some());
+    assert!(find_missing_search_patterns(&[symbol(typo)]).is_empty());
+    assert_eq!(find_missing_search_patterns(&[symbol(None)]), ["t::symbol"]);
+}

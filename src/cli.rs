@@ -529,8 +529,9 @@ pub enum Command {
         #[arg(long)]
         encoding: Option<String>,
 
-        /// Optional high-fidelity validator (e.g., external_ip, bitcoin_addr)
-        #[arg(long, rename_all = "snake_case")]
+        /// Optional high-fidelity validator (e.g., external_ip, bitcoin_addr,
+        /// typo_of:top-npm-packages)
+        #[arg(long)]
         is: Option<crate::composite_rules::condition::StringValidator>,
 
         /// Minimum entropy for section searches (0.0-8.0)

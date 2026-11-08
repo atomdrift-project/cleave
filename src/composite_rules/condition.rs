@@ -292,7 +292,7 @@ enum ConditionDeser {
 }
 
 /// High-fidelity validation checks for string matches.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Hash, Copy, clap::ValueEnum)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Hash, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum StringValidator {
     /// Require the entire match to be Base64-compatible (standard or URL-safe,
@@ -316,6 +316,32 @@ pub enum StringValidator {
     /// never called random, so this never fires on `Dell` or `admin`.
     #[serde(rename = "random_like")]
     RandomLike,
+    /// Require the match to be a hostname, or a URL whose host, reads as
+    /// generated: the registrable label fails the bigram model, mixes digits
+    /// into letters, or runs six consonants. Judges shape alone; legitimate
+    /// hosts and abused TLDs belong in the trait. See
+    /// `crate::hostname_validator`.
+    SusHostname,
+    /// Require the match to be one edit -- including a swap of adjacent
+    /// characters -- from an entry in the named dataset, without being an
+    /// entry or one of its listed lookalikes: `is: {typo_of:
+    /// top-npm-packages}`. See `crate::typo_validator`.
+    TypoOf(crate::datasets::Dataset),
+}
+
+impl std::str::FromStr for StringValidator {
+    type Err = String;
+
+    /// The CLI spelling: a bare name (`base64`, or `external-ip` as well as
+    /// `external_ip`) or `typo_of:<dataset>`.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (name, dataset) = s.split_once(':').unwrap_or((s, ""));
+        let name = name.replace('-', "_");
+        if name == "typo_of" {
+            return dataset.parse().map(Self::TypoOf);
+        }
+        crate::yaml::from_str(&name).map_err(|e| e.to_string())
+    }
 }
 
 /// Quantifier for cross-fact `eq`/`ne` when a path resolves to multiple values

@@ -40,13 +40,7 @@ pub(crate) fn extract_from_data(
         };
         guard.record_member_metadata(ExtractedMemberMetadata {
             archive_path: path.strip_prefix(dest)?.to_string_lossy().into_owned(),
-            mtime_unix: member.mtime_unix,
-            mode_octal: member.mode_octal,
-            uid: member.uid,
-            gid: member.gid,
             entry_type: member.entry_type.clone(),
-            linkname: member.linkname.clone(),
-            ..Default::default()
         });
         match entry_type {
             Some("directory") => {
@@ -182,8 +176,7 @@ mod tests {
     fn archived_executable_mode_does_not_make_extracted_files_executable() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
-        let mut member = entry("script", "regular", 0, 1);
-        member.mode_octal = Some(0o100777);
+        let member = entry("script", "regular", 0, 1);
         extract_from_data(b"x", &[member], dir.path(), &ExtractionGuard::new()).unwrap();
         assert_eq!(
             fs::metadata(dir.path().join("script"))

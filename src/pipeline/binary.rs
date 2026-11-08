@@ -92,6 +92,7 @@ pub(super) fn analyze_macho(
     analyzer.analyze_python_bundle_payload(
         path,
         arch_data,
+        Some(ctx.parsed.values()),
         &mut report,
         &archive_config,
         engine.yara().cloned(),

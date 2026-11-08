@@ -106,47 +106,6 @@ pub(crate) fn extract_zip_from_data(
     extract_zip_entries_safe(&mut archive, dest_dir, None, guard)
 }
 
-/// Return the byte offset where the ZIP payload begins inside a CRX file.
-pub(crate) fn crx_zip_offset(data: &[u8]) -> Result<usize> {
-    if data.len() < 12 {
-        anyhow::bail!("CRX data too small for header");
-    }
-    if &data[0..4] != b"Cr24" {
-        anyhow::bail!("Invalid CRX magic number");
-    }
-
-    let version = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
-    let zip_offset = match version {
-        3 => {
-            let header_size = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
-            12usize
-                .checked_add(header_size)
-                .context("CRX3 header specifies invalid offset (overflow)")?
-        }
-        2 => {
-            if data.len() < 16 {
-                anyhow::bail!("CRX2 data too small for header");
-            }
-            let pubkey_len = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
-            let sig_len = u32::from_le_bytes([data[12], data[13], data[14], data[15]]) as usize;
-            16usize
-                .checked_add(pubkey_len)
-                .and_then(|s| s.checked_add(sig_len))
-                .context("CRX2 header specifies invalid offsets (overflow)")?
-        }
-        _ => anyhow::bail!("Unsupported CRX version: {version}"),
-    };
-
-    if zip_offset >= data.len() {
-        anyhow::bail!(
-            "CRX file truncated or invalid header (offset {} >= size {})",
-            zip_offset,
-            data.len()
-        );
-    }
-    Ok(zip_offset)
-}
-
 /// Read an archive member from the offsets filefacts indexed for it (a ZIP
 /// central directory, a phar manifest): the `[data_offset, +compressed_size)`
 /// slice, decompressed by its method and capped at `limit` bytes. A member
@@ -210,18 +169,21 @@ pub(crate) fn read_indexed_member_prefix(
     }
 }
 
-/// Extract a CRX (Chrome extension) archive from in-memory data.
+/// Extract a CRX (Chrome extension) archive from in-memory data, its ZIP
+/// payload starting at `zip_offset` (filefacts' `crx.archive_offset`).
 pub(crate) fn extract_crx_from_data(
     data: &[u8],
+    zip_offset: usize,
     dest_dir: &Path,
     guard: &ExtractionGuard,
 ) -> Result<()> {
     use std::io::Cursor;
 
-    let zip_offset = crx_zip_offset(data)?;
-
-    let mut archive = zip::ZipArchive::new(Cursor::new(&data[zip_offset..]))
-        .context("Failed to read ZIP from CRX")?;
+    let payload = data
+        .get(zip_offset..)
+        .context("CRX archive offset past end of file")?;
+    let mut archive =
+        zip::ZipArchive::new(Cursor::new(payload)).context("Failed to read ZIP from CRX")?;
     if archive.len() > super::guards::MAX_ZIP_ENTRIES {
         anyhow::bail!(
             "CRX ZIP central directory claims {} entries (max {})",
@@ -280,10 +242,6 @@ pub(crate) fn extract_zip_entries_safe<R: Read + Seek>(
         );
         trace!("Entry {}: {}", i, entry_name);
 
-        let compressed_size = Some(entry.compressed_size());
-        let compression_method = Some(format_zip_compression(entry.compression()));
-        let mtime_unix = entry.last_modified().and_then(zip_datetime_to_unix);
-        let mode_octal = entry.unix_mode();
         let is_dir_flag = entry.is_dir();
         let is_symlink_flag = entry.unix_mode().is_some_and(|m| m & 0o170000 == 0o120000);
         let entry_type_str = if is_dir_flag {
@@ -321,7 +279,6 @@ pub(crate) fn extract_zip_entries_safe<R: Read + Seek>(
             .strip_prefix(dest_dir)
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| entry_name.clone());
-        let mut linkname_capture: Option<String> = None;
 
         // Check for symlinks (zip files can contain them via external attributes)
         // S_IFLNK = 0o120000, S_IFMT = 0o170000
@@ -335,31 +292,16 @@ pub(crate) fn extract_zip_entries_safe<R: Read + Seek>(
             if let Ok(read_size) = limited.read_to_end(&mut target_buf)
                 && read_size > 0
                 && read_size < 4096
+                && let Ok(target_str) = String::from_utf8(target_buf)
+                && symlink_escapes(&outpath, &target_str, dest_dir)
             {
-                // Reasonable symlink path length
-                if let Ok(target_str) = String::from_utf8(target_buf) {
-                    if symlink_escapes(&outpath, &target_str, dest_dir) {
-                        guard.add_hostile_reason(HostileArchiveReason::SymlinkEscape(format!(
-                            "{} -> {}",
-                            entry_name, target_str
-                        )));
-                    }
-                    linkname_capture = Some(target_str);
-                }
+                guard.add_hostile_reason(HostileArchiveReason::SymlinkEscape(format!(
+                    "{entry_name} -> {target_str}"
+                )));
             }
             guard.record_member_metadata(ExtractedMemberMetadata {
                 archive_path: rel_path,
-                compressed_size,
-                compression_method,
-                mtime_unix,
-                mode_octal,
-                uid: None,
-                gid: None,
-                uname: None,
-                gname: None,
                 entry_type: Some(entry_type_str.to_string()),
-                linkname: linkname_capture,
-                host_os: None,
             });
             // No link is created. But the JVM, Android and pip ignore unix
             // modes and load this entry as an ordinary file, so its bytes are
@@ -372,17 +314,7 @@ pub(crate) fn extract_zip_entries_safe<R: Read + Seek>(
         } else {
             guard.record_member_metadata(ExtractedMemberMetadata {
                 archive_path: rel_path,
-                compressed_size,
-                compression_method,
-                mtime_unix,
-                mode_octal,
-                uid: None,
-                gid: None,
-                uname: None,
-                gname: None,
                 entry_type: Some(entry_type_str.to_string()),
-                linkname: None,
-                host_os: None,
             });
         }
 
@@ -453,115 +385,11 @@ pub(crate) fn extract_zip_entries_safe<R: Read + Seek>(
     Ok(())
 }
 
-/// Short label for a ZIP compression method.
-pub(super) fn format_zip_compression(method: zip::CompressionMethod) -> String {
-    use zip::CompressionMethod;
-    match method {
-        CompressionMethod::Stored => "stored".to_string(),
-        CompressionMethod::Deflated => "deflate".to_string(),
-        CompressionMethod::Bzip2 => "bzip2".to_string(),
-        CompressionMethod::Zstd => "zstd".to_string(),
-        CompressionMethod::Lzma => "lzma".to_string(),
-        CompressionMethod::Xz => "xz".to_string(),
-        CompressionMethod::Aes => "aes".to_string(),
-        other => format!("{:?}", other).to_ascii_lowercase(),
-    }
-}
-
-/// Convert a ZIP `DateTime` (interpreted as UTC) to unix seconds.
-///
-/// ZIP stores timestamps as MS-DOS date/time pairs with no timezone; treating
-/// them as UTC is the conventional interpretation for forensic comparison.
-pub(super) fn zip_datetime_to_unix(dt: zip::DateTime) -> Option<i64> {
-    let year = dt.year();
-    if !(1970..=2999).contains(&year) {
-        return None;
-    }
-    let days = days_from_civil(year as i32, dt.month() as u32, dt.day() as u32)?;
-    let secs = (dt.hour() as i64) * 3600 + (dt.minute() as i64) * 60 + (dt.second() as i64);
-    Some(days * 86_400 + secs)
-}
-
-/// Days from 1970-01-01 for the given Gregorian (y, m, d).
-/// Based on Howard Hinnant's chrono algorithms (date.h). Returns `None` for
-/// invalid month/day values.
-fn days_from_civil(y: i32, m: u32, d: u32) -> Option<i64> {
-    if !(1..=12).contains(&m) || d == 0 || d > 31 {
-        return None;
-    }
-    let y_adj = if m <= 2 { y - 1 } else { y };
-    let era = y_adj.div_euclid(400);
-    let yoe = (y_adj - era * 400) as u32;
-    let mp = if m > 2 { m - 3 } else { m + 9 };
-    let doy = (153 * mp + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    Some((era as i64) * 146_097 + doe as i64 - 719_468)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::analyzers::archive::guards::ExtractionGuard;
     use tempfile::tempdir;
-
-    #[test]
-    fn test_days_from_civil_epoch() {
-        assert_eq!(days_from_civil(1970, 1, 1), Some(0));
-        assert_eq!(days_from_civil(1970, 1, 2), Some(1));
-        assert_eq!(days_from_civil(2000, 1, 1), Some(10_957));
-        assert_eq!(days_from_civil(2024, 1, 1), Some(19_723));
-    }
-
-    #[test]
-    fn test_days_from_civil_invalid() {
-        assert_eq!(days_from_civil(2024, 0, 1), None);
-        assert_eq!(days_from_civil(2024, 13, 1), None);
-        assert_eq!(days_from_civil(2024, 1, 0), None);
-        assert_eq!(days_from_civil(2024, 1, 32), None);
-    }
-
-    #[test]
-    #[allow(clippy::expect_used)]
-    fn test_extract_crx2_invalid_offsets() {
-        let dir = tempdir().expect("Failed to create temp dir");
-        let guard = ExtractionGuard::new();
-
-        // Malformed CRX2: pubkey_len exceeds file size
-        let mut crx_data = Vec::new();
-        crx_data.extend_from_slice(b"Cr24");
-        crx_data.extend_from_slice(&2u32.to_le_bytes()); // version 2
-        crx_data.extend_from_slice(&0xFFFFFFFFu32.to_le_bytes()); // massive pubkey_len
-        crx_data.extend_from_slice(&0u32.to_le_bytes()); // sig_len
-
-        let dest = dir.path().join("out");
-        std::fs::create_dir_all(&dest).expect("Failed to create dest dir");
-
-        let result = extract_crx_from_data(&crx_data, &dest, &guard);
-        assert!(result.is_err());
-        let err_msg = result.expect_err("Expected error").to_string();
-        assert!(err_msg.contains("truncated") || err_msg.contains("invalid"));
-    }
-
-    #[test]
-    #[allow(clippy::expect_used)]
-    fn test_extract_crx3_invalid_offsets() {
-        let dir = tempdir().expect("Failed to create temp dir");
-        let guard = ExtractionGuard::new();
-
-        // Malformed CRX3: header_size exceeds file size
-        let mut crx_data = Vec::new();
-        crx_data.extend_from_slice(b"Cr24");
-        crx_data.extend_from_slice(&3u32.to_le_bytes()); // version 3
-        crx_data.extend_from_slice(&0xFFFFFFFFu32.to_le_bytes()); // massive header_size
-
-        let dest = dir.path().join("out");
-        std::fs::create_dir_all(&dest).expect("Failed to create dest dir");
-
-        let result = extract_crx_from_data(&crx_data, &dest, &guard);
-        assert!(result.is_err());
-        let err_msg = result.expect_err("Expected error").to_string();
-        assert!(err_msg.contains("truncated") || err_msg.contains("invalid"));
-    }
 
     #[test]
     #[allow(clippy::expect_used)]
@@ -593,33 +421,9 @@ mod tests {
         let dest = dir.path().join("out");
         std::fs::create_dir_all(&dest).expect("Failed to create dest dir");
 
-        let result = extract_crx_from_data(&crx_data, &dest, &guard);
+        let result = extract_crx_from_data(&crx_data, 12 + header_size as usize, &dest, &guard);
         assert!(result.is_ok(), "CRX3 extraction failed: {result:?}");
         assert!(dest.join("manifest.json").exists());
-    }
-
-    #[test]
-    #[allow(clippy::expect_used)]
-    fn test_extract_crx_unsupported_version() {
-        let dir = tempdir().expect("Failed to create temp dir");
-        let guard = ExtractionGuard::new();
-
-        let mut crx_data = Vec::new();
-        crx_data.extend_from_slice(b"Cr24");
-        crx_data.extend_from_slice(&99u32.to_le_bytes()); // unsupported version
-        crx_data.extend_from_slice(&[0u8; 8]);
-
-        let dest = dir.path().join("out");
-        std::fs::create_dir_all(&dest).expect("Failed to create dest dir");
-
-        let result = extract_crx_from_data(&crx_data, &dest, &guard);
-        assert!(result.is_err());
-        assert!(
-            result
-                .expect_err("Expected error")
-                .to_string()
-                .contains("Unsupported CRX version")
-        );
     }
 }
 

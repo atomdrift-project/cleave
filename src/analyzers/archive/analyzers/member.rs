@@ -24,21 +24,33 @@ impl ArchiveAnalyzer {
             sha256: sha256.to_string(),
             architectures: None,
         });
-        report.findings.push(super::super::findings::archive_finding(
-            "anti-analysis/archive/excessive-nesting",
-            format!(
+        // No traits run on a member cleave declined to unpack, so the limit
+        // is reported here, beside the analysis gap it leaves.
+        report.findings.push(crate::types::Finding {
+            precomputed_spans: None,
+            src: None,
+            kind: crate::types::FindingKind::Capability,
+            trait_refs: vec![],
+            id: "anti-analysis/archive/excessive-nesting".into(),
+            desc: format!(
                 "Nested archive past the {max_depth}-level unpacking limit; its members were not analyzed"
-            ),
-            "cleave",
-            vec![crate::types::Evidence {
+            )
+            .into(),
+            conf: 0.9,
+            crit: crate::types::Criticality::Notable,
+            mbc: None,
+            attack: None,
+            evidence: vec![crate::types::Evidence {
                 method: "archive_extraction".to_string(),
                 source: "cleave".to_string(),
                 value: format!("depth={depth}"),
                 location: Some(relative_path.to_string()),
                 ..Default::default()
             }],
-            1,
-        ));
+            match_count: 1,
+            source_file: None,
+            downgraded: false,
+        });
         report
             .analysis_gaps
             .record(crate::types::AnalysisGap::EmbeddedSourceIncomplete);

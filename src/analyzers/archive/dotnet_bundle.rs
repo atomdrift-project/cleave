@@ -1,15 +1,10 @@
-//! Data-only .NET single-file bundle reader. Layouts follow dotnet/runtime's
-//! bundle/header.h and file_entry.h (versions 1, 2 and 6). The native host's
-//! fixed marker is preceded by the manifest offset; compressed v6 members
-//! are raw DEFLATE, not zlib streams. Never load or execute an assembly.
-use anyhow::{Context, Result, bail, ensure};
-use std::io::{Cursor, Read};
+//! Members of a .NET single-file bundle, as filefacts read its manifest
+//! (`binary.dotnet_bundle`), decoded from the apphost's bytes: stored
+//! members are sliced, v6 compressed members are raw DEFLATE (not zlib).
+//! Never load or execute an assembly.
+use anyhow::{Context, Result, ensure};
+use serde_json::Value as JsonValue;
 
-pub(super) const SIGNATURE: &[u8; 32] = &[
-    0x8b, 0x12, 0x02, 0xb9, 0x6a, 0x61, 0x20, 0x38, 0x72, 0x7b, 0x93, 0x02, 0x14, 0xd7, 0xa0, 0x32,
-    0x13, 0xf5, 0xb9, 0xe6, 0xef, 0xae, 0x33, 0x18, 0xee, 0x3b, 0x2d, 0xce, 0x24, 0xb3, 0x6a, 0xae,
-];
-const MAX_STRING: usize = 4096;
 pub(super) const MAX_BUNDLE_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Debug)]
@@ -27,119 +22,47 @@ pub(super) struct Bundle {
     pub notes: Vec<String>,
 }
 
-fn u32le(reader: &mut impl Read) -> Result<u32> {
-    let mut bytes = [0; 4];
-    reader.read_exact(&mut bytes)?;
-    Ok(u32::from_le_bytes(bytes))
-}
-fn u64le(reader: &mut impl Read) -> Result<u64> {
-    let mut bytes = [0; 8];
-    reader.read_exact(&mut bytes)?;
-    Ok(u64::from_le_bytes(bytes))
-}
-fn string(reader: &mut impl Read) -> Result<String> {
-    let mut len = 0u32;
-    for shift in (0..35).step_by(7) {
-        let mut byte = [0];
-        reader.read_exact(&mut byte)?;
-        ensure!(shift != 28 || byte[0] <= 7, "invalid string length");
-        len |= u32::from(byte[0] & 127) << shift;
-        if byte[0] < 128 {
-            ensure!(len as usize <= MAX_STRING, "bundle string exceeds limit");
-            let mut bytes = vec![0; len as usize];
-            reader.read_exact(&mut bytes)?;
-            return String::from_utf8(bytes).context("invalid UTF-8 bundle path");
-        }
-    }
-    bail!("invalid string length")
-}
-
-fn manifest(data: &[u8], header: usize) -> Result<Bundle> {
-    let mut reader = Cursor::new(data.get(header..).context("bundle header outside file")?);
-    let major = u32le(&mut reader)?;
-    let minor = u32le(&mut reader)?;
-    ensure!(
-        matches!(major, 1 | 2 | 6) && minor == 0,
-        "unsupported bundle version {major}.{minor}"
-    );
-    let count = u32le(&mut reader)? as usize;
-    ensure!(
-        count > 0 && count <= super::guards::MAX_ZIP_ENTRIES,
-        "invalid bundle member count"
-    );
-    let _bundle_id = string(&mut reader)?;
-    if major >= 2 {
-        let mut locations_and_flags = [0; 40];
-        reader.read_exact(&mut locations_and_flags)?;
-    }
-    let mut bundle = Bundle {
-        header,
-        entries: Vec::new(),
-        notes: Vec::new(),
+/// The bundle filefacts found: `Ok(None)` when the host carries none,
+/// `Err` when it carries a manifest that could not be read.
+pub(super) fn from_values(values: &filefacts::Values) -> Result<Option<Bundle>> {
+    let Some(bundle) = values.get("binary.dotnet_bundle") else {
+        return Ok(None);
     };
-    for index in 0..count {
-        if reader.position() > 8 * 1024 * 1024 {
-            bundle
-                .notes
-                .push("bundle manifest exceeded 8 MiB parsing budget".to_string());
-            break;
-        }
-        let entry = (|| -> Result<Entry> {
-            let offset = u64le(&mut reader)?;
-            let size = u64le(&mut reader)?;
-            let compressed = if major >= 6 { u64le(&mut reader)? } else { 0 };
-            let mut kind = [0];
-            reader.read_exact(&mut kind)?;
-            let path = string(&mut reader)?;
-            Ok(Entry {
-                path,
-                offset,
-                size,
-                compressed,
+    if let Some(error) = bundle.get("error").and_then(JsonValue::as_str) {
+        anyhow::bail!("{error}");
+    }
+    let header = bundle
+        .get("header_offset")
+        .and_then(JsonValue::as_u64)
+        .and_then(|offset| usize::try_from(offset).ok())
+        .context("bundle manifest without a header offset")?;
+    let field = |member: &JsonValue, name: &str| member.get(name).and_then(JsonValue::as_u64);
+    let entries = bundle
+        .get("members")
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|member| {
+            Some(Entry {
+                path: member.get("path")?.as_str()?.to_string(),
+                offset: field(member, "offset")?,
+                size: field(member, "size")?,
+                compressed: field(member, "compressed_size").unwrap_or(0),
             })
-        })();
-        match entry {
-            Ok(entry) => bundle.entries.push(entry),
-            Err(error) => {
-                bundle.notes.push(format!(
-                    "bundle manifest stopped at member {index}/{count}: {error:#}"
-                ));
-                break;
-            }
-        }
-    }
-    Ok(bundle)
-}
-
-/// Zero offsets are unpatched apphosts, not bundles. Do not let an earlier
-/// decoy marker mask a later valid manifest. Bound candidate work as well as
-/// member counts; malformed bundles are reported as incomplete by the caller.
-pub(super) fn parse(data: &[u8]) -> Result<Option<Bundle>> {
-    let mut error = None;
-    for (index, marker) in memchr::memmem::find_iter(data, SIGNATURE).enumerate() {
-        ensure!(index < 32, "too many .NET bundle markers");
-        let Some(offset) = marker
-            .checked_sub(8)
-            .and_then(|start| data.get(start..marker))
-        else {
-            continue;
-        };
-        let header = u64::from_le_bytes(offset.try_into()?);
-        if header == 0 {
-            continue;
-        }
-        match usize::try_from(header)
-            .context("bundle offset overflow")
-            .and_then(|header| manifest(data, header))
-        {
-            Ok(bundle) => return Ok(Some(bundle)),
-            Err(problem) => error = Some(problem),
-        }
-    }
-    match error {
-        Some(error) => Err(error),
-        None => Ok(None),
-    }
+        })
+        .collect();
+    let notes = bundle
+        .get("notes")
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|note| note.as_str().map(str::to_string))
+        .collect();
+    Ok(Some(Bundle {
+        header,
+        entries,
+        notes,
+    }))
 }
 
 /// The caller enforces its member and aggregate byte budgets before calling.
@@ -201,107 +124,78 @@ mod tests {
     use super::*;
     use std::io::Write;
 
-    pub(super) fn fixture(major: u32, compressed: bool) -> Vec<u8> {
-        let payload = b"print('bundle member')\n";
-        let mut data = vec![0; 8];
-        data.extend_from_slice(SIGNATURE);
-        let offset = data.len() as u64;
+    const PAYLOAD: &[u8] = b"print('bundle member')\n";
+
+    /// A host whose bytes hold `PAYLOAD` at offset 8 (raw DEFLATE when
+    /// `compressed`), with the manifest filefacts would report for it.
+    fn fixture(compressed: bool) -> (Vec<u8>, filefacts::Values) {
         let body = if compressed {
             let mut encoder =
                 flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
-            encoder.write_all(payload).unwrap();
+            encoder.write_all(PAYLOAD).unwrap();
             encoder.finish().unwrap()
         } else {
-            payload.to_vec()
+            PAYLOAD.to_vec()
         };
+        let mut data = vec![0; 8];
         data.extend_from_slice(&body);
-        let header = data.len() as u64;
-        data[..8].copy_from_slice(&header.to_le_bytes());
-        data.extend_from_slice(&major.to_le_bytes());
-        data.extend_from_slice(&0u32.to_le_bytes());
-        data.extend_from_slice(&1u32.to_le_bytes());
-        data.extend_from_slice(b"\x02id");
-        if major >= 2 {
-            data.extend_from_slice(&[0; 40]);
-        }
-        data.extend_from_slice(&offset.to_le_bytes());
-        data.extend_from_slice(&(payload.len() as u64).to_le_bytes());
-        if major >= 6 {
-            data.extend_from_slice(&(if compressed { body.len() as u64 } else { 0 }).to_le_bytes());
-        }
-        data.push(1);
-        data.extend_from_slice(b"\x0apayload.py");
-        data
+        let header = data.len();
+        data.extend_from_slice(&[0; 16]);
+        let values = filefacts::Values::from(serde_json::json!({"binary": {"dotnet_bundle": {
+            "version": 6,
+            "header_offset": header,
+            "members": [{
+                "path": "payload.py",
+                "offset": 8,
+                "size": PAYLOAD.len(),
+                "compressed_size": if compressed { body.len() } else { 0 },
+            }],
+        }}}));
+        (data, values)
     }
 
     #[test]
-    fn dotnet_bundle_versions_and_compression() {
-        for (version, compressed) in [(1, false), (2, false), (6, false), (6, true)] {
-            let data = fixture(version, compressed);
-            let bundle = parse(&data).unwrap().unwrap();
+    fn stored_and_compressed_members_decode() {
+        for compressed in [false, true] {
+            let (data, values) = fixture(compressed);
+            let bundle = from_values(&values).unwrap().unwrap();
             assert_eq!(bundle.entries.len(), 1);
-            assert!(bundle.notes.is_empty());
             assert_eq!(
                 read_member(&data, &bundle, &bundle.entries[0], 100).unwrap(),
-                b"print('bundle member')\n"
+                PAYLOAD
             );
         }
     }
 
     #[test]
-    fn dotnet_bundle_unpatched_decoy_and_invalid_headers() {
-        assert!(parse(b"not a bundle").unwrap().is_none());
-        let mut data = vec![0; 8];
-        data.extend_from_slice(SIGNATURE);
-        assert!(parse(&data).unwrap().is_none());
-        data[..8].copy_from_slice(&u64::MAX.to_le_bytes());
-        assert!(parse(&data).is_err());
-        let valid = fixture(6, true);
-        // A decoy precedes the actual fixed marker. Adjust its header and
-        // entry offset for the prefix without changing the compressed body.
-        let prefix = data.len();
-        let mut valid = valid;
-        let header = u64::from_le_bytes(valid[..8].try_into().unwrap()) as usize;
-        valid[..8].copy_from_slice(&((header + prefix) as u64).to_le_bytes());
-        valid[header + 55..header + 63].copy_from_slice(&((40 + prefix) as u64).to_le_bytes());
-        data.extend_from_slice(&valid);
-        let bundle = parse(&data).unwrap().unwrap();
-        assert_eq!(
-            read_member(&data, &bundle, &bundle.entries[0], 100).unwrap(),
-            b"print('bundle member')\n"
-        );
+    fn absent_and_unreadable_manifests() {
+        assert!(from_values(&filefacts::Values::new()).unwrap().is_none());
+        let broken = filefacts::Values::from(serde_json::json!(
+            {"binary": {"dotnet_bundle": {"error": "unsupported bundle version 9.0"}}}
+        ));
+        assert!(from_values(&broken).is_err());
     }
 
     #[test]
-    fn dotnet_bundle_member_bounds_and_bombs() {
-        let data = fixture(6, true);
-        let mut bundle = parse(&data).unwrap().unwrap();
+    fn member_bounds_and_bombs() {
+        let (data, values) = fixture(true);
+        let mut bundle = from_values(&values).unwrap().unwrap();
         assert!(read_member(&data, &bundle, &bundle.entries[0], 1).is_err());
         bundle.entries[0].size = u64::MAX;
         assert!(read_member(&data, &bundle, &bundle.entries[0], u64::MAX).is_err());
-        bundle.entries[0].size = 22;
+        bundle.entries[0].size = PAYLOAD.len() as u64;
         bundle.entries[0].offset = u64::MAX;
         assert!(read_member(&data, &bundle, &bundle.entries[0], 100).is_err());
-    }
-
-    #[test]
-    fn dotnet_bundle_truncation_is_visible() {
-        let mut data = fixture(6, true);
-        data.pop();
-        let bundle = parse(&data).unwrap().unwrap();
-        assert!(bundle.entries.is_empty());
-        assert!(!bundle.notes.is_empty());
-        let data = fixture(6, true);
-        let mut bundle = parse(&data).unwrap().unwrap();
+        let mut bundle = from_values(&values).unwrap().unwrap();
         bundle.entries[0].compressed -= 1;
         assert!(read_member(&data, &bundle, &bundle.entries[0], 100).is_err());
     }
 
     #[test]
-    fn dotnet_bundle_member_analysis_preserves_identity_and_limits() {
+    fn member_analysis_preserves_identity_and_limits() {
         use crate::analyzers::archive::ArchiveAnalyzer;
         use crate::types::{AnalysisReport, Criticality, TargetInfo};
-        let data = fixture(6, true);
+        let (data, values) = fixture(true);
         let analyzer = ArchiveAnalyzer::new();
         let mut report = AnalysisReport::new(TargetInfo {
             path: "bundle.exe".to_string(),
@@ -310,13 +204,12 @@ mod tests {
             sha256: String::new(),
             architectures: None,
         });
-        assert!(analyzer.analyze_dotnet_bundle(&data, &mut report));
+        assert!(analyzer.analyze_dotnet_bundle(&data, &values, &mut report));
         assert!(
             report
                 .archive_contents
                 .iter()
-                .any(|entry| entry.path == "payload.py"
-                    && entry.compression_method.as_deref() == Some("deflate"))
+                .any(|entry| entry.path == "payload.py")
         );
         assert!(report.files.iter().any(|file| file.path == "payload.py"));
         assert!(
@@ -326,11 +219,11 @@ mod tests {
                 .any(|finding| finding.crit >= Criticality::Suspicious)
         );
         let mut limited = AnalysisReport::new(report.target.clone());
-        assert!(
-            analyzer
-                .with_max_memory_file_size(1)
-                .analyze_dotnet_bundle(&data, &mut limited)
-        );
+        assert!(analyzer.with_max_memory_file_size(1).analyze_dotnet_bundle(
+            &data,
+            &values,
+            &mut limited
+        ));
         assert!(limited.files.is_empty());
         assert!(
             limited

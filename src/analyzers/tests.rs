@@ -69,10 +69,12 @@ fn bridge_magic_detection() {
         FileType::Elf
     );
 
+    // `MZ` with no image behind it is not a PE (filefacts' PE gate); its
+    // bytes are still analyzed, as data.
     let pe = [b'M', b'Z', 0x90, 0x00, 0x03, 0x00, 0x00, 0x00];
     assert_eq!(
         detect_file_type_from_data(Path::new("a.exe"), &pe),
-        FileType::Unknown
+        FileType::Data
     );
 
     let pyc = [0x55, 0x0d, 0x0d, 0x0a, 0x00, 0x00, 0x00, 0x00];
@@ -97,64 +99,6 @@ fn bridge_pe_magic_requires_valid_nt_header() {
         detect_file_type_from_data(Path::new("BOUT.inp"), b"MZ = 8    # Z size\n"),
         FileType::Text
     );
-}
-
-fn damaged_signature_fixture() -> Vec<u8> {
-    let mut data = vec![0u8; 0x400];
-    data[..2].copy_from_slice(b"MZ");
-    data[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
-    data[0x80..0x84].copy_from_slice(b"TL\0\0");
-    data[0x84..0x86].copy_from_slice(&0x14cu16.to_le_bytes());
-    data[0x86..0x88].copy_from_slice(&1u16.to_le_bytes());
-    data[0x94..0x96].copy_from_slice(&0xe0u16.to_le_bytes());
-    data[0x96..0x98].copy_from_slice(&0x102u16.to_le_bytes());
-    data[0x98..0x9a].copy_from_slice(&0x10bu16.to_le_bytes());
-    data[0xa8..0xac].copy_from_slice(&0x1000u32.to_le_bytes());
-    data[0xd0..0xd4].copy_from_slice(&0x2000u32.to_le_bytes());
-    data[0xd4..0xd8].copy_from_slice(&0x200u32.to_le_bytes());
-    let sec = &mut data[0x178..0x1a0];
-    sec[..5].copy_from_slice(b".text");
-    sec[8..12].copy_from_slice(&0x200u32.to_le_bytes());
-    sec[12..16].copy_from_slice(&0x1000u32.to_le_bytes());
-    sec[16..20].copy_from_slice(&0x200u32.to_le_bytes());
-    sec[20..24].copy_from_slice(&0x200u32.to_le_bytes());
-    sec[36..40].copy_from_slice(&0x60000020u32.to_le_bytes());
-    data[0x200] = 0xc3;
-    data
-}
-
-#[test]
-fn bridge_damaged_pe_signature_preserves_scan_dispatch() {
-    let mut data = damaged_signature_fixture();
-    for signature in [*b"TL\0\0", *b"ABCD", [0; 4]] {
-        data[0x80..0x84].copy_from_slice(&signature);
-        for name in ["sample", "sample.exe", "notes.txt"] {
-            assert_eq!(
-                detect_file_type_from_data(Path::new(name), &data),
-                FileType::Pe
-            );
-        }
-    }
-}
-
-#[test]
-fn bridge_damaged_pe_requires_stored_executable_entry() {
-    let data = damaged_signature_fixture();
-    for (offset, replacement) in [
-        (0x3c, u32::MAX),    // out-of-bounds NT header
-        (0x94, 0),           // missing optional header
-        (0xa8, 0x1800),      // entry outside stored section bytes
-        (0xd0, 0x1000),      // section outside declared image
-        (0x188, 0),          // no stored code
-        (0x18c, 0x300),      // raw section exceeds file
-        (0x19c, 0x40000040), // non-executable section
-    ] {
-        let mut invalid = data.clone();
-        invalid[offset..offset + 4].copy_from_slice(&replacement.to_le_bytes());
-        assert!(!looks_like_pe_image(&invalid), "offset {offset:x}");
-    }
-    assert!(!looks_like_pe_image(&data[..0x3ff]));
-    assert!(!looks_like_pe_image(b"MZ = 8    # ordinary text\n"));
 }
 
 #[test]

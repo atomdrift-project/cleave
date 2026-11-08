@@ -36,9 +36,7 @@ pub(crate) fn extract_from_data(data: &[u8], dest: &Path, guard: &ExtractionGuar
         }
         guard.record_member_metadata(ExtractedMemberMetadata {
             archive_path: path.strip_prefix(dest)?.to_string_lossy().into_owned(),
-            compression_method: Some("stored".into()),
             entry_type: Some("regular".into()),
-            ..Default::default()
         });
         let mut out = OpenOptions::new()
             .write(true)

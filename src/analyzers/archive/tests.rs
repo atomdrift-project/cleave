@@ -8,76 +8,23 @@ use std::io::{Cursor, Write};
 use ::tar;
 use ::zip;
 
-/// A symlink escape is excused by what the link is, or by the archive's
-/// content-detected type, never by a name whoever built the archive chose:
-/// a `testdata/` directory, a `.pkg.tar.zst` or a `docker.io_` file name.
-#[test]
-fn system_symlink_paths_normalize_dot_prefix() {
-    for link in [
-        "sbin/mount.ntfs-3g",
-        "./sbin/mount.ntfs-3g",
-        "././sbin/mount.ntfs-3g",
-    ] {
-        assert!(is_benign_archive_symlink_escape(&format!(
-            "{link} -> /bin/ntfs-3g"
-        )));
-    }
-    for link in [
-        "../sbin/mount.ntfs-3g",
-        "./../sbin/mount.ntfs-3g",
-        "./data/evil",
-    ] {
-        assert!(!is_benign_archive_symlink_escape(&format!(
-            "{link} -> /bin/ntfs-3g"
-        )));
-    }
-    assert!(!is_benign_archive_symlink_escape(
-        "./sbin/mount.ntfs-3g -> /etc/passwd"
-    ));
-    // `lib` names a directory, not a prefix: `library/` is user content.
-    assert!(is_benign_archive_symlink_escape(
-        "lib64/ld.so -> /usr/bin/ld.so"
-    ));
-    assert!(!is_benign_archive_symlink_escape(
-        "library/x -> /usr/bin/curl"
-    ));
-    assert!(is_benign_archive_symlink_escape(
-        "venv/bin/python3 -> /usr/bin/python3"
-    ));
-    assert!(!is_benign_archive_symlink_escape(
-        "venv/bin/python3 -> /etc/shadow"
-    ));
+/// 1 when the extraction guards recorded a non-empty `archive_guard.<key>`
+/// list on `report`, else 0.
+fn guard_recorded(report: &AnalysisReport, key: &str) -> usize {
+    usize::from(
+        report
+            .values_tree
+            .as_deref()
+            .and_then(|tree| tree.get("archive_guard"))
+            .and_then(|guard| guard.get(key))
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|list| !list.is_empty()),
+    )
 }
 
-#[test]
-fn rootfs_standard_symlinks_keep_both_operands_constrained() {
-    for link in [
-        "usr/lib64/ld-linux-x86-64.so.2 -> /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
-        "usr/lib/x86_64-linux-gnu/libdl.so -> /lib/x86_64-linux-gnu/libdl.so.2",
-        "usr/bin/pidof -> /sbin/killall5",
-        "bin/pidof -> /sbin/killall5",
-        "dev/core -> /proc/kcore",
-        "dev/fd -> /proc/self/fd",
-        "lib/systemd/system/bootlogs.service -> /dev/null",
-        "etc/sgml/catalog -> /var/lib/sgml-base/supercatalog",
-        "usr/share/locale/locale.alias -> /etc/locale.alias",
-    ] {
-        assert!(is_benign_archive_symlink_escape(link), "{link}");
-    }
-    for link in [
-        "data/libdl.so -> /lib/x86_64-linux-gnu/libdl.so.2",
-        "usr/lib64/loader -> /etc/shadow",
-        "usr/lib64/loader -> /lib/../../etc/shadow",
-        "usr/lib/../../data/loader -> /lib/loader",
-        "usr/bin/pidof -> /sbin/attacker",
-        "dev/core -> /etc/passwd",
-        "data/fd -> /proc/self/fd",
-        "lib/systemd/system/../../data/x.service -> /dev/null",
-        "etc/sgml/catalog -> /var/lib/other/secret",
-        "usr/share/locale/locale.alias -> /etc/shadow",
-    ] {
-        assert!(!is_benign_archive_symlink_escape(link), "{link}");
-    }
+/// The extraction-guard metric `name` on `report`.
+fn guard_metric(report: &AnalysisReport, name: &str) -> Option<f64> {
+    report.filefacts_metrics.as_ref()?.get(name).copied()
 }
 
 #[test]
@@ -106,14 +53,11 @@ fn symlink_escape_is_not_excused_by_names() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(file_name);
         std::fs::write(&path, bytes).unwrap();
-        ArchiveAnalyzer::new()
+        let report = ArchiveAnalyzer::new()
             .with_capability_mapper(CapabilityMapper::empty())
             .analyze(&path)
-            .unwrap()
-            .findings
-            .iter()
-            .filter(|f| f.id.as_ref() == "anti-analysis/archive/symlink-escape")
-            .count()
+            .unwrap();
+        guard_recorded(&report, "symlink_escapes")
     }
 
     assert_eq!(
@@ -200,14 +144,11 @@ fn tar_dot_slash_root_entry_is_not_zip_slip() {
         }
         archive.finish().unwrap();
         drop(archive);
-        ArchiveAnalyzer::new()
+        let report = ArchiveAnalyzer::new()
             .with_capability_mapper(CapabilityMapper::empty())
             .analyze(&path)
-            .unwrap()
-            .findings
-            .iter()
-            .filter(|f| f.id.as_ref() == "anti-analysis/archive/path-traversal")
-            .count()
+            .unwrap();
+        guard_recorded(&report, "path_traversals")
     }
 
     assert_eq!(
@@ -1195,7 +1136,7 @@ fn test_path_traversal_detection() {
 }
 
 #[test]
-fn member_limit_telemetry_does_not_downgrade_unsafe_entries() {
+fn member_limit_is_recorded_beside_unsafe_entries() {
     let mut report = AnalysisReport::new(TargetInfo::default());
     push_archive_hostile_findings(
         &mut report,
@@ -1207,17 +1148,11 @@ fn member_limit_telemetry_does_not_downgrade_unsafe_entries() {
         "archive_analyzer",
         false,
     );
-    let limit = report
-        .findings
-        .iter()
-        .find(|f| f.id == "metadata/archive/layout::archive-member-limit-reached")
-        .unwrap();
-    assert_eq!(limit.crit, Criticality::Notable);
-    assert!(
-        report.findings.iter().any(
-            |f| f.id.starts_with("anti-analysis/archive/") && f.crit >= Criticality::Suspicious
-        )
+    assert_eq!(
+        guard_metric(&report, "archive.guard.member_limit_reached"),
+        Some((MAX_FILE_COUNT + 1) as f64)
     );
+    assert_eq!(guard_recorded(&report, "path_traversals"), 1);
 }
 
 #[test]
@@ -1390,16 +1325,6 @@ fn test_archive_member_metadata_captured() {
         .iter()
         .find(|e| e.path == "inner.tar.gz!payload.sh")
         .expect("nested tar member missing");
-    assert_eq!(
-        inner.mode_octal,
-        Some(0o755),
-        "nested tar entry should preserve mode_octal"
-    );
-    assert_eq!(inner.mtime_unix, Some(1_700_000_000));
-    assert_eq!(inner.uid, Some(1000));
-    assert_eq!(inner.gid, Some(1000));
-    assert_eq!(inner.uname.as_deref(), Some("alice"));
-    assert_eq!(inner.gname.as_deref(), Some("staff"));
     assert_eq!(inner.entry_type.as_deref(), Some("regular"));
 }
 
@@ -1706,15 +1631,8 @@ fn test_vsix_path_traversal_protection() {
         "path traversal entry should be visible in archive_contents metadata"
     );
 
-    // Should have detected path traversal as a hostile finding
-    assert!(
-        report
-            .findings
-            .iter()
-            .any(|f| f.id.contains("path-traversal")),
-        "should detect path traversal, findings: {:?}",
-        report.findings.iter().map(|f| &f.id).collect::<Vec<_>>()
-    );
+    // The guard records the traversal for traits to judge.
+    assert_eq!(guard_recorded(&report, "path_traversals"), 1);
 }
 
 #[test]
@@ -1737,14 +1655,11 @@ fn test_zip_path_traversal_findings_are_grouped() {
     let analyzer = ArchiveAnalyzer::new();
     let report = analyzer.analyze(&zip_path).unwrap();
 
-    let path_findings: Vec<_> = report
-        .findings
-        .iter()
-        .filter(|f| f.id == "anti-analysis/archive/path-traversal")
-        .collect();
-    assert_eq!(path_findings.len(), 1);
-    assert_eq!(path_findings[0].match_count, 2);
-    assert_eq!(path_findings[0].evidence.len(), 2);
+    assert_eq!(guard_recorded(&report, "path_traversals"), 1);
+    assert_eq!(
+        guard_metric(&report, "archive.guard.path_traversal_count"),
+        Some(2.0)
+    );
 }
 
 #[test]
@@ -1883,12 +1798,7 @@ fn test_zip_path_edge_case_corpus_still_reports_zip_slip() {
     let analyzer = ArchiveAnalyzer::new();
     let report = analyzer.analyze(&zip_path).unwrap();
 
-    assert!(
-        report
-            .findings
-            .iter()
-            .any(|f| f.id == "anti-analysis/archive/path-traversal")
-    );
+    assert_eq!(guard_recorded(&report, "path_traversals"), 1);
 }
 
 #[test]
@@ -2096,14 +2006,8 @@ fn test_7z_size_limit_protection() {
     assert!(result.is_ok());
     let report = result.unwrap();
 
-    // Should have detected excessive file size
-    assert!(
-        report
-            .findings
-            .iter()
-            .any(|f| f.id == "anti-analysis/archive/large-file"
-                && f.desc.contains("excessively large file"))
-    );
+    // Should have recorded the oversized member
+    assert_eq!(guard_recorded(&report, "large_files"), 1);
 }
 
 // =========================================================================

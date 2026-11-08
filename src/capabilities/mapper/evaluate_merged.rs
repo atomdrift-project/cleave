@@ -12,7 +12,7 @@
 //!    removed if their conditions are now satisfied.
 
 use crate::composite_rules::{Arch, Condition, FileType as RuleFileType, SectionMap};
-use crate::types::{AnalysisReport, Evidence, Finding};
+use crate::types::{AnalysisReport, Criticality, Evidence, Finding};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::HashMap;
 /// Borrowed analysis products shared with the rule engine.
@@ -605,6 +605,20 @@ impl super::CapabilityMapper {
         let _d_comp = t_comp.elapsed();
         let _d_total = t_total.elapsed();
 
+        // Step 5: re-check atomic traits' downgrades against the complete
+        // file. An atom is matched in Step 2 alongside its siblings, so a
+        // downgrade naming another atom (a test filename, an assertion call)
+        // or a composite saw an incomplete context then. The composite pass
+        // does the same for composites (its Pass 3).
+        self.reeval_atomic_downgrades(
+            report,
+            binary_data,
+            cached_ast,
+            file_type,
+            &section_map,
+            &sink,
+        );
+
         // Step 6: Retroactive unless-suppression.
         //
         // Atomic traits (Steps 1-2) can declare `unless: [{id: some-composite}]`, but
@@ -683,6 +697,61 @@ impl super::CapabilityMapper {
         sink: &crate::types::SuppressionSink,
     ) {
         self.apply_retroactive_unless_suppression_to_findings(&mut report.findings, Some(sink));
+    }
+
+    /// Re-evaluate atomic traits' file-context downgrades once every atom and
+    /// composite of the file is in `report.findings`. Starts from the declared
+    /// crit, so a downgrade that already fired at match time is not applied
+    /// twice; `scope: parent` belongs to the file-tree pass.
+    fn reeval_atomic_downgrades(
+        &self,
+        report: &mut AnalysisReport,
+        binary_data: &[u8],
+        cached_ast: Option<&tree_sitter::Tree>,
+        file_type: RuleFileType,
+        section_map: &SectionMap,
+        sink: &crate::types::SuppressionSink,
+    ) {
+        let candidate = |finding: &Finding| {
+            self.trait_id_map
+                .get(finding.id.as_str())
+                .map(|&idx| &self.trait_definitions[idx])
+                .filter(|rule| {
+                    rule.downgrade
+                        .as_ref()
+                        .is_some_and(|d| d.scope != Some(crate::composite_rules::Scope::Parent))
+                })
+        };
+        if !report.findings.iter().any(|f| candidate(f).is_some()) {
+            return;
+        }
+        let updates: Vec<(usize, Criticality)> = {
+            let ctx = crate::composite_rules::context::EvaluationContext::new(
+                report,
+                binary_data,
+                file_type,
+                &self.platforms,
+                None,
+                cached_ast,
+            )
+            .with_suppressions(Some(sink))
+            .with_section_map(section_map);
+            report
+                .findings
+                .iter()
+                .enumerate()
+                .filter_map(|(i, finding)| {
+                    let rule = candidate(finding)?;
+                    let downgrade = rule.downgrade.as_ref()?;
+                    let new_crit = rule.evaluate_downgrade(downgrade, &rule.crit, &ctx);
+                    (new_crit < finding.crit).then_some((i, new_crit))
+                })
+                .collect()
+        };
+        for (idx, crit) in updates {
+            report.findings[idx].crit = crit;
+            report.findings[idx].downgraded = true;
+        }
     }
 
     pub(crate) fn apply_retroactive_unless_suppression_to_findings(

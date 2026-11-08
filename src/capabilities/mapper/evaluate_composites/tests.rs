@@ -2251,3 +2251,82 @@ fn trait_ref_index_mirrors_eval_trait_matching() {
     assert!(idx.possibly_referenced("anti/obfuscation"));
     assert!(!idx.possibly_referenced("anti/obfuscation-extra::x"));
 }
+
+/// A member downgraded by its parent's context must not leave the archive's
+/// rolled-up copy of that finding at the old crit: the copy is what the
+/// container reports. A copy pooled from several members stays as it was,
+/// because the other member may still carry the finding undowngraded.
+#[test]
+#[allow(clippy::expect_used)]
+fn parent_tree_pass_lowers_rolled_up_container_copy() {
+    let yaml = r#"
+defaults:
+  for: [pe]
+  platforms: [unix, windows]
+traits:
+  - id: "test/context::known-tool"
+    desc: "Known tool"
+    crit: notable
+    if:
+      type: basename
+      exact: "known.exe"
+  - id: "test/target::atomic"
+    desc: "Target atomic behavior explained by a known tool"
+    crit: suspicious
+    if:
+      type: basename
+      exact: "target.exe"
+    downgrade:
+      scope: file-or-parent
+      any:
+        - id: "test/context::known-tool"
+  - id: "test/target::pooled"
+    desc: "Target behavior seen in two members"
+    crit: suspicious
+    if:
+      type: basename
+      exact: "target.exe"
+    downgrade:
+      scope: file-or-parent
+      any:
+        - id: "test/context::known-tool"
+"#;
+    let source = write_test_traits(yaml);
+    let mapper =
+        super::super::CapabilityMapper::from_yaml(source.path()).expect("load rollup mapper");
+    let mut report = make_test_report();
+    let located = |id: &str, members: &[&str]| {
+        let mut finding = make_test_finding(id, Criticality::Suspicious);
+        for member in members {
+            finding.evidence.push(
+                Evidence::new("text", "fixture", "x").with_location(format!("archive:{member}")),
+            );
+        }
+        finding
+    };
+    report.findings = vec![
+        make_test_finding("test/context::known-tool", Criticality::Notable),
+        located("test/target::atomic", &["target.exe:line:12"]),
+        located("test/target::pooled", &["target.exe", "other.exe"]),
+    ];
+    report.files = vec![crate::types::FileAnalysis {
+        id: 1,
+        path: "root.tar!!target.exe".into(),
+        depth: 1,
+        file_type: "pe".into(),
+        findings: vec![
+            make_test_finding("test/target::atomic", Criticality::Suspicious),
+            make_test_finding("test/target::pooled", Criticality::Suspicious),
+        ],
+        ..Default::default()
+    }];
+
+    mapper.reeval_parent_scope_in_file_tree(&mut report, &[], RuleFileType::All);
+
+    assert_eq!(report.files[0].findings[0].crit, Criticality::Notable);
+    assert_eq!(report.files[0].findings[1].crit, Criticality::Notable);
+    assert_eq!(report.findings[1].crit, Criticality::Notable);
+    assert!(report.findings[1].downgraded);
+    assert_eq!(report.findings[2].crit, Criticality::Suspicious);
+    assert!(!report.findings[2].downgraded);
+}

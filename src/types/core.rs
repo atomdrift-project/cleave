@@ -1481,7 +1481,7 @@ fn source_location_order(location: (Option<u64>, Option<u64>)) -> (u64, u64) {
 
 /// The leaf member name of an archive-member file path: the segment after the
 /// last archive delimiter (`a.zip!!dir/b.so` → `dir/b.so`).
-fn leaf_member(path: &str) -> &str {
+pub(crate) fn leaf_member(path: &str) -> &str {
     use super::file_analysis::ARCHIVE_DELIMITER;
     path.rsplit(ARCHIVE_DELIMITER).next().unwrap_or(path)
 }

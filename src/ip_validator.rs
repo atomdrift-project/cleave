@@ -50,6 +50,7 @@ fn ip_pattern() -> Option<&'static regex::Regex> {
 /// - Private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
 /// - Loopback (127.0.0.0/8)
 /// - Link-local (169.254.0.0/16)
+/// - Shared address space (100.64.0.0/10, carrier-grade NAT / Tailscale)
 /// - Multicast (224.0.0.0/4)
 /// - Reserved (240.0.0.0/4)
 /// - Documentation ranges (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24)
@@ -114,6 +115,12 @@ fn is_external_ip_ctx(ip: &Ipv4Addr, url_scheme_anchored: bool) -> bool {
 
     // Reject link-local (169.254.0.0/16)
     if octets[0] == 169 && octets[1] == 254 {
+        return false;
+    }
+
+    // Reject shared address space (100.64.0.0/10, RFC 6598): carrier-grade NAT
+    // and Tailscale tailnet addresses, unreachable from the public internet.
+    if octets[0] == 100 && (64..=127).contains(&octets[1]) {
         return false;
     }
 
@@ -447,6 +454,17 @@ mod tests {
     fn test_external_ip_link_local_rejected() {
         assert!(!is_external_ip(&Ipv4Addr::new(169, 254, 0, 1)));
         assert!(!is_external_ip(&Ipv4Addr::new(169, 254, 255, 255)));
+    }
+
+    #[test]
+    fn test_external_ip_shared_address_space_rejected() {
+        // A Tailscale CDP endpoint, as in a browser-relay test fixture.
+        assert!(!is_external_ip_ctx(&Ipv4Addr::new(100, 100, 92, 97), true));
+        assert!(!is_external_ip(&Ipv4Addr::new(100, 64, 1, 1)));
+        assert!(!is_external_ip(&Ipv4Addr::new(100, 127, 255, 254)));
+        // Either side of the /10 is ordinary public space.
+        assert!(is_external_ip_ctx(&Ipv4Addr::new(100, 63, 12, 34), true));
+        assert!(is_external_ip_ctx(&Ipv4Addr::new(100, 128, 12, 34), true));
     }
 
     #[test]

@@ -212,8 +212,12 @@ fn is_os_root_filesystem(contents: &[ArchiveEntry]) -> bool {
         contents
             .iter()
             .filter(|entry| {
-                let path = entry.path.trim_start_matches("./");
-                !path.contains('!') && prefixes.iter().any(|prefix| path.starts_with(prefix))
+                // The member's path inside this archive, read the way
+                // `has_root_member` reads it: a nested archive's entries
+                // carry their parent's `outer!` prefix.
+                let leaf = entry.path.rsplit('!').next().unwrap_or(&entry.path);
+                let path = leaf.trim_start_matches("./");
+                prefixes.iter().any(|prefix| path.starts_with(prefix))
             })
             .take(MIN_ROOTFS_TREE_MEMBERS)
             .count()
@@ -285,6 +289,16 @@ mod tests {
         let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
         let rootfs = entries(&refs);
         assert!(carries_system_symlinks(FileType::TarZst, &rootfs));
+        // Nested inside an installer, entries carry the parent's prefix.
+        let prefixed: Vec<String> = refs
+            .iter()
+            .map(|p| format!("assets/podman-image.zst!{p}"))
+            .collect();
+        let prefixed_refs: Vec<&str> = prefixed.iter().map(String::as_str).collect();
+        assert!(carries_system_symlinks(
+            FileType::TarZst,
+            &entries(&prefixed_refs)
+        ));
         assert!(carries_system_symlinks(FileType::Tar, &rootfs));
         // Same members in a non-tar container: no allowance.
         assert!(!carries_system_symlinks(FileType::Zip, &rootfs));

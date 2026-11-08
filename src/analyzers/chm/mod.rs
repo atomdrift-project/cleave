@@ -24,34 +24,23 @@ use crate::analyzers::archive::{MAX_COMPRESSION_RATIO, MIN_ZIP_BOMB_UNCOMPRESSED
 use anyhow::{Context, Result, bail};
 use lzx::{Lzxd, WindowSize};
 
-/// Directory entry parsed from a CHM PMGL chunk.
-#[derive(Debug, Clone)]
-pub(crate) struct ChmEntry {
-    pub name: String,
-    /// Content section index (0=Uncompressed, 1=MSCompressed typically).
-    pub section: u64,
-    /// Offset within the content section.
-    pub offset: u64,
-    /// Length in bytes.
-    pub length: u64,
-}
+/// A directory entry, as filefacts read it from the PMGL chunks.
+pub(crate) type ChmEntry = filefacts::chm::DirEntry;
 
-impl ChmEntry {
-    /// True if this entry is a CHM-internal control file (`#SYSTEM`,
-    /// `::DataSpace/...`, etc.) that callers should not extract as a
-    /// scannable user file.
-    fn is_internal(&self) -> bool {
-        // CHM directory names usually start with '/'. Strip a single
-        // leading '/' before checking the conventional namespace markers
-        // ('#' for header records, '$' for ObjectInfo-style sections, '::'
-        // for the system namespace).
-        let n = self.name.strip_prefix('/').unwrap_or(&self.name);
-        n.starts_with('#')
-            || n.starts_with("::")
-            || n.starts_with('$')
-            || self.name == "/"
-            || self.name.ends_with('/')
-    }
+/// True if `entry` is a CHM-internal control file (`#SYSTEM`,
+/// `::DataSpace/...`, etc.) that callers should not extract as a scannable
+/// user file.
+fn is_internal(entry: &ChmEntry) -> bool {
+    // CHM directory names usually start with '/'. Strip a single leading
+    // '/' before checking the conventional namespace markers ('#' for
+    // header records, '$' for ObjectInfo-style sections, '::' for the
+    // system namespace).
+    let n = entry.name.strip_prefix('/').unwrap_or(&entry.name);
+    n.starts_with('#')
+        || n.starts_with("::")
+        || n.starts_with('$')
+        || entry.name == "/"
+        || entry.name.ends_with('/')
 }
 
 /// Parsed CHM container with directory listing and pointers needed to
@@ -65,30 +54,14 @@ pub(crate) struct Chm<'a> {
 }
 
 impl<'a> Chm<'a> {
-    /// Parse the ITSF/ITSP/PMGL structure of `data`.
+    /// The directory of `data`, as filefacts reads it (version-3 ITSF only).
     pub(crate) fn parse(data: &'a [u8]) -> Result<Self> {
-        if data.len() < 0x60 || !data.starts_with(b"ITSF") {
-            bail!("not a CHM file (missing ITSF magic)");
-        }
-        let version = u32_le(data, 0x04).context("ITSF header truncated")?;
-        if version != 3 {
-            bail!("unsupported CHM version {version} (only v3 supported)");
-        }
-
-        // Section 1 of the ITSF header table holds the ITSP + directory.
-        let header = |offset| u64_le(data, offset).context("ITSF header truncated");
-        let section1_offset = header(0x48)?;
-        let section1_length = header(0x50)?;
-        let data_offset = header(0x58)?;
-
-        let dir = slice_at(data, section1_offset, section1_length)
-            .context("ITSF section 1 (directory) out of bounds")?;
-        let entries = parse_directory(dir)?;
-
+        let directory = filefacts::chm::directory(data)
+            .context("not a version-3 CHM, or its directory lies outside the file")?;
         Ok(Self {
             data,
-            data_offset,
-            entries,
+            data_offset: directory.data_offset,
+            entries: directory.entries,
         })
     }
 
@@ -362,89 +335,6 @@ fn decompress_lzx(content: &[u8], cd: &ControlData, rt: &ResetTable) -> Result<V
     Ok(out)
 }
 
-/// Walk the ITSP directory chunks and return the flat list of leaf
-/// entries (one per internal file).
-fn parse_directory(section: &[u8]) -> Result<Vec<ChmEntry>> {
-    if section.len() < 0x54 || !section.starts_with(b"ITSP") {
-        bail!("missing ITSP header");
-    }
-    let field = |offset| usize_le(section, offset).context("ITSP header truncated");
-    let chunk_size = field(0x10)?;
-    let chunk_count = field(0x2c)?;
-    if chunk_size < 0x14 {
-        bail!("ITSP chunk_size {chunk_size} too small");
-    }
-
-    let header_len = field(0x08)?;
-    let mut entries = Vec::new();
-    for i in 0..chunk_count {
-        let Some(chunk) = i
-            .checked_mul(chunk_size)
-            .and_then(|offset| offset.checked_add(header_len))
-            .and_then(|start| section.get(start..start.checked_add(chunk_size)?))
-        else {
-            break;
-        };
-        if !chunk.starts_with(b"PMGL") {
-            // PMGI index chunk — skip; we only need leaf entries.
-            continue;
-        }
-        let Some(quickref) = usize_le(chunk, 0x04).filter(|&quickref| quickref < chunk_size) else {
-            continue;
-        };
-        let entries_end = chunk_size.saturating_sub(quickref);
-        let mut pos = 0x14usize;
-        // Each entry consumes at least four ENCINT bytes, so `pos` advances.
-        while let Some(rest) = chunk.get(pos..entries_end).filter(|rest| !rest.is_empty()) {
-            let Some((entry, consumed)) = parse_entry(rest) else {
-                break;
-            };
-            pos = pos.saturating_add(consumed);
-            entries.push(entry);
-        }
-    }
-    Ok(entries)
-}
-
-fn parse_entry(buf: &[u8]) -> Option<(ChmEntry, usize)> {
-    let (name_len, mut pos) = read_encint(buf)?;
-    // An ENCINT spans up to 70 bits, so the length can be near `u64::MAX`;
-    // `pos + name_len` would wrap and slip past a plain bounds check.
-    let name_end = pos.checked_add(usize::try_from(name_len).ok()?)?;
-    let name = String::from_utf8_lossy(buf.get(pos..name_end)?).into_owned();
-    pos = name_end;
-    let mut next_encint = || {
-        let (value, len) = read_encint(buf.get(pos..)?)?;
-        pos = pos.checked_add(len)?;
-        Some(value)
-    };
-    let section = next_encint()?;
-    let offset = next_encint()?;
-    let length = next_encint()?;
-    Some((
-        ChmEntry {
-            name,
-            section,
-            offset,
-            length,
-        },
-        pos,
-    ))
-}
-
-/// Decode one CHM ENCINT (variable-length, big-endian, high bit = continue).
-fn read_encint(buf: &[u8]) -> Option<(u64, usize)> {
-    let mut value: u64 = 0;
-    for (len, &b) in (1..=10).zip(buf) {
-        // Bits shifted past the top of a 10-byte (70-bit) value are dropped.
-        value = value.wrapping_shl(7) | u64::from(b & 0x7f);
-        if b & 0x80 == 0 {
-            return Some((value, len));
-        }
-    }
-    None
-}
-
 fn u32_le(buf: &[u8], off: usize) -> Option<u32> {
     let bytes = buf.get(off..off.checked_add(4)?)?;
     Some(u32::from_le_bytes(bytes.try_into().ok()?))
@@ -523,7 +413,7 @@ pub(crate) fn collect_members(data: &[u8]) -> Result<ChmContents> {
     let mut members = Vec::new();
     let mut path_traversals = Vec::new();
     for entry in &chm.entries {
-        if entry.length == 0 || entry.is_internal() {
+        if entry.length == 0 || is_internal(entry) {
             continue;
         }
         let Some(rel_name) = sanitize_chm_name(&entry.name) else {
@@ -571,23 +461,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn encint_decode_single_byte() {
-        assert_eq!(read_encint(&[0x05, 0xFF]), Some((5, 1)));
-    }
-
-    #[test]
-    fn encint_decode_multi_byte() {
-        // 0x82 0x05 → (2 << 7) | 5 = 261
-        assert_eq!(read_encint(&[0x82, 0x05]), Some((261, 2)));
-    }
-
-    #[test]
-    fn encint_decode_three_byte() {
-        // 0x81 0x80 0x01 → ((1 << 7) | 0) << 7 | 1 = 16385
-        assert_eq!(read_encint(&[0x81, 0x80, 0x01]), Some((16385, 3)));
-    }
-
-    #[test]
     fn sanitize_rejects_traversal() {
         assert_eq!(sanitize_chm_name("../etc/passwd"), None);
         assert_eq!(sanitize_chm_name("a/../b"), None);
@@ -613,15 +486,6 @@ mod tests {
     #[test]
     fn parse_rejects_short() {
         assert!(Chm::parse(b"ITSF").is_err());
-    }
-
-    /// A 10-byte ENCINT name length near `u64::MAX` made `pos + name_len`
-    /// overflow; the entry must be rejected, not panic.
-    #[test]
-    fn parse_entry_rejects_overflowing_name_len() {
-        let mut buf = vec![0xFF; 9];
-        buf.extend_from_slice(&[0x7F, b'a', 0x00, 0x00, 0x00]);
-        assert!(parse_entry(&buf).is_none());
     }
 
     /// A small stream declaring a huge output is refused before decoding, as

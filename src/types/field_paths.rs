@@ -98,22 +98,14 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
 /// two claims the same `package.json` makes — so they moved to
 /// `filefacts::formats::npm`, which is where that manifest is parsed. The
 /// remaining entries genuinely cannot: `unused_runtime_deps` needs every
-/// shipped module's imports beside the manifest, `vsix.*` needs the manifest
-/// as a member of a container filefacts does not crack, and `references.*` is
-/// the outcome of a network fetch. The `binary.*` / `pe.*` entries have no
-/// such excuse — they are per-file measurements sitting on the wrong side of
-/// the boundary.
+/// shipped module's imports beside the manifest, `references.*` is the
+/// outcome of a network fetch, `archive.guard.*` is what extraction
+/// observed, and `strings.*` reports cleave's own retention caps.
 #[cfg(feature = "lint")]
 pub(crate) const CLEAVE_OWNED_METRIC_FIELDS: &[&str] = &[
     // Needs every shipped module's imports beside the manifest, so no
     // single-file parse can reach it.
     "consistency.unused_runtime_deps",
-    "consistency.self_dependency",
-    "consistency.metadata_identity_mismatch",
-    "consistency.name_typosquat",
-    "consistency.cloned_summary",
-    "vsix.extension_pack_self_entries",
-    "vsix.extension_pack_size",
     // Written by scan's follow phase (`attribute_reference_outcomes`), which
     // attributes each fetch outcome back to the file that declared it. Neither
     // filefacts nor cleave can compute these — only a run that actually
@@ -131,19 +123,20 @@ pub(crate) const CLEAVE_OWNED_METRIC_FIELDS: &[&str] = &[
     // different path from the fetch records the two counts above come from: a
     // dependency can resolve without a live download and still have a record.
     "references.security_hold_count",
+    // What cleave's extraction guards observed while unpacking (see
+    // `archive::findings::push_archive_hostile_findings`): outcomes of
+    // extraction, which only the extractor can report.
+    "archive.guard.compression_ratio",
+    "archive.guard.longest_entry_name",
+    "archive.guard.member_limit_reached",
+    "archive.guard.path_traversal_count",
+    "archive.guard.total_size",
     // Cleave's own string-retention policy: filefacts offers every text row,
     // cleave's per-file caps decide what rules search. Only the side that
     // applies the cap can say how many rows it dropped.
     "strings.extracted_count",
     "strings.retained_count",
     "strings.truncated",
-    // Per-file measurements that should move into filefacts.
-    "binary.embedded_binaries",
-    "pe.directory_section_mismatch_count",
-    "pe.executable_prose_section_count",
-    "pe.headers_size",
-    "pe.headers_size_ratio",
-    "pe.prose_section_count",
 ];
 
 /// Returns a map of `"prefix.field"` → doc-comment description for every

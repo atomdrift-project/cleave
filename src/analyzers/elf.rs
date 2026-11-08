@@ -40,99 +40,7 @@ pub(crate) struct ElfAnalyzer {
     cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
-/// Map an ELF `e_machine` value to its canonical short name. Used
-/// only when filefacts's parse fails entirely and we salvage the
-/// architecture from raw header bytes (see `analyze_elf_core`'s
-/// failure branch).
-fn arch_name_from_machine(e_machine: u16) -> String {
-    match e_machine {
-        62 => "x86_64".to_string(),
-        3 => "i386".to_string(),
-        183 => "aarch64".to_string(),
-        40 => "arm".to_string(),
-        243 => "riscv".to_string(),
-        8 => "mips".to_string(),
-        20 => "powerpc".to_string(),
-        21 => "powerpc64".to_string(),
-        2 | 18 | 43 => "sparc".to_string(),
-        4 => "m68k".to_string(),
-        22 => "s390".to_string(),
-        42 => "superh".to_string(),
-        _ => format!("unknown_{}", e_machine),
-    }
-}
-
-/// A deliberately malformed binary under a test-fixture path.
-///
-/// A parser test suite has to ship inputs its parser rejects, and names them
-/// accordingly. PyPI's `packaging` ships
-/// `tests/manylinux/hello-world-invalid-class`, `-invalid-data` and a set of
-/// arch/ABI mismatches; every one of them failed the ELF parse and scored
-/// suspicious. Keep the structural anomaly visible at notable -- the file is
-/// genuinely malformed -- but a fixture directory is not evasion.
-fn is_test_fixture_path(path: &str) -> bool {
-    const DIRS: [&str; 4] = ["/tests/", "/test/", "/testdata/", "/fixtures/"];
-    DIRS.iter().any(|d| path.contains(d))
-}
-
-fn is_jvm_bundled_native_path(path: &str) -> bool {
-    (path.contains(".jar!") || path.contains(".jar/"))
-        && (path.contains("snappy-java")
-            || path.contains("zstd-jni")
-            || path.contains("lz4-java")
-            || path.contains("rocksdbjni"))
-}
-
-fn raw_elf_machine(data: &[u8]) -> Option<u16> {
-    if data.len() < 20 {
-        return None;
-    }
-    if data.get(0..4) != Some(b"\x7fELF") {
-        return None;
-    }
-    let machine: [u8; 2] = data.get(18..20)?.try_into().ok()?;
-    Some(if data.get(5) == Some(&2) {
-        u16::from_be_bytes(machine)
-    } else {
-        u16::from_le_bytes(machine)
-    })
-}
-
 impl ElfAnalyzer {
-    /// Push a baseline structural metadata finding with its evidence anchored
-    /// at `location` (a hex offset such as the originating section's file
-    /// offset, e.g. for a `.gnu_debuglink` reference).
-    fn push_metadata_finding_at(
-        report: &mut AnalysisReport,
-        id: &str,
-        desc: &str,
-        method: &str,
-        value: String,
-        location: String,
-    ) {
-        report.findings.push(
-            Finding::structural(id.to_string(), desc.to_string(), 1.0)
-                .with_criticality(Criticality::Baseline)
-                .with_evidence(vec![Evidence {
-                    method: method.to_string(),
-                    source: "filefacts".to_string(),
-                    value,
-                    location: Some(location),
-                    ..Default::default()
-                }]),
-        );
-    }
-
-    fn gnu_debuglink_name(section_data: &[u8]) -> Option<String> {
-        let nul = section_data.iter().position(|&b| b == 0)?;
-        if nul == 0 {
-            return None;
-        }
-        std::str::from_utf8(section_data.get(..nul)?)
-            .ok()
-            .map(ToString::to_string)
-    }
-
     /// Creates a new ELF analyzer with default configuration
     #[must_use]
     pub(crate) fn new() -> Self {
@@ -215,7 +123,6 @@ impl ElfAnalyzer {
 
         let mut report = AnalysisReport::new(target);
         let mut tools_used = vec![];
-        let mut embedded_binary_count: u32 = 0;
 
         // Filefacts's ELF parse status drives the analyzer. A successful
         // parse populates `elf.machine`; a failed/panicked parse leaves
@@ -223,14 +130,12 @@ impl ElfAnalyzer {
         // `elf.parse_panicked`. We branch on that single signal.
         let parsed_values = ctx.parsed.values();
         let parsed_metrics = ctx.parsed.metrics();
-        let filefacts_ok = parsed_values.get("elf.machine").is_some();
+        // filefacts salvages `elf.machine` from the raw header even when the
+        // parse fails, so success is the absence of the failure metrics.
         let parse_panicked = parsed_metrics.get("elf.parse_panicked").is_some();
-
-        let is_core_dump = filefacts_ok
-            && parsed_values
-                .get("elf.type")
-                .and_then(|v| v.as_str())
-                .is_some_and(|s| s == "core");
+        let filefacts_ok = !parse_panicked
+            && parsed_metrics.get("elf.parse_failed").is_none()
+            && parsed_values.get("elf.machine").is_some();
 
         if filefacts_ok {
             tools_used.push("filefacts".to_string());
@@ -243,40 +148,10 @@ impl ElfAnalyzer {
             ]);
 
             let struct_start = std::time::Instant::now();
-            self.fill_structure_from_ctx(ctx, data, &mut report);
+            self.fill_structure_from_ctx(ctx, &mut report);
             self.fill_dynamic_symbols_from_ctx(ctx, &mut report);
             self.fill_sections_from_ctx(ctx, &mut report);
             self.fill_syscalls_from_ctx(ctx, &mut report);
-            // filefacts parsed the segment view only because the section
-            // header table lies past end of file; the anomaly stays visible.
-            if parsed_metrics
-                .get("elf.section_headers_truncated")
-                .is_some()
-            {
-                if parsed_values
-                    .get("elf.segments")
-                    .is_some_and(|segments| has_unbacked_load_segment(segments, data.len() as u64))
-                {
-                    // An incomplete load image and missing section table can
-                    // both result from a truncated transfer or file carve.
-                    // Neither establishes an attempt to hinder analysis.
-                    report.findings.push(
-                        Finding::structural(
-                            "metadata/binary/header/parse::elf-unbacked-load-and-section-table"
-                                .to_string(),
-                            "ELF load segment and section table extend past file".to_string(),
-                            1.0,
-                        )
-                        .with_criticality(Criticality::Notable),
-                    );
-                } else {
-                    report.findings.push(malformed_header_finding(
-                        &report.target.path,
-                        data,
-                        "section header table extends past end of file",
-                    ));
-                }
-            }
             let struct_ms = struct_start.elapsed().as_millis();
             tracing::info!(
                 path = %analysis_path.display(),
@@ -295,71 +170,38 @@ impl ElfAnalyzer {
                 .iter_kind(filefacts::SymbolKind::Function)
                 .filter_map(crate::analysis_context::project_filefacts_function)
                 .collect();
-            // ELF overlay detection: data after the last PT_LOAD segment.
-            let image_end = ctx
+            // An archive appended past the ELF image, as filefacts measured
+            // and named it (an AppImage's squashfs is identified, not unpacked).
+            let overlay_size = ctx
+                .parsed
+                .metrics()
+                .get("binary.overlay_size")
+                .map(|size| size as usize);
+            if let Some(archive_type) = ctx
                 .parsed
                 .values()
-                .get("elf.segments")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter(|seg| seg.get("type").and_then(|t| t.as_str()) == Some("load"))
-                        .filter_map(|seg| {
-                            let off = seg.get("file_offset")?.as_u64()?;
-                            let sz = seg.get("file_size")?.as_u64()?;
-                            Some(off.saturating_add(sz) as usize)
-                        })
-                        .max()
-                        .unwrap_or(0)
-                })
-                .unwrap_or(0);
-            if image_end > 0
-                && let Some(overlay) = data.get(image_end..).filter(|rest| !rest.is_empty())
-            {
-                const SQUASHFS_LE: &[u8] = &[0x73, 0x71, 0x73, 0x68];
-                const SQUASHFS_BE: &[u8] = &[0x68, 0x73, 0x71, 0x73];
-                if overlay.starts_with(SQUASHFS_LE) || overlay.starts_with(SQUASHFS_BE) {
-                    report.findings.push(crate::types::Finding {
-                        precomputed_spans: None,
-                        src: None,
-                        id: "file/sfx/appimage".to_string().into(),
-                        kind: crate::types::FindingKind::Structural,
-                        desc: "Squashfs filesystem appended after ELF image (AppImage)"
-                            .to_string()
-                            .into(),
-                        conf: 1.0,
-                        crit: crate::types::Criticality::Notable,
-                        mbc: None,
-                        attack: None,
-                        trait_refs: vec![],
-                        evidence: vec![crate::types::Evidence {
-                            method: "magic".to_string(),
-                            source: "elf_overlay".to_string(),
-                            value: format!("squashfs at offset {:#x}", image_end),
-                            location: Some(format!("{:#x}", image_end)),
-                            ..Default::default()
-                        }],
-                        match_count: 1,
-                        source_file: None,
-                        downgraded: false,
-                    });
-                } else if let Ok(Some(ov)) = crate::analyzers::overlay::analyze_overlay(
+                .get("binary.overlay_archive")
+                .and_then(serde_json::Value::as_str)
+                .filter(|kind| *kind != "squashfs")
+                && let Some(overlay) =
+                    overlay_size.and_then(|size| data.get(data.len().saturating_sub(size)..))
+                && let Ok(ov) = crate::analyzers::overlay::analyze_overlay(
                     overlay,
+                    archive_type,
                     &report.target.path,
                     &self.engine,
                     None,
                     None,
-                ) {
-                    report.findings.push(ov.sfx_finding);
-                    report.findings.extend(ov.archive_report.findings);
-                    report.files.extend(ov.archive_report.files);
-                }
+                )
+            {
+                report.findings.extend(ov.extraction_failure);
+                report.findings.extend(ov.archive_report.findings);
+                report.files.extend(ov.archive_report.files);
             }
         } else {
-            // Filefacts's ELF parse failed (or it didn't identify the bytes
-            // as ELF at all). Emit the structural finding, salvage
-            // architecture from the raw header, and take what binform
-            // recovered via the shared cached path.
+            // filefacts's ELF parse failed; the traits judge the failure
+            // (`elf.parse_failed`, `elf.parse_error`) and the architecture
+            // comes from the header fields filefacts salvaged.
             let err_msg = ctx
                 .parsed
                 .errors()
@@ -367,34 +209,10 @@ impl ElfAnalyzer {
                 .find(|e| e.stage == filefacts::Stage::ElfParse)
                 .map(|e| e.message.clone())
                 .unwrap_or_default();
-            report.findings.push(malformed_header_finding(
-                &report.target.path,
-                data,
-                &err_msg,
-            ));
-
-            // Architecture salvage from raw header bytes — `e_machine` at
-            // offset 18 (2 bytes); endianness via EI_DATA at offset 5.
-            if let Some(machine) = data.get(18..20).and_then(|b| <[u8; 2]>::try_from(b).ok()) {
-                let is_big_endian = data.get(5) == Some(&2);
-                let e_machine = if is_big_endian {
-                    u16::from_be_bytes(machine)
-                } else {
-                    u16::from_le_bytes(machine)
-                };
-                let arch = arch_name_from_machine(e_machine);
-                report.structure.push(StructuralFeature {
-                    id: format!("binary/arch/{}", arch),
-                    desc: format!("{} architecture", arch),
-                    evidence: vec![Evidence {
-                        method: "header".to_string(),
-                        source: "raw_header".to_string(),
-                        value: format!("e_machine={}", e_machine),
-                        ..Default::default()
-                    }],
-                });
-                report.target.architectures = Some(vec![arch]);
-            }
+            report.target.architectures = parsed_values
+                .get("elf.machine")
+                .and_then(serde_json::Value::as_str)
+                .map(|machine| vec![machine.to_string()]);
 
             report.metadata.errors.push(format!(
                 "ELF parse {}: {}",
@@ -436,78 +254,29 @@ impl ElfAnalyzer {
                 .get_or_insert_with(Default::default),
         );
 
-        // Embedded ELF / PE scanning (host-agnostic, scans raw bytes)
-        if !self.skip_embedded_scan && !is_core_dump {
+        // Embedded ELF / PE images filefacts located (it skips core dumps,
+        // whose memory holds the images they ran), analyzed as children.
+        if !self.skip_embedded_scan {
             let host_name = std::path::Path::new(&report.target.path)
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("binary.elf")
                 .to_string();
-            let embedded = crate::analyzers::embedded_binary_detector::scan_for_embedded_binaries(
-                data,
-                self.cancellation.as_deref(),
-            );
-            for binary in &embedded {
+            for image in
+                crate::analyzers::embedded_images::EmbeddedImage::from_values(parsed_values)
+            {
                 if self.is_cancelled() {
                     break;
                 }
-                report
-                    .findings
-                    .push(crate::analyzers::embedded_binary_detector::finding_for(
-                        binary,
-                        &report.target.path,
-                    ));
-                embedded_binary_count = embedded_binary_count.saturating_add(1);
-                if binary.offset >= data.len() {
+                let Some(bytes) = image.bytes(data) else {
                     continue;
-                }
-                // For base64-encoded payloads we must decode before
-                // recursing — otherwise the child analyzer reads
-                // base64 text and reports the embedded binary as
-                // malformed (Kong-ingress-controller 2024).
-                let decoded_storage: Vec<u8>;
-                let embedded_bytes: &[u8] = if binary.encoding == Some("base64") {
-                    // The base64 run starting at the offset, trimmed to whole
-                    // 4-character quads.
-                    let Some(encoded) = data.get(binary.offset..).and_then(|rest| {
-                        let run = rest
-                            .iter()
-                            .take_while(|&&b| {
-                                b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'='
-                            })
-                            .count();
-                        rest.get(..run & !3)
-                    }) else {
-                        continue;
-                    };
-                    match base64::Engine::decode(
-                        &base64::engine::general_purpose::STANDARD,
-                        encoded,
-                    ) {
-                        Ok(b) => {
-                            decoded_storage = b;
-                            decoded_storage.as_slice()
-                        }
-                        Err(_) => continue,
-                    }
-                } else {
-                    let slice_end = binary
-                        .offset
-                        .saturating_add(binary.estimated_size)
-                        .min(data.len());
-                    match data.get(binary.offset..slice_end) {
-                        Some(bytes) => bytes,
-                        None => continue,
-                    }
                 };
-                let kind_str = binary.kind.as_str();
-                let display_kind = binary.display_kind();
                 if let Some(files) = crate::analyzers::utils::analyze_embedded_as_child(
-                    embedded_bytes,
+                    &bytes,
                     &host_name,
-                    kind_str,
-                    &display_kind,
-                    binary.offset,
+                    &image.family,
+                    &image.display_kind(),
+                    image.offset,
                     self.engine.clone(),
                     None, // YARA handled by child
                 ) {
@@ -554,39 +323,9 @@ impl ElfAnalyzer {
         report.files.extend(encoded_layers);
         report.findings.extend(plain_findings);
 
-        // ELF binaries are usually unsigned (or use non-standard signing) —
-        // this is the norm on Linux/BSD, so it's baseline metadata rather
-        // than a notable deviation (unlike PE / Mach-O where signing is expected).
-        if !is_core_dump {
-            report.findings.push(Finding {
-                precomputed_spans: None,
-                src: None,
-                id: "metadata/unsigned".to_string().into(),
-                kind: FindingKind::Capability,
-                desc: "Binary is not digitally signed".to_string().into(),
-                conf: 1.0,
-                crit: Criticality::Baseline,
-                mbc: None,
-                attack: None,
-                trait_refs: vec![],
-                evidence: vec![],
-                match_count: 0,
-                source_file: None,
-                downgraded: false,
-            });
-        }
-
         // Emit recursive-scan counters. Mirrors pe.rs — embedded
         // payload discovery is cleave-side recursive work, not
         // filefacts's parse-time view.
-        if embedded_binary_count > 0 {
-            use crate::types::core::MetricsExt;
-            report
-                .filefacts_metrics
-                .get_or_insert_with(Default::default)
-                .set_f("binary.embedded_binaries", f64::from(embedded_binary_count));
-        }
-
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
         report.metadata.tools_used = tools_used;
 
@@ -597,13 +336,10 @@ impl ElfAnalyzer {
     }
 
     /// `analyze_structure`'s filefacts-backed counterpart. Synthesises the
-    /// same `binary/format/elf`, `binary/arch/*`, `binary/stripped`,
-    /// `binary/pie`, and `metadata/build/debug::elf-debuglink` features
-    /// but pulls every input from filefacts's view of the file.
-    /// Synthesize `binary/format/elf`, `binary/arch/*`,
-    /// `binary/stripped`, `binary/pie`, and `metadata/build/debug::elf-debuglink`
-    /// structural features from filefacts's typed view.
-    fn fill_structure_from_ctx(&self, ctx: &Ctx<'_>, data: &[u8], report: &mut AnalysisReport) {
+    /// same `binary/format/elf`, `binary/arch/*`, `binary/stripped` and
+    /// `binary/pie` features but pulls every input from filefacts's view of
+    /// the file.
+    fn fill_structure_from_ctx(&self, ctx: &Ctx<'_>, report: &mut AnalysisReport) {
         let parsed = &ctx.parsed;
         let metrics = parsed.metrics();
         let values = parsed.values();
@@ -674,30 +410,6 @@ impl ElfAnalyzer {
                     ..Default::default()
                 }],
             });
-        }
-
-        // `.gnu_debuglink` section — present when a build was stripped
-        // with split-debug. Walk filefacts's typed section list, then
-        // slice into `data` for the section contents.
-        for section in parsed.sections().iter() {
-            if section.name != ".gnu_debuglink" || section.file_size == 0 {
-                continue;
-            }
-            let offset = section.file_offset as usize;
-            let end = offset.saturating_add(section.file_size as usize);
-            let Some(section_data) = data.get(offset..end) else {
-                continue;
-            };
-            if let Some(debuglink) = Self::gnu_debuglink_name(section_data) {
-                Self::push_metadata_finding_at(
-                    report,
-                    "metadata/build/debug::elf-debuglink",
-                    ".gnu_debuglink reference present",
-                    "section",
-                    debuglink,
-                    format!("0x{:x}", section.file_offset),
-                );
-            }
         }
     }
 
@@ -1103,85 +815,6 @@ impl Analyzer for ElfAnalyzer {
     }
 }
 
-fn has_unbacked_load_segment(segments: &serde_json::Value, file_len: u64) -> bool {
-    segments.as_array().is_some_and(|segments| {
-        segments.iter().any(|segment| {
-            segment.get("type").and_then(serde_json::Value::as_str) == Some("load")
-                && segment
-                    .get("file_offset")
-                    .and_then(serde_json::Value::as_u64)
-                    .zip(segment.get("file_size").and_then(serde_json::Value::as_u64))
-                    .is_some_and(|(offset, size)| {
-                        size > 0 && offset.saturating_add(size) > file_len
-                    })
-        })
-    })
-}
-
-/// The structural finding for an ELF header whose section metadata is
-/// unusable: goblin rejected it outright, or its section header table lies
-/// past end of file. IoT bots corrupt `e_shoff` to break analysis tools;
-/// truncated downloads lose the table the same way. Suspicious, except in the
-/// known-benign layouts below.
-fn malformed_header_finding(path: &str, data: &[u8], err_msg: &str) -> Finding {
-    // ELF string tables are byte strings, not a UTF-8 contract. A parser's
-    // Unicode restriction does not prove a malformed header or anti-analysis.
-    if err_msg.contains("invalid utf8") || err_msg.contains("invalid UTF-8") {
-        return Finding::structural(
-            "metadata/binary/header/parse::elf-non-utf8-parser-limit".to_string(),
-            format!("ELF parser rejected non-UTF8 metadata: {err_msg}"),
-            1.0,
-        )
-        .with_criticality(Criticality::Notable);
-    }
-    let mut crit = Criticality::Suspicious;
-    if path.contains("!!embedded") {
-        crit = Criticality::Notable;
-    } else {
-        let contains = |needle: &[u8]| memchr::memmem::find(data, needle).is_some();
-        let large_go_or_linuxbrew_build = data.len() >= 50 * 1024 * 1024
-            && ((contains(b"-trimpath=true") && contains(b"go.mod"))
-                || contains(b"/home/linuxbrew/.linuxbrew/Cellar/"));
-        let has_android_gif_drawable_marker =
-            path.contains("libpl_droidsonroids_gif.so") || contains(b"android-gif-drawable");
-        let is_snappy_s390x_native =
-            path.contains("libsnappyjava.so") && raw_elf_machine(data) == Some(22);
-        if large_go_or_linuxbrew_build
-            || has_android_gif_drawable_marker
-            || is_jvm_bundled_native_path(path)
-            || is_snappy_s390x_native
-            || is_test_fixture_path(path)
-        {
-            // Very large Linuxbrew/Go CLI builds and some legacy
-            // Android native libraries can carry metadata layouts
-            // filefacts's parser rejects even though the executable is
-            // otherwise legitimate. JVM native-dependency jars also
-            // ship cross-platform shared libraries that may not parse
-            // cleanly on the host, including snappy-java's s390x
-            // native library after archive extraction loses the
-            // enclosing jar path. Keep the structural anomaly visible,
-            // but below suspicious for these known-benign contexts.
-            crit = Criticality::Notable;
-        }
-    }
-    Finding {
-        precomputed_spans: None,
-        src: None,
-        kind: FindingKind::Structural,
-        id: "anti-analysis/malformed/elf-header".to_string().into(),
-        desc: format!("Malformed ELF header or section headers: {err_msg}").into(),
-        conf: 1.0,
-        crit,
-        mbc: Some("B0001".into()),
-        attack: Some("T1027".into()),
-        evidence: vec![],
-        match_count: 0,
-        trait_refs: vec![],
-        source_file: None,
-        downgraded: false,
-    }
-}
-
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -1190,6 +823,3 @@ fn malformed_header_finding(path: &str, data: &[u8], err_msg: &str) -> Finding {
     clippy::arithmetic_side_effects
 )]
 mod tests;
-
-#[cfg(test)]
-mod utf8_parser_limit_tests;

@@ -304,7 +304,6 @@ fn unknown_binary_carrier_exposes_validated_embedded_pe() {
     let report = GenericAnalyzer::new(FileType::Unknown)
         .analyze_input(&input)
         .unwrap();
-    assert!(report.findings.iter().any(|f| f.id == "binary/embedded/pe"));
     assert!(report.files.iter().any(|f| f.file_type == "pe"));
 
     let disabled = GenericAnalyzer::new(FileType::Unknown)
@@ -318,12 +317,6 @@ fn unknown_binary_carrier_exposes_validated_embedded_pe() {
     let invalid = GenericAnalyzer::new(FileType::Unknown)
         .analyze_input(&input)
         .unwrap();
-    assert!(
-        !invalid
-            .findings
-            .iter()
-            .any(|f| f.id == "binary/embedded/pe")
-    );
     assert!(invalid.files.is_empty());
 }
 

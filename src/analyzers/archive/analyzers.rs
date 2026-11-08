@@ -33,8 +33,8 @@ use super::guards::{
     CancellableReader, ExtractionGuard, HostileArchiveReason, LimitedReader, MAX_FILE_SIZE,
     MAX_PATH_COMPONENT_LEN, sanitize_entry_path, symlink_escapes,
 };
-use super::utils::{calculate_sha256, find_main_class, is_benign_java_path};
-use crate::analyzers::{AnalysisInput, FileType, FileTypeExt, declared_file_type_from_name};
+use super::utils::{calculate_sha256, find_main_class};
+use crate::analyzers::{AnalysisInput, FileType, FileTypeExt};
 use crate::composite_rules::traits::nest_host;
 use crate::types::{
     ARCHIVE_DELIMITER, AnalysisReport, ArchiveEntry, ENCODING_DELIMITER, FileAnalysis, Finding,
@@ -656,43 +656,19 @@ struct MemoryArchiveMember {
 
 fn archive_entry_metadata(
     entry_path: String,
-    logical_path: &Path,
     file_type: &FileType,
     sha256: String,
     data: &[u8],
     container_kind: Option<String>,
 ) -> ArchiveEntry {
-    let declared_file_type = declared_file_type_from_name(logical_path);
-    let declared_type =
-        (declared_file_type != FileType::Unknown).then(|| declared_file_type.report_file_type());
-    let extension_type_mismatch = declared_type.is_some() && declared_file_type != *file_type;
-
     ArchiveEntry {
         path: entry_path,
         file_type: file_type.report_file_type(),
         sha256,
         size_bytes: data.len() as u64,
-        declared_type,
-        extension_type_mismatch,
-        entropy: (!data.is_empty())
-            .then(|| (crate::entropy::shannon(data) * 1000.0).round() / 1000.0),
-        magic_prefix: magic_prefix(data),
         container_kind,
         ..ArchiveEntry::default()
     }
-}
-
-fn magic_prefix(data: &[u8]) -> Option<String> {
-    if data.is_empty() {
-        return None;
-    }
-
-    let mut out = String::with_capacity(data.len().min(8) * 2);
-    for byte in data.iter().take(8) {
-        use std::fmt::Write;
-        let _ = write!(&mut out, "{byte:02x}");
-    }
-    Some(out)
 }
 
 fn pyinstaller_entry_kind(kind: pyinstx::EntryKind) -> &'static str {
@@ -1476,9 +1452,14 @@ pub(crate) fn log_archive_analysis_stats() {
 impl ArchiveAnalyzer {
     /// Analyze the managed members of a native .NET single-file host through
     /// the normal bounded member pipeline. Packaging alone is not suspicious.
-    pub(crate) fn analyze_dotnet_bundle(&self, data: &[u8], report: &mut AnalysisReport) -> bool {
+    pub(crate) fn analyze_dotnet_bundle(
+        &self,
+        data: &[u8],
+        values: &filefacts::Values,
+        report: &mut AnalysisReport,
+    ) -> bool {
         let guard = ExtractionGuard::with_budget(self.cancelled.clone(), self.budget.clone());
-        let bundle = match super::dotnet_bundle::parse(data) {
+        let bundle = match super::dotnet_bundle::from_values(values) {
             Ok(Some(bundle)) => bundle,
             Ok(None) => return false,
             Err(error) => {
@@ -1545,21 +1526,7 @@ impl ArchiveAnalyzer {
             let sha256 = calculate_sha256(&file_data);
             guard.record_member_metadata(super::guards::ExtractedMemberMetadata {
                 archive_path: relative_path.clone(),
-                compressed_size: Some(if entry.compressed == 0 {
-                    entry.size
-                } else {
-                    entry.compressed
-                }),
-                compression_method: Some(
-                    if entry.compressed == 0 {
-                        "stored"
-                    } else {
-                        "deflate"
-                    }
-                    .to_string(),
-                ),
                 entry_type: Some("regular".to_string()),
-                ..Default::default()
             });
             window.push(MemoryArchiveMember {
                 relative_path,
@@ -1596,11 +1563,7 @@ impl ArchiveAnalyzer {
             && (memchr::memmem::find(data, b"MZ").is_some()
                 || memchr::memmem::find(data, b"\x7fELF").is_some()
                 || memchr::memmem::find(data, b"TVq").is_some())
-            && !crate::analyzers::embedded_binary_detector::scan_for_embedded_binaries(
-                data,
-                self.cancelled.as_deref(),
-            )
-            .is_empty()
+            && filefacts::has_embedded_executable(data)
     }
 
     fn archive_member_analysis_skip_reason(

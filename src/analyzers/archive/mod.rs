@@ -1,7 +1,6 @@
 //! Archive analyzer for various archive formats.
 
 pub(crate) mod analyzers;
-mod asar;
 mod cpio;
 mod dotnet_bundle;
 mod guards;
@@ -38,8 +37,7 @@ use std::sync::Arc;
 use crate::composite_rules::SectionMap;
 pub(crate) use guards::MAX_TOTAL_SIZE;
 use guards::{
-    ExtractedMemberMetadata, ExtractionGuard, MAX_FILE_COUNT, MAX_FILE_SIZE, escaped_relative_path,
-    names_extraction_root,
+    ExtractedMemberMetadata, ExtractionGuard, escaped_relative_path, names_extraction_root,
 };
 use utils::calculate_sha256;
 
@@ -174,7 +172,19 @@ fn contains_java_members(temp_dir: &Path) -> bool {
 /// its own, and those of every member folded into it (a container image's
 /// layer tarballs are separate nested archives that report their own).
 fn drop_system_container_symlink_escapes(report: &mut AnalysisReport) {
-    let is_escape = |finding: &Finding| finding.id == "anti-analysis/archive/symlink-escape";
+    // The container's own escapes are dropped before its traits run.
+    if let Some(serde_json::Value::Object(root)) = report.values_tree.as_deref_mut()
+        && let Some(serde_json::Value::Object(guard)) = root.get_mut("archive_guard")
+    {
+        guard.remove("symlink_escapes");
+    }
+    let is_escape = |finding: &Finding| {
+        matches!(
+            finding.id.as_str(),
+            "objectives/anti-analysis/anti-tampering::archive-symlink-escape"
+                | "objectives/anti-analysis/anti-tampering::archive-symlink-climbs-out"
+        )
+    };
     report.findings.retain(|finding| !is_escape(finding));
     for file in &mut report.files {
         file.findings.retain(|finding| !is_escape(finding));
@@ -587,6 +597,7 @@ impl ArchiveAnalyzer {
 
         let mut report = AnalysisReport::new(target);
         let filefacts_archive_entries: Vec<ArchiveEntry>;
+        let crx_archive_offset: Option<usize>;
 
         // Open filefacts once on the host archive bytes and merge its
         // typed values/metrics into the report. The capability
@@ -609,6 +620,12 @@ impl ArchiveAnalyzer {
             ));
             report.identity = ctx.identity();
             filefacts_archive_entries = ctx.archive_entries();
+            crx_archive_offset = ctx
+                .parsed
+                .values()
+                .get("crx.archive_offset")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|offset| usize::try_from(offset).ok());
             crate::capabilities::merge_filefacts_context(&mut report, &ctx);
             if matches!(file_type, FileType::Rpm) {
                 // Header-declared scripts are independent of payload decoding.
@@ -696,7 +713,7 @@ impl ArchiveAnalyzer {
                     ..Default::default()
                 }],
             });
-            report.seal_archive_metadata_kv();
+            report.prune_archive_directories();
             self.evaluate_container_findings(&mut report, data, file_type);
             return Ok(report);
         }
@@ -713,10 +730,10 @@ impl ArchiveAnalyzer {
             } else {
                 self.analyze_asar_archive_in_memory(
                     data,
-                    archive_path,
                     &mut report,
                     start,
                     &guard,
+                    &filefacts_archive_entries,
                 )?;
             }
             let member_metadata = guard.take_member_metadata();
@@ -752,7 +769,7 @@ impl ArchiveAnalyzer {
                     ..Default::default()
                 }],
             });
-            report.seal_archive_metadata_kv();
+            report.prune_archive_directories();
             self.evaluate_container_findings(&mut report, data, file_type);
             return Ok(report);
         }
@@ -823,9 +840,11 @@ impl ArchiveAnalyzer {
                     )?,
                 }
             } else if matches!(file_type, FileType::Crx) {
-                let zip_offset = zip::crx_zip_offset(data)?;
+                let payload = crx_archive_offset
+                    .and_then(|offset| data.get(offset..))
+                    .context("CRX header does not locate its archive")?;
                 self.analyze_zip_archive_in_memory(
-                    &data[zip_offset..],
+                    payload,
                     archive_path,
                     &mut report,
                     start,
@@ -893,7 +912,7 @@ impl ArchiveAnalyzer {
             // down; the in-memory short-circuit needs the same pass
             // or composites like `python-package-with-dll` will never
             // see member basenames.
-            report.seal_archive_metadata_kv();
+            report.prune_archive_directories();
             self.evaluate_container_findings(&mut report, data, file_type);
             return Ok(report);
         }
@@ -914,6 +933,7 @@ impl ArchiveAnalyzer {
             temp_dir.path(),
             &guard,
             &filefacts_archive_entries,
+            crx_archive_offset,
         );
 
         let hostile_reasons = guard.take_reasons();
@@ -1045,7 +1065,7 @@ impl ArchiveAnalyzer {
                             ..Default::default()
                         }],
                     });
-                    report.seal_archive_metadata_kv();
+                    report.prune_archive_directories();
                     self.evaluate_container_findings(&mut report, data, file_type);
                     return Ok(report);
                 }
@@ -1125,7 +1145,7 @@ impl ArchiveAnalyzer {
             );
         }
 
-        report.seal_archive_metadata_kv();
+        report.prune_archive_directories();
         self.evaluate_container_findings(&mut report, data, file_type);
 
         Ok(report)
@@ -1347,12 +1367,6 @@ impl ArchiveAnalyzer {
                 &empty_section_map,
                 Some(&file.path),
             );
-            if has_builtin_anti_analysis_finding(&file.findings) {
-                // No sink: this pass runs at archive assembly over an aggregated
-                // finding pool. Each member recorded its own suppressions when
-                // it was analyzed.
-                mapper.apply_retroactive_unless_suppression_to_findings(&mut file.findings, None);
-            }
         };
         if crate::rayon_nest::inner_work_parallel() {
             use rayon::prelude::*;
@@ -1403,9 +1417,6 @@ impl ArchiveAnalyzer {
             &mut report.findings,
             &container_suppression_targets,
         );
-        if has_builtin_anti_analysis_finding(&report.findings) {
-            mapper.apply_retroactive_unless_suppression_to_findings(&mut report.findings, None);
-        }
         if let Some(timing) = timing {
             tracing::debug!(
                 path = %report.target.path,
@@ -1428,6 +1439,7 @@ impl ArchiveAnalyzer {
         dest_dir: &Path,
         guard: &ExtractionGuard,
         filefacts_members: &[ArchiveEntry],
+        crx_offset: Option<usize>,
     ) -> Result<()> {
         use std::io::Cursor;
 
@@ -1548,7 +1560,12 @@ impl ArchiveAnalyzer {
             | FileType::Vsix => {
                 zip::extract_zip_from_data(data, dest_dir, guard, &self.zip_passwords)
             }
-            FileType::Crx => zip::extract_crx_from_data(data, dest_dir, guard),
+            FileType::Crx => zip::extract_crx_from_data(
+                data,
+                crx_offset.context("CRX header does not locate its archive")?,
+                dest_dir,
+                guard,
+            ),
             FileType::Deb => {
                 system_packages::extract_deb_from_reader(Cursor::new(data), dest_dir, guard)
             }
@@ -1609,8 +1626,8 @@ impl Analyzer for ArchiveAnalyzer {
 /// Overlay a filefacts archive listing onto `report.archive_contents`.
 ///
 /// Extracted members keep the sha256 and type the unpack pass learned; listing
-/// fields the extractor never saw (encrypted, host OS, header offsets, packed
-/// size) are filled in. Names that could not be unpacked — the usual encrypted
+/// fields the extractor never saw (encrypted, packed size, method, payload
+/// offset) are filled in. Names that could not be unpacked — the usual encrypted
 /// RAR case — are appended so path matchers still see them.
 fn merge_filefacts_archive_listing(report: &mut AnalysisReport, listing: &[ArchiveEntry]) {
     use std::collections::HashMap;
@@ -1626,26 +1643,17 @@ fn merge_filefacts_archive_listing(report: &mut AnalysisReport, listing: &[Archi
         if let Some(&i) = by_path.get(&entry.path) {
             let dest = &mut report.archive_contents[i];
             dest.encrypted |= entry.encrypted;
-            if dest.mtime_unix.is_none() {
-                dest.mtime_unix = entry.mtime_unix;
-            }
-            if dest.host_os.is_none() {
-                dest.host_os = entry.host_os.clone();
-            }
             if dest.compressed_size.is_none() {
                 dest.compressed_size = entry.compressed_size;
             }
             if dest.compression_method.is_none() {
                 dest.compression_method = entry.compression_method.clone();
             }
-            if dest.crc32.is_none() {
-                dest.crc32 = entry.crc32;
-            }
-            if dest.header_offset.is_none() {
-                dest.header_offset = entry.header_offset;
-            }
             if dest.data_offset.is_none() {
                 dest.data_offset = entry.data_offset;
+            }
+            if dest.crc32.is_none() {
+                dest.crc32 = entry.crc32;
             }
             if dest.linkname.is_none() {
                 dest.linkname = entry.linkname.clone();
@@ -1657,8 +1665,9 @@ fn merge_filefacts_archive_listing(report: &mut AnalysisReport, listing: &[Archi
     }
 }
 
-/// Merge per-entry forensic metadata captured by [`ExtractionGuard`] during
-/// extraction into the matching `ArchiveEntry` items in `report.archive_contents`.
+/// Merge the entry types captured by [`ExtractionGuard`] during extraction
+/// into the matching `ArchiveEntry` items in `report.archive_contents`, so
+/// directory entries can be pruned whichever extraction path ran.
 ///
 /// Matching strategy: exact match on `archive_path` first (top-level archives),
 /// then fall back to the suffix after the last `!` (nested archives, where
@@ -1666,7 +1675,7 @@ fn merge_filefacts_archive_listing(report: &mut AnalysisReport, listing: &[Archi
 /// are still `None` are populated — never overwrite values already set by the
 /// caller. Entries in the metadata vec that don't match any `ArchiveEntry`
 /// (e.g. directories or symlinks not surfaced in `archive_contents`) are
-/// dropped silently; aggregate kv exposure will capture them in a later pass.
+/// dropped silently.
 fn merge_archive_member_metadata(
     report: &mut AnalysisReport,
     metadata: Vec<ExtractedMemberMetadata>,
@@ -1704,38 +1713,8 @@ fn merge_archive_member_metadata(
             continue;
         };
 
-        if entry.compressed_size.is_none() {
-            entry.compressed_size = meta.compressed_size;
-        }
-        if entry.compression_method.is_none() {
-            entry.compression_method = meta.compression_method;
-        }
-        if entry.mtime_unix.is_none() {
-            entry.mtime_unix = meta.mtime_unix;
-        }
-        if entry.mode_octal.is_none() {
-            entry.mode_octal = meta.mode_octal;
-        }
-        if entry.uid.is_none() {
-            entry.uid = meta.uid;
-        }
-        if entry.gid.is_none() {
-            entry.gid = meta.gid;
-        }
-        if entry.uname.is_none() {
-            entry.uname = meta.uname;
-        }
-        if entry.gname.is_none() {
-            entry.gname = meta.gname;
-        }
         if entry.entry_type.is_none() {
             entry.entry_type = meta.entry_type;
-        }
-        if entry.linkname.is_none() {
-            entry.linkname = meta.linkname;
-        }
-        if entry.host_os.is_none() {
-            entry.host_os = meta.host_os;
         }
     }
 }

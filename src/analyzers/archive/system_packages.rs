@@ -245,13 +245,10 @@ fn parse_7z_technical_listing(stdout: &str) -> Vec<ArchiveEntry> {
             let size_bytes = field("Size")?.parse::<u64>().ok()?;
             let is_dir = field("Attributes").is_some_and(|a| a.starts_with('D'));
             // Only the encrypted directory is readable: nothing identified the
-            // member's bytes, so its type is unknown and the name is recorded
-            // as the claim it is (`declared_type`), never as its identity.
-            let declared = crate::analyzers::declared_file_type_from_name(Path::new(name));
+            // member's bytes, so its type is unknown.
             Some(ArchiveEntry {
                 path: name.replace('\\', "/"),
                 file_type: FileType::Unknown.report_file_type(),
-                declared_type: (declared != FileType::Unknown).then(|| declared.report_file_type()),
                 sha256: String::new(),
                 size_bytes,
                 compressed_size: field("Packed Size").and_then(|v| v.parse().ok()),

@@ -118,8 +118,8 @@ fn sfx_marker_detection() {
     fs::write(&nsis_path, &nsis).unwrap();
     let (stdout, _) = analyze_compact(&nsis_path);
     assert!(
-        stdout.contains("file/sfx/nsis"),
-        "Expected 'file/sfx/nsis' in output.\nFirst 2000 chars:\n{}",
+        stdout.contains("metadata/file/format/installer::nsis-installer"),
+        "Expected 'metadata/file/format/installer::nsis-installer' in output.\nFirst 2000 chars:\n{}",
         &stdout[..stdout.len().min(2000)]
     );
 
@@ -131,8 +131,8 @@ fn sfx_marker_detection() {
     fs::write(&inno_path, &inno).unwrap();
     let (stdout, _) = analyze_compact(&inno_path);
     assert!(
-        stdout.contains("file/sfx/inno-setup"),
-        "Expected 'file/sfx/inno-setup' in output.\nFirst 2000 chars:\n{}",
+        stdout.contains("metadata/file/format/installer::inno-setup-installer"),
+        "Expected 'metadata/file/format/installer::inno-setup-installer' in output.\nFirst 2000 chars:\n{}",
         &stdout[..stdout.len().min(2000)]
     );
 
@@ -144,8 +144,8 @@ fn sfx_marker_detection() {
         fs::write(&cab_path, &host).unwrap();
         let (stdout, _) = analyze_compact(&cab_path);
         assert!(
-            stdout.contains("self-extracting/cab"),
-            "Expected 'self-extracting/cab' in output.\nFirst 2000 chars:\n{}",
+            stdout.contains("metadata/file/format/installer::overlay-archive-self-extractor"),
+            "Expected 'metadata/file/format/installer::overlay-archive-self-extractor' in output.\nFirst 2000 chars:\n{}",
             &stdout[..stdout.len().min(2000)]
         );
     } else {
@@ -172,8 +172,8 @@ fn embedded_binary_scanning() {
     fs::write(&pe_path, &pe_host).unwrap();
     let (stdout, report) = analyze_compact(&pe_path);
     assert!(
-        stdout.contains("binary/embedded/pe"),
-        "Expected 'binary/embedded/pe' in output.\nFirst 2000 chars:\n{}",
+        stdout.contains("metadata/binary/layout/embedded::embedded-pe-image"),
+        "Expected 'metadata/binary/layout/embedded::embedded-pe-image' in output.\nFirst 2000 chars:\n{}",
         &stdout[..stdout.len().min(2000)]
     );
     let pe_host = report["files"]
@@ -185,7 +185,7 @@ fn embedded_binary_scanning() {
         Some(1.0)
     );
 
-    // 2. Embedded PE in NSIS overlay should downgrade to notable (level 3).
+    // 2. An embedded PE in an NSIS overlay is recorded at notable (level 3).
     let mut nsis = minimal_pe_stub();
     nsis.resize(0x600, 0);
     nsis.extend_from_slice(&[0xEF, 0xBE, 0xAD, 0xDE]);
@@ -199,7 +199,7 @@ fn embedded_binary_scanning() {
         .expect("top-level findings should be an array");
     let embedded_pe: Vec<_> = findings
         .iter()
-        .filter(|f| f["id"] == "binary/embedded/pe")
+        .filter(|f| f["id"] == "metadata/binary/layout/embedded::embedded-pe-image")
         .collect();
     assert!(
         !embedded_pe.is_empty(),
@@ -207,7 +207,7 @@ fn embedded_binary_scanning() {
     );
     assert!(
         embedded_pe.iter().all(|f| f["crit"] == 3),
-        "expected NSIS overlay embedded PE findings to be downgraded to notable.\nstdout:\n{stdout}",
+        "expected NSIS overlay embedded PE findings at notable.\nstdout:\n{stdout}",
     );
 
     // 3. & 4. Real ELF with another ELF appended.
@@ -223,8 +223,8 @@ fn embedded_binary_scanning() {
     fs::write(&combo_path, &combo).unwrap();
     let (stdout, report) = analyze_compact(&combo_path);
     assert!(
-        stdout.contains("binary/embedded/elf"),
-        "Expected 'binary/embedded/elf' in output.\nFirst 2000 chars:\n{}",
+        stdout.contains("metadata/binary/layout/embedded::embedded-elf-image"),
+        "Expected 'metadata/binary/layout/embedded::embedded-elf-image' in output.\nFirst 2000 chars:\n{}",
         &stdout[..stdout.len().min(2000)]
     );
     let elf_host = report["files"]
@@ -322,10 +322,12 @@ fn false_positive_regressions() {
     // Clean PE: no embedded PE finding.
     if let Ok(()) = fs::copy("tests/fixtures/test.exe", tmp.path().join("clean.exe")).map(|_| ()) {
         let (stdout, _) = analyze_compact(&tmp.path().join("clean.exe"));
-        let count = stdout.matches("binary/embedded/pe").count();
+        let count = stdout
+            .matches("metadata/binary/layout/embedded::embedded-pe-image")
+            .count();
         assert!(
             count == 0,
-            "False positive: {count} 'binary/embedded/pe' findings on clean test.exe"
+            "False positive: {count} 'metadata/binary/layout/embedded::embedded-pe-image' findings on clean test.exe"
         );
     } else {
         crate::support::skip_missing("clean-PE sub-case: tests/fixtures/test.exe");
@@ -334,10 +336,12 @@ fn false_positive_regressions() {
     // Clean ELF: no embedded ELF finding.
     if let Ok(()) = fs::copy("tests/fixtures/test.elf", tmp.path().join("clean.elf")).map(|_| ()) {
         let (stdout, _) = analyze_compact(&tmp.path().join("clean.elf"));
-        let count = stdout.matches("binary/embedded/elf").count();
+        let count = stdout
+            .matches("metadata/binary/layout/embedded::embedded-elf-image")
+            .count();
         assert!(
             count == 0,
-            "False positive: {count} 'binary/embedded/elf' findings on clean test.elf"
+            "False positive: {count} 'metadata/binary/layout/embedded::embedded-elf-image' findings on clean test.elf"
         );
     } else {
         crate::support::skip_missing("clean-ELF sub-case: tests/fixtures/test.elf");

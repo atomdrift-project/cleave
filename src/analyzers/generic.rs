@@ -164,65 +164,32 @@ impl GenericAnalyzer {
         // opened once and threaded in, or one the caller opened on `eval_bytes`.
         let source_ast = source_ctx.and_then(crate::analysis_context::AnalysisContext::source_ast);
 
-        // Unknown binary carriers can wrap an otherwise valid executable. Use
-        // the same bounded header validation as PE/ELF hosts, and analyze the
-        // carved bytes as a child rather than treating a wrapper as a PE.
+        // Unknown binary carriers can wrap an otherwise valid executable:
+        // analyze each image filefacts located as a child rather than
+        // treating the wrapper as a PE.
         if self.detect_embedded
             && matches!(self.file_type, FileType::Unknown | FileType::Data)
-            && eval_bytes.len() <= 32 * 1024 * 1024
+            && let Some(ctx) = source_ctx
         {
             let host = file_path
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("data");
-            for binary in crate::analyzers::embedded_binary_detector::scan_for_embedded_binaries(
-                eval_bytes,
-                cancellation.map(AsRef::as_ref),
-            ) {
-                let decoded;
-                let bytes = if binary.encoding == Some("base64") {
-                    let Some(rest) = eval_bytes.get(binary.offset..) else {
-                        continue;
-                    };
-                    let len = rest
-                        .iter()
-                        .take_while(|&&b| {
-                            b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'='
-                        })
-                        .count()
-                        & !3;
-                    match base64::Engine::decode(
-                        &base64::engine::general_purpose::STANDARD,
-                        &rest[..len],
-                    ) {
-                        Ok(value) => {
-                            decoded = value;
-                            decoded.as_slice()
-                        }
-                        Err(_) => continue,
-                    }
-                } else {
-                    let end = binary
-                        .offset
-                        .saturating_add(binary.estimated_size)
-                        .min(eval_bytes.len());
-                    let Some(value) = eval_bytes.get(binary.offset..end) else {
-                        continue;
-                    };
-                    value
+            for image in
+                crate::analyzers::embedded_images::EmbeddedImage::from_values(ctx.parsed.values())
+            {
+                if cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Acquire)) {
+                    break;
+                }
+                let Some(bytes) = image.bytes(eval_bytes) else {
+                    continue;
                 };
-                report
-                    .findings
-                    .push(crate::analyzers::embedded_binary_detector::finding_for(
-                        &binary,
-                        &report.target.path,
-                    ));
                 if let Some(files) = crate::analyzers::utils::analyze_embedded_as_child(
-                    bytes,
+                    &bytes,
                     host,
-                    binary.kind.as_str(),
-                    &binary.display_kind(),
-                    binary.offset,
+                    &image.family,
+                    &image.display_kind(),
+                    image.offset,
                     self.engine.clone(),
                     None,
                 ) {

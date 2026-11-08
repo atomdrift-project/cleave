@@ -119,35 +119,19 @@ impl ArchiveAnalyzer {
                 // A symlink-mode entry records its target, but no link is
                 // made: the JVM, Android and pip ignore unix modes and load it
                 // as an ordinary file, so its bytes are analyzed below too.
-                let linkname = if entry_type_label == "symlink" {
-                    let target = super::super::zip::read_indexed_member(data, entry, 4096)
+                if entry_type_label == "symlink"
+                    && let Some(target) = super::super::zip::read_indexed_member(data, entry, 4096)
                         .ok()
-                        .and_then(|bytes| String::from_utf8(bytes).ok());
-                    if let Some(target_str) = target.as_deref()
-                        && symlink_escapes(&outpath, target_str, fake_root)
-                    {
-                        guard.add_hostile_reason(HostileArchiveReason::SymlinkEscape(format!(
-                            "{} -> {}",
-                            entry_name, target_str
-                        )));
-                    }
-                    target
-                } else {
-                    entry.linkname.clone()
-                };
+                        .and_then(|bytes| String::from_utf8(bytes).ok())
+                    && symlink_escapes(&outpath, &target, fake_root)
+                {
+                    guard.add_hostile_reason(HostileArchiveReason::SymlinkEscape(format!(
+                        "{entry_name} -> {target}"
+                    )));
+                }
                 guard.record_member_metadata(super::super::guards::ExtractedMemberMetadata {
                     archive_path: relative_path.clone(),
-                    compressed_size: entry.compressed_size,
-                    compression_method: entry.compression_method.clone(),
-                    mtime_unix: entry.mtime_unix,
-                    mode_octal: entry.mode_octal,
-                    uid: entry.uid,
-                    gid: entry.gid,
-                    uname: entry.uname.clone(),
-                    gname: entry.gname.clone(),
                     entry_type: Some(entry_type_label.to_string()),
-                    linkname,
-                    host_os: entry.host_os.clone(),
                 });
 
                 let compressed = entry.compressed_size.unwrap_or(0);
@@ -358,16 +342,6 @@ impl ArchiveAnalyzer {
                     .to_string_lossy()
                     .replace('\\', "/");
 
-                // Capture forensic metadata from the central-directory header
-                // before any reads consume the entry. linkname is set in the
-                // symlink branch below; non-symlink/non-dir entries record here.
-                let entry_compressed_size = entry.compressed_size();
-                let entry_compression =
-                    super::super::zip::format_zip_compression(entry.compression());
-                let entry_mtime = entry
-                    .last_modified()
-                    .and_then(super::super::zip::zip_datetime_to_unix);
-                let entry_mode_octal = entry.unix_mode();
                 let entry_is_dir = entry.is_dir();
                 let entry_is_symlink = entry.unix_mode().is_some_and(|m| m & 0o170000 == 0o120000);
                 let entry_type_label = if entry_is_dir {
@@ -383,33 +357,19 @@ impl ArchiveAnalyzer {
                 {
                     let mut target_buf = Vec::new();
                     let mut limited = LimitedReader::new(&mut entry, 4096);
-                    let mut linkname_capture: Option<String> = None;
                     if let Ok(read_size) = limited.read_to_end(&mut target_buf)
                         && read_size > 0
                         && read_size < 4096
                         && let Ok(target_str) = String::from_utf8(target_buf)
+                        && symlink_escapes(&outpath, &target_str, fake_root)
                     {
-                        if symlink_escapes(&outpath, &target_str, fake_root) {
-                            guard.add_hostile_reason(HostileArchiveReason::SymlinkEscape(format!(
-                                "{} -> {}",
-                                entry_name, target_str
-                            )));
-                        }
-                        linkname_capture = Some(target_str);
+                        guard.add_hostile_reason(HostileArchiveReason::SymlinkEscape(format!(
+                            "{entry_name} -> {target_str}"
+                        )));
                     }
                     guard.record_member_metadata(super::super::guards::ExtractedMemberMetadata {
                         archive_path: relative_path.clone(),
-                        compressed_size: Some(entry_compressed_size),
-                        compression_method: Some(entry_compression),
-                        mtime_unix: entry_mtime,
-                        mode_octal: entry_mode_octal,
-                        uid: None,
-                        gid: None,
-                        uname: None,
-                        gname: None,
                         entry_type: Some(entry_type_label.to_string()),
-                        linkname: linkname_capture,
-                        host_os: None,
                     });
                     // The JVM, Android and pip ignore unix modes and load this
                     // entry as an ordinary file: analyze its bytes as well.
@@ -436,17 +396,7 @@ impl ArchiveAnalyzer {
                     }
                     guard.record_member_metadata(super::super::guards::ExtractedMemberMetadata {
                         archive_path: relative_path.clone(),
-                        compressed_size: Some(entry_compressed_size),
-                        compression_method: Some(entry_compression),
-                        mtime_unix: entry_mtime,
-                        mode_octal: entry_mode_octal,
-                        uid: None,
-                        gid: None,
-                        uname: None,
-                        gname: None,
                         entry_type: Some(entry_type_label.to_string()),
-                        linkname: None,
-                        host_os: None,
                     });
                 }
                 if entry.encrypted() {
@@ -656,23 +606,6 @@ impl ArchiveAnalyzer {
                 };
 
                 let entry_type = entry.header().entry_type();
-                let header = entry.header();
-                let mode_octal = header.mode().ok();
-                let uid = header.uid().ok();
-                let gid = header.gid().ok();
-                let mtime_unix = header.mtime().ok().map(|m| m as i64);
-                let uname = header
-                    .username()
-                    .ok()
-                    .flatten()
-                    .filter(|s| !s.is_empty())
-                    .map(ToString::to_string);
-                let gname = header
-                    .groupname()
-                    .ok()
-                    .flatten()
-                    .filter(|s| !s.is_empty())
-                    .map(ToString::to_string);
                 let outpath = if super::super::tar::carries_file_content(entry_type) {
                     guard.claim_output_path(outpath)
                 } else {
@@ -694,17 +627,7 @@ impl ArchiveAnalyzer {
 
                 guard.record_member_metadata(ExtractedMemberMetadata {
                     archive_path: rel_path.clone(),
-                    compressed_size: None,
-                    compression_method: None,
-                    mtime_unix,
-                    mode_octal,
-                    uid,
-                    gid,
-                    uname,
-                    gname,
                     entry_type: Some(tar_entry_type_label(entry_type).to_string()),
-                    linkname: linkname_opt.clone(),
-                    host_os: None,
                 });
 
                 if entry_type.is_symlink() || entry_type.is_hard_link() {
@@ -990,10 +913,7 @@ impl ArchiveAnalyzer {
             .iter()
             .copied()
             .enumerate()
-            .filter(|(_, member)| {
-                !is_benign_java_path(Path::new(&member.relative_path))
-                    && !selected_paths.contains(member.relative_path.as_str())
-            })
+            .filter(|(_, member)| !selected_paths.contains(member.relative_path.as_str()))
             .collect();
         keep_top_ranked(
             &mut sample_candidates,
@@ -1020,10 +940,6 @@ impl ArchiveAnalyzer {
             members
                 .iter()
                 .filter(|m| !m.relative_path.ends_with(".class"))
-                .filter(|m| {
-                    let path = Path::new(&m.relative_path);
-                    is_nested_archive_member(&m.file_type) || !is_benign_java_path(path)
-                })
                 .filter(|m| is_interesting_jar_resource(Path::new(&m.relative_path), &m.file_type))
                 // Members the analysis would skip anyway must not spend the
                 // cap: a jar padded with a few hundred opaque `assets/*.db`
@@ -1151,24 +1067,27 @@ impl ArchiveAnalyzer {
     }
 
     /// Analyze an Electron ASAR container in memory. ASAR member data is
-    /// stored uncompressed after the header, so each addressable member can be
-    /// sliced directly and routed through normal file-type detection.
+    /// stored uncompressed after the header, so each member filefacts located
+    /// (`data_offset`) is sliced directly and routed through normal file-type
+    /// detection. Unpacked members live beside the archive and have no offset.
     pub(in super::super) fn analyze_asar_archive_in_memory(
         &self,
         data: &[u8],
-        _archive_path: &Path,
         report: &mut AnalysisReport,
         start: std::time::Instant,
         guard: &ExtractionGuard,
+        filefacts_entries: &[ArchiveEntry],
     ) -> Result<()> {
-        let entries = super::super::asar::collect_entries(data)?;
+        let entries = filefacts_entries
+            .iter()
+            .filter_map(|entry| Some((entry.path.clone(), entry.data_offset?, entry.size_bytes)));
         let fake_root = Path::new("/__cleave_archive__");
         // Scope for the window's pipelined consumer; all exit paths drop the
         // window (and its sender) before the join.
         std::thread::scope(|scope| -> Result<()> {
             let mut window = MemberWindow::new_in(scope, self, "memory ASAR");
 
-            for entry in entries {
+            for (entry_path, data_offset, entry_size) in entries {
                 if self.is_cancelled() {
                     anyhow::bail!("Analysis cancelled during ASAR member read");
                 }
@@ -1179,15 +1098,15 @@ impl ArchiveAnalyzer {
                     ));
                     break;
                 }
-                if entry.path.len() > MAX_PATH_COMPONENT_LEN {
+                if entry_path.len() > MAX_PATH_COMPONENT_LEN {
                     guard.add_hostile_reason(HostileArchiveReason::ExcessiveEntryName {
-                        len: entry.path.len(),
-                        preview: entry.path.chars().take(80).collect(),
+                        len: entry_path.len(),
+                        preview: entry_path.chars().take(80).collect(),
                     });
                 }
 
-                let Some(outpath) = sanitize_entry_path(&entry.path, fake_root) else {
-                    guard.add_hostile_reason(HostileArchiveReason::PathTraversal(entry.path));
+                let Some(outpath) = sanitize_entry_path(&entry_path, fake_root) else {
+                    guard.add_hostile_reason(HostileArchiveReason::PathTraversal(entry_path));
                     continue;
                 };
                 let relative_path = outpath
@@ -1196,18 +1115,18 @@ impl ArchiveAnalyzer {
                     .to_string_lossy()
                     .replace('\\', "/");
 
-                if entry.size > MAX_FILE_SIZE {
+                if entry_size > MAX_FILE_SIZE {
                     guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
-                        file: entry.path,
-                        size: entry.size,
+                        file: entry_path,
+                        size: entry_size,
                     });
                     continue;
                 }
 
-                let start_offset = usize::try_from(entry.data_offset).map_err(|e| {
+                let start_offset = usize::try_from(data_offset).map_err(|e| {
                     anyhow::anyhow!("ASAR member offset exceeds addressable memory: {e}")
                 })?;
-                let member_size = usize::try_from(entry.size).map_err(|e| {
+                let member_size = usize::try_from(entry_size).map_err(|e| {
                     anyhow::anyhow!("ASAR member size exceeds addressable memory: {e}")
                 })?;
                 let end_offset = start_offset
@@ -1232,17 +1151,7 @@ impl ArchiveAnalyzer {
 
                 guard.record_member_metadata(super::super::guards::ExtractedMemberMetadata {
                     archive_path: relative_path.clone(),
-                    compressed_size: Some(entry.size),
-                    compression_method: Some("stored".to_string()),
-                    mtime_unix: None,
-                    mode_octal: None,
-                    uid: None,
-                    gid: None,
-                    uname: None,
-                    gname: None,
                     entry_type: Some("regular".to_string()),
-                    linkname: None,
-                    host_os: None,
                 });
 
                 let logical_path = Path::new(&relative_path);
@@ -1324,17 +1233,7 @@ impl ArchiveAnalyzer {
 
                 guard.record_member_metadata(super::super::guards::ExtractedMemberMetadata {
                     archive_path: relative_path.clone(),
-                    compressed_size: entry.compressed_size,
-                    compression_method: entry.compression_method.clone(),
-                    mtime_unix: entry.mtime_unix,
-                    mode_octal: entry.mode_octal,
-                    uid: None,
-                    gid: None,
-                    uname: None,
-                    gname: None,
                     entry_type: Some("regular".to_string()),
-                    linkname: None,
-                    host_os: None,
                 });
 
                 if !guard
@@ -1482,7 +1381,6 @@ impl ArchiveAnalyzer {
         let logical_path = Path::new(&member.relative_path);
         let entry_metadata = archive_entry_metadata(
             entry_path.clone(),
-            logical_path,
             &member.file_type,
             member.sha256.clone(),
             &member.data,

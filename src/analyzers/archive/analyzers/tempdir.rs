@@ -158,7 +158,8 @@ impl ArchiveAnalyzer {
         // Phase 2: Run full JavaClassAnalyzer only on interesting classes
         // - Main class
         // - YARA-flagged classes
-        // - Non-benign classes (limited sample)
+        // - A sample ranked by salient APIs. A package name is chosen by
+        //   whoever built the jar, so a library-looking one earns no pass.
         let interesting_classes: Vec<_> = class_files
             .iter()
             .filter(|e| {
@@ -173,22 +174,13 @@ impl ArchiveAnalyzer {
                     }
                 }
 
-                // Always analyze YARA-flagged classes
-                if flagged_classes.contains(path) {
-                    return true;
-                }
-
-                // Skip benign library packages
-                if is_benign_java_path(path.strip_prefix(temp_dir).unwrap_or(path)) {
-                    return false;
-                }
-
-                // For non-flagged, non-benign classes, just take a sample
-                false
+                // Always analyze YARA-flagged classes; the rest compete
+                // for the ranked sample below.
+                flagged_classes.contains(path)
             })
             .collect();
 
-        // Also include a bounded sample of non-benign, non-flagged classes,
+        // Also include a bounded sample of non-flagged classes,
         // prioritizing classes with salient APIs rather than attacker-controlled
         // archive order. Exclude main/YARA classes already selected.
         let interesting_paths: HashSet<&Path> = interesting_classes
@@ -198,11 +190,7 @@ impl ArchiveAnalyzer {
         let mut sample_classes: Vec<(usize, u64, _)> = class_files
             .iter()
             .enumerate()
-            .filter(|(_, entry)| {
-                let path = entry.path();
-                !is_benign_java_path(path.strip_prefix(temp_dir).unwrap_or(path))
-                    && !interesting_paths.contains(path)
-            })
+            .filter(|(_, entry)| !interesting_paths.contains(entry.path()))
             .map(|(index, entry)| {
                 let len = entry.metadata().map_or(0, |meta| meta.len());
                 (index, len, entry)
@@ -292,7 +280,6 @@ impl ArchiveAnalyzer {
 
                 let entry_metadata = archive_entry_metadata(
                     entry_path.clone(),
-                    Path::new(&relative_path),
                     &file_type,
                     sha256.clone(),
                     file_data,
@@ -400,9 +387,7 @@ impl ArchiveAnalyzer {
                 let path = e.path();
                 let file_type =
                     crate::analyzers::detect_file_type(path).unwrap_or(FileType::Unknown);
-                (is_nested_archive_member(&file_type)
-                    || !is_benign_java_path(path.strip_prefix(temp_dir).unwrap_or(path)))
-                    && is_interesting_jar_resource(path, &file_type)
+                is_interesting_jar_resource(path, &file_type)
             })
             .collect();
         // Path breaks rank ties so the selection is reproducible; walkdir
@@ -469,7 +454,6 @@ impl ArchiveAnalyzer {
 
                 let entry_metadata = archive_entry_metadata(
                     entry_path.clone(),
-                    Path::new(&relative_path),
                     &file_type,
                     sha256.clone(),
                     file_data,
@@ -669,7 +653,6 @@ impl ArchiveAnalyzer {
 
                 let entry_metadata = archive_entry_metadata(
                     entry_path.clone(),
-                    Path::new(&relative_path),
                     &file_type,
                     sha256.clone(),
                     file_data,
@@ -764,10 +747,7 @@ impl ArchiveAnalyzer {
             capability_count,
         } = acc.merge_into(report);
 
-        // Emit the `archive.*` kv subtree (members + aggregates) so traits
-        // can match on archive contents and shape. See
-        // [`AnalysisReport::seal_archive_metadata_kv`] for the field layout.
-        report.seal_archive_metadata_kv();
+        report.prune_archive_directories();
 
         // Add metadata about archive contents
         report.metadata.errors.push(format!(

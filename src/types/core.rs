@@ -1550,10 +1550,8 @@ impl TargetInfo {
 /// For nested archives, uses `!` separator: "inner.tar.gz!path/to/file.txt"
 ///
 /// The optional fields below are populated by format-aware extractors (zip,
-/// tar). They surface forensically-useful header data that the archive
-/// carries: timestamps, POSIX ownership/mode, compression choice, entry
-/// type, link targets. Traits at the archive root query these via the
-/// `archive.members[]` kv subtree materialized by `seal_archive_metadata_kv`.
+/// tar): timestamps, POSIX ownership/mode, compression choice, entry type,
+/// link targets.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ArchiveEntry {
     /// Path within the archive. For nested archives, uses `!` separator.
@@ -1566,71 +1564,28 @@ pub struct ArchiveEntry {
     pub sha256: String,
     /// File size in bytes (uncompressed)
     pub size_bytes: u64,
-    /// File type implied by the archive member path/extension, before content validation.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub declared_type: Option<String>,
-    /// True when the path-implied type differs from the content-derived type.
-    #[serde(skip_serializing_if = "is_false", default)]
-    pub extension_type_mismatch: bool,
-    /// Shannon entropy of the uncompressed entry bytes.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub entropy: Option<f64>,
-    /// First bytes of the uncompressed entry as lowercase hex.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub magic_prefix: Option<String>,
     /// Container-specific member kind, for example a PyInstaller entry kind.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub container_kind: Option<String>,
 
-    /// Compressed size in bytes (zip per-entry; tar entries are uncompressed so this matches size_bytes).
+    /// Compressed size in bytes; the zip-bomb ratio guard reads it.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub compressed_size: Option<u64>,
     /// Compression method: "stored", "deflate", "lzma", "zstd", "bzip2", etc.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub compression_method: Option<String>,
-    /// Modification time as Unix epoch seconds. Zip stores 2-second-resolution
-    /// DOS time by default; the UT extra-field carries real Unix timestamps.
-    /// Tar carries native Unix time.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub mtime_unix: Option<i64>,
-    /// POSIX mode bits (12 low bits standard; setuid/setgid/sticky included).
-    /// Zip provides this only when version_made_by indicates a Unix host;
-    /// tar always provides it. Format: decimal of the 16-bit mode value.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub mode_octal: Option<u32>,
-    /// Numeric user id (tar only).
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub uid: Option<u64>,
-    /// Numeric group id (tar only).
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub gid: Option<u64>,
-    /// User name string (tar only — surprisingly often the real username).
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub uname: Option<String>,
-    /// Group name string (tar only).
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub gname: Option<String>,
     /// Entry type: "regular", "symlink", "hardlink", "dir", "char-dev",
     /// "block-dev", "fifo", "pax-header", "gnu-longname", etc.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub entry_type: Option<String>,
-    /// Link target for symlinks and hardlinks.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub linkname: Option<String>,
-    /// Host OS that created the entry (zip version_made_by upper byte).
-    /// Values: "msdos", "unix", "macintosh", "ntfs", "vfat", "amiga", etc.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub host_os: Option<String>,
-    /// ZIP local-header offset, when filefacts indexed the container.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub header_offset: Option<u64>,
     /// ZIP compressed payload offset, when filefacts indexed the container.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub data_offset: Option<u64>,
-    /// ZIP central-directory header offset, when available.
+    /// Symlink target; the symlink-escape guard reads it.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub central_header_offset: Option<u64>,
-    /// ZIP CRC32 of the uncompressed entry payload.
+    pub linkname: Option<String>,
+    /// CRC-32 the archive records for the member; extraction verifies the
+    /// bytes it reads against it.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub crc32: Option<u32>,
     /// True when the archive entry is encrypted.

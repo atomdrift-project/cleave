@@ -370,27 +370,16 @@ pub(crate) fn project_filefacts_function(sym: &filefacts::Symbol) -> Option<Func
 }
 
 fn archive_entry_from_filefacts_member(member: &filefacts::ArchiveMember) -> ArchiveEntry {
-    let compression = &member.compression;
-    let ownership = &member.ownership;
     ArchiveEntry {
         path: member.path.clone(),
         file_type: "unknown".to_string(),
         sha256: String::new(),
         size_bytes: member.size_bytes,
-        compressed_size: compression.compressed_size,
-        compression_method: compression.method.clone(),
-        mtime_unix: member.mtime_unix,
-        mode_octal: ownership.mode_octal,
-        uid: ownership.uid,
-        gid: ownership.gid,
-        uname: ownership.uname.clone(),
-        gname: ownership.gname.clone(),
+        compressed_size: member.compression.compressed_size,
+        compression_method: member.compression.method.clone(),
         entry_type: Some(member.entry_type.as_str().to_owned()),
-        linkname: member.linkname.clone(),
-        host_os: member.host_os.clone(),
-        header_offset: member.offsets.header,
         data_offset: member.offsets.data,
-        central_header_offset: member.offsets.central_header,
+        linkname: member.linkname.clone(),
         crc32: member.crc32,
         encrypted: member.encrypted,
         ..ArchiveEntry::default()

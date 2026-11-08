@@ -37,44 +37,6 @@ pub(crate) struct MachOAnalyzer {
 }
 
 impl MachOAnalyzer {
-    fn push_metadata_finding(
-        report: &mut AnalysisReport,
-        id: &str,
-        desc: &str,
-        method: &str,
-        source: &str,
-        value: String,
-    ) {
-        // Header/whole-file facts (magic, arch, format bits) genuinely live at
-        // the header, so the default anchor is offset 0.
-        Self::push_metadata_finding_at(report, id, desc, method, source, value, "0x0".to_string());
-    }
-
-    /// Like [`Self::push_metadata_finding`] but with an explicit evidence
-    /// `location` — used where the fact sits at a known non-header offset
-    /// (e.g. a dylib load command).
-    fn push_metadata_finding_at(
-        report: &mut AnalysisReport,
-        id: &str,
-        desc: &str,
-        method: &str,
-        source: &str,
-        value: String,
-        location: String,
-    ) {
-        report.findings.push(
-            Finding::structural(id.to_string(), desc.to_string(), 1.0)
-                .with_criticality(Criticality::Baseline)
-                .with_evidence(vec![Evidence {
-                    method: method.to_string(),
-                    source: source.to_string(),
-                    value,
-                    location: Some(location),
-                    ..Default::default()
-                }]),
-        );
-    }
-
     /// Creates a new Mach-O analyzer with default configuration
     #[must_use]
     pub(crate) fn new() -> Self {
@@ -119,26 +81,26 @@ impl MachOAnalyzer {
         &self,
         path: &Path,
         data: &[u8],
+        values: Option<&filefacts::Values>,
         report: &mut AnalysisReport,
         config: &crate::analyzers::archive::ArchiveAnalyzerConfig,
         yara: Option<std::sync::Arc<crate::yara_engine::YaraEngine>>,
     ) {
         use crate::analyzers::sfx_detector::SfxKind;
-        let Some(kind @ (SfxKind::Nuitka | SfxKind::PyInstaller)) =
-            crate::analyzers::sfx_detector::detect_sfx(data, &[])
+        let Some((kind @ (SfxKind::Nuitka | SfxKind::PyInstaller), marker_offset)) = values
+            .and_then(|values| crate::analyzers::sfx_detector::installer_from_values(values, 0))
         else {
             return;
         };
         let sfx = crate::analyzers::sfx_detector::analyze_sfx(
             path,
             kind,
+            marker_offset,
             data,
             &self.engine,
             yara,
             Some(config),
-            &[],
         );
-        report.findings.push(sfx.sfx_finding);
         report.findings.extend(sfx.extraction_findings);
         if let Some(child) = sfx.archive_report {
             report.findings.extend(child.findings);
@@ -425,7 +387,7 @@ impl MachOAnalyzer {
         // supplies the decoded metadata; cleave additionally verifies the
         // CodeDirectory page hashes against the bytes being analyzed.
         let _t = std::time::Instant::now();
-        self.generate_signature_findings_from_ctx(ctx, data, &mut report);
+        self.generate_signature_findings_from_ctx(ctx, &mut report);
         let sig_findings_ms = _t.elapsed().as_millis();
 
         let _t = std::time::Instant::now();
@@ -681,69 +643,6 @@ impl MachOAnalyzer {
                 }],
             });
         }
-
-        if let Some(name) = v.get("macho.install_name").and_then(|x| x.as_str()) {
-            Self::push_metadata_finding(
-                report,
-                "metadata/binary/linking::macho-install-name",
-                "Mach-O install name present",
-                "lc_id_dylib",
-                "filefacts",
-                name.to_string(),
-            );
-        }
-
-        if let Some(libs) = v.get("macho.libraries").and_then(|x| x.as_array()) {
-            // Map each dylib path to its load-command file offset (filefacts
-            // exposes these via `macho.load_dylibs`) so the evidence is
-            // anchored where the dylib reference physically sits.
-            let dylib_offsets: std::collections::HashMap<&str, u64> = v
-                .get("macho.load_dylibs")
-                .and_then(|x| x.as_array())
-                .map(|entries| {
-                    entries
-                        .iter()
-                        .filter_map(|e| {
-                            let path = e.get("path")?.as_str()?;
-                            let off = e.get("offset")?.as_u64()?;
-                            Some((path, off))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            for lib in libs {
-                let Some(name) = lib.as_str() else { continue };
-                if name.is_empty() {
-                    continue;
-                }
-                let location = dylib_offsets
-                    .get(name)
-                    .map_or_else(|| "0x0".to_string(), |off| format!("0x{off:x}"));
-                Self::push_metadata_finding_at(
-                    report,
-                    "metadata/binary/linking::macho-dylib",
-                    "Mach-O linked dylib",
-                    "load_dylib",
-                    "filefacts",
-                    name.to_string(),
-                    location,
-                );
-            }
-        }
-
-        if let Some(rpaths) = v.get("macho.rpaths").and_then(|x| x.as_array()) {
-            for rpath in rpaths {
-                let Some(name) = rpath.as_str() else { continue };
-                Self::push_metadata_finding(
-                    report,
-                    "metadata/binary/linking::macho-rpath",
-                    "Mach-O runtime search path",
-                    "rpath",
-                    "filefacts",
-                    name.to_string(),
-                );
-            }
-        }
     }
 
     /// Project filefacts's typed Sections view into the report, marking
@@ -781,12 +680,7 @@ impl MachOAnalyzer {
     /// anchor each finding at the offset of the thing it describes.
     ///
     /// [`Identity`]: filefacts::Identity
-    fn generate_signature_findings_from_ctx(
-        &self,
-        ctx: &Ctx<'_>,
-        data: &[u8],
-        report: &mut AnalysisReport,
-    ) {
+    fn generate_signature_findings_from_ctx(&self, ctx: &Ctx<'_>, report: &mut AnalysisReport) {
         let values = ctx.parsed.values();
         // The `LC_CODE_SIGNATURE` blob offset is present iff the binary is
         // signed. Without it there's nothing to attribute — unsigned
@@ -804,35 +698,19 @@ impl MachOAnalyzer {
             .get("macho.code_signature.identifier_offset")
             .and_then(serde_json::Value::as_u64);
         let identity = ctx.identity().unwrap_or_default();
-        let entitlements = values
-            .get("macho.code_signature.entitlements")
-            .and_then(serde_json::Value::as_object);
-        // Checked first: code pages that no longer hash to the
-        // CodeDirectory mean the signer's identity belongs under
+        // Code pages that no longer hash to the CodeDirectory (filefacts
+        // recomputes them) put the signer's identity under
         // `invalid/tampered/`, whatever chain the signature carries.
-        let tampered = if let CodeDirectoryIntegrity::Invalid {
-            mismatched,
-            checked,
-        } = verify_code_directory_hashes(data, sig_offset as usize)
-        {
-            report.findings.push(signature_finding(
-                "metadata/signature/invalid/tampered::macho-code-directory".to_string(),
-                "Mach-O code pages do not match their code signature".to_string(),
-                Criticality::Suspicious,
-                "code_directory_hashes",
-                format!("{mismatched} of {checked} signed code pages do not match"),
-                &format!("0x{sig_offset:x}"),
-            ));
-            Some(super::signature::Failure::Tampered)
-        } else {
-            None
-        };
+        let tampered = values
+            .get("macho.code_signature.code_page_mismatches")
+            .and_then(serde_json::Value::as_u64)
+            .is_some_and(|pages| pages > 0)
+            .then_some(super::signature::Failure::Tampered);
         emit_signature_findings(
             report,
             sig_offset,
             identifier_offset,
             &identity,
-            entitlements,
             tampered,
             values
                 .get("macho.code_signature.cms")
@@ -1316,27 +1194,10 @@ impl MachOAnalyzer {
         };
         let mut report = AnalysisReport::new(target);
 
-        let plausible_macho_size = data.len() >= 4096;
-        if plausible_macho_size && let Some(msg) = parse_failure {
-            report.metadata.errors.push(msg.clone());
-            report.findings.push(Finding {
-                precomputed_spans: None,
-                src: None,
-                kind: FindingKind::Structural,
-                id: "metadata/analysis/limitation::macho-parse-failed"
-                    .to_string()
-                    .into(),
-                desc: format!("Mach-O structural parsing failed: {}", msg).into(),
-                conf: 1.0,
-                crit: Criticality::Notable,
-                mbc: None,
-                attack: None,
-                evidence: vec![],
-                match_count: 0,
-                trait_refs: vec![],
-                source_file: None,
-                downgraded: false,
-            });
+        // The parse failure is judged by traits (`macho.parse_failed`,
+        // `macho.parse_panicked`); here it is only an analysis note.
+        if let Some(msg) = parse_failure {
+            report.metadata.errors.push(msg);
         }
 
         // Filefacts's recovery already populated the typed `Functions`
@@ -1442,6 +1303,7 @@ impl Analyzer for MachOAnalyzer {
         self.analyze_python_bundle_payload(
             input.path,
             preferred_data,
+            preferred_ctx.map(|ctx| ctx.parsed.values()),
             &mut report,
             &archive_config,
             None,
@@ -1502,14 +1364,7 @@ impl Analyzer for MachOAnalyzer {
 }
 
 mod signing;
-use signing::{
-    CodeDirectoryIntegrity, emit_signature_findings, signature_finding,
-    verify_code_directory_hashes,
-};
-#[cfg(feature = "lint")]
-pub(crate) use signing::{ENTITLEMENT_CATEGORIES, entitlement_category};
-#[cfg(test)]
-use signing::{describe_entitlement, determine_entitlement_criticality};
+use signing::emit_signature_findings;
 
 #[cfg(test)]
 #[allow(

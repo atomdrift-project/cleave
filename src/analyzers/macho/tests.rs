@@ -1,9 +1,9 @@
 use super::*;
-use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 #[test]
-fn parser_failure_reports_limitation_without_evasion_intent() {
+fn parser_failure_is_an_analysis_note_not_a_finding() {
+    // The failure itself is judged by traits over `macho.parse_failed`.
     let analyzer = MachOAnalyzer::new();
     let bytes = vec![0u8; 4096];
     let report = analyzer.analyze_macho_fallback(
@@ -12,16 +12,8 @@ fn parser_failure_reports_limitation_without_evasion_intent() {
         "sha".into(),
         Some("parser could not recover header".into()),
     );
-    assert_eq!(report.metadata.errors.len(), 1);
-    assert_eq!(report.findings.len(), 1);
-    let finding = &report.findings[0];
-    assert_eq!(
-        finding.id.as_str(),
-        "metadata/analysis/limitation::macho-parse-failed"
-    );
-    assert_eq!(finding.crit, Criticality::Notable);
-    assert!(finding.attack.is_none());
-    assert!(finding.mbc.is_none());
+    assert_eq!(report.metadata.errors, ["parser could not recover header"]);
+    assert!(report.findings.is_empty());
 }
 
 /// A fat binary's slice table comes from the parse the caller already
@@ -59,95 +51,6 @@ fn fat_slices_come_from_the_callers_parse() {
 
 fn test_macho_path() -> PathBuf {
     PathBuf::from("tests/fixtures/test.macho")
-}
-
-fn put_be_u32(buf: &mut [u8], offset: usize, value: u32) {
-    buf[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
-}
-
-/// Minimal two-page SHA-256 CodeDirectory wrapped in an embedded-signature
-/// SuperBlob. The signed bytes precede the signature, as in a real Mach-O.
-fn code_directory_fixture(tampered: bool) -> (Vec<u8>, usize) {
-    code_directory_fixture_with_slots(tampered, &[0])
-}
-
-/// As [`code_directory_fixture`], with one index entry per slot type in
-/// `slots`, every one pointing at the same CodeDirectory.
-fn code_directory_fixture_with_slots(tampered: bool, slots: &[u32]) -> (Vec<u8>, usize) {
-    const PAGE: usize = 4096;
-    const CODE_LEN: usize = PAGE * 2;
-    const CD_HEADER: usize = 44;
-    const HASH_SIZE: usize = 32;
-    const CD_LEN: usize = CD_HEADER + HASH_SIZE * 2;
-    let super_header = 12 + 8 * slots.len();
-
-    let mut data = vec![b'A'; CODE_LEN];
-    let mut cd = vec![0u8; CD_LEN];
-    put_be_u32(&mut cd, 0, 0xfade_0c02);
-    put_be_u32(&mut cd, 4, CD_LEN as u32);
-    put_be_u32(&mut cd, 8, 0x0002_0000);
-    put_be_u32(&mut cd, 16, CD_HEADER as u32);
-    put_be_u32(&mut cd, 28, 2);
-    put_be_u32(&mut cd, 32, CODE_LEN as u32);
-    cd[36] = HASH_SIZE as u8;
-    cd[37] = 2; // SHA-256
-    cd[39] = 12; // 4096-byte pages
-    for page in 0..2 {
-        let digest = Sha256::digest(&data[page * PAGE..(page + 1) * PAGE]);
-        let hash_start = CD_HEADER + page * HASH_SIZE;
-        cd[hash_start..hash_start + HASH_SIZE].copy_from_slice(&digest);
-    }
-
-    let mut superblob = vec![0u8; super_header];
-    put_be_u32(&mut superblob, 0, 0xfade_0cc0);
-    put_be_u32(&mut superblob, 4, (super_header + CD_LEN) as u32);
-    put_be_u32(&mut superblob, 8, slots.len() as u32);
-    for (i, slot) in slots.iter().enumerate() {
-        put_be_u32(&mut superblob, 12 + i * 8, *slot);
-        put_be_u32(&mut superblob, 16 + i * 8, super_header as u32);
-    }
-    superblob.extend_from_slice(&cd);
-    let sig_offset = data.len();
-    data.extend_from_slice(&superblob);
-    if tampered {
-        data[PAGE + 17] ^= 0xff;
-    }
-    (data, sig_offset)
-}
-
-#[test]
-fn code_directory_page_hashes_validate() {
-    let (data, sig_offset) = code_directory_fixture(false);
-    assert_eq!(
-        verify_code_directory_hashes(&data, sig_offset),
-        CodeDirectoryIntegrity::Valid { checked: 2 }
-    );
-}
-
-/// Each page is hashed once however many index entries name the
-/// CodeDirectory, and entries outside the CodeDirectory slots are ignored.
-/// Otherwise a forged index makes verification quadratic in its size.
-#[test]
-fn code_directory_is_verified_once_per_blob() {
-    let mut slots = vec![0u32; 1000];
-    slots.extend([0x1000, 0x1001, 2, 0x10000]);
-    let (data, sig_offset) = code_directory_fixture_with_slots(false, &slots);
-    assert_eq!(
-        verify_code_directory_hashes(&data, sig_offset),
-        CodeDirectoryIntegrity::Valid { checked: 2 }
-    );
-}
-
-#[test]
-fn code_directory_page_hashes_detect_tampering() {
-    let (data, sig_offset) = code_directory_fixture(true);
-    assert_eq!(
-        verify_code_directory_hashes(&data, sig_offset),
-        CodeDirectoryIntegrity::Invalid {
-            mismatched: 1,
-            checked: 2
-        }
-    );
 }
 
 fn report_with_offsets() -> AnalysisReport {
@@ -518,15 +421,7 @@ fn test_identity_finding_is_notable() {
         sha256: String::new(),
         architectures: None,
     });
-    emit_signature_findings(
-        &mut report,
-        0xb3a0,
-        Some(0xb3c8),
-        &identity,
-        None,
-        None,
-        None,
-    );
+    emit_signature_findings(&mut report, 0xb3a0, Some(0xb3c8), &identity, None, None);
 
     let id_finding = report
         .findings
@@ -553,11 +448,10 @@ fn test_identity_finding_is_notable() {
 
 /// A Developer-ID-signed binary yields `metadata/signature/verified/developer::<team>`
 /// trait keyed by Team ID, with the signer organization in the description,
-/// plus a per-entitlement finding — all sourced from filefacts's `Identity`
-/// and entitlements map, none from a re-parse. This is the supply-chain
-/// signal an analyst reads first: who signed it, and what it was granted.
+/// sourced from filefacts's `Identity`, not a re-parse. This is the
+/// supply-chain signal an analyst reads first: who signed it.
 #[test]
-fn test_developer_signed_and_entitlement_findings() {
+fn test_developer_signed_findings() {
     let mut identity = filefacts::Identity::default();
     identity.trust = filefacts::Trust::DeveloperId;
     identity.team_id = Some(filefacts::Claim::verified(
@@ -568,11 +462,6 @@ fn test_developer_signed_and_entitlement_findings() {
     signer.common_name = Some("Developer ID Application: Acme Inc. (ABCDE12345)".to_string());
     signer.organization = Some("Acme Inc.".to_string());
     identity.signer = Some(signer);
-    let mut entitlements = serde_json::Map::new();
-    entitlements.insert(
-        "com.apple.security.cs.debugger".to_string(),
-        serde_json::Value::Bool(true),
-    );
     let mut report = AnalysisReport::new(crate::types::TargetInfo {
         path: "/Applications/Acme.app/Contents/MacOS/Acme".to_string(),
         file_type: "macho".to_string(),
@@ -580,15 +469,7 @@ fn test_developer_signed_and_entitlement_findings() {
         sha256: String::new(),
         architectures: None,
     });
-    emit_signature_findings(
-        &mut report,
-        0x4000,
-        None,
-        &identity,
-        Some(&entitlements),
-        None,
-        None,
-    );
+    emit_signature_findings(&mut report, 0x4000, None, &identity, None, None);
 
     let dev = report
         .findings
@@ -599,176 +480,6 @@ fn test_developer_signed_and_entitlement_findings() {
     assert_eq!(
         dev.desc,
         "Verified Apple Developer ID: Acme Inc. (ABCDE12345)"
-    );
-
-    // A dangerous entitlement on a non-platform binary escalates to Suspicious.
-    let ent = report
-        .findings
-        .iter()
-        .find(|f| f.id == "metadata/entitlement/security::com.apple.security.cs.debugger")
-        .expect("entitlement finding emitted");
-    assert_eq!(ent.crit, Criticality::Suspicious);
-    assert_eq!(ent.evidence[0].location.as_deref(), Some("0x4000"));
-}
-
-/// Permissions never fall to Baseline: every entitlement is at least
-/// Notable, and dangerous ones escalate to Suspicious. Guards the
-/// `determine_entitlement_criticality` invariant.
-#[test]
-fn test_entitlements_never_baseline() {
-    // (key, is_platform)
-    let cases = [
-        ("com.apple.security.app-sandbox", false),
-        ("com.apple.security.cs.allow-jit", false),
-        ("com.apple.security.get-task-allow", false),
-        ("com.apple.private.tcc.allow", true),
-    ];
-    for (key, is_platform) in cases {
-        let crit = determine_entitlement_criticality(key, is_platform, false);
-        assert!(
-            crit >= Criticality::Notable,
-            "entitlement {key} must be Notable-or-higher, got {crit:?}"
-        );
-    }
-}
-
-#[test]
-fn test_entitlement_finding_confidence() {
-    let analyzer = MachOAnalyzer::new();
-    let test_file = test_macho_path();
-
-    let report = analyzer.analyze(&test_file).unwrap();
-
-    // All entitlement findings should have high confidence
-    let ent_findings: Vec<_> = report
-        .findings
-        .iter()
-        .filter(|f| f.id.contains("entitlement"))
-        .collect();
-
-    for finding in &ent_findings {
-        assert_eq!(finding.conf, 1.0); // Entitlements from signature have 100% confidence
-    }
-}
-
-#[test]
-fn test_describe_entitlement_coverage() {
-    // Test that describe_entitlement handles various entitlement keys
-    assert_eq!(
-        describe_entitlement("com.apple.security.cs.disable-library-validation"),
-        "Allows libraries without signature validation"
-    );
-    assert_eq!(
-        describe_entitlement("com.apple.security.cs.allow-jit"),
-        "Allows JIT-compiled executable memory"
-    );
-    assert_eq!(
-        describe_entitlement("personal-information.location"),
-        "Location data access"
-    );
-    assert_eq!(describe_entitlement("device.camera"), "Camera access");
-    assert_eq!(
-        describe_entitlement("com.apple.security.network.client"),
-        "Can make outbound network connections"
-    );
-    assert_eq!(
-        describe_entitlement("com.apple.security.network.server"),
-        "Can accept incoming network connections"
-    );
-    assert_eq!(
-        describe_entitlement("com.apple.security.files.user-selected.read-write"),
-        "Can read and modify user-selected files"
-    );
-    assert_eq!(
-        describe_entitlement("com.apple.developer.team-identifier"),
-        "Team identifier"
-    );
-}
-
-#[test]
-fn test_describe_entitlement_fallback() {
-    // Test fallback behavior for unknown entitlements
-    let desc = describe_entitlement("com.example.unknown-entitlement");
-    assert!(!desc.is_empty());
-    assert_ne!(desc, "com.example.unknown-entitlement"); // Should be transformed
-}
-
-#[test]
-fn test_determine_entitlement_criticality_platform_always_notable() {
-    // Platform (Apple-signed) binaries: all entitlements are notable
-    for key in [
-        "com.apple.security.cs.allow-jit",
-        "com.apple.security.cs.debugger",
-        "com.apple.security.cs.disable-library-validation",
-    ] {
-        assert_eq!(
-            determine_entitlement_criticality(key, true, false,),
-            Criticality::Notable,
-            "platform binary entitlement {key} should be notable"
-        );
-    }
-}
-
-#[test]
-fn test_determine_entitlement_criticality_dangerous_non_apple() {
-    // Dangerous entitlements are suspicious on non-Apple binaries
-    for key in [
-        "com.apple.security.cs.debugger",
-        "com.apple.security.cs.allow-unsigned-executable-memory",
-    ] {
-        assert_eq!(
-            determine_entitlement_criticality(key, false, false,),
-            Criticality::Suspicious,
-            "non-Apple entitlement {key} should be suspicious"
-        );
-    }
-    // allow-jit is common in legitimate apps, notable not suspicious
-    assert_eq!(
-        determine_entitlement_criticality("com.apple.security.cs.allow-jit", false, false,),
-        Criticality::Notable,
-    );
-}
-
-#[test]
-fn test_determine_entitlement_criticality_disable_library_validation_notable() {
-    // disable-library-validation is common for developer-signed apps (plugins, frameworks)
-    assert_eq!(
-        determine_entitlement_criticality(
-            "com.apple.security.cs.disable-library-validation",
-            false,
-            false,
-        ),
-        Criticality::Notable,
-    );
-}
-
-#[test]
-fn test_determine_entitlement_criticality_privacy_notable() {
-    for key in ["personal-information.location", "device.bluetooth"] {
-        assert_eq!(
-            determine_entitlement_criticality(key, false, false,),
-            Criticality::Notable,
-        );
-    }
-}
-
-#[test]
-fn test_determine_entitlement_criticality_allow_unsigned_exec_memory_common_helper() {
-    assert_eq!(
-        determine_entitlement_criticality(
-            "com.apple.security.cs.allow-unsigned-executable-memory",
-            false,
-            true,
-        ),
-        Criticality::Notable,
-    );
-    assert_eq!(
-        determine_entitlement_criticality(
-            "com.apple.security.cs.allow-unsigned-executable-memory",
-            false,
-            true,
-        ),
-        Criticality::Notable,
     );
 }
 

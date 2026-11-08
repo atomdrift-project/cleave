@@ -6,8 +6,6 @@ use crate::types::{AnalysisReport, Evidence, StructuralFeature, TargetInfo};
 use anyhow::{Result, bail};
 use std::path::Path;
 
-mod capabilities;
-mod helpers;
 mod tests;
 
 #[derive(Debug)]
@@ -68,8 +66,6 @@ impl JavaClassAnalyzer {
                 ..Default::default()
             }],
         });
-
-        self.detect_capabilities(ctx, &mut report);
 
         // Preserve declarations, including native methods without Code bodies.
         // Constant-pool references and quoted names remain imports/text only.

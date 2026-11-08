@@ -1,14 +1,6 @@
 use super::*;
 use std::path::PathBuf;
 
-#[test]
-fn test_arch_name_from_machine_known() {
-    assert_eq!(arch_name_from_machine(62), "x86_64");
-    assert_eq!(arch_name_from_machine(183), "aarch64");
-    assert_eq!(arch_name_from_machine(3), "i386");
-    assert!(arch_name_from_machine(0xfff0).starts_with("unknown_"));
-}
-
 fn test_elf_path() -> PathBuf {
     PathBuf::from("tests/fixtures/test.elf")
 }
@@ -139,10 +131,6 @@ fn test_elf_architecture_detected() {
     let archs = report.target.architectures.unwrap();
     assert!(!archs.is_empty());
 }
-
-#[test]
-#[cfg(any())]
-fn _deleted_bounded_note_scanner_tests() {}
 
 #[test]
 fn test_elf_sections_analyzed() {

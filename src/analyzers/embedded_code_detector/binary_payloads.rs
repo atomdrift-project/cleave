@@ -71,7 +71,7 @@ pub(super) fn head_decodes_to_known_magic_text(value: &str) -> bool {
 
 /// Detect archive/binary type from raw magic bytes.
 pub(super) fn magic_type(data: &[u8]) -> Option<&'static str> {
-    crate::analyzers::overlay::detect_archive_from_bytes(data).or_else(|| {
+    filefacts::archive_magic(data).or_else(|| {
         if data.starts_with(b"MZ") {
             Some("pe")
         } else if data.len() >= 4 && data[..4] == [0x7F, 0x45, 0x4C, 0x46] {

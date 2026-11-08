@@ -12,24 +12,10 @@
 use crate::analyzers::archive::{ArchiveAnalyzer, ArchiveAnalyzerConfig};
 use crate::types::{AnalysisReport, Criticality, Evidence, Finding, FindingKind};
 use crate::yara_engine::YaraEngine;
-use memchr::memmem;
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::OnceLock;
-
-/// NSIS installer marker (little-endian 0xDEADBEEF).
-const NSIS_DEADBEEF: &[u8] = &[0xEF, 0xBE, 0xAD, 0xDE];
-
-/// Inno Setup data header string.
-const INNO_MARKER: &[u8] = b"Inno Setup Setup Data";
-
-/// PyInstaller cookie magic.
-const PYINST_MAGIC: &[u8] = b"MEI\x0c\x0b\x0a\x0b\x0e";
-const NSIS_VERSION_BANNER: &[u8] = b"Nullsoft Install System";
-const NSIS_ERROR_TITLE: &[u8] = b"NSIS Error";
-const NSIS_ERROR_URL: &[u8] = b"nsis.sf.net/NSIS_Error";
-const NSIS_NCRC_SWITCH: &[u8] = b"/NCRC";
 
 /// Known SFX installer kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,42 +27,31 @@ pub(crate) enum SfxKind {
     IExpress,
 }
 
-impl SfxKind {
-    fn finding_id(self) -> &'static str {
-        match self {
-            SfxKind::Nsis => "file/sfx/nsis",
-            SfxKind::InnoSetup => "file/sfx/inno-setup",
-            SfxKind::PyInstaller => "file/sfx/pyinstaller",
-            SfxKind::Nuitka => "file/sfx/nuitka",
-            SfxKind::IExpress => "metadata/file/format/iexpress::cabinet-self-extractor",
-        }
-    }
-
-    fn description(self) -> &'static str {
-        match self {
-            SfxKind::Nsis => "NSIS self-extracting installer",
-            SfxKind::InnoSetup => "Inno Setup self-extracting installer",
-            SfxKind::PyInstaller => "PyInstaller-bundled Python executable",
-            SfxKind::Nuitka => "Nuitka compressed one-file Python bundle",
-            SfxKind::IExpress => "IExpress cabinet self-extractor",
-        }
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            SfxKind::Nsis => "NSIS",
-            SfxKind::InnoSetup => "Inno Setup",
-            SfxKind::PyInstaller => "PyInstaller",
-            SfxKind::Nuitka => "Nuitka",
-            SfxKind::IExpress => "IExpress",
-        }
-    }
+/// The installer filefacts identified in a PE (`binary.installer`) and the
+/// offset its data starts at, moved back by `prefix` bytes of junk before
+/// the PE the caller analyzes.
+pub(crate) fn installer_from_values(
+    values: &filefacts::Values,
+    prefix: usize,
+) -> Option<(SfxKind, Option<usize>)> {
+    let kind = match values.get("binary.installer.kind")?.as_str()? {
+        "nsis" => SfxKind::Nsis,
+        "inno" => SfxKind::InnoSetup,
+        "pyinstaller" => SfxKind::PyInstaller,
+        "nuitka" => SfxKind::Nuitka,
+        "iexpress" => SfxKind::IExpress,
+        _ => return None,
+    };
+    let marker_offset = values
+        .get("binary.installer.marker_offset")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|offset| usize::try_from(offset).ok())
+        .and_then(|offset| offset.checked_sub(prefix));
+    Some((kind, marker_offset))
 }
 
 /// Result of an SFX analysis attempt.
 pub(crate) struct SfxResult {
-    /// Finding describing the detected SFX format.
-    pub sfx_finding: Finding,
     /// Findings describing extraction/parser diagnostics from external tools.
     pub extraction_findings: Vec<Finding>,
     /// Analysis report from extracted contents, if extraction succeeded.
@@ -156,100 +131,6 @@ struct InnoExtractDiagnostic {
     message: String,
 }
 
-/// Detect SFX markers in the host bytes, excluding markers inside validated
-/// embedded binaries that are analyzed separately.
-#[must_use]
-pub(crate) fn detect_sfx(
-    data: &[u8],
-    embedded_binaries: &[crate::analyzers::embedded_binary_detector::EmbeddedBinary],
-) -> Option<SfxKind> {
-    if marker_outside_embedded_binary(data, INNO_MARKER, embedded_binaries).is_some() {
-        return Some(SfxKind::InnoSetup);
-    }
-    if has_strong_nsis_markers(data, embedded_binaries) {
-        return Some(SfxKind::Nsis);
-    }
-    if marker_outside_embedded_binary(data, PYINST_MAGIC, embedded_binaries).is_some() {
-        return Some(SfxKind::PyInstaller);
-    }
-    if marker_outside_embedded_binary(data, b"NUITKA_ONEFILE_", embedded_binaries).is_some()
-        && marker_outside_embedded_binary(data, NUITKA_COMPRESSED, embedded_binaries).is_some()
-    {
-        return Some(SfxKind::Nuitka);
-    }
-    if iexpress_cabinet_offset(data, embedded_binaries).is_some() {
-        return Some(SfxKind::IExpress);
-    }
-    None
-}
-
-// IExpress stores its format-mandated CABINET and RUNPROGRAM resource names
-// as UTF-16. Require both and a bounded, structurally plausible cabinet, rather
-// than inferring a bundle from a vendor/version string or bare MSCF bytes.
-fn iexpress_cabinet_offset(
-    data: &[u8],
-    embedded: &[crate::analyzers::embedded_binary_detector::EmbeddedBinary],
-) -> Option<usize> {
-    if !data.starts_with(b"MZ") {
-        return None;
-    }
-    for name in ["CABINET", "RUNPROGRAM"] {
-        let marker: Vec<u8> = name.encode_utf16().flat_map(u16::to_le_bytes).collect();
-        marker_outside_embedded_binary(data, &marker, embedded)?;
-    }
-    memmem::find_iter(data, b"MSCF").find(|&offset| {
-        if embedded.iter().any(|b| {
-            b.encoding.is_none()
-                && offset >= b.offset
-                && offset < b.offset.saturating_add(b.estimated_size)
-        }) {
-            return false;
-        }
-        let Some(header) = data.get(offset..offset.saturating_add(36)) else {
-            return false;
-        };
-        let len = u32::from_le_bytes(header[8..12].try_into().unwrap_or_default()) as usize;
-        let files = u32::from_le_bytes(header[16..20].try_into().unwrap_or_default()) as usize;
-        header[4..8] == [0; 4]
-            && header[24..26] == [3, 1]
-            && len >= 36
-            && files >= 36
-            && files < len
-            && u16::from_le_bytes([header[26], header[27]]) > 0
-            && u16::from_le_bytes([header[28], header[29]]) > 0
-            && data.get(offset..offset.saturating_add(len)).is_some()
-    })
-}
-
-fn marker_outside_embedded_binary(
-    data: &[u8],
-    marker: &[u8],
-    embedded_binaries: &[crate::analyzers::embedded_binary_detector::EmbeddedBinary],
-) -> Option<usize> {
-    memmem::find_iter(data, marker).find(|&offset| {
-        !embedded_binaries.iter().any(|binary| {
-            binary.encoding.is_none()
-                && offset >= binary.offset
-                && offset < binary.offset.saturating_add(binary.estimated_size)
-        })
-    })
-}
-
-fn has_strong_nsis_markers(
-    data: &[u8],
-    embedded_binaries: &[crate::analyzers::embedded_binary_detector::EmbeddedBinary],
-) -> bool {
-    marker_outside_embedded_binary(data, NSIS_DEADBEEF, embedded_binaries).is_some()
-        && [
-            NSIS_VERSION_BANNER,
-            NSIS_ERROR_TITLE,
-            NSIS_ERROR_URL,
-            NSIS_NCRC_SWITCH,
-        ]
-        .iter()
-        .any(|marker| marker_outside_embedded_binary(data, marker, embedded_binaries).is_some())
-}
-
 /// Attempt to extract a detected SFX installer and analyze its contents.
 ///
 /// Always returns an [`SfxResult`] with a detection finding. Extraction is
@@ -258,21 +139,12 @@ fn has_strong_nsis_markers(
 pub(crate) fn analyze_sfx(
     file_path: &Path,
     kind: SfxKind,
+    marker_offset: Option<usize>,
     data: &[u8],
     engine: &crate::Engine,
     yara_engine: Option<Arc<YaraEngine>>,
     archive_config: Option<&ArchiveAnalyzerConfig>,
-    embedded_binaries: &[crate::analyzers::embedded_binary_detector::EmbeddedBinary],
 ) -> SfxResult {
-    let marker = match kind {
-        SfxKind::Nsis => NSIS_DEADBEEF,
-        SfxKind::InnoSetup => INNO_MARKER,
-        SfxKind::PyInstaller => PYINST_MAGIC,
-        SfxKind::Nuitka => NUITKA_COMPRESSED,
-        SfxKind::IExpress => b"MSCF",
-    };
-    let marker_offset = marker_outside_embedded_binary(data, marker, embedded_binaries);
-
     let extraction = try_extract(
         file_path,
         data,
@@ -301,7 +173,6 @@ pub(crate) fn analyze_sfx(
     }
 
     SfxResult {
-        sfx_finding: build_finding(kind, extracted, marker_offset),
         extraction_findings,
         archive_report: extraction.archive_report,
     }
@@ -310,41 +181,6 @@ pub(crate) fn analyze_sfx(
 struct SfxExtraction {
     archive_report: Option<AnalysisReport>,
     inno_diagnostics: Vec<InnoExtractDiagnostic>,
-}
-
-fn build_finding(kind: SfxKind, extracted: bool, marker_offset: Option<usize>) -> Finding {
-    Finding {
-        precomputed_spans: None,
-        src: None,
-        kind: if kind == SfxKind::IExpress {
-            FindingKind::Structural
-        } else {
-            FindingKind::Capability
-        },
-        id: kind.finding_id().to_string().into(),
-        desc: kind.description().to_string().into(),
-        conf: if extracted { 1.0 } else { 0.9 },
-        crit: Criticality::Notable,
-        mbc: None,
-        // A Nuitka launcher establishes packaging, not that a command or
-        // script interpreter executed during this scan.
-        attack: (!matches!(kind, SfxKind::IExpress | SfxKind::Nuitka)).then(|| "T1059".into()),
-        evidence: vec![Evidence {
-            method: "marker_detection".to_string(),
-            source: "sfx_detector".to_string(),
-            value: format!(
-                "{} marker found{}",
-                kind.name(),
-                if extracted { ", extracted" } else { "" }
-            ),
-            location: marker_offset.map(|o| format!("offset:{:#x}", o)),
-            ..Default::default()
-        }],
-        match_count: 1,
-        trait_refs: vec![],
-        source_file: None,
-        downgraded: false,
-    }
 }
 
 fn build_innoextract_finding(diagnostic: &InnoExtractDiagnostic) -> Finding {
@@ -703,7 +539,6 @@ fn analyze_dir(
 // The Windows one-file payload starts with KA + Y (compressed), followed by
 // one Zstandard frame. Its decoded records are NUL-terminated UTF-16LE names,
 // u64 little-endian sizes and exact member bytes; an empty name ends the list.
-const NUITKA_COMPRESSED: &[u8] = b"KAY\x28\xb5\x2f\xfd";
 const NUITKA_MAX_TOTAL: u64 = 1024 * 1024 * 1024;
 const NUITKA_MAX_MEMBER: u64 = 512 * 1024 * 1024;
 
@@ -737,13 +572,6 @@ fn read_nuitka_name(reader: &mut impl std::io::Read) -> std::io::Result<String> 
         units.push(unit);
     }
     Err(std::io::Error::other("Nuitka member name too long"))
-}
-
-#[cfg(test)]
-fn extract_nuitka(data: &[u8], out: &Path) -> std::io::Result<()> {
-    let offset = memmem::find(data, NUITKA_COMPRESSED)
-        .ok_or_else(|| std::io::Error::other("missing Nuitka frame"))?;
-    extract_nuitka_at(data, offset, out)
 }
 
 fn extract_nuitka_at(data: &[u8], offset: usize, out: &Path) -> std::io::Result<()> {

@@ -221,7 +221,6 @@ chrono = { version = "0.4", features = ["serde"] }
 hex = "0.4"
 base64 = "0.22"
 data-encoding = "2.11"
-roxmltree = "0.21.2"  # 0.21.2 parses nested elements iteratively (deep-XML stack overflow fix)
 tempfile = "3.27"
 filetime = "0.2"
 strsim = "0.11"
@@ -330,7 +329,6 @@ criterion = { version = "0.8", features = ["html_reports"] }
 # Builds DMG resource-fork property lists in archive tests.
 plist = "1.10"
 predicates = "3.1"
-proptest = "1.12"
 # Tags compound-file storages with a CLSID in Office fixtures.
 uuid = "1"
 
@@ -433,4 +431,5 @@ tree-sitter-language = { git = "https://github.com/tstromberg/tree-sitter" }
 # Thread CPU clock for the per-query AST budgets (`ast_walker::thread_cpu_time`).
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
 

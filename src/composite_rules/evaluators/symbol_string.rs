@@ -98,6 +98,8 @@ pub(crate) fn validate_match(s: &str, validator: Option<StringValidator>) -> boo
         Some(StringValidator::ValidIp) => contains_valid_ip(s),
         Some(StringValidator::BitcoinAddr) => contains_bitcoin_address(s),
         Some(StringValidator::RandomLike) => is_random_like(s),
+        Some(StringValidator::SusHostname) => cleave::hostname_validator::is_sus_hostname(s),
+        Some(StringValidator::TypoOf(dataset)) => cleave::typo_validator::is_typo_of(s, dataset),
     }
 }
 use crate::types::binary::normalize_symbol;

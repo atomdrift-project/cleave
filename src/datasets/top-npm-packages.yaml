@@ -1,0 +1,29 @@
+# Heavily depended-on npm packages: the names squatters register misspellings
+# of. Used by `is: {typo_of: top-npm-packages}`.
+entries:
+  - async
+  - axios
+  - chalk
+  - colors
+  - commander
+  - debug
+  - eslint
+  - express
+  - lodash
+  - moment
+  - react
+  - request
+  - typescript
+  - underscore
+  - webpack
+# Established packages one edit from an entry: never typos.
+lookalikes:
+  - asynct
+  - color
+  - colord
+  - eclint
+  - gaxios
+  - lodash3
+  - preact
+  - tslint
+  - ttypescript

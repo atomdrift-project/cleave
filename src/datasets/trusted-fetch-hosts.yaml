@@ -1,0 +1,23 @@
+# Registrable domains that packages, installers and build scripts fetch from
+# routinely. `is: sus_hostname` never flags these or their subdomains,
+# however their labels look.
+entries:
+  - amazonaws.com
+  - azure.com
+  - bitbucket.org
+  - cloudflare.com
+  - github.com
+  - githubusercontent.com
+  - gitlab.com
+  - google.com
+  - googleapis.com
+  - herokuapp.com
+  - jsdelivr.net
+  - microsoft.com
+  - netlify.app
+  - npmjs.com
+  - npmjs.org
+  - sourceforge.net
+  - unpkg.com
+  - vercel.app
+  - yarnpkg.com

@@ -397,8 +397,52 @@ impl super::CapabilityMapper {
             }
         }
         for (idx, edits) in updates {
+            let child_id = report.files[idx].id;
             for edit in edits {
                 edit.apply(&mut report.files[idx].findings);
+                // The member's finding was already rolled up into its
+                // containers (root and nested archives) before this pass, so
+                // lower the copies attributed to this child too, or the
+                // container keeps reporting the pre-downgrade crit. Before
+                // finalize a copy names its member only through evidence
+                // located `archive:<member>[:<inner location>]`; one pooled
+                // from several members keeps its crit, since another member
+                // may still carry it undowngraded.
+                let finding_id = report.files[idx].findings[edit.index].id.clone();
+                let child_leaf =
+                    crate::types::core::leaf_member(&report.files[idx].path).to_owned();
+                let names_child = |location: &str| {
+                    location.strip_prefix("archive:").is_some_and(|rel| {
+                        let member = rel.rsplit('!').next().unwrap_or(rel);
+                        member
+                            .strip_prefix(child_leaf.as_str())
+                            .is_some_and(|rest| rest.is_empty() || rest.starts_with(':'))
+                    })
+                };
+                let from_child = |copy: &Finding| {
+                    if copy.src.is_some() {
+                        return copy.src == Some(child_id);
+                    }
+                    let mut located = copy
+                        .evidence
+                        .iter()
+                        .filter_map(|e| e.location.as_deref())
+                        .filter(|l| l.starts_with("archive:"))
+                        .peekable();
+                    located.peek().is_some() && located.all(names_child)
+                };
+                let lower = |copy: &mut Finding| {
+                    if copy.id == finding_id && copy.crit > edit.crit && from_child(copy) {
+                        copy.crit = edit.crit;
+                        copy.downgraded = edit.downgraded;
+                    }
+                };
+                report.findings.iter_mut().for_each(lower);
+                for (other, file) in report.files.iter_mut().enumerate() {
+                    if other != idx {
+                        file.findings.iter_mut().for_each(lower);
+                    }
+                }
             }
         }
     }

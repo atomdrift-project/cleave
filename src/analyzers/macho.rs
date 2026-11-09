@@ -11,8 +11,7 @@
 use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::strings::StringExtractor;
 use crate::types::{
-    AnalysisReport, Criticality, Evidence, Export, Finding, FindingKind, StringInfo,
-    StructuralFeature, TargetInfo,
+    AnalysisReport, Criticality, Export, Finding, FindingKind, StringInfo, TargetInfo,
 };
 use anyhow::{Context, Result};
 use std::fs;
@@ -132,7 +131,6 @@ impl MachOAnalyzer {
         logical_path: &Path,
         data: &[u8],
         report: &mut AnalysisReport,
-        base_offset: usize,
     ) {
         for (payload, encoding) in unpack::macho_integer_tables::recover(data)
             .into_iter()
@@ -183,10 +181,6 @@ impl MachOAnalyzer {
             if report.files.iter().any(|file| file.sha256 == source_hash) {
                 continue;
             }
-            let is_lcg = encoding.first().is_some_and(|x| x == "lcg-xor");
-            let is_hex_rc4 = encoding.first().is_some_and(|x| x == "hex");
-            let is_custom_base64 =
-                encoding.last().is_some_and(|x| x == "custom-base64") && is_hex_rc4;
             let chain = encoding;
             let path = crate::types::encode_decoded_path(
                 &logical_path.display().to_string(),
@@ -222,51 +216,6 @@ impl MachOAnalyzer {
                     child.compute_summary();
                     report.files.push(child);
                     report.files.extend(nested);
-                    report.structure.push(StructuralFeature {
-                        id: if is_lcg {
-                            "data/lcg-xor-script"
-                        } else if is_custom_base64 {
-                            "data/hex-custom-base64-script"
-                        } else if is_hex_rc4 {
-                            "data/hex-rc4-script"
-                        } else {
-                            "data/integer-table-script"
-                        }
-                        .to_string(),
-                        desc: if is_lcg {
-                            "Script data recovered from LCG XOR"
-                        } else if is_custom_base64 {
-                            "Script data recovered from hex and custom Base64"
-                        } else if is_hex_rc4 {
-                            "Script data recovered from hex and RC4"
-                        } else {
-                            "Script data recovered from integer tables and custom alphabet"
-                        }
-                        .to_string(),
-                        evidence: vec![Evidence {
-                            method: "static-decode".to_string(),
-                            source: if is_lcg {
-                                "macho_lcg_xor"
-                            } else if is_custom_base64 {
-                                "macho_hex_custom_base64"
-                            } else if is_hex_rc4 {
-                                "macho_hex_rc4"
-                            } else {
-                                "macho_integer_tables"
-                            }
-                            .to_string(),
-                            value: format!(
-                                "{} recovered script bytes; no specimen code executed",
-                                source.len()
-                            ),
-                            location: Some(format!(
-                                "offset:{}",
-                                payload.offset.saturating_add(base_offset)
-                            )),
-                            offsets: vec![payload.offset.saturating_add(base_offset) as u64],
-                            ..Evidence::default()
-                        }],
-                    });
                 }
                 Err(error) => report
                     .metadata
@@ -373,12 +322,8 @@ impl MachOAnalyzer {
         let mut report = AnalysisReport::new(target);
         let mut tools_used = vec!["filefacts".to_string()];
 
-        // Phase 1: structural features, signature findings, imports,
+        // Phase 1: signature findings, imports,
         // exports, sections. All driven from ctx.
-        let _t = std::time::Instant::now();
-        self.fill_structural_features_from_ctx(ctx, &mut report);
-        let structure_ms = _t.elapsed().as_millis();
-
         // Code-signature identity/trust/entitlement findings. filefacts
         // supplies the decoded metadata; cleave additionally verifies the
         // CodeDirectory page hashes against the bytes being analyzed.
@@ -400,7 +345,6 @@ impl MachOAnalyzer {
 
         tracing::info!(
             path = %logical_path.display(),
-            structure_ms,
             sig_findings_ms,
             imports_ms,
             exports_ms,
@@ -484,7 +428,7 @@ impl MachOAnalyzer {
             );
         report.files.extend(encoded_layers);
         report.findings.extend(plain_findings);
-        self.analyze_integer_table_scripts(logical_path, data, &mut report, 0);
+        self.analyze_integer_table_scripts(logical_path, data, &mut report);
         for payload in unpack::macho_chacha::recover(data) {
             if self
                 .cancellation
@@ -532,22 +476,6 @@ impl MachOAnalyzer {
                     child.compute_summary();
                     report.files.push(child);
                     report.files.extend(nested);
-                    report.structure.push(StructuralFeature {
-                        id: "crypto/authenticated-script-payload".to_string(),
-                        desc: "Compiled script recovered from authenticated encrypted chunks"
-                            .to_string(),
-                        evidence: vec![Evidence {
-                            method: "crypto".to_string(),
-                            source: "macho_chacha".to_string(),
-                            value: format!(
-                                "segments={}; pbkdf2_iterations={}; all tags verified",
-                                payload.segments, payload.iterations
-                            ),
-                            location: Some(format!("offset:{}", payload.offset)),
-                            offsets: vec![payload.offset as u64],
-                            ..Evidence::default()
-                        }],
-                    });
                 }
                 Err(error) => report
                     .metadata
@@ -574,71 +502,6 @@ impl MachOAnalyzer {
         report.metadata.tools_used = tools_used;
 
         report
-    }
-
-    /// Emit the binary/format, architecture, signature presence, and
-    /// metadata findings (install name, linked dylibs, rpaths) from
-    /// filefacts's typed views. No goblin walk — every fact comes from
-    /// `ctx.parsed`.
-    fn fill_structural_features_from_ctx(&self, ctx: &Ctx<'_>, report: &mut AnalysisReport) {
-        let v = ctx.parsed.values();
-
-        report.structure.push(StructuralFeature {
-            id: "binary/format/macho".to_string(),
-            desc: "Mach-O binary format".to_string(),
-            evidence: vec![Evidence {
-                method: "magic".to_string(),
-                source: "filefacts".to_string(),
-                // Cleave traits historically read `0x{magic:x}` but
-                // filefacts doesn't surface the magic word directly. The
-                // file_type_raw (MH_* constant) gives a stable
-                // architecture-agnostic identity.
-                value: format!(
-                    "filetype=0x{:x}",
-                    v.get("macho.file_type_raw")
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(0)
-                ),
-                location: Some("0x0".to_string()),
-                ..Default::default()
-            }],
-        });
-
-        let arch = arch_name_from_ctx(ctx);
-        let cputype_raw = v
-            .get("macho.cpu_type_raw")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0);
-        report.structure.push(StructuralFeature {
-            id: format!("binary/arch/{}", arch),
-            desc: format!("{} architecture", arch),
-            evidence: vec![Evidence {
-                method: "header".to_string(),
-                source: "filefacts".to_string(),
-                value: format!("cputype=0x{:x}", cputype_raw),
-                location: Some("0x0".to_string()),
-                ..Default::default()
-            }],
-        });
-
-        // Code signature presence: an LC_CODE_SIGNATURE in the load
-        // command list or any `macho.code_signature.*` value (parsed
-        // out by filefacts's code-signature reader) means the binary
-        // carries a signature blob.
-        let has_signature = lc_present(ctx, "LC_CODE_SIGNATURE");
-        if has_signature {
-            report.structure.push(StructuralFeature {
-                id: "binary/signed".to_string(),
-                desc: "Binary has code signature".to_string(),
-                evidence: vec![Evidence {
-                    method: "load_command".to_string(),
-                    source: "filefacts".to_string(),
-                    value: "LC_CODE_SIGNATURE".to_string(),
-                    location: Some("load_commands".to_string()),
-                    ..Default::default()
-                }],
-            });
-        }
     }
 
     /// Project filefacts's typed Sections view into the report.
@@ -791,15 +654,6 @@ fn arch_name_from_ctx(ctx: &Ctx<'_>) -> String {
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
     format!("unknown_0x{:x}", raw)
-}
-
-/// True when filefacts's `macho.load_commands[]` list contains `name`.
-fn lc_present(ctx: &Ctx<'_>, name: &str) -> bool {
-    ctx.parsed
-        .values()
-        .get("macho.load_commands")
-        .and_then(|v| v.as_array())
-        .is_some_and(|arr| arr.iter().any(|lc| lc.as_str().is_some_and(|s| s == name)))
 }
 
 /// Build the code-signature findings — signer + trust class, bundle
@@ -1079,12 +933,7 @@ impl MachOAnalyzer {
             );
             arches_parsed = arches_parsed.saturating_add(1);
             let logical_path = report.target.path.clone();
-            self.analyze_integer_table_scripts(
-                Path::new(&logical_path),
-                slice_bytes,
-                report,
-                offset,
-            );
+            self.analyze_integer_table_scripts(Path::new(&logical_path), slice_bytes, report);
 
             for mut imp in slice_ctx.imports_from_filefacts() {
                 let key = (imp.symbol.clone(), imp.library.clone());

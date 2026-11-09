@@ -58,69 +58,29 @@ pub(crate) struct SfxResult {
     pub archive_report: Option<AnalysisReport>,
 }
 
+pub(crate) const UNEXPECTED_LOADER_REVISION_ID: &str =
+    "metadata/file/format/installer::inno-setup-unexpected-loader-revision";
+pub(crate) const LOADER_CHECKSUM_MISMATCH_ID: &str =
+    "metadata/file/format/installer::inno-setup-loader-checksum-mismatch";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InnoExtractDiagnosticKind {
     UnexpectedLoaderRevision,
     LoaderChecksumMismatch,
-    SetupDataVersionUndetermined,
-    LongMemberPath,
-    GenericFailure,
 }
 
 impl InnoExtractDiagnosticKind {
     fn id(self) -> &'static str {
         match self {
-            Self::UnexpectedLoaderRevision => {
-                "file/sfx/inno-setup/extraction/unexpected-loader-revision"
-            }
-            Self::LoaderChecksumMismatch => {
-                "file/sfx/inno-setup/extraction/loader-checksum-mismatch"
-            }
-            Self::LongMemberPath => "file/sfx/inno-setup/extraction/long-member-path",
-            Self::SetupDataVersionUndetermined => {
-                "file/sfx/inno-setup/extraction/setup-data-version-undetermined"
-            }
-            Self::GenericFailure => "file/sfx/inno-setup/extraction-failed",
+            Self::UnexpectedLoaderRevision => UNEXPECTED_LOADER_REVISION_ID,
+            Self::LoaderChecksumMismatch => LOADER_CHECKSUM_MISMATCH_ID,
         }
     }
 
     fn desc(self) -> &'static str {
         match self {
-            Self::UnexpectedLoaderRevision => "Innoextract found unexpected setup loader revision",
-            Self::LoaderChecksumMismatch => "Innoextract found setup loader checksum mismatch",
-            Self::LongMemberPath => {
-                "Inno Setup member name exceeds the filesystem limit; that member was not extracted"
-            }
-            Self::SetupDataVersionUndetermined => {
-                "Innoextract could not determine setup data version"
-            }
-            Self::GenericFailure => "Inno Setup extraction failed",
-        }
-    }
-
-    fn crit(self) -> Criticality {
-        match self {
-            Self::UnexpectedLoaderRevision | Self::LoaderChecksumMismatch => {
-                Criticality::Suspicious
-            }
-            Self::LongMemberPath | Self::SetupDataVersionUndetermined | Self::GenericFailure => {
-                Criticality::Notable
-            }
-        }
-    }
-
-    fn conf(self) -> f32 {
-        match self {
-            Self::LongMemberPath => 0.99,
-            Self::GenericFailure => 0.86,
-            _ => 0.95,
-        }
-    }
-
-    fn attack(self) -> Option<&'static str> {
-        match self {
-            Self::LongMemberPath => None,
-            _ => Some("T1027.009"),
+            Self::UnexpectedLoaderRevision => "Unexpected setup loader revision",
+            Self::LoaderChecksumMismatch => "Setup loader checksum mismatch",
         }
     }
 }
@@ -154,23 +114,11 @@ pub(crate) fn analyze_sfx(
         archive_config,
         marker_offset,
     );
-    let extracted = extraction.archive_report.is_some();
-
-    let mut extraction_findings: Vec<Finding> = extraction
+    let extraction_findings: Vec<Finding> = extraction
         .inno_diagnostics
         .iter()
         .map(build_innoextract_finding)
         .collect();
-    if kind == SfxKind::Nuitka && !extracted {
-        extraction_findings.push(
-            Finding::structural(
-                "metadata/file/format/nuitka::extraction-incomplete".to_string(),
-                "Nuitka payload was not extracted".to_string(),
-                1.0,
-            )
-            .with_criticality(Criticality::Notable),
-        );
-    }
 
     SfxResult {
         extraction_findings,
@@ -190,10 +138,10 @@ fn build_innoextract_finding(diagnostic: &InnoExtractDiagnostic) -> Finding {
         kind: FindingKind::Capability,
         id: diagnostic.kind.id().to_string().into(),
         desc: diagnostic.kind.desc().to_string().into(),
-        conf: diagnostic.kind.conf(),
-        crit: diagnostic.kind.crit(),
+        conf: 0.95,
+        crit: Criticality::Suspicious,
         mbc: None,
-        attack: diagnostic.kind.attack().map(Into::into),
+        attack: Some("T1027.009".into()),
         evidence: vec![Evidence {
             method: "innoextract".to_string(),
             source: "sfx_detector".to_string(),
@@ -280,11 +228,6 @@ fn try_extract(
                 inno_diagnostics = result.diagnostics;
                 result.extracted
             } else {
-                // Say why, rather than reporting a bare extraction failure.
-                inno_diagnostics.push(InnoExtractDiagnostic {
-                    kind: InnoExtractDiagnosticKind::GenericFailure,
-                    message: "innoextract is not available".to_string(),
-                });
                 false
             }
         }
@@ -402,17 +345,6 @@ fn run_innoextract(command: &Path, src: &Path, out: &Path) -> InnoExtractResult 
         out,
         crate::analyzers::archive::MAX_TOTAL_SIZE,
     ) {
-        Ok(None) => InnoExtractResult {
-            extracted: false,
-            diagnostics: vec![InnoExtractDiagnostic {
-                kind: InnoExtractDiagnosticKind::GenericFailure,
-                message: format!(
-                    "innoextract killed: ran past {}s or wrote over {} bytes",
-                    crate::subprocess::EXTRACT_TIMEOUT.as_secs(),
-                    crate::analyzers::archive::MAX_TOTAL_SIZE,
-                ),
-            }],
-        },
         Ok(Some(output)) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
             InnoExtractResult {
@@ -420,30 +352,12 @@ fn run_innoextract(command: &Path, src: &Path, out: &Path) -> InnoExtractResult 
                 diagnostics: classify_innoextract_diagnostics(&stderr),
             }
         }
-        Err(e) => InnoExtractResult {
+        // Killed past its budget, or failed to start: no diagnostics to judge.
+        Ok(None) | Err(_) => InnoExtractResult {
             extracted: false,
-            diagnostics: vec![InnoExtractDiagnostic {
-                kind: InnoExtractDiagnosticKind::GenericFailure,
-                message: format!("failed to run innoextract: {e}"),
-            }],
+            diagnostics: vec![],
         },
     }
-}
-
-/// Whether an innoextract error line reports an output file it could not
-/// create because one path component is longer than the 255-byte name limit
-/// of common filesystems.
-fn names_overlong_output_file(line: &str) -> bool {
-    if !line.to_ascii_lowercase().contains("open output file") {
-        return false;
-    }
-    let (Some(start), Some(end)) = (line.find('"'), line.rfind('"')) else {
-        return false;
-    };
-    end > start
-        && line[start + 1..end]
-            .split(['/', '\\'])
-            .any(|component| component.len() > 255)
 }
 
 fn classify_innoextract_diagnostics(output: &str) -> Vec<InnoExtractDiagnostic> {
@@ -459,29 +373,11 @@ fn classify_innoextract_diagnostics(output: &str) -> Vec<InnoExtractDiagnostic> 
             "setup loader checksum mismatch",
             InnoExtractDiagnosticKind::LoaderChecksumMismatch,
         ),
-        (
-            "could not determine setup data version",
-            InnoExtractDiagnosticKind::SetupDataVersionUndetermined,
-        ),
     ] {
         if let Some(message) = matching_diagnostic_line(output, &lower, needle) {
             diagnostics.push(InnoExtractDiagnostic { kind, message });
         }
     }
-    if let Some(line) = output.lines().find(|line| names_overlong_output_file(line)) {
-        diagnostics.push(InnoExtractDiagnostic {
-            kind: InnoExtractDiagnosticKind::LongMemberPath,
-            message: truncate_diagnostic(line.trim()),
-        });
-    }
-
-    if diagnostics.is_empty() && !output.trim().is_empty() {
-        diagnostics.push(InnoExtractDiagnostic {
-            kind: InnoExtractDiagnosticKind::GenericFailure,
-            message: truncate_diagnostic(output.trim()),
-        });
-    }
-
     diagnostics
 }
 

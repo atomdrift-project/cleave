@@ -105,43 +105,6 @@ traits:
     assert!(!findings.iter().any(|f| f.id == "test/snippet::many-lines"));
 }
 
-/// Script-deobfuscation layers name themselves from a closed set; each
-/// must be listed so its `metadata/lang/encoding/layer::<name>` id validates.
-#[test]
-fn deobfuscation_layers_are_known_encoded_layer_names() {
-    use stng::script::ScriptLanguage;
-    for (language, chain) in [
-        (
-            ScriptLanguage::PowerShell,
-            "powershell:encodedcommand+utf16le",
-        ),
-        (ScriptLanguage::PowerShell, "powershell:iex"),
-        (ScriptLanguage::Python, "python:base64+zlib"),
-        (ScriptLanguage::Php, "php:gzinflate+base64_decode"),
-    ] {
-        let result =
-            stng::script::DeobfuscationResult::new(String::new(), 0, chain.to_string(), language);
-        for step in encoding_chain_for_deobfuscation(&result) {
-            assert!(
-                ENCODED_LAYER_NAMES.contains(&step.as_str()),
-                "{chain} -> {step}"
-            );
-        }
-    }
-    assert!(ENCODED_LAYER_NAMES.contains(&"unicode-variation-selector"));
-}
-
-#[test]
-fn wide_encoded_layer_emits_registered_metadata() {
-    let findings = generate_encoded_layer_traits(&["wide".to_string()], 0x40);
-    assert_eq!(findings.len(), 1);
-    assert_eq!(
-        findings[0].id.as_ref(),
-        "metadata/lang/encoding/layer::wide"
-    );
-    assert_eq!(findings[0].evidence[0].location.as_deref(), Some("0x40"));
-}
-
 fn make_string_info(value: &str) -> StringInfo {
     StringInfo {
         value: (value.to_string()).into(),
@@ -271,56 +234,6 @@ fn test_skip_plain_component_markup_in_component_host() {
 }
 
 #[test]
-#[allow(clippy::unwrap_used)]
-fn typed_encoding_context_is_visible_during_layer_evaluation() {
-    let rules = tempfile::NamedTempFile::new().unwrap();
-    std::fs::write(
-        rules.path(),
-        r#"
-composite_rules:
-  - id: fixture/context::typed-layer
-    desc: Typed reconstructed source context
-    crit: notable
-    platforms: [windows]
-    for: [powershell]
-    all:
-      - id: metadata/lang/encoding/layer::powershell-literal-program
-"#,
-    )
-    .unwrap();
-    let engine = crate::Engine::from_rules(std::sync::Arc::new(
-        crate::capabilities::CapabilityMapper::from_yaml(rules.path()).unwrap(),
-    ));
-    let layer = analyze_decoded_script_layer(
-        "sample.py",
-        "Write-Output 'ordinary reconstruction control'",
-        123,
-        FileType::PowerShell,
-        vec!["powershell-literal-program".to_string()],
-        &engine,
-        0,
-        false,
-    )
-    .unwrap();
-    assert!(
-        layer
-            .findings
-            .iter()
-            .any(|finding| finding.id == "fixture/context::typed-layer")
-    );
-    assert_eq!(
-        layer
-            .findings
-            .iter()
-            .filter(
-                |finding| finding.id == "metadata/lang/encoding/layer::powershell-literal-program"
-            )
-            .count(),
-        1
-    );
-}
-
-#[test]
 fn test_short_base64_source_map_javascript_is_analyzed() {
     let value = "const JWTSECRET = process.env.JWTSECRET;\nconst ENDPOINT_CONFIG = { API_GATEWAY: \"aHR0cHM6Ly9leGFtcGxlLmNvbQ==\" };\nmodule.exports = ENDPOINT_CONFIG;";
     let mut info = make_string_info(value);
@@ -364,7 +277,6 @@ fn test_decode_depth_limit_reports_an_incomplete_layer() {
             .analysis_gaps
             .contains(crate::types::AnalysisGap::EmbeddedSourceIncomplete)
     );
-    assert!(!layer.findings.is_empty(), "encoding-layer traits are kept");
 }
 
 #[test]
@@ -883,7 +795,7 @@ fn test_script_deobfuscation_layers_powershell_encoded_command() {
         layers.iter().any(|file| {
             file.findings
                 .iter()
-                .any(|finding| finding.id.contains("base64-powershell"))
+                .any(|finding| finding.id.contains("base64-decoded-powershell"))
         }),
         "expected EncodedCommand layer from stng deobfuscator"
     );
@@ -926,7 +838,7 @@ fn test_source_map_key_names_do_not_hide_payloads_in_scripts() {
         layers.iter().any(|file| {
             file.findings
                 .iter()
-                .any(|f| f.id.contains("base64-powershell"))
+                .any(|f| f.id.contains("base64-decoded-powershell"))
         })
     };
     assert!(
@@ -960,7 +872,7 @@ fn test_process_all_strings_skips_encoded_command_when_asked() {
         with_scan.iter().any(|file| {
             file.findings
                 .iter()
-                .any(|finding| finding.id.contains("base64-powershell"))
+                .any(|finding| finding.id.contains("base64-decoded-powershell"))
         }),
         "fallback EncodedCommand scan should still fire for binary/generic hosts"
     );
@@ -968,7 +880,7 @@ fn test_process_all_strings_skips_encoded_command_when_asked() {
         skipped.iter().all(|file| {
             file.findings
                 .iter()
-                .all(|finding| !finding.id.contains("base64-powershell"))
+                .all(|finding| !finding.id.contains("base64-decoded-powershell"))
         }),
         "unified source path must not re-scan EncodedCommand"
     );

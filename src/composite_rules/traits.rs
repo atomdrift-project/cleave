@@ -124,6 +124,12 @@ fn default_confidence() -> f32 {
     1.0
 }
 
+/// The `if:` of an override ([`TraitDefinition::is_override`]): a reference to
+/// no trait, which never matches.
+pub(crate) fn inert_condition() -> Condition {
+    Condition::Trait { id: String::new() }
+}
+
 /// Combine the condition-level and trait-level `not:` exception lists into a
 /// single owned vector, preserving ordering. Returns `None` when both inputs
 /// are empty so call sites can keep the no-exception fast paths.
@@ -843,7 +849,8 @@ pub(crate) struct TraitDefinition {
     #[cfg_attr(not(feature = "lint"), allow(dead_code))]
     pub for_from_groups: bool,
 
-    /// The detection condition (plain Condition — no flatten, enables deny_unknown_fields)
+    /// The detection condition (plain Condition — no flatten, enables deny_unknown_fields).
+    /// [`inert_condition`] on an override of an engine-emitted finding.
     pub r#if: Condition,
 
     /// Minimum file size in bytes — checked before evaluating condition

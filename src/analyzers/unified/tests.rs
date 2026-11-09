@@ -291,7 +291,6 @@ if __name__ == "__main__":
     main()
 "#;
     let report = analyzer.analyze_source(&path, code);
-    assert!(report.structure.iter().any(|s| s.id.contains("python")));
     assert!(!report.functions.is_empty());
     assert!(!report.strings.is_empty());
 }
@@ -383,7 +382,6 @@ const handler = async () => {
 };
 "#;
     let report = analyzer.analyze_source(&path, code);
-    assert!(report.structure.iter().any(|s| s.id.contains("javascript")));
     assert!(!report.functions.is_empty());
 }
 
@@ -462,7 +460,6 @@ func main() {
 }
 "#;
     let report = analyzer.analyze_source(&path, code);
-    assert!(report.structure.iter().any(|s| s.id.contains("go")));
     assert!(!report.functions.is_empty());
 }
 
@@ -816,18 +813,6 @@ func main() {
 }
 
 #[test]
-fn test_go_structural_feature() {
-    let code = "package main\nfunc main() {}";
-    let report = analyze_go_code(code);
-    assert!(
-        report
-            .structure
-            .iter()
-            .any(|s| s.id == "source/language/go")
-    );
-}
-
-#[test]
 fn test_go_extract_functions() {
     let code = r#"
 package main
@@ -1023,22 +1008,6 @@ fn python_encoded_command_yields_a_shell_layer_with_exact_hash() {
         "@{}",
         source.find(&format!("'{PY_PAYLOAD}'")).unwrap()
     )));
-}
-
-/// The encodings unpack's script reconstructors report are layer names
-/// cleave knows.
-#[test]
-fn script_reconstructor_chains_are_known_layer_names() {
-    for chain in [
-        vec!["scrypt", "aes-256-cbc", "base64"],
-        vec!["js-joined-base64-module"],
-        vec!["js-constant-string-table"],
-        vec!["hex", "xor"],
-        vec!["base32"],
-    ] {
-        let chain: Vec<String> = chain.into_iter().map(String::from).collect();
-        crate::analyzers::embedded_code_detector::generate_encoded_layer_traits(&chain, 0);
-    }
 }
 
 /// filefacts locates an Edge.js C# body (`source.embedded`); cleave analyzes

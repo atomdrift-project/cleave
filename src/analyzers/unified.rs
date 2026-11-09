@@ -85,8 +85,6 @@ pub(crate) struct LanguageConfig {
     pub name: &'static str,
     /// File type for reports
     pub file_type: &'static str,
-    /// Human-readable description
-    pub description: &'static str,
     /// Node types for symbol/call extraction
     pub call_node_types: &'static [&'static str],
     /// Node types for function declarations
@@ -108,7 +106,6 @@ pub(crate) fn config_for_file_type(
         FileType::Python => Some(LanguageConfig {
             name: "python",
             file_type: "python",
-            description: "Python script",
             call_node_types: &["call"],
             function_node_types: &["function_definition", "async_function_definition"],
             function_name_field: "name",
@@ -117,7 +114,6 @@ pub(crate) fn config_for_file_type(
         FileType::JavaScript => Some(LanguageConfig {
             name: "javascript",
             file_type: "javascript",
-            description: "JavaScript code",
             call_node_types: &[
                 "call_expression",
                 "assignment_expression",
@@ -135,7 +131,6 @@ pub(crate) fn config_for_file_type(
         FileType::TypeScript => Some(LanguageConfig {
             name: "typescript",
             file_type: "javascript",
-            description: "TypeScript/JavaScript code",
             call_node_types: &["call_expression"],
             function_node_types: &[
                 "function_declaration",
@@ -149,7 +144,6 @@ pub(crate) fn config_for_file_type(
         FileType::Go => Some(LanguageConfig {
             name: "go",
             file_type: "go",
-            description: "Go source code",
             call_node_types: &["call_expression"],
             function_node_types: &["function_declaration", "method_declaration"],
             function_name_field: "name",
@@ -158,7 +152,6 @@ pub(crate) fn config_for_file_type(
         FileType::Rust => Some(LanguageConfig {
             name: "rust",
             file_type: "rust",
-            description: "Rust source code",
             call_node_types: &["call_expression", "macro_invocation"],
             function_node_types: &["function_item"],
             function_name_field: "name",
@@ -167,7 +160,6 @@ pub(crate) fn config_for_file_type(
         FileType::Ruby => Some(LanguageConfig {
             name: "ruby",
             file_type: "ruby",
-            description: "Ruby script",
             call_node_types: &["call", "method_call"],
             function_node_types: &["method", "singleton_method"],
             function_name_field: "name",
@@ -183,7 +175,6 @@ pub(crate) fn config_for_file_type(
         FileType::Php => Some(LanguageConfig {
             name: "php",
             file_type: "php",
-            description: "PHP script",
             call_node_types: &["function_call_expression"],
             function_node_types: &["function_definition", "method_declaration"],
             function_name_field: "name",
@@ -192,7 +183,6 @@ pub(crate) fn config_for_file_type(
         FileType::Shell => Some(LanguageConfig {
             name: "shell",
             file_type: "shell",
-            description: "Shell script",
             call_node_types: &["command", "command_name"],
             function_node_types: &["function_definition"],
             function_name_field: "name",
@@ -201,7 +191,6 @@ pub(crate) fn config_for_file_type(
         FileType::Lua => Some(LanguageConfig {
             name: "lua",
             file_type: "lua",
-            description: "Lua script",
             call_node_types: &["function_call"],
             function_node_types: &["function_declaration", "local_function"],
             function_name_field: "name",
@@ -210,7 +199,6 @@ pub(crate) fn config_for_file_type(
         FileType::Perl => Some(LanguageConfig {
             name: "perl",
             file_type: "perl",
-            description: "Perl script",
             call_node_types: &["function_call", "method_call"],
             function_node_types: &["subroutine_declaration", "method_declaration"],
             function_name_field: "name",
@@ -219,7 +207,6 @@ pub(crate) fn config_for_file_type(
         FileType::PowerShell => Some(LanguageConfig {
             name: "powershell",
             file_type: "powershell",
-            description: "PowerShell script",
             call_node_types: &["command_expression", "invocation_expression"],
             function_node_types: &["function_statement"],
             function_name_field: "name",
@@ -228,7 +215,6 @@ pub(crate) fn config_for_file_type(
         FileType::Java => Some(LanguageConfig {
             name: "java",
             file_type: "java",
-            description: "Java source code",
             call_node_types: &["method_invocation"],
             function_node_types: &["method_declaration", "constructor_declaration"],
             function_name_field: "name",
@@ -237,7 +223,6 @@ pub(crate) fn config_for_file_type(
         FileType::CSharp => Some(LanguageConfig {
             name: "csharp",
             file_type: "csharp",
-            description: "C# source code",
             call_node_types: &["invocation_expression"],
             function_node_types: &["method_declaration", "constructor_declaration"],
             function_name_field: "name",
@@ -246,7 +231,6 @@ pub(crate) fn config_for_file_type(
         FileType::C => Some(LanguageConfig {
             name: "c",
             file_type: "c",
-            description: "C source code",
             call_node_types: &["call_expression"],
             function_node_types: &["function_definition"],
             function_name_field: "declarator",
@@ -255,7 +239,6 @@ pub(crate) fn config_for_file_type(
         FileType::Swift => Some(LanguageConfig {
             name: "swift",
             file_type: "swift",
-            description: "Swift source code",
             call_node_types: &["call_expression"],
             function_node_types: &["function_declaration"],
             function_name_field: "name",
@@ -264,7 +247,6 @@ pub(crate) fn config_for_file_type(
         FileType::ObjectiveC => Some(LanguageConfig {
             name: "objective_c",
             file_type: "objective_c",
-            description: "Objective-C source code",
             call_node_types: &["message_expression", "call_expression"],
             function_node_types: &["function_definition", "method_definition"],
             function_name_field: "declarator",
@@ -273,7 +255,6 @@ pub(crate) fn config_for_file_type(
         FileType::Groovy => Some(LanguageConfig {
             name: "groovy",
             file_type: "groovy",
-            description: "Groovy source code",
             call_node_types: &["method_call", "function_call"],
             function_node_types: &["method_declaration", "function_declaration"],
             function_name_field: "name",
@@ -284,7 +265,6 @@ pub(crate) fn config_for_file_type(
         FileType::Scala => Some(LanguageConfig {
             name: "scala",
             file_type: "scala",
-            description: "Scala source code",
             call_node_types: &["call_expression", "apply_expression"],
             function_node_types: &["function_definition"],
             function_name_field: "name",
@@ -293,7 +273,6 @@ pub(crate) fn config_for_file_type(
         FileType::Kotlin => Some(LanguageConfig {
             name: "kotlin",
             file_type: "kotlin",
-            description: "Kotlin source code",
             call_node_types: &["call_expression"],
             function_node_types: &["fun_declaration", "function_declaration"],
             function_name_field: "name",
@@ -302,7 +281,6 @@ pub(crate) fn config_for_file_type(
         FileType::Zig => Some(LanguageConfig {
             name: "zig",
             file_type: "zig",
-            description: "Zig source code",
             call_node_types: &["call_expression"],
             function_node_types: &["fn_decl"],
             function_name_field: "name",
@@ -311,7 +289,6 @@ pub(crate) fn config_for_file_type(
         FileType::Elixir => Some(LanguageConfig {
             name: "elixir",
             file_type: "elixir",
-            description: "Elixir source code",
             call_node_types: &["call"],
             function_node_types: &["call"], // def/defp are calls in Elixir's AST
             function_name_field: "target",
@@ -320,7 +297,6 @@ pub(crate) fn config_for_file_type(
         FileType::Makefile => Some(LanguageConfig {
             name: "makefile",
             file_type: "makefile",
-            description: "Makefile build script",
             call_node_types: &["recipe"],
             function_node_types: &["rule"],
             function_name_field: "target",
@@ -512,25 +488,11 @@ impl UnifiedSourceAnalyzer {
                 .findings
                 .push(crate::analyzers::embedded_code_detector::heuristic_quoted_origin_finding());
         }
-        // Encoding context is input to this layer's rules, not an output
-        // appended after evaluation. The host still retains this layer.
-        if let Some(chain) = &self.encoded_context {
-            report.findings.extend(
-                crate::analyzers::embedded_code_detector::generate_encoded_layer_traits(chain, 0),
-            );
-        }
 
         // `pyc.*` kv now comes from filefacts's dual emission step
         // in `evaluate_and_merge_findings`; no synthesis here.
 
         // Add structural feature
-        report
-            .structure
-            .push(crate::analyzers::utils::create_language_feature(
-                self.config.name,
-                &format!("tree-sitter-{}", self.config.name),
-                self.config.description,
-            ));
 
         let has_preextracted = !preextracted_stng.is_empty();
         // `source_ctx` is resolved by the caller — the threaded context when it
@@ -800,17 +762,6 @@ impl UnifiedSourceAnalyzer {
                     });
 
                 // Add a structural finding for the encrypted payload
-                report.structure.push(crate::types::StructuralFeature {
-                    id: format!("crypto/encrypted-payload/{}", payload.algorithm),
-                    desc: format!("Encrypted payload decrypted with {}", payload.algorithm),
-                    evidence: vec![crate::types::Evidence {
-                        method: "pattern".to_string(),
-                        source: "aes_extractor".to_string(),
-                        value: format!("preview={}", payload.preview),
-                        location: Some(format!("offset:{}", payload.original_offset)),
-                        ..Default::default()
-                    }],
-                });
 
                 // Process payload report
                 if let Some(pr) = payload_report {

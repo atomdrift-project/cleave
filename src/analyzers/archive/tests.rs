@@ -1,4 +1,5 @@
 use super::*;
+use crate::Evidence;
 use crate::capabilities::CapabilityMapper;
 use guards::{ExtractionGuard, MAX_FILE_COUNT, sanitize_entry_path};
 use std::fs::File;
@@ -806,12 +807,6 @@ fn test_analyze_zip_with_shell_script() {
     assert!(result.is_ok());
     let report = result.unwrap();
     assert_eq!(report.target.file_type, "zip");
-    assert!(
-        report
-            .structure
-            .iter()
-            .any(|s| s.id.starts_with("archive/"))
-    );
 }
 
 /// A zip with no bytecode must not be treated as a Java archive.
@@ -2492,11 +2487,7 @@ fn phar_members_are_extracted_in_memory() {
         "an over-size member is not analyzed"
     );
 
-    let notes: Vec<&str> = report
-        .findings
-        .iter()
-        .flat_map(|f| f.evidence.iter().map(|e| e.value.as_str()))
-        .collect();
+    let notes: Vec<&str> = report.metadata.errors.iter().map(String::as_str).collect();
     assert!(
         notes.iter().any(|n| n.starts_with("bomb.txt:")),
         "{notes:?}"
@@ -2843,25 +2834,17 @@ fn truncated_gzip_analyzes_decoded_prefix() {
         "the partial decode should be recorded, got: {:?}",
         report.metadata.errors
     );
-    let incomplete = report
-        .findings
-        .iter()
-        .find(|f| f.id == "metadata/archive/parsing::partial-extraction")
-        .expect("a partial read should raise the incomplete-archive finding");
-    assert_eq!(
-        incomplete.crit,
-        Criticality::Notable,
-        "an incomplete read is visible, not a verdict"
-    );
     assert!(
-        !incomplete.evidence.is_empty(),
-        "the finding should carry the extraction notes as evidence"
+        report
+            .analysis_gaps
+            .contains(crate::types::AnalysisGap::ExtractionPartial),
+        "a partial read should flag the report"
     );
 }
 
-/// The counterpart: a clean archive must not pick up the finding.
+/// The counterpart: a clean archive is not flagged partial.
 #[test]
-fn intact_tar_gz_raises_no_incomplete_finding() {
+fn intact_tar_gz_is_not_flagged_partial() {
     #[allow(clippy::expect_used)]
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let path = temp_dir.path().join("intact.tar.gz");
@@ -2880,9 +2863,8 @@ fn intact_tar_gz_raises_no_incomplete_finding() {
     let report = analyzer.analyze(&path).expect("analyze intact tar.gz");
     assert!(
         !report
-            .findings
-            .iter()
-            .any(|f| f.id == "metadata/archive/parsing::partial-extraction"),
+            .analysis_gaps
+            .contains(crate::types::AnalysisGap::ExtractionPartial),
         "an intact archive must not be flagged incomplete, errors: {:?}",
         report.metadata.errors
     );
@@ -2985,9 +2967,8 @@ fn truncated_large_tar_member_keeps_exact_readable_prefix() {
     );
     assert!(
         report
-            .findings
-            .iter()
-            .any(|f| f.id == "metadata/archive/parsing::partial-extraction")
+            .analysis_gaps
+            .contains(crate::types::AnalysisGap::ExtractionPartial)
     );
 }
 
@@ -3142,11 +3123,10 @@ fn zip_member_inflating_past_its_declared_size_is_capped() {
     assert_eq!(member.size, u64::from(DECLARED));
     assert!(
         report
-            .findings
-            .iter()
-            .any(|f| f.id == "metadata/archive/parsing::partial-extraction"),
+            .analysis_gaps
+            .contains(crate::types::AnalysisGap::ExtractionPartial),
         "{:?}",
-        report.findings.iter().map(|f| &f.id).collect::<Vec<_>>()
+        report.metadata.errors
     );
 }
 
@@ -3395,14 +3375,6 @@ fn test_alpine_apk_detected_via_gzip_tar_path() {
             .any(|f| f.path.ends_with("public_suffix.rb")),
         "expected ruby archive member to be analyzed, got files: {:?}",
         report.files.iter().map(|f| &f.path).collect::<Vec<_>>()
-    );
-    assert!(
-        report
-            .structure
-            .iter()
-            .any(|s| s.id == "archive/apk_alpine"),
-        "expected apk_alpine structural marker, got: {:?}",
-        report.structure.iter().map(|s| &s.id).collect::<Vec<_>>()
     );
 }
 

@@ -663,11 +663,9 @@ mod offset_tests {
     }
 }
 
-/// Both compression layers the peeler adds are names reference validation
-/// accepts as `metadata/lang/encoding/layer::<encoding>`.
+/// The peeler names the compression layer it removed.
 #[test]
-fn decompression_layers_are_known_encoded_layer_names() {
-    use crate::analyzers::embedded_code_detector::ENCODED_LAYER_NAMES;
+fn decompression_layers_are_named() {
     use flate2::Compression;
     use flate2::write::{GzEncoder, ZlibEncoder};
     use std::io::Write;
@@ -685,7 +683,6 @@ fn decompression_layers_are_known_encoded_layer_names() {
         let (out, name) = super::decompress_if_compressed(&bytes).unwrap();
         assert_eq!(out, payload);
         assert_eq!(name, expected);
-        assert!(ENCODED_LAYER_NAMES.contains(&name.as_str()), "{name}");
     }
 }
 

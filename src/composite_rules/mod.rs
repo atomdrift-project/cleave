@@ -32,7 +32,9 @@ pub(crate) use condition::{
 };
 pub(crate) use context::{EvaluationContext, FindingScope};
 pub(crate) use section_map::SectionMap;
-pub(crate) use traits::{CompositeTrait, DowngradeConditions, Scope, TraitDefinition};
+pub(crate) use traits::{
+    CompositeTrait, DowngradeConditions, Scope, TraitDefinition, inert_condition,
+};
 
 pub(crate) use types::Arch;
 pub(crate) use types::FileType;

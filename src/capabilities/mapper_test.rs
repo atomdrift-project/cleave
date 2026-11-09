@@ -2967,16 +2967,16 @@ fn atomic_finding_cap_retains_composite_support_and_exclusions() {
 // `unless:` on engine-emitted findings
 //
 // A finding the engine emits (an analyzer pushes it onto the report before
-// rules run) has no YAML definition of its own. A rule whose id leaf is
-// `builtin-<slug of the finding id>` is its hook carrier: the carrier's
-// `unless:` applies to the finding exactly as a YAML trait's `unless:` applies
-// to that trait. These tests hold the two paths to identical behavior.
+// rules run) has no YAML definition of its own. A rule written at its id
+// without an `if:` is its override: the override's `unless:` and `downgrade:`
+// apply to the finding exactly as a YAML trait's apply to that trait. These
+// tests hold the two paths to identical behavior.
 // ---------------------------------------------------------------------------
 
 const ENGINE_FINDING_ID: &str = "test/engine::emitted-victim";
 
-/// A context trait both victims name in `unless:`, a YAML victim, and the hook
-/// carrier for [`ENGINE_FINDING_ID`] (`/` and `::` become `-`).
+/// A context trait both victims name in `unless:`, a YAML victim, and the
+/// override for [`ENGINE_FINDING_ID`].
 fn hook_rules() -> (TempDir, CapabilityMapper) {
     let yaml = r#"
 defaults:
@@ -3001,15 +3001,9 @@ traits:
     unless:
       - id: test/context::marker
 
-  # Hook carrier. The token never occurs, so the carrier itself never fires;
-  # only its `unless:` is used.
-  - id: "test/hook::builtin-test-engine-emitted-victim"
-    desc: "Hook carrier for an engine-emitted finding"
-    crit: suspicious
-    conf: 0.9
-    if:
-      type: text
-      substr: "CARRIER_NEVER_PRESENT"
+  # Override: no `if:`, so it never fires; only its `unless:` is used.
+  - id: "test/engine::emitted-victim"
+    desc: "Override of an engine-emitted finding"
     unless:
       - id: test/context::marker
 "#;
@@ -3073,7 +3067,7 @@ fn unless_suppresses_an_engine_emitted_finding_like_a_yaml_one() {
     );
     assert!(
         !has(&report, ENGINE_FINDING_ID),
-        "engine-emitted finding is suppressed through its hook carrier"
+        "engine-emitted finding is suppressed through its override"
     );
 }
 
@@ -3088,16 +3082,27 @@ fn unless_leaves_an_engine_emitted_finding_alone_without_its_context() {
     assert!(has(&report, ENGINE_FINDING_ID));
 }
 
-/// The hook carrier exists only to carry `unless:`; it must never be reported.
+/// An override exists only to tune the engine's finding; with no engine
+/// finding on the report it must never be reported itself.
 #[test]
-fn hook_carrier_never_appears_as_a_finding() {
+fn override_never_appears_as_a_finding() {
     let (_dir, mapper) = hook_rules();
     for text in [&["VICTIM_TOKEN"][..], &["VICTIM_TOKEN", "CONTEXT_MARKER"]] {
-        let report = evaluate_with_engine_finding(&mapper, text);
-        assert!(!has(
-            &report,
-            "test/hook::builtin-test-engine-emitted-victim"
-        ));
+        let data = text.join(" ");
+        let mut report = create_test_report_with_size(data.len() as u64);
+        for s in text {
+            report.strings.push(crate::types::StringInfo {
+                value: (s.to_string()).into(),
+                offset: Some(0),
+                encoding: "ascii".to_string(),
+                string_type: None,
+                section: None,
+                encoding_chain: Vec::new(),
+                fragments: None,
+            });
+        }
+        mapper.evaluate_and_merge_findings(&mut report, data.as_bytes(), None, None);
+        assert!(!has(&report, ENGINE_FINDING_ID));
     }
 }
 
@@ -3128,7 +3133,7 @@ fn engine_and_yaml_suppressions_are_recorded_identically() {
     }
 }
 
-/// A YAML trait with `downgrade:` and the hook carrier for an engine-emitted
+/// A YAML trait with `downgrade:` and the override of an engine-emitted
 /// finding with the same `downgrade:` must demote their findings the same way.
 #[test]
 fn downgrade_demotes_an_engine_emitted_finding_like_a_yaml_one() {
@@ -3156,13 +3161,8 @@ traits:
       any:
         - id: test/context::harness
 
-  - id: "test/hook::builtin-test-engine-emitted-victim"
-    desc: "Hook carrier for an engine-emitted finding"
-    crit: suspicious
-    conf: 0.9
-    if:
-      type: text
-      substr: "CARRIER_NEVER_PRESENT"
+  - id: "test/engine::emitted-victim"
+    desc: "Override of an engine-emitted finding"
     downgrade:
       any:
         - id: test/context::harness

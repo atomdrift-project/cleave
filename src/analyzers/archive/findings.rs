@@ -4,66 +4,21 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-/// Drain the guard's non-fatal extraction notes into the report, raising one
-/// finding when any were recorded.
+/// Drain the guard's non-fatal extraction notes into `metadata.errors` and
+/// flag the report [`AnalysisGap::ExtractionPartial`] when any were recorded.
 ///
 /// An archive we could only read part of is worth surfacing — truncating a
-/// container is a cheap way past a scanner that bails on a bad member, which is
-/// exactly the failure this recovery path exists for — but it is also the
-/// everyday shape of an interrupted download. So it lands at `Notable`
-/// ([`Criticality::score_weight`] 1, against 40 for suspicious): visible in the
-/// trait list and the LLM render, without nudging a benign sample's verdict.
-///
-/// Partial extraction reports archive readability, not anti-analysis intent.
-/// Keep this structural finding outside `anti-analysis/archive/`, whose
-/// retroactive-suppression pass handles hostile-container findings rather
-/// than missing bytes.
+/// container is a cheap way past a scanner that bails on a bad member — but it
+/// is also the everyday shape of an interrupted download. It reports archive
+/// readability, not intent, so it is a state of the analysis, not a finding.
 pub(super) fn drain_extraction_notes(report: &mut AnalysisReport, guard: &ExtractionGuard) {
     let notes = guard.take_extraction_notes();
     if notes.is_empty() {
         return;
     }
-
-    let evidence = notes
-        .iter()
-        .take(MAX_INCOMPLETE_ARCHIVE_EVIDENCE)
-        .map(|note| Evidence {
-            method: "archive_extraction".to_string(),
-            source: "archive_analyzer".to_string(),
-            value: note.clone(),
-            location: None,
-            ..Default::default()
-        })
-        .collect();
-
-    report.findings.push(Finding {
-        precomputed_spans: None,
-        src: None,
-        kind: FindingKind::Structural,
-        trait_refs: vec![],
-        id: "metadata/archive/parsing::partial-extraction"
-            .to_string()
-            .into(),
-        desc: format!(
-            "Archive could only be read in part ({} extraction {})",
-            notes.len(),
-            if notes.len() == 1 {
-                "problem"
-            } else {
-                "problems"
-            }
-        )
-        .into(),
-        conf: 1.0,
-        crit: Criticality::Notable,
-        mbc: None,
-        attack: None,
-        evidence,
-        match_count: notes.len(),
-        source_file: None,
-        downgraded: false,
-    });
-
+    report
+        .analysis_gaps
+        .record(crate::types::AnalysisGap::ExtractionPartial);
     report.metadata.errors.extend(notes);
 }
 

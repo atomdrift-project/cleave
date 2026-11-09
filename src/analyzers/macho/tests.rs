@@ -1,4 +1,5 @@
 use super::*;
+use crate::Evidence;
 use std::path::PathBuf;
 
 #[test]
@@ -209,15 +210,6 @@ fn test_analyze_macho_file() {
     assert_eq!(report.target.file_type, "macho");
     assert!(report.target.size_bytes > 0);
     assert!(!report.target.sha256.is_empty());
-}
-
-#[test]
-fn test_macho_has_structure() {
-    let analyzer = MachOAnalyzer::new();
-    let test_file = test_macho_path();
-
-    let report = analyzer.analyze(&test_file).unwrap();
-    assert!(!report.structure.is_empty());
 }
 
 #[test]

@@ -11,8 +11,7 @@
 use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::strings::StringExtractor;
 use crate::types::{
-    AnalysisReport, Criticality, Evidence, Export, Finding, FindingKind, Import, Section,
-    StructuralFeature, TargetInfo,
+    AnalysisReport, Criticality, Export, Finding, FindingKind, Import, Section, TargetInfo,
 };
 use crate::yara_engine::YaraEngine;
 use anyhow::{Context, Result};
@@ -106,72 +105,6 @@ fn adopt_overlay(
 }
 
 impl PEAnalyzer {
-    /// Emit the small list of structural-feature entries cleave's
-    /// downstream consumers expect: `pe/header`, `pe/dll` (when the
-    /// IMAGE_FILE_DLL characteristic is set), and `pe/optional_header`
-    /// (when the optional header is present). All facts come from
-    /// filefacts's emitted values — no goblin re-walk.
-    fn structural_features(&self, ctx: &Ctx<'_>) -> Vec<StructuralFeature> {
-        let mut features = Vec::new();
-        let values = ctx.parsed.values();
-        let machine = values
-            .get("pe.machine")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
-        let subsystem = values
-            .get("pe.subsystem")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
-        features.push(StructuralFeature {
-            id: "pe/header".to_string(),
-            desc: format!("PE file (machine: {}, subsystem: {:?})", machine, subsystem),
-            evidence: vec![Evidence {
-                method: "header".to_string(),
-                source: "filefacts".to_string(),
-                value: "PE".to_string(),
-                location: Some("0x0".to_string()),
-                ..Default::default()
-            }],
-        });
-
-        // filefacts always emits the raw COFF Characteristics u16 here;
-        // IMAGE_FILE_DLL is bit 0x2000.
-        let is_dll = ctx
-            .parsed
-            .values()
-            .get("pe.characteristics_raw")
-            .and_then(serde_json::Value::as_u64)
-            .is_some_and(|characteristics| characteristics & 0x2000 != 0);
-        if is_dll {
-            features.push(StructuralFeature {
-                id: "pe/dll".to_string(),
-                desc: "Dynamic Link Library (DLL)".to_string(),
-                evidence: vec![Evidence {
-                    method: "header".to_string(),
-                    source: "filefacts".to_string(),
-                    value: "DLL".to_string(),
-                    location: Some("0x0".to_string()),
-                    ..Default::default()
-                }],
-            });
-        }
-
-        if values.get("pe.subsystem").is_some() {
-            features.push(StructuralFeature {
-                id: "pe/optional_header".to_string(),
-                desc: "Has optional header (standard Windows executable)".to_string(),
-                evidence: vec![Evidence {
-                    method: "header".to_string(),
-                    source: "filefacts".to_string(),
-                    value: "OptionalHeader".to_string(),
-                    location: Some("0x0".to_string()),
-                    ..Default::default()
-                }],
-            });
-        }
-        features
-    }
-
     /// Project filefacts's typed `Imports` view into `Vec<Import>`. Symbol
     /// names are pre-normalised inside `imports_from_filefacts`; symbol traits
     /// match them through the trait engine's symbol index.
@@ -601,13 +534,11 @@ impl PEAnalyzer {
         let mut struct_ms = 0u128;
         if filefacts_ok {
             let s_start = std::time::Instant::now();
-            let structural_features = self.structural_features(ctx);
             let pe_imports = self.pe_imports(ctx);
             let (pe_exports, _aliased_count) = self.pe_exports(ctx);
             let pe_sections = self.pe_sections(ctx);
             struct_ms = s_start.elapsed().as_millis();
 
-            report.structure.extend(structural_features);
             report.imports.extend(pe_imports);
             report.exports.extend(pe_exports);
             report.sections.extend(pe_sections);

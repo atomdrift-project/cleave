@@ -81,10 +81,12 @@ traits:
                     .any(|f| f.id.as_str() == "micro-behaviors/ui/terminal::ready-output")
             );
             let incomplete = report
-                .findings
-                .iter()
-                .chain(report.files.iter().flat_map(|f| &f.findings))
-                .any(|f| f.id.as_str() == "metadata/archive/parsing::partial-extraction");
+                .analysis_gaps
+                .contains(cleave::types::AnalysisGap::ExtractionPartial)
+                || report.files.iter().any(|f| {
+                    f.analysis_gaps
+                        .contains(cleave::types::AnalysisGap::ExtractionPartial)
+                });
             assert_eq!(incomplete, partial, "compressed={compressed}");
         }
     }
@@ -93,9 +95,8 @@ traits:
     let report = cleave::analyze_bytes(&empty, "empty.cpio", &options).unwrap();
     assert!(report.files.is_empty());
     assert!(
-        report
-            .findings
-            .iter()
-            .all(|f| f.id.as_str() != "metadata/archive/parsing::partial-extraction")
+        !report
+            .analysis_gaps
+            .contains(cleave::types::AnalysisGap::ExtractionPartial)
     );
 }

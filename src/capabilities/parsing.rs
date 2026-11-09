@@ -340,9 +340,25 @@ pub(crate) fn apply_trait_defaults(
         ));
     }
 
-    // For size-only traits without a condition, create a synthetic "always-true" condition
-    // This uses a basename regex that matches everything
+    // Without a condition and with no size, entropy or count filter, a trait
+    // that carries `unless:` or `downgrade:` is an override: it tunes the
+    // engine-emitted finding at its id and never matches on its own.
+    let is_override = raw.condition.is_none()
+        && raw.size_min.is_none()
+        && raw.size_max.is_none()
+        && raw.count_min.is_none()
+        && raw.count_max.is_none()
+        && raw.per_kb_min.is_none()
+        && raw.per_kb_max.is_none()
+        && raw.entropy_min.is_none()
+        && raw.entropy_max.is_none()
+        && (raw.unless.is_some() || raw.downgrade.is_some());
+    // Other size-only traits without a condition get a synthetic "always-true"
+    // condition: a basename regex that matches everything.
     let mut condition = raw.condition.unwrap_or_else(|| {
+        if is_override {
+            return crate::composite_rules::inert_condition();
+        }
         crate::composite_rules::Condition::Path(PathQuery {
             exact: None,
             substr: None,

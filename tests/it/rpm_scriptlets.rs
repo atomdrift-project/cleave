@@ -101,9 +101,8 @@ composite_rules:
         );
         assert_eq!(
             report
-                .findings
-                .iter()
-                .any(|f| f.id.as_str() == "metadata/archive/parsing::partial-extraction"),
+                .analysis_gaps
+                .contains(cleave::types::AnalysisGap::ExtractionPartial),
             unsupported_payload
         );
     }
@@ -147,8 +146,7 @@ composite_rules:
     assert!(report.files[0].path.ends_with("/postin/body"));
     assert!(
         report
-            .findings
-            .iter()
-            .any(|f| f.id.as_str() == "metadata/archive/parsing::partial-extraction")
+            .analysis_gaps
+            .contains(cleave::types::AnalysisGap::ExtractionPartial)
     );
 }

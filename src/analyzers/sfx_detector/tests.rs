@@ -92,7 +92,7 @@ fn nuitka_posix_cached_rejects_unsafe_or_corrupt_records() -> std::io::Result<()
 }
 
 #[test]
-fn nuitka_depth_limit_reports_incomplete_extraction() -> std::io::Result<()> {
+fn nuitka_depth_limit_stops_extraction() -> std::io::Result<()> {
     let data = posix_nuitka_bundle(&[("main", b"code", 1)])?;
     let config = ArchiveAnalyzerConfig::default().with_depth(3);
     let result = analyze_sfx(
@@ -105,12 +105,7 @@ fn nuitka_depth_limit_reports_incomplete_extraction() -> std::io::Result<()> {
         Some(&config),
     );
     assert!(result.archive_report.is_none());
-    assert!(
-        result
-            .extraction_findings
-            .iter()
-            .any(|f| f.id == "metadata/file/format/nuitka::extraction-incomplete")
-    );
+    assert!(result.extraction_findings.is_empty());
     Ok(())
 }
 
@@ -190,8 +185,7 @@ fn materializes_exact_analyzed_bytes_for_external_extractor() -> std::io::Result
 fn test_classify_innoextract_known_failures() {
     let diagnostics = classify_innoextract_diagnostics(
         "Warning: unexpected setup loader revision: 2\n\
-             Warning: setup loader checksum mismatch\n\
-             Error: could not determine setup data version\n",
+             Warning: setup loader checksum mismatch\n",
     );
 
     let kinds: Vec<_> = diagnostics
@@ -203,21 +197,8 @@ fn test_classify_innoextract_known_failures() {
         vec![
             InnoExtractDiagnosticKind::UnexpectedLoaderRevision,
             InnoExtractDiagnosticKind::LoaderChecksumMismatch,
-            InnoExtractDiagnosticKind::SetupDataVersionUndetermined,
         ]
     );
-}
-
-#[test]
-fn test_classify_innoextract_generic_failure() {
-    let diagnostics = classify_innoextract_diagnostics("Error: unsupported Inno stream\n");
-
-    assert_eq!(diagnostics.len(), 1);
-    assert_eq!(
-        diagnostics[0].kind,
-        InnoExtractDiagnosticKind::GenericFailure
-    );
-    assert_eq!(diagnostics[0].message, "Error: unsupported Inno stream");
 }
 
 #[test]
@@ -229,24 +210,8 @@ fn test_build_innoextract_finding_criticality() {
 
     assert_eq!(
         finding.id,
-        "file/sfx/inno-setup/extraction/loader-checksum-mismatch"
+        "metadata/file/format/installer::inno-setup-loader-checksum-mismatch"
     );
     assert_eq!(finding.crit, Criticality::Suspicious);
     assert_eq!(finding.evidence[0].value, "setup loader checksum mismatch");
-}
-
-#[test]
-fn test_build_inno_long_member_path_finding_is_not_malware_attribution() {
-    let long = "a".repeat(300);
-    let stderr = format!("Error: could not open output file \"app/{long}.dll\"");
-    let diagnostics = classify_innoextract_diagnostics(&stderr);
-    assert_eq!(diagnostics.len(), 1);
-    let finding = build_innoextract_finding(&diagnostics[0]);
-
-    assert_eq!(
-        finding.id,
-        "file/sfx/inno-setup/extraction/long-member-path"
-    );
-    assert_eq!(finding.crit, Criticality::Notable);
-    assert_eq!(finding.attack, None);
 }

@@ -765,52 +765,6 @@ fn is_top_level_self_detection(
 pub(crate) const EMBEDDED_LANG_NAMES: &[&str] =
     &["python", "javascript", "shell", "php", "unknown"];
 
-/// Every encoding-chain step the analyzers produce, i.e. the `<encoding>` of
-/// `metadata/lang/encoding/layer::<encoding>`: stng's decoder methods
-/// (`generic.rs`), the compression and nested layers peeled by
-/// `extractors::encoded_payload::decompress_and_nest`, and the script and
-/// variation-selector layers decoded here. Reference validation checks YAML
-/// refs against this list; adding a producer means adding its name here.
-pub(crate) const ENCODED_LAYER_NAMES: &[&str] = &[
-    "powershell-literal-program",
-    "javascript-literal-program",
-    "js-constant-string-table",
-    "js-joined-base64-module",
-    "powershell-literal-arithmetic",
-    "character-table",
-    "decimal-byte-array",
-    "aes-cbc",
-    "aes-128-cbc",
-    "aes-256-cbc",
-    "aes128",
-    "aes256",
-    "scrypt",
-    "utf16le",
-    "utf16be",
-    "mime-base64",
-    "nibble-table",
-    "nrv2b-8",
-    "unknown",
-    "xor",
-    "base64",
-    "base64-obf",
-    "rot13-base64",
-    "base64-utf16le",
-    "hex",
-    "url",
-    "unicode-escape",
-    "unicode-variation-selector",
-    "base32",
-    "base85",
-    "script",
-    "scpt",
-    "batch-expansion",
-    "stack",
-    "wide",
-    "gzip",
-    "zlib",
-];
-
 pub(crate) fn lang_name(file_type: &FileType) -> &'static str {
     match file_type {
         FileType::Python => "python",
@@ -840,62 +794,6 @@ fn generate_embedded_language_trait(detected_lang: &FileType, offset: u64, value
             method: "embedded-code-detection".to_string(),
             source: "string-analysis".to_string(),
             value: value.split_whitespace().collect::<Vec<_>>().join(" "),
-            location: Some(format!("{:#x}", offset)),
-            ..Default::default()
-        }],
-        match_count: 0,
-        source_file: None,
-        downgraded: false,
-    }
-}
-
-/// Generate automatic encoded-layer metadata for each step in the
-/// encoding chain (`metadata/lang/encoding/layer::<encoding>`). Lets trait
-/// authors and ML pipelines key off "this layer was unwrapped from
-/// hex / base64 / xor / etc." without re-deriving from
-/// `encoding_chain` everywhere.
-pub(crate) fn generate_encoded_layer_traits(
-    encoding_chain: &[String],
-    offset: u64,
-) -> Vec<Finding> {
-    encoding_chain
-        .iter()
-        .map(|encoding| {
-            debug_assert!(
-                ENCODED_LAYER_NAMES.contains(&encoding.as_str()),
-                "encoding `{encoding}` missing from ENCODED_LAYER_NAMES"
-            );
-            encoded_layer_finding(encoding, offset)
-        })
-        .collect()
-}
-
-fn encoded_layer_finding(encoding: &str, offset: u64) -> Finding {
-    Finding {
-        precomputed_spans: None,
-        src: None,
-        id: format!("metadata/lang/encoding/layer::{encoding}").into(),
-        kind: crate::types::FindingKind::Capability,
-        desc: format!("Code recovered from {encoding}-encoded layer").into(),
-        conf: 1.0,
-        // These typed reconstruction identities must survive conversion of
-        // the child report so the host's file-scope composites can use them.
-        // They are complete encoding observations, useful on their own.
-        crit: if matches!(
-            encoding,
-            "powershell-literal-program" | "javascript-literal-program"
-        ) {
-            Criticality::Notable
-        } else {
-            Criticality::Baseline
-        },
-        mbc: None,
-        attack: None,
-        trait_refs: vec![],
-        evidence: vec![Evidence {
-            method: "embedded-code-detection".to_string(),
-            source: "encoded-layer".to_string(),
-            value: format!("Decoded layer at offset {:#x}", offset),
             location: Some(format!("{:#x}", offset)),
             ..Default::default()
         }],
@@ -977,7 +875,6 @@ fn analyze_embedded_haystack(
         );
         layer.depth = (current_depth + 1) as u32;
         layer.encoding = Some(encoding_chain.to_vec());
-        layer.findings = generate_encoded_layer_traits(encoding_chain, offset);
         layer
             .analysis_gaps
             .record(crate::types::AnalysisGap::EmbeddedSourceIncomplete);
@@ -1092,14 +989,6 @@ fn analyze_embedded_haystack(
                 ));
             }
         }
-
-        // Auto-generated `metadata/lang/encoding/layer::<encoding>` traits —
-        // one per step in the encoding chain — so trait authors can
-        // target "anything reached via hex" / "anything reached via
-        // base64+gzip" without re-walking `encoding_chain` inline.
-        file_entry
-            .findings
-            .extend(generate_encoded_layer_traits(encoding_chain, offset));
 
         file_entry.compute_summary();
         Ok(EmbeddedAnalysisResult::EncodedLayer(Box::new(file_entry)))

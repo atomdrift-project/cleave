@@ -69,103 +69,6 @@ pub(super) fn head_decodes_to_known_magic_text(value: &str) -> bool {
         .is_some()
 }
 
-/// Recognize the small Firefox profile bootstrap archive used by browser
-/// integration tests. The content check is intentionally structural: an XZ
-/// stream must contain only Firefox `profiles.ini`/`installs.ini` metadata and
-/// a profile `times.json`. A similarly named test file carrying another
-/// compressed payload still gets reported.
-pub(super) fn is_firefox_profile_bootstrap_fixture(data: &[u8]) -> bool {
-    const MAX_EXPANDED_SIZE: u64 = 32 * 1024;
-    const MAX_MEMBERS: usize = 8;
-
-    let decoder = xz2::read::XzDecoder::new(std::io::Cursor::new(data)).take(MAX_EXPANDED_SIZE + 1);
-    let mut archive = tar::Archive::new(decoder);
-    let Ok(entries) = archive.entries() else {
-        return false;
-    };
-
-    let mut profiles_ini = None;
-    let mut installs_ini = None;
-    let mut times_json = None;
-    let mut member_count = 0;
-    let mut total_size = 0u64;
-    for entry in entries {
-        let Ok(entry) = entry else {
-            return false;
-        };
-        member_count += 1;
-        if member_count > MAX_MEMBERS {
-            return false;
-        }
-        total_size = total_size.saturating_add(entry.header().size().unwrap_or(0));
-        if total_size > MAX_EXPANDED_SIZE {
-            return false;
-        }
-        if entry.header().entry_type().is_dir() {
-            continue;
-        }
-
-        let Ok(path) = entry.path() else {
-            return false;
-        };
-        let path = path.to_string_lossy();
-        let slot = if path == "profiles.ini" {
-            &mut profiles_ini
-        } else if path == "installs.ini" {
-            &mut installs_ini
-        } else if path.ends_with("/times.json") {
-            &mut times_json
-        } else {
-            return false;
-        };
-        if slot.is_some() {
-            return false;
-        }
-        let mut content = String::new();
-        if entry.take(4097).read_to_string(&mut content).is_err() || content.len() > 4096 {
-            return false;
-        }
-        *slot = Some(content);
-    }
-
-    let (Some(profiles_ini), Some(installs_ini), Some(times_json)) =
-        (profiles_ini, installs_ini, times_json)
-    else {
-        return false;
-    };
-
-    let mut in_default_release_profile = false;
-    let mut default_release_path = None;
-    for line in profiles_ini.lines() {
-        if line.starts_with('[') {
-            in_default_release_profile = false;
-        } else if line == "Name=default-release" {
-            in_default_release_profile = true;
-        } else if in_default_release_profile && let Some(path) = line.strip_prefix("Path=") {
-            default_release_path = Some(path);
-            break;
-        }
-    }
-    let Some(default_release_path) = default_release_path else {
-        return false;
-    };
-
-    default_release_path.ends_with(".default-release")
-        && profiles_ini.contains("[Profile")
-        && profiles_ini.contains("IsRelative=1")
-        && installs_ini.contains(&format!("Default={default_release_path}"))
-        && times_json.contains("\"created\"")
-        && times_json.contains("\"firstUse\"")
-}
-
-pub(super) fn is_test_source_path(path: &str) -> bool {
-    path.split(['/', '\\', '!']).any(|component| {
-        matches!(component, "test" | "tests" | "testing")
-            || component.starts_with("test_")
-            || component.ends_with("_test.py")
-    })
-}
-
 /// Try to decode `string_info` as base64 containing a binary payload (PE, ELF, or archive).
 /// Only runs at depth 0 to prevent compounding recursion.
 ///
@@ -211,16 +114,6 @@ pub(super) fn detect_base64_binary(
     }
     if matches!(inner_type, "gz" | "zip" | "xz" | "lzma" | "bz2")
         && decoded.len() < MIN_BASE64_COMPRESSED_SIZE
-    {
-        return Vec::new();
-    }
-    // Browser-cookie3's integration test embeds a tiny, non-secret Firefox
-    // profile bootstrap tar.xz. Confirm both its test-source context and its
-    // profile metadata before suppressing this generic compressed-payload
-    // signal; path names alone must not hide embedded archives.
-    if inner_type == "xz"
-        && is_test_source_path(parent_path)
-        && is_firefox_profile_bootstrap_fixture(&decoded)
     {
         return Vec::new();
     }

@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use super::binary::{Export, Function, Import, Section, StringInfo, SyscallInfo, YaraMatch};
 use super::core::Criticality;
 use super::filefacts_view::FilefactsView;
-use super::paths_env::{DirectoryAccess, EnvVarInfo, PathInfo};
 use super::traits_findings::{ContextLine, Finding, StructuralFeature, Trait};
 
 /// Path delimiter for archive members (e.g., "archive.zip!!inner/file.py")
@@ -218,18 +217,6 @@ pub struct FileAnalysis {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub filefacts_metrics: Option<std::collections::BTreeMap<String, f64>>,
 
-    /// Paths discovered
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub paths: Vec<PathInfo>,
-
-    /// Directories accessed
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub directories: Vec<DirectoryAccess>,
-
-    /// Environment variables accessed
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub env_vars: Vec<EnvVarInfo>,
-
     /// Molecular formula representing the file's behavioral fingerprint
     /// Generated from findings by `crate::formula`
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -319,9 +306,6 @@ impl FileAnalysis {
             filefacts: None,
             identity: None,
             filefacts_metrics: None,
-            paths: Vec::new(),
-            directories: Vec::new(),
-            env_vars: Vec::new(),
             formula: None,
             composite_sources: std::collections::BTreeMap::new(),
             kv: std::collections::BTreeMap::new(),
@@ -411,9 +395,6 @@ impl FileAnalysis {
         self.strings = Vec::new();
         self.yara_matches = Vec::new();
         self.syscalls = Vec::new();
-        self.paths = Vec::new();
-        self.directories = Vec::new();
-        self.env_vars = Vec::new();
         // Matching is complete, so bound what each finding's evidence still
         // owns to what serialization can ever emit. `value` is unbounded at
         // capture but truncated to MAX_EVIDENCE_VALUE_SIZE on the wire;
@@ -442,18 +423,6 @@ impl FileAnalysis {
         }
         for f in &mut self.findings {
             for e in &mut f.evidence {
-                e.source.clear();
-            }
-        }
-        for p in &mut self.paths {
-            p.source.clear();
-            for e in &mut p.evidence {
-                e.source.clear();
-            }
-        }
-        for ev in &mut self.env_vars {
-            ev.source.clear();
-            for e in &mut ev.evidence {
                 e.source.clear();
             }
         }

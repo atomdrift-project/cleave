@@ -9,7 +9,6 @@ use super::diff::DiffReportV1;
 use super::file_analysis::{FileAnalysis, ReportSummary};
 use super::filefacts_view::FilefactsView;
 use super::is_false;
-use super::paths_env::{DirectoryAccess, EnvVarInfo, PathInfo};
 use super::traits_findings::{ContextLine, Finding, StructuralFeature, Suppression, Trait};
 use crate::analyzers::FileType;
 
@@ -323,15 +322,6 @@ pub struct AnalysisReport {
     /// match can attach the location to its finding for downstream (a report viewer).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub filefacts_metric_spans: Option<std::collections::BTreeMap<String, Vec<filefacts::Span>>>,
-    /// Raw paths discovered (complete list)
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub paths: Vec<PathInfo>,
-    /// Paths grouped by directory (analysis view)
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub directories: Vec<DirectoryAccess>,
-    /// Environment variables accessed
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub env_vars: Vec<EnvVarInfo>,
     /// Files contained within archives (for archive targets only)
     /// Paths match those used in Evidence.location fields (without "archive:" prefix)
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -475,9 +465,6 @@ impl AnalysisReport {
             engine: None,
             filefacts_metrics: None,
             filefacts_metric_spans: None,
-            paths: Vec::new(),
-            directories: Vec::new(),
-            env_vars: Vec::new(),
             archive_contents: Vec::new(),
             scanned_path: None,
             files: Vec::new(),
@@ -723,9 +710,6 @@ impl AnalysisReport {
             sections,
             yara_matches,
             syscalls,
-            paths,
-            directories,
-            env_vars,
             values_tree,
             // Report-level only: not part of a per-file entry.
             version: _,
@@ -762,9 +746,6 @@ impl AnalysisReport {
                 sections: sections.clone(),
                 yara_matches: yara_matches.clone(),
                 syscalls: syscalls.clone(),
-                paths: paths.clone(),
-                directories: directories.clone(),
-                env_vars: env_vars.clone(),
             },
         );
 
@@ -813,9 +794,6 @@ impl AnalysisReport {
             sections,
             yara_matches,
             syscalls,
-            paths,
-            directories,
-            env_vars,
             values_tree,
             cached_member_kv,
             engine: _,
@@ -852,9 +830,6 @@ impl AnalysisReport {
                 sections,
                 yara_matches,
                 syscalls,
-                paths,
-                directories,
-                env_vars,
             },
         );
 
@@ -915,9 +890,6 @@ struct ReportFileParts {
     sections: Vec<Section>,
     yara_matches: Vec<YaraMatch>,
     syscalls: Vec<SyscallInfo>,
-    paths: Vec<PathInfo>,
-    directories: Vec<DirectoryAccess>,
-    env_vars: Vec<EnvVarInfo>,
 }
 
 impl FileAnalysis {
@@ -943,9 +915,6 @@ impl FileAnalysis {
             sections,
             yara_matches,
             syscalls,
-            paths,
-            directories,
-            env_vars,
         } = parts;
         let TargetInfo {
             path,
@@ -985,9 +954,6 @@ impl FileAnalysis {
             filefacts,
             identity,
             filefacts_metrics,
-            paths,
-            directories,
-            env_vars,
             formula: None,
             composite_sources: std::collections::BTreeMap::new(),
             kv: std::collections::BTreeMap::new(),

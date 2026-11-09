@@ -9,7 +9,6 @@
 #![warn(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 
 use crate::analyzers::{AnalysisInput, Analyzer};
-use crate::entropy::EntropyLevel;
 use crate::strings::StringExtractor;
 use crate::types::{
     AnalysisReport, Criticality, Evidence, Export, Finding, FindingKind, StringInfo,
@@ -642,29 +641,9 @@ impl MachOAnalyzer {
         }
     }
 
-    /// Project filefacts's typed Sections view into the report, marking
-    /// high-entropy sections with the canonical `entropy/high`
-    /// structural feature.
+    /// Project filefacts's typed Sections view into the report.
     fn analyze_sections_from_ctx(&self, ctx: &Ctx<'_>, report: &mut AnalysisReport) {
-        for section in ctx.sections_from_filefacts() {
-            let entropy = section.entropy;
-            let section_name = section.name.clone();
-            report.sections.push(section);
-            let level = EntropyLevel::from_value(entropy);
-            if level == EntropyLevel::High {
-                report.structure.push(StructuralFeature {
-                    id: "entropy/high".to_string(),
-                    desc: "High entropy section (possibly packed/encrypted)".to_string(),
-                    evidence: vec![Evidence {
-                        method: "entropy".to_string(),
-                        source: "filefacts".to_string(),
-                        value: format!("{:.2}", entropy),
-                        location: Some(section_name),
-                        ..Default::default()
-                    }],
-                });
-            }
-        }
+        report.sections.extend(ctx.sections_from_filefacts());
     }
 
     /// Project filefacts's parsed code signature into identity/trust and

@@ -1,7 +1,6 @@
 //! Tests for the types module.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use super::paths_env::PathAccessType;
 use super::*;
 
 #[test]
@@ -27,42 +26,6 @@ fn test_criticality_serialization() {
 }
 
 #[test]
-fn test_path_type_enum_variants() {
-    let types = [PathType::Absolute, PathType::Relative, PathType::Dynamic];
-    assert_eq!(types.len(), 3);
-}
-
-#[test]
-fn test_path_category_enum_variants() {
-    let categories = vec![
-        PathCategory::System,
-        PathCategory::Config,
-        PathCategory::Temp,
-        PathCategory::Log,
-        PathCategory::Home,
-        PathCategory::Device,
-        PathCategory::Runtime,
-        PathCategory::Hidden,
-        PathCategory::Network,
-        PathCategory::Other,
-    ];
-    assert_eq!(categories.len(), 10);
-}
-
-#[test]
-fn test_path_access_type_enum() {
-    let access_types = [
-        PathAccessType::Read,
-        PathAccessType::Write,
-        PathAccessType::Execute,
-        PathAccessType::Delete,
-        PathAccessType::Create,
-        PathAccessType::Unknown,
-    ];
-    assert_eq!(access_types.len(), 6);
-}
-
-#[test]
 fn test_string_type_enum_variants() {
     let types = vec![
         StringType::Url,
@@ -76,50 +39,6 @@ fn test_string_type_enum_variants() {
         StringType::ShellCmd,
     ];
     assert_eq!(types.len(), 9);
-}
-
-#[test]
-fn test_env_var_access_type_enum() {
-    let access_types = [
-        EnvVarAccessType::Read,
-        EnvVarAccessType::Write,
-        EnvVarAccessType::Delete,
-        EnvVarAccessType::Unknown,
-    ];
-    assert_eq!(access_types.len(), 4);
-}
-
-#[test]
-fn test_env_var_category_enum() {
-    let categories = vec![
-        EnvVarCategory::Path,
-        EnvVarCategory::User,
-        EnvVarCategory::System,
-        EnvVarCategory::Temp,
-        EnvVarCategory::Display,
-        EnvVarCategory::Credential,
-        EnvVarCategory::Runtime,
-        EnvVarCategory::Platform,
-        EnvVarCategory::Injection,
-        EnvVarCategory::Locale,
-        EnvVarCategory::Network,
-        EnvVarCategory::Other,
-    ];
-    assert_eq!(categories.len(), 12);
-}
-
-#[test]
-fn test_directory_access_pattern_enum() {
-    let _pattern1 = DirectoryAccessPattern::SingleFile;
-    let _pattern2 = DirectoryAccessPattern::MultipleSpecific { count: 3 };
-    let _pattern3 = DirectoryAccessPattern::Enumeration {
-        pattern: Some("*.txt".to_string()),
-    };
-    let _pattern4 = DirectoryAccessPattern::BatchOperation {
-        operation: "delete".to_string(),
-        count: 5,
-    };
-    let _pattern5 = DirectoryAccessPattern::UserEnumeration;
 }
 
 #[test]
@@ -241,38 +160,6 @@ fn test_evidence_creation() {
     assert_eq!(evidence.method, "symbol");
     assert_eq!(evidence.value, "socket");
     assert_eq!(evidence.location, Some("0x1000".to_string()));
-}
-
-#[test]
-fn test_path_info_creation() {
-    let path = PathInfo {
-        path: "/etc/passwd".to_string(),
-        path_type: PathType::Absolute,
-        category: PathCategory::Config,
-        access_type: Some(PathAccessType::Read),
-        source: "strings".to_string(),
-        evidence: vec![],
-    };
-
-    assert_eq!(path.path, "/etc/passwd");
-    assert_eq!(path.path_type, PathType::Absolute);
-    assert_eq!(path.category, PathCategory::Config);
-    assert_eq!(path.access_type, Some(PathAccessType::Read));
-}
-
-#[test]
-fn test_env_var_info_creation() {
-    let env_var = EnvVarInfo {
-        name: "USER".to_string(),
-        category: EnvVarCategory::User,
-        access_type: EnvVarAccessType::Read,
-        source: "tree-sitter".to_string(),
-        evidence: vec![],
-    };
-
-    assert_eq!(env_var.name, "USER");
-    assert_eq!(env_var.category, EnvVarCategory::User);
-    assert_eq!(env_var.access_type, EnvVarAccessType::Read);
 }
 
 #[test]
@@ -414,21 +301,4 @@ fn test_target_info_serialization() {
 
     assert_eq!(deserialized.path, "/bin/test");
     assert_eq!(deserialized.size_bytes, 1024);
-}
-
-#[test]
-fn test_directory_access_creation() {
-    let dir_access = DirectoryAccess {
-        directory: "/tmp".to_string(),
-        files: vec!["file1.txt".to_string(), "file2.txt".to_string()],
-        file_count: 2,
-        access_pattern: DirectoryAccessPattern::MultipleSpecific { count: 2 },
-        categories: vec![PathCategory::Temp],
-        enumerated: false,
-    };
-
-    assert_eq!(dir_access.directory, "/tmp");
-    assert_eq!(dir_access.file_count, 2);
-    assert_eq!(dir_access.files.len(), 2);
-    assert!(!dir_access.enumerated);
 }

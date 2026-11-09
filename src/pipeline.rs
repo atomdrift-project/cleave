@@ -168,9 +168,6 @@ pub(crate) fn report_from_file_analysis(
         analysis_gaps,
         filefacts_metrics,
         identity,
-        paths,
-        directories,
-        env_vars,
         kv,
         // Placement and derived output, recomputed when the report is folded
         // back into a file entry.
@@ -216,9 +213,6 @@ pub(crate) fn report_from_file_analysis(
     report.analysis_gaps = analysis_gaps;
     report.filefacts_metrics = filefacts_metrics;
     report.identity = identity;
-    report.paths = paths;
-    report.directories = directories;
-    report.env_vars = env_vars;
     // The compact member cache stores kv already flattened (no `values_tree`).
     // Carry it through so `into_file_analysis` restores it verbatim rather than
     // yielding empty kv — the diff reads both `identity` and `kv`, and dropping

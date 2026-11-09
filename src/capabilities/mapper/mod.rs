@@ -122,6 +122,9 @@ pub(super) enum UnlessSource {
 pub(super) struct UnlessIndex {
     pub(super) by_id: rustc_hash::FxHashMap<String, UnlessSource>,
     pub(super) by_hook_leaf: rustc_hash::FxHashMap<String, UnlessSource>,
+    /// `builtin-*` ID leaf to the first trait carrying a `downgrade:`: the
+    /// hook carrier of an engine-emitted finding that is to be demoted.
+    pub(super) downgrade_hook_by_leaf: rustc_hash::FxHashMap<String, usize>,
 }
 
 impl UnlessIndex {

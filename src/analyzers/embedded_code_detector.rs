@@ -12,7 +12,6 @@ use crate::types::{Criticality, Finding, FindingKind};
 use anyhow::{Context, Result};
 use regex::Regex;
 use rustc_hash::FxHashSet;
-use std::io::Read;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 

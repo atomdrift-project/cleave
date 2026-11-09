@@ -715,15 +715,26 @@ impl super::CapabilityMapper {
         section_map: &SectionMap,
         sink: &crate::types::SuppressionSink,
     ) {
+        // The trait whose `downgrade:` governs `finding`, and whether it is the
+        // finding's hook carrier rather than its own definition. An
+        // engine-emitted finding has no definition; a `builtin-<slug>` trait
+        // stands in for it, and demotes from the finding's own criticality.
+        let hooks = &self.unless_index().downgrade_hook_by_leaf;
         let candidate = |finding: &Finding| {
-            self.trait_id_map
-                .get(finding.id.as_str())
-                .map(|&idx| &self.trait_definitions[idx])
-                .filter(|rule| {
-                    rule.downgrade
-                        .as_ref()
-                        .is_some_and(|d| d.scope != Some(crate::composite_rules::Scope::Parent))
-                })
+            let governs = |rule: &&crate::composite_rules::TraitDefinition| {
+                rule.downgrade
+                    .as_ref()
+                    .is_some_and(|d| d.scope != Some(crate::composite_rules::Scope::Parent))
+            };
+            if let Some(&idx) = self.trait_id_map.get(finding.id.as_str()) {
+                return Some(&self.trait_definitions[idx])
+                    .filter(governs)
+                    .map(|r| (r, false));
+            }
+            let &idx = hooks.get(&Self::builtin_finding_hook_slug(&finding.id))?;
+            Some(&self.trait_definitions[idx])
+                .filter(governs)
+                .map(|r| (r, true))
         };
         if !report.findings.iter().any(|f| candidate(f).is_some()) {
             return;
@@ -744,9 +755,13 @@ impl super::CapabilityMapper {
                 .iter()
                 .enumerate()
                 .filter_map(|(i, finding)| {
-                    let rule = candidate(finding)?;
+                    let (rule, is_hook) = candidate(finding)?;
                     let downgrade = rule.downgrade.as_ref()?;
-                    let new_crit = rule.evaluate_downgrade(downgrade, &rule.crit, &ctx);
+                    let new_crit = if is_hook {
+                        rule.evaluate_downgrade_of(&finding.id, downgrade, &finding.crit, &ctx)
+                    } else {
+                        rule.evaluate_downgrade(downgrade, &rule.crit, &ctx)
+                    };
                     (new_crit < finding.crit).then_some((i, new_crit))
                 })
                 .collect()
@@ -1153,6 +1168,17 @@ impl super::CapabilityMapper {
                 .enumerate()
                 .filter(|(_, r)| r.unless.is_some())
                 .map(|(i, r)| (r.id.as_str(), super::UnlessSource::Composite(i)));
+            for (i, rule) in self.trait_definitions.iter().enumerate() {
+                if rule.downgrade.is_some()
+                    && let Some((_, leaf)) = rule.id.rsplit_once("::")
+                    && leaf.starts_with("builtin-")
+                {
+                    index
+                        .downgrade_hook_by_leaf
+                        .entry(leaf.to_owned())
+                        .or_insert(i);
+                }
+            }
             for (id, source) in traits.chain(composites) {
                 // Last insert wins: composites shadow a trait sharing their
                 // qualified ID, as in the map this index replaced.

@@ -1888,6 +1888,7 @@ checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 [[package]]
 name = "filefacts"
 version = "3.0.0-beta.1"
+source = "git+https://github.com/atomdrift-project/filefacts.git#11cca2def3d26a3addf44eb552775d3351abaff2"
 dependencies = [
  "aes 0.9.4",
  "aho-corasick",
@@ -5566,6 +5567,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
+source = "git+https://github.com/atomdrift-project/filefacts.git#11cca2def3d26a3addf44eb552775d3351abaff2"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -5825,6 +5827,7 @@ dependencies = [
 [[package]]
 name = "unpack"
 version = "0.1.0"
+source = "git+https://github.com/atomdrift-project/unpack.git#8f16284aed2f0bd0ad8bc962ca2c2bfdd65c9fa2"
 dependencies = [
  "aes 0.9.4",
  "aes-gcm",

@@ -102,7 +102,7 @@ cleave-macros = { path = "cleave-macros" }
 filefacts = { git = "https://github.com/atomdrift-project/filefacts.git", default-features = false }
 # Unpackers and payload decoders. TEMPORARY path dependency until the unpack
 # repository is pushed; then `{ git = "https://github.com/atomdrift-project/unpack.git", default-features = false, features = ["script"] }`.
-unpack = { path = "../unpack", default-features = false, features = ["script"] }
+unpack = { git = "https://github.com/atomdrift-project/unpack.git", default-features = false, features = ["script"] }
 
 cfb = "0.14"  # Microsoft OLE2/CFBF compound document parsing
 
@@ -414,8 +414,6 @@ opt-level = 3
 # TEMPORARY: filefacts' `source.data_only`, `source.embedded` and
 # `binary.installer.python_version` are not pushed yet. Remove this section
 # once filefacts is pushed and `cargo update -p filefacts` runs.
-[patch."https://github.com/atomdrift-project/filefacts.git"]
-filefacts = { path = "../filefacts" }
 
 [patch.crates-io]
 # tree-sitter carries an illumos build fix not yet released upstream; both

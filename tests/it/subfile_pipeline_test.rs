@@ -5,7 +5,7 @@
 //! 1. **PDF → JavaScript** — a PDF whose `/JS` action carries an
 //!    inline JS literal. After cleave runs, `report.files` must
 //!    include a depth-1 entry with `file_type == "javascript"` and
-//!    a virtual path under the `!!pdf/` namespace.
+//!    a virtual path under the `##javascript@` layer name.
 //!
 //! 2. **Shell → base64 → tar.gz → Python** — a shell script
 //!    embedding a base64 blob whose decoded bytes are a gzipped
@@ -119,7 +119,7 @@ fn collect_subfiles(report: &AnalysisReport) -> Vec<(String, u32, String)> {
 
 /// PDF → JavaScript: the JS action's inline literal should land
 /// as a depth-1 sub-file with `file_type=javascript` and the
-/// `!!pdf/object<id>.js` virtual path.
+/// `##javascript@<offset>` virtual path.
 #[test]
 fn pdf_javascript_subfile_lands_at_depth_one() {
     let pdf = build_pdf_with_inline_js("eval(atob('YWxlcnQoMSk='))");
@@ -135,10 +135,10 @@ fn pdf_javascript_subfile_lands_at_depth_one() {
     let subfiles = collect_subfiles(&report);
     let js_entry = subfiles
         .iter()
-        .find(|(p, d, ft)| *d == 1 && ft == "javascript" && p.contains("!!pdf/"));
+        .find(|(p, d, ft)| *d == 1 && ft == "javascript" && p.contains("##javascript@"));
     assert!(
         js_entry.is_some(),
-        "expected a depth-1 javascript sub-file under !!pdf/, got {subfiles:?}",
+        "expected a depth-1 javascript sub-file under ##javascript@, got {subfiles:?}",
     );
     // The sub-file must carry the parsed JS source — filefacts'
     // `source.language` is the canonical "the JS analyzer actually ran"

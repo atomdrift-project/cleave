@@ -60,91 +60,39 @@ fn office_variants_route_to_their_document_type() {
     }
 }
 
-// ==================== FileType::is_source_code Tests ====================
+// ==================== FileType::uses_raw_text_search Tests ====================
 
+/// Source, markup and text manifests are searched as raw text; binaries are
+/// not. The list itself is filefacts' `FileType::is_text_content`.
 #[test]
-fn test_is_source_code_true_for_shell() {
-    assert!(FileType::Shell.is_source_code());
-}
-
-#[test]
-fn test_is_source_code_true_for_python() {
-    assert!(FileType::Python.is_source_code());
-}
-
-#[test]
-fn test_is_source_code_true_for_javascript() {
-    assert!(FileType::JavaScript.is_source_code());
-}
-
-#[test]
-fn test_is_source_code_true_for_rust() {
-    assert!(FileType::Rust.is_source_code());
-}
-
-#[test]
-fn test_is_source_code_true_for_go() {
-    assert!(FileType::Go.is_source_code());
-}
-
-#[test]
-fn test_is_source_code_true_for_applescript() {
-    assert!(FileType::AppleScript.is_source_code());
-}
-
-#[test]
-fn test_is_source_code_false_for_elf() {
-    assert!(!FileType::Elf.is_source_code());
-}
-
-#[test]
-fn test_is_source_code_false_for_macho() {
-    assert!(!FileType::Macho.is_source_code());
-}
-
-#[test]
-fn test_is_source_code_false_for_pe() {
-    assert!(!FileType::Pe.is_source_code());
-}
-
-#[test]
-fn test_is_source_code_false_for_all() {
-    assert!(!FileType::All.is_source_code());
-}
-
-#[test]
-fn test_is_source_code_false_for_package_json() {
-    assert!(!FileType::PackageJson.is_source_code());
-}
-
-#[test]
-fn test_go_mod_is_raw_text_manifest() {
-    assert!(!FileType::GoMod.is_source_code());
-    assert!(FileType::GoMod.uses_raw_text_search());
+fn raw_text_types_come_from_filefacts() {
+    for raw in [
+        FileType::Shell,
+        FileType::Python,
+        FileType::JavaScript,
+        FileType::Rust,
+        FileType::Go,
+        FileType::Cpp,
+        FileType::AppleScript,
+        FileType::PackageJson,
+        FileType::GoMod,
+        FileType::Plist,
+        FileType::SystemdService,
+        FileType::Svg,
+    ] {
+        assert!(raw.uses_raw_text_search(), "{raw:?}");
+    }
+    for binary in [
+        FileType::Elf,
+        FileType::Macho,
+        FileType::Pe,
+        FileType::All,
+        FileType::Jpeg,
+    ] {
+        assert!(!binary.uses_raw_text_search(), "{binary:?}");
+    }
     assert_eq!(FileType::from_str("go.mod"), FileType::GoMod);
     assert_eq!(FileType::from_str("gomod"), FileType::GoMod);
-}
-
-#[test]
-fn test_is_source_code_false_for_plist() {
-    assert!(!FileType::Plist.is_source_code());
-}
-
-#[test]
-fn test_is_source_code_false_for_systemd_service() {
-    assert!(!FileType::SystemdService.is_source_code());
-    assert!(FileType::SystemdService.uses_raw_text_search());
-}
-
-#[test]
-fn test_svg_is_raw_text() {
-    assert!(!FileType::Svg.is_source_code());
-    assert!(FileType::Svg.uses_raw_text_search());
-}
-
-#[test]
-fn test_is_source_code_false_for_jpeg() {
-    assert!(!FileType::Jpeg.is_source_code());
 }
 
 // ==================== FileType::all_concrete_variants Tests ====================

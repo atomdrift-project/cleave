@@ -745,7 +745,7 @@ impl super::CapabilityMapper {
             .find_matches_detailed(
                 binary_data,
                 &file_type,
-                file_type.uses_raw_text_search_for(binary_data),
+                file_type.uses_raw_text_search_in(report),
             );
 
         let cache = TraitEvalCache {
@@ -872,7 +872,7 @@ impl super::CapabilityMapper {
                 .find_matches_detailed(
                     binary_data,
                     &file_type,
-                    file_type.uses_raw_text_search_for(binary_data),
+                    file_type.uses_raw_text_search_in(report),
                 )
         } else {
             crate::capabilities::indexes::RawGateHits::default()
@@ -973,7 +973,7 @@ impl super::CapabilityMapper {
         // Determine file type from report
         let file_type = self.evaluation_file_type(report, binary_data.len());
         let use_string_prefilters =
-            !file_type.uses_raw_text_search_for(binary_data) || cache.source_text_prefiltered;
+            !file_type.uses_raw_text_search_in(report) || cache.source_text_prefiltered;
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
         let mut ctx = EvaluationContext::new(
@@ -1010,7 +1010,7 @@ impl super::CapabilityMapper {
         if let Some(ranges) = cache.arch_ranges {
             ctx = ctx.with_arch_ranges(ranges);
         }
-        if file_type.uses_raw_text_search_for(binary_data) {
+        if file_type.uses_raw_text_search_in(report) {
             ctx = ctx.with_raw_atom_offsets(cache.raw_atom_offsets);
         }
 
@@ -1086,7 +1086,7 @@ impl super::CapabilityMapper {
         // for rules without trait dependencies: the dependent pass and
         // `test-rules` never short-circuit, so a rule's verdict flipped with
         // an unrelated `unless:` entry.
-        let has_raw_text = file_type.uses_raw_text_search_for(binary_data)
+        let has_raw_text = file_type.uses_raw_text_search_in(report)
             && binary_data.iter().any(|b| !b.is_ascii_whitespace());
         if !dependent_only
             && !has_any_matches
@@ -1133,7 +1133,7 @@ impl super::CapabilityMapper {
         // load balancing.
         let eval_flags = self.trait_eval_flags();
         let base_cached_evidence = ctx.cached_evidence;
-        let is_raw_text = file_type.uses_raw_text_search_for(binary_data);
+        let is_raw_text = file_type.uses_raw_text_search_in(report);
         let trait_chunk = PARALLEL_TRAIT_CHUNK;
 
         // Decoded-layer skip map for `eval_text`: indexed `type: text` traits

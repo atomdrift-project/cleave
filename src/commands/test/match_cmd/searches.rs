@@ -346,7 +346,7 @@ pub(super) fn text(ctx: &MatchCtx<'_>) -> Outcome {
         let matched =
             result.matched && count_min_ok && count_max_ok && per_kb_min_ok && per_kb_max_ok;
 
-        let mode = if internal_file_type.uses_raw_text_search_for(binary_data) {
+        let mode = if internal_file_type.uses_raw_text_search_in(ctx.report) {
             "raw-text"
         } else {
             "extracted-strings"

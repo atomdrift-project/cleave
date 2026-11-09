@@ -894,7 +894,7 @@ pub(crate) fn eval_text<'a, 'b>(
     trait_id: Option<&str>,
 ) -> ConditionResult {
     let _mp = crate::mem_profile::phase(crate::mem_profile::Phase::EvalText);
-    if ctx.file_type.uses_raw_text_search_for(ctx.binary_data) {
+    if ctx.file_type.uses_raw_text_search_in(ctx.report) {
         let masked_source = if params.exclude_comments {
             ctx.comment_free_source()
         } else if params.exclude_html_comments {

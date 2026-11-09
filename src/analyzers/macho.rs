@@ -132,38 +132,36 @@ impl MachOAnalyzer {
         &self,
         logical_path: &Path,
         data: &[u8],
-        ctx: &Ctx<'_>,
         report: &mut AnalysisReport,
         base_offset: usize,
     ) {
-        for (payload, encoding) in
-            crate::extractors::macho_integer_tables::recover(data, &ctx.parsed)
-                .into_iter()
-                .map(|p| {
-                    (
-                        p,
-                        vec![
-                            "integer-sub-xor".to_string(),
-                            "hex".to_string(),
-                            "custom-base64".to_string(),
-                        ],
-                    )
-                })
-                .chain(
-                    crate::extractors::macho_hex_scripts::recover(data, &ctx.parsed)
-                        .into_iter()
-                        .map(|p| (p, vec!["hex".to_string(), "rc4".to_string()])),
+        for (payload, encoding) in unpack::macho_integer_tables::recover(data)
+            .into_iter()
+            .map(|p| {
+                (
+                    p,
+                    vec![
+                        "integer-sub-xor".to_string(),
+                        "hex".to_string(),
+                        "custom-base64".to_string(),
+                    ],
                 )
-                .chain(
-                    crate::extractors::macho_hex_scripts::recover_custom(data, &ctx.parsed)
-                        .into_iter()
-                        .map(|p| (p, vec!["hex".to_string(), "custom-base64".to_string()])),
-                )
-                .chain(
-                    crate::extractors::macho_hex_scripts::recover_lcg(data, &ctx.parsed)
-                        .into_iter()
-                        .map(|p| (p, vec!["lcg-xor".to_string()])),
-                )
+            })
+            .chain(
+                unpack::macho_hex_scripts::recover(data)
+                    .into_iter()
+                    .map(|p| (p, vec!["hex".to_string(), "rc4".to_string()])),
+            )
+            .chain(
+                unpack::macho_hex_scripts::recover_custom(data)
+                    .into_iter()
+                    .map(|p| (p, vec!["hex".to_string(), "custom-base64".to_string()])),
+            )
+            .chain(
+                unpack::macho_hex_scripts::recover_lcg(data)
+                    .into_iter()
+                    .map(|p| (p, vec!["lcg-xor".to_string()])),
+            )
         {
             if self
                 .cancellation
@@ -177,8 +175,7 @@ impl MachOAnalyzer {
             };
             // Strip only this complete quoted interpreter wrapper. Other
             // recovered text remains visible without guessing its language.
-            let Some(source) = crate::extractors::macho_integer_tables::inline_applescript(command)
-            else {
+            let Some(source) = unpack::macho_integer_tables::inline_applescript(command) else {
                 continue;
             };
             // FAT slices can contain identical payloads. Attach one decoded
@@ -488,8 +485,8 @@ impl MachOAnalyzer {
             );
         report.files.extend(encoded_layers);
         report.findings.extend(plain_findings);
-        self.analyze_integer_table_scripts(logical_path, data, ctx, &mut report, 0);
-        for payload in crate::extractors::macho_chacha::recover(data, &ctx.parsed) {
+        self.analyze_integer_table_scripts(logical_path, data, &mut report, 0);
+        for payload in unpack::macho_chacha::recover(data) {
             if self
                 .cancellation
                 .as_ref()
@@ -1106,7 +1103,6 @@ impl MachOAnalyzer {
             self.analyze_integer_table_scripts(
                 Path::new(&logical_path),
                 slice_bytes,
-                &slice_ctx,
                 report,
                 offset,
             );

@@ -15,6 +15,8 @@ fn compiled() -> Vec<u8> {
     bytes
 }
 
+/// A report for `bytes`. A compiled one carries filefacts' `file.binary`
+/// and the string extraction would have found.
 fn report(bytes: &[u8], extracted: bool) -> AnalysisReport {
     let mut report = AnalysisReport::new(TargetInfo {
         path: "fixture.scpt".into(),
@@ -24,6 +26,10 @@ fn report(bytes: &[u8], extracted: bool) -> AnalysisReport {
         architectures: None,
     });
     if extracted {
+        report.filefacts_metrics = Some(std::collections::BTreeMap::from([(
+            "file.binary".to_string(),
+            1.0,
+        )]));
         report.strings.push(StringInfo {
             value: SECRET.into(),
             offset: Some(16),
@@ -92,30 +98,20 @@ composite_rules:
     CapabilityMapper::from_yaml(&path).unwrap()
 }
 
+/// Raw-text search follows the rule type, unless filefacts parsed the
+/// content as a binary encoding (`file.binary`), as for a compiled script.
 #[test]
-fn compiled_text_mode_depends_on_magic_and_file_type() {
-    assert!(RuleFileType::AppleScript.uses_raw_text_search());
-    assert!(!RuleFileType::AppleScript.uses_raw_text_search_for(b"FasdUAS 1.101.10"));
-    assert!(RuleFileType::AppleScript.uses_raw_text_search_for(b"Fas"));
-    assert!(RuleFileType::AppleScript.uses_raw_text_search_for(b"set x to \"Fasd\""));
-    assert!(RuleFileType::AppleScript.uses_raw_text_search_for(b""));
-    // The compiled-format gate must use the format's full magic. A source
-    // file that merely starts with the 4-byte prefix is still source: if it
-    // switched the haystack to extracted strings, an attacker could disable
-    // every `type: text` rule by prepending four bytes.
-    assert!(RuleFileType::AppleScript.uses_raw_text_search_for(b"Fasd is not compiled"));
-    assert!(RuleFileType::AppleScript.uses_raw_text_search_for(b"FasdUAS"));
+fn raw_text_follows_the_rule_type_and_the_binary_fact() {
+    let (text, binary) = (report(b"", false), report(b"", true));
     for kind in [
+        RuleFileType::AppleScript,
         RuleFileType::Python,
-        RuleFileType::Text,
-        RuleFileType::Pe,
         RuleFileType::Json,
     ] {
-        assert_eq!(
-            kind.uses_raw_text_search_for(b"FasdUAS 1.101.10"),
-            kind.uses_raw_text_search()
-        );
+        assert!(kind.uses_raw_text_search_in(&text), "{kind:?}");
+        assert!(!kind.uses_raw_text_search_in(&binary), "{kind:?}");
     }
+    assert!(!RuleFileType::Pe.uses_raw_text_search_in(&text));
 }
 
 #[test]

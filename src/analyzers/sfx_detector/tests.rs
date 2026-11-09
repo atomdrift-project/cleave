@@ -25,11 +25,11 @@ fn nuitka_frame(data: &[u8]) -> std::io::Result<usize> {
 }
 
 fn extract_posix_test(data: &[u8], out: &Path) -> std::io::Result<()> {
-    extract_nuitka_posix_cached_at(data, nuitka_frame(data)?, out)
+    extract_nuitka_to(data, nuitka_frame(data)?, out)
 }
 
 fn extract_nuitka(data: &[u8], out: &Path) -> std::io::Result<()> {
-    extract_nuitka_at(data, nuitka_frame(data)?, out)
+    extract_nuitka_to(data, nuitka_frame(data)?, out)
 }
 
 #[test]
@@ -78,7 +78,7 @@ fn nuitka_posix_cached_rejects_unsafe_or_corrupt_records() -> std::io::Result<()
     let out = tempfile::tempdir()?;
     assert!(extract_posix_test(&bad_crc, out.path()).is_err());
     let mut oversized = b"file\0\0".to_vec();
-    oversized.extend_from_slice(&(NUITKA_MAX_MEMBER + 1).to_le_bytes());
+    oversized.extend_from_slice(&(unpack::nuitka::MAX_MEMBER + 1).to_le_bytes());
     oversized.extend_from_slice(&1u32.to_le_bytes());
     let mut oversized_frame = b"KAY".to_vec();
     oversized_frame.extend(zstd::stream::encode_all(oversized.as_slice(), 1)?);

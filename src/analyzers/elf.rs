@@ -609,7 +609,7 @@ impl ElfAnalyzer {
         use crate::types::file_analysis::encode_upx_path;
         use crate::upx::UPXDecompressor;
 
-        if !UPXDecompressor::is_upx_packed(data) {
+        if !unpack::upx::is_packed(data) {
             return self.analyze_elf_core(file_path, backing_path, data, precomputed_sha256, ctx);
         }
 
@@ -617,26 +617,12 @@ impl ElfAnalyzer {
         let mut report =
             self.analyze_elf_core(file_path, backing_path, data, precomputed_sha256, ctx);
 
-        report.findings.push(
-            Finding::structural(
-                "anti-static/packer/upx".to_string(),
-                "Binary contains a UPX packing marker".to_string(),
-                1.0,
-            )
-            .with_criticality(Criticality::Notable),
-        );
+        crate::upx::record_packed(&mut report);
 
         // A UPX-disabled engine reports the same as a missing tool: the
         // unpacked image was not analyzed.
         if !self.engine.upx() || !UPXDecompressor::is_available() {
-            report.findings.push(
-                Finding::structural(
-                    "anti-static/packer/upx/tool-missing".to_string(),
-                    "UPX binary not found in PATH - unpacked analysis skipped".to_string(),
-                    1.0,
-                )
-                .with_criticality(Criticality::Suspicious),
-            );
+            crate::upx::record_tool_missing(&mut report);
             return report;
         }
 
@@ -715,42 +701,8 @@ impl ElfAnalyzer {
                 // is not reproducible run to run; keep it in the log and put a
                 // fixed reason in the finding. See `upx::classify_failure`.
                 tracing::debug!("UPX decompression failed: {}", e);
-                let failure = crate::upx::classify_failure(&e);
-                if let Some(finding) = crate::upx::standard_unpack_refusal(&e) {
-                    report.findings.push(finding);
-                }
-                report.findings.push(
-                    Finding::structural(
-                        "metadata/binary/layout/compression::upx-decompression-failed".to_string(),
-                        failure.description.to_string(),
-                        1.0,
-                    )
-                    .with_criticality(Criticality::Notable),
-                );
-                // Artifact-specific integrity failure, distinct from missing tools,
-                // timeouts and size limits. The finding states the evidence rather
-                // than asserting a particular payload or malware family.
-                if failure.invalid_image {
-                    report.findings.push(
-                        Finding::structural(
-                            "metadata/binary/layout/compression::upx-invalid-packed-image"
-                                .to_string(),
-                            "UPX-like image has invalid or non-packed structure".to_string(),
-                            1.0,
-                        )
-                        .with_criticality(Criticality::Suspicious),
-                    );
-                }
-                if failure.checksum_mismatch {
-                    report.findings.push(
-                        Finding::structural(
-                            "metadata/binary/layout/compression::upx-checksum-mismatch".to_string(),
-                            "UPX-packed image fails checksum validation".to_string(),
-                            1.0,
-                        )
-                        .with_criticality(Criticality::Suspicious),
-                    );
-                }
+                crate::upx::record_attempt_failure(&mut report, &e);
+                crate::upx::record_failure(&mut report, &e);
             }
         }
 

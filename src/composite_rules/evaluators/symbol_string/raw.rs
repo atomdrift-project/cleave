@@ -116,7 +116,7 @@ pub(super) fn source_raw_windows(
     search_end: usize,
 ) -> Option<Vec<(usize, usize)>> {
     use super::super::raw_window_stats as ws;
-    if !ctx.file_type.uses_raw_text_search_for(ctx.binary_data) {
+    if !ctx.file_type.uses_raw_text_search_in(ctx.report) {
         ws::bump(&ws::NOT_SOURCE_TYPE);
         ws::LAST_REASON.with(|r| r.set(3));
         return None;

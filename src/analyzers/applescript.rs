@@ -7,14 +7,6 @@ use crate::strings::StringExtractor;
 use crate::types::{AnalysisReport, TargetInfo};
 use anyhow::Result;
 
-/// Whether `data` is compiled AppleScript (`.scpt`, the `FasdUAS ` stream)
-/// rather than source. filefacts parses compiled scripts; cleave only needs
-/// to know which text view to search.
-#[must_use]
-pub(crate) fn is_compiled(data: &[u8]) -> bool {
-    data.starts_with(b"FasdUAS ")
-}
-
 #[derive(Debug)]
 pub(crate) struct AppleScriptAnalyzer {
     engine: crate::Engine,
@@ -37,20 +29,21 @@ impl AppleScriptAnalyzer {
         self
     }
 
-    /// Add parsed events and recovered strings to the report and embedded scan.
-    fn add_scpt_facts(
+    /// Add what filefacts parsed (a compiled script's Apple events and
+    /// literals) to the report and embedded scan.
+    fn add_parsed_facts(
         ctx: &crate::analysis_context::AnalysisContext<'_>,
         report: &mut AnalysisReport,
         compact_values: bool,
     ) {
-        if !is_compiled(ctx.content) {
-            return;
-        }
         report.imports = ctx.imports_from_filefacts();
-        report.filefacts = Some(crate::types::FilefactsView::of(ctx, compact_values));
+        let view = crate::types::FilefactsView::of(ctx, compact_values);
+        if !view.is_empty() {
+            report.filefacts = Some(view);
+        }
         report
             .strings
-            .extend(crate::strings::scpt_literal_strings(ctx));
+            .extend(crate::strings::parser_literal_strings(ctx));
     }
 }
 
@@ -87,7 +80,7 @@ impl Analyzer for AppleScriptAnalyzer {
                 .convert_stng_iter(text.iter(), text.len());
         }
         if let Some(ctx) = filefacts_ctx {
-            Self::add_scpt_facts(ctx, &mut report, self.engine.compact_members());
+            Self::add_parsed_facts(ctx, &mut report, self.engine.compact_members());
         }
 
         // Analyze embedded code in strings
@@ -136,7 +129,7 @@ mod tests {
         });
         let text = ctx.parsed.text();
         report.strings = StringExtractor::new().convert_stng_iter(text.iter(), text.len());
-        AppleScriptAnalyzer::add_scpt_facts(&ctx, &mut report, false);
+        AppleScriptAnalyzer::add_parsed_facts(&ctx, &mut report, false);
         let rows: Vec<_> = report
             .strings
             .iter()
@@ -169,7 +162,7 @@ mod tests {
             sha256: String::new(),
             architectures: None,
         });
-        AppleScriptAnalyzer::add_scpt_facts(&ctx, &mut report, false);
+        AppleScriptAnalyzer::add_parsed_facts(&ctx, &mut report, false);
         assert!(
             report
                 .strings

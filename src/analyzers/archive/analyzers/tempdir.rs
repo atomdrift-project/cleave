@@ -6,7 +6,7 @@ use super::*;
 
 impl ArchiveAnalyzer {
     /// Analyze a PyInstaller-bundled executable entirely in memory. Decodes
-    /// every CArchive entry and PYZ contents via the `pyinstx` crate, then
+    /// every CArchive entry and PYZ contents via `unpack::pyinstaller`, then
     /// feeds each as a [`MemoryArchiveMember`] into the same per-member
     /// pipeline used for ZIP archives.
     pub(in super::super) fn analyze_pyinstaller_archive_in_memory(
@@ -16,8 +16,8 @@ impl ArchiveAnalyzer {
         report: &mut AnalysisReport,
         start: std::time::Instant,
     ) -> Result<()> {
-        let mem = pyinstx::extract_to_memory(data)
-            .map_err(|e| anyhow::anyhow!("pyinstx extract: {e}"))?;
+        let mem = unpack::pyinstaller::extract_to_memory(data)
+            .map_err(|e| anyhow::anyhow!("PyInstaller extract: {e}"))?;
 
         let members: Vec<MemoryArchiveMember> = mem
             .entries
@@ -61,12 +61,7 @@ impl ArchiveAnalyzer {
             vec!["archive_analyzer".to_string(), "pyinstx".to_string()],
         );
 
-        if let Some((maj, min)) = mem.py_version {
-            report
-                .metadata
-                .errors
-                .push(format!("PyInstaller bundle: Python {maj}.{min}"));
-        }
+        // The interpreter version is filefacts' `binary.installer.python_version`.
         Ok(())
     }
 

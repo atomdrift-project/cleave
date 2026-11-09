@@ -131,8 +131,6 @@ classifies every variable cleave reads.
 | --------------- | ---------------------------------------------------------------- |
 | `cleave`        | Engine and public API.                                           |
 | `yara-classify` | YARA-based file-type and tier classification.                    |
-| `pyinstx`       | Pure-Rust PyInstaller bundle extraction.                         |
-| `scpt`          | AppleScript `.scpt` parser and symbol extractor.                 |
 | `sysmem`        | Dependency-free system memory queries.                           |
 | `lzx`           | LZX decompression (CAB delta, CHM framing).                      |
 | `cleave-macros` | Derive macros for the trait field-path tables.                   |

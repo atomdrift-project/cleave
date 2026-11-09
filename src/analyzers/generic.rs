@@ -288,15 +288,13 @@ impl GenericAnalyzer {
                 );
             }
 
-            // DEX has no source AST, but its const-string instructions are
-            // format-defined literals. Preserve filefacts' source anchors so
-            // literal rules can distinguish used constants from the string pool.
-            if self.file_type == FileType::Dex
-                && let Some(ctx) = source_ctx
-            {
+            // A binary format's parser literals (DEX const-strings) keep
+            // filefacts' source anchors, so literal rules can tell used
+            // constants from the string pool.
+            if let Some(ctx) = source_ctx {
                 report
                     .strings
-                    .extend(crate::strings::dex_literal_strings(ctx));
+                    .extend(crate::strings::parser_literal_strings(ctx));
             }
 
             if self.detect_embedded {
@@ -349,7 +347,7 @@ impl GenericAnalyzer {
         // Recover a bounded self-read/certutil hex envelope as data. PE analysis
         // supplies behavioral findings; the carrier records encoding provenance.
         if self.file_type == FileType::Batch
-            && let Some(payload) = crate::extractors::batch_self_hex::recover(content.as_bytes())
+            && let Some(payload) = unpack::batch_self_hex::recover(content.as_bytes())
         {
             let member = format!("certutil-hex/payload-{}.exe", payload.offset);
             let virtual_path = format!("{}!{}", file_path.display(), member);
@@ -726,7 +724,7 @@ pub(crate) fn peel_nested_encoding(value: &str, chain: Vec<String>) -> (String, 
 impl Analyzer for GenericAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
         if self.file_type == FileType::Cfml
-            && let Some(decoded) = crate::analyzers::cfml::decrypt_template(input.data)
+            && let Some(decoded) = unpack::cfml::decrypt_template(input.data)
         {
             let content = String::from_utf8_lossy(&decoded);
             let source_ctx = crate::analysis_context::AnalysisContext::open_with(
@@ -773,17 +771,13 @@ impl Analyzer for GenericAnalyzer {
         );
         if self.detect_embedded
             && self.file_type == FileType::DosCom
-            && let Some((offset, decoded)) = super::dos_word_xor::decode(input.data)
+            && let Some(unpack::dos_word_xor::Decoded {
+                offset,
+                recipe,
+                data: decoded,
+            }) = unpack::dos_word_xor::decode(input.data)
         {
-            let encoding = vec![if input.data.first() == Some(&0xe8) {
-                "dos-word-sub-xor-rotate".to_owned()
-            } else if input.data.get(offset) == Some(&0xb2) {
-                "dos-byte-xor".to_owned()
-            } else if input.data.get(offset) == Some(&0xfa) {
-                "dos-byte-subtract".to_owned()
-            } else {
-                "dos-word-xor".to_owned()
-            }];
+            let encoding = vec![recipe.name().to_owned()];
             let name = crate::types::encode_decoded_path(
                 &input.path.display().to_string(),
                 &encoding,

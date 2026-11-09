@@ -816,8 +816,6 @@ checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 name = "cleave"
 version = "3.0.0-beta.3"
 dependencies = [
- "aes 0.9.4",
- "aes-gcm",
  "aho-corasick",
  "anyhow",
  "apple-xar",
@@ -828,9 +826,7 @@ dependencies = [
  "bytes",
  "bzip2 0.6.1",
  "cab",
- "cbc 0.2.1",
  "cfb",
- "chacha20poly1305",
  "chrono",
  "clap",
  "cleave-macros",
@@ -840,8 +836,6 @@ dependencies = [
  "criterion",
  "ctrlc",
  "cu-bincode",
- "data-encoding",
- "des 0.8.1",
  "dirs",
  "dmgwiz",
  "encoding_rs",
@@ -852,13 +846,11 @@ dependencies = [
  "libc",
  "lru 0.18.5",
  "lzx",
- "md-5 0.10.6",
  "memchr",
  "memmap2",
  "parking_lot",
  "plist",
  "predicates",
- "pyinstx",
  "rayon",
  "regex",
  "regex-automata",
@@ -869,7 +861,6 @@ dependencies = [
  "rust-fs-core",
  "rust-fs-squashfs",
  "rustc-hash 2.1.3",
- "scrypt",
  "semver",
  "serde",
  "serde-saphyr",
@@ -893,6 +884,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tree-sitter",
+ "unpack",
  "unrar-ng",
  "uuid",
  "walkdir",
@@ -1896,7 +1888,6 @@ checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 [[package]]
 name = "filefacts"
 version = "3.0.0-beta.1"
-source = "git+https://github.com/atomdrift-project/filefacts.git#be7ea98bd38cba98bef5e0597eece665fc4c5eee"
 dependencies = [
  "aes 0.9.4",
  "aho-corasick",
@@ -3935,18 +3926,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pyinstx"
-version = "0.1.0"
-dependencies = [
- "flate2",
- "memchr",
- "tempfile",
- "thiserror 2.0.21",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "quanta"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5515,18 +5494,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 dependencies = [
  "once_cell",
- "valuable",
-]
-
-[[package]]
-name = "tracing-log"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee855f1f400bd0e5c02d150ae5de3840039a3f54b025156404e34c23c03f47c3"
-dependencies = [
- "log",
- "once_cell",
- "tracing-core",
 ]
 
 [[package]]
@@ -5544,7 +5511,6 @@ dependencies = [
  "thread_local",
  "tracing",
  "tracing-core",
- "tracing-log",
 ]
 
 [[package]]
@@ -5600,7 +5566,6 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#be7ea98bd38cba98bef5e0597eece665fc4c5eee"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -5858,6 +5823,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "unpack"
+version = "0.1.0"
+dependencies = [
+ "aes 0.9.4",
+ "aes-gcm",
+ "aho-corasick",
+ "base64 0.22.1",
+ "cbc 0.2.1",
+ "chacha20poly1305",
+ "crc32fast",
+ "data-encoding",
+ "des 0.8.1",
+ "flate2",
+ "hex",
+ "md-5 0.10.6",
+ "memchr",
+ "regex",
+ "scrypt",
+ "serde_json",
+ "sha2 0.11.1",
+ "tracing",
+ "tree-sitter",
+ "tree-sitter-javascript",
+ "tree-sitter-python",
+ "xz2",
+ "zstd",
+]
+
+[[package]]
 name = "unrar-ng"
 version = "0.7.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5940,12 +5934,6 @@ dependencies = [
  "js-sys",
  "wasm-bindgen",
 ]
-
-[[package]]
-name = "valuable"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "value-trait"

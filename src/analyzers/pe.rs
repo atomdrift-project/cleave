@@ -369,7 +369,7 @@ impl PEAnalyzer {
         use crate::types::file_analysis::encode_upx_path;
         use crate::upx::UPXDecompressor;
 
-        if !UPXDecompressor::is_upx_packed(data) {
+        if !unpack::upx::is_packed(data) {
             return self.analyze_structural_with_strings(
                 file_path,
                 backing_path,
@@ -388,26 +388,12 @@ impl PEAnalyzer {
             ctx,
         );
 
-        report.findings.push(
-            Finding::structural(
-                "anti-static/packer/upx".to_string(),
-                "Binary contains a UPX packing marker".to_string(),
-                1.0,
-            )
-            .with_criticality(Criticality::Notable),
-        );
+        crate::upx::record_packed(&mut report);
 
         // A UPX-disabled engine reports the same as a missing tool: the
         // unpacked image was not analyzed.
         if !self.engine.upx() || !UPXDecompressor::is_available() {
-            report.findings.push(
-                Finding::structural(
-                    "anti-static/packer/upx/tool-missing".to_string(),
-                    "UPX binary not found in PATH - unpacked analysis skipped".to_string(),
-                    1.0,
-                )
-                .with_criticality(Criticality::Suspicious),
-            );
+            crate::upx::record_tool_missing(&mut report);
             return report;
         }
 
@@ -416,40 +402,21 @@ impl PEAnalyzer {
         }
 
         let initial = UPXDecompressor::decompress(data);
-        if let Err(error) = &initial
-            && let Some(finding) = crate::upx::standard_unpack_refusal(error)
-        {
-            report.findings.push(finding);
+        if let Err(error) = &initial {
+            crate::upx::record_attempt_failure(&mut report, error);
         }
         let recovered = if initial
             .as_ref()
             .err()
             .is_some_and(|e| crate::upx::classify_failure(e).checksum_mismatch)
         {
-            UPXDecompressor::repair_nrv2b_checksums(data)
+            unpack::upx::repair_checksums(data)
                 .and_then(|copy| UPXDecompressor::decompress(&copy).ok())
         } else {
             None
         };
         let unpacked = if let Some(bytes) = recovered {
-            report.findings.push(
-                Finding::structural(
-                    "metadata/binary/layout/compression::upx-checksum-mismatch".to_string(),
-                    "UPX-packed image fails checksum validation".to_string(),
-                    1.0,
-                )
-                .with_criticality(Criticality::Suspicious),
-            );
-            report.findings.push(
-                Finding::structural(
-                    "metadata/binary/layout/compression::upx-checksum-repaired-analysis-copy"
-                        .to_string(),
-                    "Recovered UPX payload after repairing checksums on an analysis copy"
-                        .to_string(),
-                    1.0,
-                )
-                .with_criticality(Criticality::Notable),
-            );
+            crate::upx::record_checksum_repaired(&mut report);
             Ok(bytes)
         } else {
             initial
@@ -526,39 +493,7 @@ impl PEAnalyzer {
                 // is not reproducible run to run; keep it in the log and put a
                 // fixed reason in the finding. See `upx::classify_failure`.
                 tracing::debug!("UPX decompression failed: {}", e);
-                let failure = crate::upx::classify_failure(&e);
-                report.findings.push(
-                    Finding::structural(
-                        "metadata/binary/layout/compression::upx-decompression-failed".to_string(),
-                        failure.description.to_string(),
-                        1.0,
-                    )
-                    .with_criticality(Criticality::Notable),
-                );
-                // Artifact-specific integrity failure, distinct from missing tools,
-                // timeouts and size limits. The finding states the evidence rather
-                // than asserting a particular payload or malware family.
-                if failure.invalid_image {
-                    report.findings.push(
-                        Finding::structural(
-                            "metadata/binary/layout/compression::upx-invalid-packed-image"
-                                .to_string(),
-                            "UPX-like image has invalid or non-packed structure".to_string(),
-                            1.0,
-                        )
-                        .with_criticality(Criticality::Suspicious),
-                    );
-                }
-                if failure.checksum_mismatch {
-                    report.findings.push(
-                        Finding::structural(
-                            "metadata/binary/layout/compression::upx-checksum-mismatch".to_string(),
-                            "UPX-packed image fails checksum validation".to_string(),
-                            1.0,
-                        )
-                        .with_criticality(Criticality::Suspicious),
-                    );
-                }
+                crate::upx::record_failure(&mut report, &e);
             }
         }
 
@@ -776,7 +711,7 @@ impl PEAnalyzer {
         report.files.extend(encoded_layers);
         report.findings.extend(plain_findings);
 
-        self.analyze_recovered_payloads(&mut report, pe_data, ctx, logical_path);
+        self.analyze_recovered_payloads(&mut report, pe_data, logical_path);
 
         // Signer findings, filed under how far the signature is trusted
         // (see `signature`). filefacts already folds the image-digest check

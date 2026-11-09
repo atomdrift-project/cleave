@@ -114,7 +114,7 @@ impl PdfAnalyzer {
     /// sub-file at depth 1.
     ///
     /// Mirrors `office::analyze_vba_subfiles`:
-    /// 1. Build a virtual path `<doc>!!pdf/object<id>.js` so the
+    /// 1. Build a virtual path `<doc>##javascript@<offset>` so the
     ///    JS analyzer sees it as a freestanding file.
     /// 2. Run the cancellation-aware string extractor (text hint —
     ///    JavaScript source is ASCII-shaped; no XOR scan).
@@ -136,23 +136,26 @@ impl PdfAnalyzer {
 
         for payload in payloads {
             let js_bytes = payload.content.as_bytes();
-            // Source-object-id is the natural identifier — the same
-            // payload can be referenced from multiple actions but we
-            // dedupe upstream in collect_js_payloads. Virtual path
-            // uses `!!pdf/` so it visually parallels archive
-            // members (`!!inner/file.py`) and the office VBA path
-            // (`!!vba/Module1.vbs`).
+            // A /JS action has no file name: it is an anonymous source, so
+            // it is a `##` layer named by where its `/JS` key sits. Its
+            // findings are still lifted into the document (below), which the
+            // composites over PDF and script findings rely on.
             let object_label = payload
                 .source_object_id
                 .map_or_else(|| "anon".to_string(), |id| format!("object{id}"));
-            let member_path = format!("pdf/{object_label}.js");
-            let virtual_path_str = format!("{doc_name}!!{member_path}");
+            let member_path = format!("javascript@{}", payload.offset);
+            let virtual_path_str = format!("{doc_name}##{member_path}");
             let virtual_path = Path::new(&virtual_path_str);
 
             // filefacts is the string-extraction authority and the source
             // parser: open the JS payload once and thread it into the sub-file
             // analyzer so it is parsed a single time.
-            let js_ctx = crate::analysis_context::AnalysisContext::open(virtual_path, js_bytes);
+            // The name carries no extension, so say what it is.
+            let js_ctx = crate::analysis_context::AnalysisContext::open_with(
+                filefacts::OpenOptions::new().file_type(filefacts::FileType::JavaScript),
+                virtual_path,
+                js_bytes,
+            );
             let strings = js_ctx.text_rows();
             let input =
                 AnalysisInput::with_strings(virtual_path, js_bytes, strings, FileType::JavaScript)
@@ -188,6 +191,8 @@ impl PdfAnalyzer {
 /// one sub-file per carrier so per-site findings stay distinguishable.
 #[derive(Debug, Clone)]
 struct JsPayload {
+    /// File offset of the `/JS` key.
+    offset: u64,
     source_object_id: Option<u32>,
     content: String,
 }
@@ -229,6 +234,10 @@ fn collect_js_payloads(report: &AnalysisReport) -> Vec<JsPayload> {
             .and_then(|s| s.strip_prefix("object:"))
             .and_then(|s| s.parse::<u32>().ok());
         out.push(JsPayload {
+            offset: obj
+                .get("offset")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
             source_object_id,
             content,
         });
@@ -320,7 +329,7 @@ mod tests {
         let js_file = &report.files[0];
         assert_eq!(js_file.depth, 1);
         assert!(
-            js_file.path.contains("!!pdf/object5.js"),
+            js_file.path.contains("##javascript@"),
             "virtual path was {:?}",
             js_file.path,
         );
@@ -366,7 +375,7 @@ mod tests {
         // The carrier object id is 3 (where the /JS key sits).
         let js_file = &report.files[0];
         assert!(
-            js_file.path.contains("!!pdf/object3.js"),
+            js_file.path.contains("##javascript@"),
             "virtual path was {:?}",
             js_file.path,
         );
@@ -403,8 +412,8 @@ mod tests {
             2,
             "expected one sub-file per /JS site, got {paths:?}",
         );
-        assert!(paths.iter().any(|p| p.contains("!!pdf/object5.js")));
-        assert!(paths.iter().any(|p| p.contains("!!pdf/object8.js")));
+        assert!(paths.iter().any(|p| p.contains("##javascript@")));
+        assert!(paths.iter().any(|p| p.contains("##javascript@")));
     }
 
     /// The JS sub-analyzer's tree-sitter parse populates the sub-file's

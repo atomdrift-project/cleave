@@ -1058,54 +1058,6 @@ impl FileType {
         )
     }
 
-    /// Returns true if this file type is source code (not a compiled binary)
-    #[must_use]
-    pub(crate) fn is_source_code(&self) -> bool {
-        matches!(
-            self,
-            FileType::Shell
-                | FileType::Batch
-                | FileType::Jcl
-                | FileType::Python
-                | FileType::JavaScript
-                | FileType::TypeScript
-                | FileType::Rust
-                | FileType::Java
-                | FileType::Ruby
-                | FileType::C
-                | FileType::Cpp
-                | FileType::Go
-                | FileType::CSharp
-                | FileType::Php
-                | FileType::Lua
-                | FileType::Perl
-                | FileType::PowerShell
-                | FileType::Swift
-                | FileType::ObjectiveC
-                | FileType::Groovy
-                | FileType::Kotlin
-                | FileType::Scala
-                | FileType::Zig
-                | FileType::Elixir
-                | FileType::Clojure
-                | FileType::AppleScript
-                | FileType::Vbs
-                | FileType::Html
-                | FileType::Jsp
-                | FileType::Asp
-                | FileType::Cfml
-                | FileType::Tex
-                | FileType::Yara
-                | FileType::PostScript
-                | FileType::Mirc
-                | FileType::IrcII
-                | FileType::Markdown
-                | FileType::Makefile
-                | FileType::Dockerfile
-                | FileType::Text
-        )
-    }
-
     /// Grammar name for this file type, as [`filefacts::validate_source_query`]
     /// spells it. `None` means no tree-sitter grammar is wired up, so `type:
     /// tree-sitter` conditions can never match this type.
@@ -1150,59 +1102,36 @@ impl FileType {
         self.tree_sitter_language_name().is_some()
     }
 
-    /// Returns true when `type: text` should search raw file content for this file type.
-    ///
-    /// Text-mode uses raw content for source and other ASCII/UTF-8 structured formats,
-    /// and uses extracted strings for binary-like formats.
+    /// Whether `type: text` searches the raw content of files of this rule
+    /// type: a filefacts type that routes here is its own text
+    /// ([`filefacts::FileType::is_text_content`]).
     #[must_use]
     pub(crate) fn uses_raw_text_search(&self) -> bool {
-        self.is_source_code()
-            || matches!(
-                self,
-                FileType::PackageJson
-                    | FileType::PackageLockJson
-                    | FileType::CargoLock
-                    | FileType::RequirementsTxt
-                    | FileType::PoetryLock
-                    | FileType::PipfileLock
-                    | FileType::GemfileLock
-                    | FileType::ComposerLock
-                    | FileType::YarnLock
-                    | FileType::PnpmLock
-                    | FileType::GoMod
-                    | FileType::GoSum
-                    | FileType::Json
-                    | FileType::ChromeManifest
-                    | FileType::VsixManifest
-                    | FileType::CargoToml
-                    | FileType::PyProjectToml
-                    | FileType::Yaml
-                    | FileType::GithubActions
-                    | FileType::SystemdService
-                    | FileType::DesktopEntry
-                    | FileType::Xml
-                    // SVG is markup. A smuggled script often sits on one long
-                    // line after a comment pad; string extraction keeps a
-                    // prefix of that line and the loader never reaches a
-                    // `type: text` rule.
-                    | FileType::Svg
-                    | FileType::ComposerJson
-                    | FileType::PkgInfo
-                    | FileType::SrcInfo
-                    | FileType::Registry
-                    | FileType::Reg
-                    | FileType::Plist
-                    | FileType::Nib
-                    | FileType::Text
-            )
+        static RAW: std::sync::OnceLock<rustc_hash::FxHashSet<FileType>> =
+            std::sync::OnceLock::new();
+        RAW.get_or_init(|| {
+            filefacts::FileType::ALL
+                .iter()
+                .filter(|ft| ft.is_text_content())
+                .map(|ft| FileType::from(*ft))
+                // Authoring aliases no filefacts type routes to: C++ source is
+                // typed as C, and SVG is scanned as XML.
+                .chain([FileType::Cpp, FileType::Svg])
+                .collect()
+        })
+        .contains(self)
     }
 
-    /// Select the text haystack for this file's content.
+    /// [`uses_raw_text_search`](Self::uses_raw_text_search) for the file
+    /// `report` describes: not when filefacts parsed it as a binary encoding
+    /// (`file.binary`, a compiled AppleScript).
     #[must_use]
-    pub(crate) fn uses_raw_text_search_for(&self, bytes: &[u8]) -> bool {
+    pub(crate) fn uses_raw_text_search_in(&self, report: &crate::types::AnalysisReport) -> bool {
         self.uses_raw_text_search()
-            && !(*self == FileType::AppleScript
-                && crate::analyzers::applescript::is_compiled(bytes))
+            && !report
+                .filefacts_metrics
+                .as_ref()
+                .is_some_and(|metrics| metrics.get("file.binary") == Some(&1.0))
     }
 
     /// Returns true if this file type typically has a section structure (ELF, Mach-O, PE)

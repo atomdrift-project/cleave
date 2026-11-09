@@ -18,45 +18,35 @@ use stng::{ExtractedString, StringMethod};
 ///
 /// [`AnalysisContext`]: crate::analysis_context::AnalysisContext
 pub(crate) fn strings_from_filefacts(path: &std::path::Path, data: &[u8]) -> Vec<StringInfo> {
-    let ctx = crate::analysis_context::AnalysisContext::open(path, data);
+    strings_from_context(&crate::analysis_context::AnalysisContext::open(path, data))
+}
+
+/// [`strings_from_filefacts`] over an already-open context.
+pub(crate) fn strings_from_context(
+    ctx: &crate::analysis_context::AnalysisContext<'_>,
+) -> Vec<StringInfo> {
     // Convert straight from the context's `text()` view — no intermediate Vec.
     let text = ctx.parsed.text();
     let mut strings = StringExtractor::new().convert_stng_iter(text.iter(), text.len());
-    strings.extend(scpt_literal_strings(&ctx));
+    strings.extend(parser_literal_strings(ctx));
     strings
 }
 
-/// Convert compiled AppleScript literals without rescanning or decoding them.
-/// Decoded rows retain their parent's source anchor and the literal section.
-pub(crate) fn scpt_literal_strings(
+/// The literals filefacts' parser read from a binary format (a compiled
+/// AppleScript's constants, a DEX file's const-string operands, a nib's
+/// strings), as rows of the precise literal section, without rescanning or
+/// decoding them. Decoded rows keep their parent's source anchor. A source
+/// file's literals stay with its syntax-tree analysis.
+pub(crate) fn parser_literal_strings(
     ctx: &crate::analysis_context::AnalysisContext<'_>,
 ) -> Vec<StringInfo> {
-    if !crate::analyzers::applescript::is_compiled(ctx.content) {
+    if ctx.parsed.fileid().file_type().is_source_code() {
         return Vec::new();
     }
-    ctx.parsed
-        .literals()
-        .iter()
-        .map(scpt_literal_string)
-        .collect()
+    ctx.parsed.literals().iter().map(literal_string).collect()
 }
 
-/// Project parser-referenced DEX constants into the precise literal section.
-/// Raw string-pool names remain ordinary text and cannot satisfy literal rules.
-pub(crate) fn dex_literal_strings(
-    ctx: &crate::analysis_context::AnalysisContext<'_>,
-) -> Vec<StringInfo> {
-    if ctx.parsed.fileid().file_type() != filefacts::fileid::FileType::Dex {
-        return Vec::new();
-    }
-    ctx.parsed
-        .literals()
-        .iter()
-        .map(scpt_literal_string)
-        .collect()
-}
-
-fn scpt_literal_string(literal: &filefacts::Literal) -> StringInfo {
+fn literal_string(literal: &filefacts::Literal) -> StringInfo {
     // Only decoders cleave can name contribute a chain; anything else is a
     // literal the parser read verbatim.
     let encoding_chain = match literal
@@ -517,7 +507,7 @@ mod tests {
             let literal = filefacts::Literal::new("decoded command", 73)
                 .with_method(method)
                 .with_encoding(encoding);
-            let row = scpt_literal_string(&literal);
+            let row = literal_string(&literal);
             let expected = match suffix {
                 "literal" => vec![],
                 "constant" => vec!["scpt"],
@@ -565,7 +555,7 @@ mod tests {
         let path = std::path::Path::new("base64.scpt");
         let ctx = crate::analysis_context::AnalysisContext::open(path, bytes);
         let cached = ctx.text_rows();
-        let rows = scpt_literal_strings(&ctx);
+        let rows = parser_literal_strings(&ctx);
         assert!(std::ptr::eq(cached, ctx.text_rows()));
         let parent = rows
             .iter()

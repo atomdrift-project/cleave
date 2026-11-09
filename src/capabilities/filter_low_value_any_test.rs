@@ -689,7 +689,7 @@ mod tests {
         use crate::composite_rules::FileType;
         use crate::types::{AnalysisReport, FileAnalysis, TargetInfo};
 
-        const VIEW: &str = "pkg.zip!!player.js##embedded-php@1686";
+        const VIEW: &str = "pkg.zip!!player.js##php@1686";
         const HOST: &str = "pkg.zip!!player.js";
         const MEMBER: &str = "pkg.zip!!init.php";
 

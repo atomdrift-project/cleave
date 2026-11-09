@@ -311,282 +311,70 @@ pub(crate) fn extract_encoded_payloads(
     payloads
 }
 
-/// Recover bounded, contiguous Base64 PE images embedded in image bytes.
-/// String decoders return text, so binary output otherwise disappears before
-/// recursive analysis. Validate the DOS, COFF and optional headers before
-/// retaining a candidate; the caller limits this search to media files.
+/// A payload unpack recovered, as one decoded layer named `encoding`.
+fn unpacked(
+    data: Vec<u8>,
+    encoding: &str,
+    detected_type: FileType,
+    offset: usize,
+) -> ExtractedPayload {
+    ExtractedPayload {
+        preview: generate_preview(&data),
+        data,
+        encoding_chain: vec![encoding.to_string()],
+        detected_type,
+        original_offset: offset,
+    }
+}
+
+/// Contiguous Base64 PE images embedded in media bytes; the caller limits
+/// this search to media files.
 pub(crate) fn extract_media_base64_pes(data: &[u8]) -> Vec<ExtractedPayload> {
-    use base64::{Engine as _, engine::general_purpose};
-
-    const MAX_INPUT: usize = 64 * 1024 * 1024;
-    const MAX_ENCODED: usize = 16 * 1024 * 1024;
-    const MAX_CANDIDATES: usize = 32;
-    const MIN_ENCODED: usize = 512;
-    if data.len() > MAX_INPUT {
-        return Vec::new();
-    }
-    let is_base64 = |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/');
-    let mut out = Vec::new();
-    for offset in memchr::memmem::find_iter(data, b"TV")
-        .filter(|&offset| {
-            (offset == 0 || !is_base64(data[offset - 1]))
-                && data
-                    .get(offset + 2)
-                    .is_some_and(|b| matches!(b, b'o' | b'p' | b'q' | b'r'))
-        })
-        .take(MAX_CANDIDATES)
-    {
-        let mut end = offset;
-        while end < data.len() && end - offset <= MAX_ENCODED && is_base64(data[end]) {
-            end += 1;
-        }
-        while end < data.len() && end - offset <= MAX_ENCODED && data[end] == b'=' {
-            end += 1;
-        }
-        let candidate = &data[offset..end];
-        if candidate.len() < MIN_ENCODED || candidate.len() > MAX_ENCODED {
-            continue;
-        }
-        // Check a bounded prefix first, avoiding multi-megabyte allocations
-        // for ordinary text that merely begins with a PE-like Base64 prefix.
-        let prefix_len = candidate.len().min(8192) / 4 * 4;
-        let Ok(prefix) = general_purpose::STANDARD.decode(&candidate[..prefix_len]) else {
-            continue;
-        };
-        if !plausible_pe_header(&prefix) {
-            continue;
-        }
-        let decoded = general_purpose::STANDARD
-            .decode(candidate)
-            .or_else(|_| general_purpose::STANDARD_NO_PAD.decode(candidate));
-        let Ok(decoded) = decoded else { continue };
-        if !plausible_pe_header(&decoded) {
-            continue;
-        }
-        out.push(ExtractedPayload {
-            preview: generate_preview(&decoded),
-            data: decoded,
-            encoding_chain: vec!["media-base64-pe".to_string()],
-            detected_type: FileType::Pe,
-            original_offset: offset,
-        });
-    }
-    out
+    unpack::media_pe::base64_pes(data)
+        .into_iter()
+        .map(|image| unpacked(image.data, "media-base64-pe", FileType::Pe, image.offset))
+        .collect()
 }
 
-/// Recover single-byte-XOR PE data inside an image. A candidate must have a
-/// standard DOS prefix and a structurally plausible PE header before any
-/// larger suffix is decoded. The retained bytes are capped to bound memory.
+/// Single-byte-XOR PE images inside media bytes.
 pub(crate) fn extract_media_xor_pes(data: &[u8]) -> Vec<ExtractedPayload> {
-    const MAX_INPUT: usize = 64 * 1024 * 1024;
-    const MAX_OUTPUT: usize = 16 * 1024 * 1024;
-    const MAX_CANDIDATES: usize = 32;
-    if data.len() > MAX_INPUT {
-        return Vec::new();
-    }
-    let candidates = data.windows(4).enumerate().filter_map(|(offset, bytes)| {
-        let key = bytes[0] ^ b'M';
-        (key != 0
-            && bytes[1] ^ key == b'Z'
-            && matches!(bytes[2] ^ key, 0x90 | 0x00)
-            && bytes[3] ^ key == 0)
-            .then_some((offset, key))
-    });
-    let mut out = Vec::new();
-    for (offset, key) in candidates.take(MAX_CANDIDATES) {
-        let source = &data[offset..];
-        if source.len() > MAX_OUTPUT {
-            continue;
-        }
-        let prefix: Vec<u8> = source.iter().take(8192).map(|byte| byte ^ key).collect();
-        if !plausible_pe_header(&prefix) {
-            continue;
-        }
-        let decoded: Vec<u8> = source.iter().map(|byte| byte ^ key).collect();
-        if !plausible_pe_header(&decoded) {
-            continue;
-        }
-        out.push(ExtractedPayload {
-            preview: generate_preview(&decoded),
-            data: decoded,
-            encoding_chain: vec!["media-xor-pe".to_string()],
-            detected_type: FileType::Pe,
-            original_offset: offset,
-        });
-    }
-    out
+    unpack::media_pe::xor_pes(data)
+        .into_iter()
+        .map(|image| unpacked(image.data, "media-xor-pe", FileType::Pe, image.offset))
+        .collect()
 }
 
-fn plausible_pe_header(data: &[u8]) -> bool {
-    if !data.starts_with(b"MZ") || data.len() < 64 {
-        return false;
-    }
-    let offset = u32::from_le_bytes([data[60], data[61], data[62], data[63]]) as usize;
-    if !(64..=4096).contains(&offset) || data.get(offset..offset + 4) != Some(b"PE\0\0") {
-        return false;
-    }
-    let Some(coff) = data.get(offset + 4..offset + 24) else {
-        return false;
-    };
-    let machine = u16::from_le_bytes([coff[0], coff[1]]);
-    let sections = u16::from_le_bytes([coff[2], coff[3]]);
-    let optional_size = u16::from_le_bytes([coff[16], coff[17]]) as usize;
-    if !matches!(machine, 0x014c | 0x8664 | 0xaa64)
-        || !(1..=96).contains(&sections)
-        || optional_size < 96
-    {
-        return false;
-    }
-    let optional = offset + 24;
-    let Some(magic) = data.get(optional..optional + 2) else {
-        return false;
-    };
-    matches!(magic, [0x0b, 0x01] | [0x0b, 0x02])
-        && data.len() >= optional + optional_size + usize::from(sections) * 40
-}
-
-/// Decode MIME attachment bodies using only their declared transfer encoding.
-/// Keep the supported binary formats bounded; no attachment is executed.
+/// ZIP, PE and ELF attachments of a MIME message.
 pub(crate) fn extract_mime_attachments(data: &[u8]) -> Vec<ExtractedPayload> {
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
-    if data.len() > 10 * 1024 * 1024 {
-        return Vec::new();
-    }
-    let Ok(source) = std::str::from_utf8(data) else {
-        return Vec::new();
-    };
-    let lower = source.to_ascii_lowercase();
-    if !lower.contains("mime-version:") || !lower.contains("multipart/") {
-        return Vec::new();
-    }
-    let Some(parts) = static_regex!(
-        r"(?im)content-transfer-encoding:[ \t]*base64[^\r\n]*\r?\n(?:[^\r\n]+\r?\n)*\r?\n([A-Za-z0-9+/=\r\n]+)"
-    ) else {
-        return Vec::new();
-    };
-    parts
-        .captures_iter(source)
-        .take(16)
-        .filter_map(|caps| {
-            let body = caps.get(1)?;
-            let compact: String = body
-                .as_str()
-                .chars()
-                .filter(|c| !c.is_ascii_whitespace())
-                .collect();
-            let decoded = STANDARD.decode(compact).ok()?;
-            let detected_type = if decoded.starts_with(b"PK\x03\x04") {
-                FileType::Zip
-            } else if decoded.starts_with(b"MZ") {
-                FileType::Pe
-            } else if decoded.starts_with(b"\x7fELF") {
-                FileType::Elf
-            } else {
-                return None;
+    unpack::mime::attachments(data)
+        .into_iter()
+        .map(|attachment| {
+            let detected_type = match attachment.format {
+                unpack::mime::Format::Zip => FileType::Zip,
+                unpack::mime::Format::Pe => FileType::Pe,
+                unpack::mime::Format::Elf => FileType::Elf,
             };
-            Some(ExtractedPayload {
-                preview: generate_preview(&decoded),
-                data: decoded,
-                encoding_chain: vec!["mime-base64".to_string()],
+            unpacked(
+                attachment.data,
+                "mime-base64",
                 detected_type,
-                original_offset: body.start(),
-            })
+                attachment.offset,
+            )
         })
         .collect()
 }
 
-/// Reconstruct literal low/high nibble tables consumed by a script interpreter.
-/// This evaluates only decimal literals, never the surrounding program. Bounds
-/// and an explicit reconstruction/dispatch shape keep ordinary CSV data out.
+/// The next stage a PowerShell or VBScript nibble table rebuilds, when it is
+/// readable or a recognized format.
 pub(crate) fn extract_nibble_table_payloads(data: &[u8]) -> Vec<ExtractedPayload> {
-    if data.len() > 1024 * 1024 {
-        return Vec::new();
-    }
-    let Ok(source) = std::str::from_utf8(data) else {
-        return Vec::new();
-    };
-    let lower = source.to_ascii_lowercase();
-    let is_powershell = lower.contains("addscript") && lower.contains("[int]");
-    let is_vbs = lower.contains("chr(clng(") && lower.contains("\nexecute ");
-    if !is_powershell && !is_vbs {
-        return Vec::new();
-    }
-    let mut decoded = Vec::new();
-    let offset;
-    if is_powershell {
-        let Some(formula) = static_regex!(r"(?i)\[int\].{0,40}\*\s*16\s*\+\s*\[int\]") else {
-            return Vec::new();
-        };
-        if !formula.is_match(source) {
-            return Vec::new();
-        }
-        let Some(row) = static_regex!(r"(?m)^\d{1,8},(\d{1,2}),(\d{1,2})\r?$") else {
-            return Vec::new();
-        };
-        offset = row.find(source).map_or(0, |m| m.start());
-        for caps in row.captures_iter(source) {
-            let (Ok(lo), Ok(hi)) = (caps[1].parse::<u8>(), caps[2].parse::<u8>()) else {
-                return Vec::new();
-            };
-            if lo > 15 || hi > 15 {
-                return Vec::new();
-            }
-            decoded.push(hi * 16 + lo);
-        }
-    } else {
-        let Some(formula) = static_regex!(r"(?i)Chr\(CLng\([^\r\n]{1,60}\)\*16\+CLng") else {
-            return Vec::new();
-        };
-        if !formula.is_match(source) {
-            return Vec::new();
-        }
-        let Some(chunks) = static_regex!(r#""([0-9.,]+)""#) else {
-            return Vec::new();
-        };
-        offset = chunks.find(source).map_or(0, |m| m.start());
-        let joined: String = chunks
-            .captures_iter(source)
-            .filter_map(|c| {
-                let chunk = &c[1];
-                (chunk == ","
-                    || chunk.split(',').filter(|s| !s.is_empty()).all(|pair| {
-                        pair.split_once('.').is_some_and(|(lo, hi)| {
-                            !lo.is_empty()
-                                && !hi.is_empty()
-                                && lo.bytes().all(|b| b.is_ascii_digit())
-                                && hi.bytes().all(|b| b.is_ascii_digit())
-                        })
-                    }))
-                .then(|| chunk.to_string())
-            })
-            .collect();
-        for pair in joined.split(',').filter(|s| !s.is_empty()) {
-            let Some((lo, hi)) = pair.split_once('.') else {
-                return Vec::new();
-            };
-            let (Ok(lo), Ok(hi)) = (lo.parse::<u8>(), hi.parse::<u8>()) else {
-                return Vec::new();
-            };
-            if lo > 15 || hi > 15 {
-                return Vec::new();
-            }
-            decoded.push(hi * 16 + lo);
-        }
-    }
-    if decoded.len() < MIN_PAYLOAD_LENGTH || !supports_nested_encoding(&decoded) {
-        return Vec::new();
-    }
-    vec![ExtractedPayload {
-        preview: generate_preview(&decoded),
-        data: decoded,
-        encoding_chain: vec!["nibble-table".to_string()],
-        detected_type: if is_powershell {
-            FileType::PowerShell
-        } else {
-            FileType::Vbs
-        },
-        original_offset: offset,
-    }]
+    unpack::nibble_table::recover(data)
+        .filter(|table| supports_nested_encoding(&table.data))
+        .map(|table| {
+            let detected_type = super::language_file_type(table.language);
+            unpacked(table.data, "nibble-table", detected_type, table.offset)
+        })
+        .into_iter()
+        .collect()
 }
 
 /// A whole file that is a PE under a repeating XOR key: a dropper's payload
@@ -611,15 +399,9 @@ pub(crate) fn xor_encoded_pe(fileid: &filefacts::FileId, data: &[u8]) -> Option<
 /// Recover validated PE images from length-prefixed NRV2B-8 streams.
 /// Compression is neutral; the decoded child receives ordinary analysis.
 pub(crate) fn nrv8_encoded_pes(data: &[u8]) -> Vec<ExtractedPayload> {
-    super::nrv8::recover(data)
+    unpack::nrv8::recover(data)
         .into_iter()
-        .map(|image| ExtractedPayload {
-            preview: generate_preview(&image.data),
-            data: image.data,
-            encoding_chain: vec!["nrv2b-8".to_string()],
-            detected_type: FileType::Pe,
-            original_offset: image.offset,
-        })
+        .map(|image| unpacked(image.data, "nrv2b-8", FileType::Pe, image.offset))
         .collect()
 }
 

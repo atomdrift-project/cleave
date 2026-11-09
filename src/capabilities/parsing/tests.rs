@@ -1007,7 +1007,6 @@ fn yaml_scope_and_manifest_alias_route_the_real_file_type() {
         RuleFileType::Yaml
     );
     assert!(RuleFileType::Yaml.uses_raw_text_search());
-    assert!(!RuleFileType::Yaml.is_source_code());
 }
 
 #[test]

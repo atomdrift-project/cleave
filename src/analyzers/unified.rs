@@ -676,10 +676,7 @@ impl UnifiedSourceAnalyzer {
                     content.as_bytes(),
                 ),
             );
-            if let Some(payload) =
-                crate::extractors::powershell_literals::extract_powershell_literal_payload(
-                    content.as_bytes(),
-                )
+            if let Some(payload) = crate::extractors::powershell_literal_payload(content.as_bytes())
             {
                 owned_extracted_payloads.push(payload);
             }
@@ -759,7 +756,7 @@ impl UnifiedSourceAnalyzer {
 
         // Extract and analyze AES-encrypted payloads (JavaScript/TypeScript)
         if matches!(self.config.file_type, "javascript" | "typescript") {
-            let aes_payloads = crate::extractors::extract_aes_payloads(content.as_bytes());
+            let aes_payloads = unpack::aes_payload::extract_aes_payloads(content.as_bytes());
             for (idx, payload) in aes_payloads.iter().enumerate() {
                 if cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Acquire)) {
                     break;
@@ -773,11 +770,16 @@ impl UnifiedSourceAnalyzer {
 
                 // Read the decrypted content
                 let payload_content = payload.data.clone();
+                let detected_type = payload
+                    .detected_type
+                    .map(crate::extractors::language_file_type);
 
                 // Create ArchiveEntry metadata
                 let entry_metadata = crate::types::ArchiveEntry {
                     path: virtual_path.clone(),
-                    file_type: payload.detected_type.report_file_type(),
+                    file_type: detected_type
+                        .unwrap_or(FileType::Unknown)
+                        .report_file_type(),
                     sha256: crate::analyzers::utils::calculate_sha256(&payload_content),
                     size_bytes: payload_content.len() as u64,
                     ..crate::types::ArchiveEntry::default()
@@ -785,43 +787,17 @@ impl UnifiedSourceAnalyzer {
                 report.archive_contents.push(entry_metadata);
 
                 // Analyze the decrypted payload
-                let payload_report = match payload.detected_type {
-                    FileType::JavaScript | FileType::TypeScript => {
-                        UnifiedSourceAnalyzer::for_file_type(&payload.detected_type).map(
-                            |analyzer| {
-                                analyzer
-                                    .with_engine(self.engine.clone())
-                                    .with_cancellation(cancellation.cloned())
-                                    .analyze_source(
-                                        Path::new(&virtual_path),
-                                        &String::from_utf8_lossy(&payload_content),
-                                    )
-                            },
-                        )
-                    }
-                    FileType::Python => UnifiedSourceAnalyzer::for_file_type(&FileType::Python)
-                        .map(|analyzer| {
-                            analyzer
-                                .with_engine(self.engine.clone())
-                                .with_cancellation(cancellation.cloned())
-                                .analyze_source(
-                                    Path::new(&virtual_path),
-                                    &String::from_utf8_lossy(&payload_content),
-                                )
-                        }),
-                    FileType::Shell => {
-                        UnifiedSourceAnalyzer::for_file_type(&FileType::Shell).map(|analyzer| {
-                            analyzer
-                                .with_engine(self.engine.clone())
-                                .with_cancellation(cancellation.cloned())
-                                .analyze_source(
-                                    Path::new(&virtual_path),
-                                    &String::from_utf8_lossy(&payload_content),
-                                )
-                        })
-                    }
-                    _ => None,
-                };
+                let payload_report = detected_type
+                    .and_then(|ft| UnifiedSourceAnalyzer::for_file_type(&ft))
+                    .map(|analyzer| {
+                        analyzer
+                            .with_engine(self.engine.clone())
+                            .with_cancellation(cancellation.cloned())
+                            .analyze_source(
+                                Path::new(&virtual_path),
+                                &String::from_utf8_lossy(&payload_content),
+                            )
+                    });
 
                 // Add a structural finding for the encrypted payload
                 report.structure.push(crate::types::StructuralFeature {
@@ -903,12 +879,12 @@ impl UnifiedSourceAnalyzer {
             if matches!(self.file_type, FileType::JavaScript | FileType::TypeScript)
                 && let Some(ast) = source_ast
             {
-                for command in super::js_xor_command::decode(ast) {
+                for command in unpack::js_xor_command::decode(ast.source, ast.tree) {
                     if let Some(layer) = super::embedded_code_detector::analyze_decoded_script_layer(
                         &parent,
                         &command.text,
                         command.offset,
-                        command.file_type,
+                        crate::extractors::language_file_type(command.language),
                         vec!["hex".into(), "xor".into()],
                         &self.engine,
                         parent.matches("##").count(),
@@ -921,7 +897,7 @@ impl UnifiedSourceAnalyzer {
             if self.file_type == FileType::Python
                 && let Some(ast) = source_ast
             {
-                for command in super::python_encoded_command::decode(ast) {
+                for command in unpack::python_encoded_command::decode(ast.source, ast.tree) {
                     if let Some(layer) = super::embedded_code_detector::analyze_decoded_script_layer(
                         &parent,
                         &command.text,
@@ -954,7 +930,7 @@ impl UnifiedSourceAnalyzer {
             if matches!(self.config.name, "javascript" | "typescript")
                 && let Some(ast) =
                     source_ctx.and_then(crate::analysis_context::AnalysisContext::source_ast)
-                && let Some(decoded) = crate::analyzers::js_string_table::decode(ast)
+                && let Some(decoded) = unpack::js_string_table::decode(ast.source, ast.tree)
                 && let Some(layer) =
                     crate::analyzers::embedded_code_detector::analyze_decoded_script_layer(
                         &parent,
@@ -973,10 +949,10 @@ impl UnifiedSourceAnalyzer {
                 && let Some(ast) =
                     source_ctx.and_then(crate::analysis_context::AnalysisContext::source_ast)
             {
-                for (offset, decoded) in crate::analyzers::js_joined_module::decode(ast) {
-                    for (inner, extra_chain) in
-                        crate::analyzers::js_joined_module::encrypted_layers(ast, &decoded, offset)
-                    {
+                for (offset, decoded) in unpack::js_joined_module::decode(ast.source, ast.tree) {
+                    for (inner, extra_chain) in unpack::js_joined_module::encrypted_layers(
+                        ast.source, ast.tree, &decoded, offset,
+                    ) {
                         let mut chain = vec!["js-joined-base64-module".to_string()];
                         chain.extend(extra_chain);
                         if let Some(layer) =
@@ -1010,59 +986,20 @@ impl UnifiedSourceAnalyzer {
                     }
                 }
             }
-            if matches!(self.config.name, "javascript" | "typescript") {
-                // Plaintext views in another language, not concealment: each
-                // is analyzed as that language beside its host.
-                let mut view = |path: String, file_type: FileType, embedded: &str| {
-                    let Some(analyzer) = Self::for_file_type(&file_type) else {
-                        return;
-                    };
-                    let view_report = analyzer
-                        .with_engine(self.engine.clone())
-                        .without_embedded_detection()
-                        .analyze_source_as_configured(Path::new(&path), embedded);
-                    let (mut entry, _, _) = view_report.into_file_analysis(0, &self.engine);
-                    entry.path = path;
-                    entry.depth = 1;
-                    entry.encoding = None;
-                    entry.compute_summary();
-                    report.files.push(entry);
-                };
-                if let Some(ast) =
-                    source_ctx.and_then(crate::analysis_context::AnalysisContext::source_ast)
-                {
-                    for (offset, embedded) in crate::analyzers::js_edge_source::extract(ast) {
-                        view(
-                            format!("{parent}##edge-csharp@{offset}"),
-                            FileType::CSharp,
-                            &embedded,
-                        );
-                    }
-                }
-                // A PHP include runs these whatever JavaScript makes of them.
-                for (offset, embedded) in crate::analyzers::php_blocks::extract(content) {
-                    tracing::debug!(path = %parent, offset, "carved PHP block from JavaScript");
-                    view(
-                        format!("{parent}##embedded-php@{offset}"),
-                        FileType::Php,
-                        embedded,
-                    );
-                }
+            if matches!(self.config.name, "javascript" | "typescript")
+                && let Some(ctx) = source_ctx
+            {
+                // Plaintext views in another language, not concealment.
+                crate::analyzers::embedded_layers::attach(&mut report, &parent, ctx, &self.engine);
             }
             // Borrow the host haystack instead of copying `content` and
             // `report.strings` per member.
             // A module containing only immutable quoted constants has no
             // executable use of those strings. Keep its encoded layers, but
             // do not infer program behavior from plain quoted source examples.
-            let data_only = source_ctx
-                .and_then(crate::analysis_context::AnalysisContext::source_ast)
-                .is_some_and(|ast| match self.config.name {
-                    "javascript" | "typescript" => {
-                        crate::analyzers::js_literal_catalog::is_data_only(ast)
-                    }
-                    "python" => crate::analyzers::python_literal_catalog::is_data_only(ast),
-                    _ => false,
-                });
+            let data_only = matches!(self.config.name, "javascript" | "typescript" | "python")
+                && source_ctx
+                    .is_some_and(|ctx| ctx.parsed.metrics().get("source.data_only") == Some(1.0));
             let encoded_constants: Vec<_> = if data_only {
                 report
                     .strings
@@ -1099,7 +1036,7 @@ impl UnifiedSourceAnalyzer {
             let parent = file_path.display().to_string();
             let depth = parent.matches("##").count() as u32;
             if depth < 3 {
-                for payload in crate::extractors::powershell_payloads::extract(content.as_bytes()) {
+                for payload in crate::extractors::powershell_payloads(content.as_bytes()) {
                     if cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Acquire)) {
                         break;
                     }

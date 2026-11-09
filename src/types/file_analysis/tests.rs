@@ -51,9 +51,6 @@ fn test_file_analysis_new_all_collections_empty() {
     assert!(fa.exports.is_empty());
     assert!(fa.yara_matches.is_empty());
     assert!(fa.syscalls.is_empty());
-    assert!(fa.paths.is_empty());
-    assert!(fa.directories.is_empty());
-    assert!(fa.env_vars.is_empty());
 }
 
 #[test]

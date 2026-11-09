@@ -453,9 +453,6 @@ impl AnalysisReport {
         self.exports.shrink_to_fit();
         self.yara_matches.shrink_to_fit();
         self.syscalls.shrink_to_fit();
-        self.paths.shrink_to_fit();
-        self.directories.shrink_to_fit();
-        self.env_vars.shrink_to_fit();
         self.archive_contents.shrink_to_fit();
         self.files.shrink_to_fit();
     }
@@ -463,9 +460,8 @@ impl AnalysisReport {
     /// Drop the analysis fields that nothing downstream consumes, the moment a
     /// member's analysis (matching) is complete.
     ///
-    /// `traits`, `structure`, `strings`, `yara_matches`, `syscalls`, `paths`,
-    /// `directories`, and `env_vars` are produced by analyzers and matched
-    /// against during trait evaluation, but the compact output
+    /// `traits`, `structure`, `strings`, `yara_matches` and `syscalls` are
+    /// produced by analyzers and matched against during trait evaluation, but the compact output
     /// (`compact::convert_file`) never serializes them and archive-scope
     /// evaluation consumes only the member's matched `findings`. On an archive
     /// with thousands of members, retaining them until the end accumulates
@@ -479,9 +475,6 @@ impl AnalysisReport {
         self.strings = Vec::new();
         self.yara_matches = Vec::new();
         self.syscalls = Vec::new();
-        self.paths = Vec::new();
-        self.directories = Vec::new();
-        self.env_vars = Vec::new();
         for file in &mut self.files {
             file.clear_unserialized_fields();
         }
@@ -842,9 +835,6 @@ impl AnalysisReport {
         let _ = std::mem::take(&mut self.exports);
         let _ = std::mem::take(&mut self.yara_matches);
         let _ = std::mem::take(&mut self.syscalls);
-        let _ = std::mem::take(&mut self.paths);
-        let _ = std::mem::take(&mut self.directories);
-        let _ = std::mem::take(&mut self.env_vars);
         let _ = std::mem::take(&mut self.archive_contents);
 
         // Clear fields that are redundant with files[0] / summary

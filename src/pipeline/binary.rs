@@ -167,8 +167,6 @@ pub(super) fn analyze_elf(b: BinaryInput<'_, '_>) -> AnalysisReport {
         None,
         options.cancellation.as_deref(),
     );
-    path_mapper::analyze_and_link_paths(&mut report);
-    env_mapper::analyze_and_link_env_vars(&mut report);
     report
 }
 

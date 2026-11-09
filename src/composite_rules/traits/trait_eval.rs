@@ -1074,10 +1074,24 @@ impl TraitDefinition {
         base_crit: &Criticality,
         ctx: &EvaluationContext<'a>,
     ) -> Criticality {
+        self.evaluate_downgrade_of(&self.shared_id(), conditions, base_crit, ctx)
+    }
+
+    /// [`evaluate_downgrade`](Self::evaluate_downgrade) for the finding
+    /// `finding_id`, which this trait's `downgrade:` governs but did not
+    /// produce: the hook carrier of an engine-emitted finding. The recorded
+    /// suppression names that finding, as it would name a YAML trait's own.
+    pub(crate) fn evaluate_downgrade_of<'a>(
+        &self,
+        finding_id: &crate::types::Istr,
+        conditions: &DowngradeConditions,
+        base_crit: &Criticality,
+        ctx: &EvaluationContext<'a>,
+    ) -> Criticality {
         if self.eval_downgrade_conditions(conditions, ctx) {
             if *base_crit >= crate::types::MIN_RECORDED_SUPPRESSION {
                 ctx.record_suppression(|| crate::types::Suppression {
-                    id: self.shared_id(),
+                    id: finding_id.clone(),
                     crit: *base_crit,
                     kind: crate::types::SuppressionKind::Downgrade,
                     by: downgrade_legs(conditions, |c| self.eval_condition(c, ctx)),

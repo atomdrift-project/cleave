@@ -248,9 +248,6 @@ are omitted from JSON when empty or `None`.
 | `values_tree`         | JSON object                   | Format-specific metadata: manifest, DWARF, EXIF, etc.            |
 | `filefacts_metrics`   | object                        | Flat numeric metric map, e.g. `{"binary.overall_entropy": 7.12}`. The sole numeric metric surface. |
 | `filefacts_metric_spans` | object                     | Byte-span provenance for located metrics: metric name → `[Span, …]` where each was measured. |
-| `paths`               | array of `PathInfo`           | Discovered file and directory paths with access patterns.        |
-| `directories`         | array of `DirectoryAccess`    | Paths grouped by parent directory.                               |
-| `env_vars`            | array of `EnvVarInfo`         | Environment variable references.                                 |
 | `archive_contents`    | array of `ArchiveEntry`       | Archive members: path, type, SHA-256, size.                      |
 | `scanned_path`        | string                        | Root directory, for directory scans.                             |
 | `files`               | array of `FileAnalysis`       | Per-file sub-reports, for directory scans and decoded payloads.  |

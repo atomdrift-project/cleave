@@ -2962,3 +2962,240 @@ fn atomic_finding_cap_retains_composite_support_and_exclusions() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// `unless:` on engine-emitted findings
+//
+// A finding the engine emits (an analyzer pushes it onto the report before
+// rules run) has no YAML definition of its own. A rule whose id leaf is
+// `builtin-<slug of the finding id>` is its hook carrier: the carrier's
+// `unless:` applies to the finding exactly as a YAML trait's `unless:` applies
+// to that trait. These tests hold the two paths to identical behavior.
+// ---------------------------------------------------------------------------
+
+const ENGINE_FINDING_ID: &str = "test/engine::emitted-victim";
+
+/// A context trait both victims name in `unless:`, a YAML victim, and the hook
+/// carrier for [`ENGINE_FINDING_ID`] (`/` and `::` become `-`).
+fn hook_rules() -> (TempDir, CapabilityMapper) {
+    let yaml = r#"
+defaults:
+  for: [binaries, scripts, source, manifests, documents, media, data, archives]
+
+traits:
+  - id: "test/context::marker"
+    desc: "Benign context marker"
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      substr: "CONTEXT_MARKER"
+
+  - id: "test/victim::yaml-victim"
+    desc: "YAML-emitted victim"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      substr: "VICTIM_TOKEN"
+    unless:
+      - id: test/context::marker
+
+  # Hook carrier. The token never occurs, so the carrier itself never fires;
+  # only its `unless:` is used.
+  - id: "test/hook::builtin-test-engine-emitted-victim"
+    desc: "Hook carrier for an engine-emitted finding"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      substr: "CARRIER_NEVER_PRESENT"
+    unless:
+      - id: test/context::marker
+"#;
+    let (dir, path) = create_test_yaml(yaml);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+    (dir, mapper)
+}
+
+/// Evaluate a report holding `text` as strings, with the engine-emitted
+/// finding already on it, as an analyzer leaves it before rules run.
+fn evaluate_with_engine_finding(mapper: &CapabilityMapper, text: &[&str]) -> AnalysisReport {
+    let data = text.join(" ");
+    let mut report = create_test_report_with_size(data.len() as u64);
+    for s in text {
+        report.strings.push(crate::types::StringInfo {
+            value: (s.to_string()).into(),
+            offset: Some(0),
+            encoding: "ascii".to_string(),
+            string_type: None,
+            section: None,
+            encoding_chain: Vec::new(),
+            fragments: None,
+        });
+    }
+    report.findings.push(
+        crate::types::Finding::structural(
+            ENGINE_FINDING_ID.to_string(),
+            "Engine-emitted victim".to_string(),
+            1.0,
+        )
+        .with_criticality(Criticality::Suspicious),
+    );
+    mapper.evaluate_and_merge_findings(&mut report, data.as_bytes(), None, None);
+    report
+}
+
+fn has(report: &AnalysisReport, id: &str) -> bool {
+    report.findings.iter().any(|f| f.id == id)
+}
+
+/// The suppressors recorded against `id`, or `None` if it was not suppressed.
+fn suppressed_by(report: &AnalysisReport, id: &str) -> Option<Vec<String>> {
+    report
+        .suppressions
+        .iter()
+        .find(|s| s.id == id)
+        .map(|s| s.by.iter().map(|leg| leg.id.to_string()).collect())
+}
+
+/// With the context present, the `unless:` on an engine-emitted finding
+/// suppresses it, just as it suppresses the YAML-emitted victim.
+#[test]
+fn unless_suppresses_an_engine_emitted_finding_like_a_yaml_one() {
+    let (_dir, mapper) = hook_rules();
+    let report = evaluate_with_engine_finding(&mapper, &["VICTIM_TOKEN", "CONTEXT_MARKER"]);
+
+    assert!(has(&report, "test/context::marker"), "context fires");
+    assert!(
+        !has(&report, "test/victim::yaml-victim"),
+        "YAML victim is suppressed"
+    );
+    assert!(
+        !has(&report, ENGINE_FINDING_ID),
+        "engine-emitted finding is suppressed through its hook carrier"
+    );
+}
+
+/// Without the context neither is suppressed: the hook does not change a
+/// finding it was not asked to.
+#[test]
+fn unless_leaves_an_engine_emitted_finding_alone_without_its_context() {
+    let (_dir, mapper) = hook_rules();
+    let report = evaluate_with_engine_finding(&mapper, &["VICTIM_TOKEN"]);
+
+    assert!(has(&report, "test/victim::yaml-victim"));
+    assert!(has(&report, ENGINE_FINDING_ID));
+}
+
+/// The hook carrier exists only to carry `unless:`; it must never be reported.
+#[test]
+fn hook_carrier_never_appears_as_a_finding() {
+    let (_dir, mapper) = hook_rules();
+    for text in [&["VICTIM_TOKEN"][..], &["VICTIM_TOKEN", "CONTEXT_MARKER"]] {
+        let report = evaluate_with_engine_finding(&mapper, text);
+        assert!(!has(
+            &report,
+            "test/hook::builtin-test-engine-emitted-victim"
+        ));
+    }
+}
+
+/// Both paths record the suppression the same way: same kind, and the same
+/// suppressor named, so a reader cannot tell which path withheld a finding.
+#[test]
+fn engine_and_yaml_suppressions_are_recorded_identically() {
+    let (_dir, mapper) = hook_rules();
+    let report = evaluate_with_engine_finding(&mapper, &["VICTIM_TOKEN", "CONTEXT_MARKER"]);
+
+    let yaml = suppressed_by(&report, "test/victim::yaml-victim");
+    let engine = suppressed_by(&report, ENGINE_FINDING_ID);
+    assert_eq!(
+        yaml,
+        Some(vec!["test/context::marker".to_string()]),
+        "the YAML victim records its suppressor"
+    );
+    assert_eq!(engine, yaml, "the engine-emitted finding records the same");
+
+    for id in ["test/victim::yaml-victim", ENGINE_FINDING_ID] {
+        let kind = report
+            .suppressions
+            .iter()
+            .find(|s| s.id == id)
+            .unwrap()
+            .kind;
+        assert_eq!(kind, crate::types::SuppressionKind::Unless, "{id}");
+    }
+}
+
+/// A YAML trait with `downgrade:` and the hook carrier for an engine-emitted
+/// finding with the same `downgrade:` must demote their findings the same way.
+#[test]
+fn downgrade_demotes_an_engine_emitted_finding_like_a_yaml_one() {
+    let yaml = r#"
+defaults:
+  for: [binaries, scripts, source, manifests, documents, media, data, archives]
+
+traits:
+  - id: "test/context::harness"
+    desc: "Test harness marker"
+    crit: notable
+    conf: 0.9
+    if:
+      type: text
+      substr: "HARNESS_MARKER"
+
+  - id: "test/victim::yaml-victim"
+    desc: "YAML-emitted victim"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      substr: "VICTIM_TOKEN"
+    downgrade:
+      any:
+        - id: test/context::harness
+
+  - id: "test/hook::builtin-test-engine-emitted-victim"
+    desc: "Hook carrier for an engine-emitted finding"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      substr: "CARRIER_NEVER_PRESENT"
+    downgrade:
+      any:
+        - id: test/context::harness
+"#;
+    let (_dir, path) = create_test_yaml(yaml);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+
+    let crit_of = |report: &AnalysisReport, id: &str| {
+        report
+            .findings
+            .iter()
+            .find(|f| f.id == id)
+            .map(|f| (f.crit, f.downgraded))
+    };
+
+    let with = evaluate_with_engine_finding(&mapper, &["VICTIM_TOKEN", "HARNESS_MARKER"]);
+    let yaml_with = crit_of(&with, "test/victim::yaml-victim").unwrap();
+    let engine_with = crit_of(&with, ENGINE_FINDING_ID).unwrap();
+    assert!(yaml_with.0 < Criticality::Suspicious, "YAML victim demoted");
+    assert_eq!(
+        engine_with, yaml_with,
+        "engine-emitted demoted the same way"
+    );
+
+    let without = evaluate_with_engine_finding(&mapper, &["VICTIM_TOKEN"]);
+    assert_eq!(
+        crit_of(&without, ENGINE_FINDING_ID),
+        Some((Criticality::Suspicious, false)),
+        "no context, no demotion"
+    );
+    assert_eq!(
+        suppressed_by(&with, ENGINE_FINDING_ID),
+        suppressed_by(&with, "test/victim::yaml-victim"),
+        "the demotion is recorded identically"
+    );
+}

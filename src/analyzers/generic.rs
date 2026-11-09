@@ -389,8 +389,6 @@ impl GenericAnalyzer {
 
         // Analyze paths and environment variables
         let t_paths = std::time::Instant::now();
-        crate::path_mapper::analyze_and_link_paths(&mut report);
-        crate::env_mapper::analyze_and_link_env_vars(&mut report);
         tracing::debug!(
             "GenericAnalyzer: Path/env analysis completed in {:?}",
             t_paths.elapsed()

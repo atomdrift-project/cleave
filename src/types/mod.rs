@@ -40,7 +40,6 @@ pub mod istr;
 // pdf_metrics, text_metrics, language_metrics.
 pub(crate) mod byte_text;
 pub(crate) mod ml_features;
-pub(crate) mod paths_env;
 pub(crate) mod reference_graph;
 pub(crate) mod scores;
 pub(crate) mod traits_findings;
@@ -72,11 +71,6 @@ pub use traits_findings::{
 pub(crate) use traits_findings::{
     MAX_EVIDENCE_PER_TRAIT, MIN_RECORDED_SUPPRESSION, SuppressionSink, deduplicate_evidence,
     truncate_evidence_value,
-};
-
-pub(crate) use paths_env::{
-    DirectoryAccess, DirectoryAccessPattern, EnvVarAccessType, EnvVarCategory, EnvVarInfo,
-    PathCategory, PathInfo, PathType,
 };
 
 pub use binary::{

@@ -10,7 +10,6 @@
 #![warn(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 
 use crate::analyzers::{AnalysisInput, Analyzer};
-use crate::entropy::EntropyLevel;
 use crate::strings::StringExtractor;
 use crate::types::{
     AnalysisReport, Criticality, Evidence, Finding, FindingKind, Section, StructuralFeature,
@@ -434,7 +433,8 @@ impl ElfAnalyzer {
 
     /// Walk the section table from filefacts's typed `Sections` view,
     /// reading each section's entropy directly off the typed field (the same
-    /// value PE/Mach-O use via `sections_from_filefacts`).
+    /// value PE/Mach-O use via `sections_from_filefacts`). Whether a section's
+    /// entropy is high is a judgment for traits, not for this projection.
     fn fill_sections_from_ctx(&self, ctx: &Ctx<'_>, report: &mut AnalysisReport) {
         let parsed = &ctx.parsed;
         for section in parsed.sections().iter() {
@@ -458,21 +458,6 @@ impl ElfAnalyzer {
                 ),
                 flags: crate::analysis_context::section_flag_names(&section.flags),
             });
-
-            let level = EntropyLevel::from_value(entropy);
-            if level == EntropyLevel::High {
-                report.structure.push(StructuralFeature {
-                    id: "entropy/high".to_string(),
-                    desc: "High entropy section (possibly packed/encrypted)".to_string(),
-                    evidence: vec![Evidence {
-                        method: "entropy".to_string(),
-                        source: "entropy_analyzer".to_string(),
-                        value: format!("{:.2}", entropy),
-                        location: Some(section.name.clone()),
-                        ..Default::default()
-                    }],
-                });
-            }
         }
     }
 
@@ -665,8 +650,6 @@ impl ElfAnalyzer {
                         None,
                         None,
                     );
-                    crate::path_mapper::analyze_and_link_paths(&mut unpacked_report);
-                    crate::env_mapper::analyze_and_link_env_vars(&mut unpacked_report);
 
                     // Create separate FileAnalysis for unpacked layer
                     let unpacked_sha256 = crate::analyzers::utils::calculate_sha256(&unpacked_data);
@@ -745,8 +728,6 @@ impl Analyzer for ElfAnalyzer {
             None,
             None,
         );
-        crate::path_mapper::analyze_and_link_paths(&mut report);
-        crate::env_mapper::analyze_and_link_env_vars(&mut report);
         Ok(report)
     }
 

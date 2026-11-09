@@ -863,8 +863,6 @@ impl UnifiedSourceAnalyzer {
             }
 
             // Analyze paths and environment variables
-            crate::path_mapper::analyze_and_link_paths(&mut report);
-            crate::env_mapper::analyze_and_link_env_vars(&mut report);
 
             // `text.*` / `identifiers.*` / `strings.*` / `comments.*` /
             // `functions.*` / `imports.*` metrics all flow through

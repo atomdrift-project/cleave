@@ -107,7 +107,8 @@ pub(crate) fn find_duplicate_atomic_traits(
         .par_chunks(chunk_size)
         .map(|chunk| {
             let mut local_map: HashMap<u64, Vec<String>> = HashMap::with_capacity(chunk.len());
-            for t in chunk {
+            // An override has no predicate to duplicate.
+            for t in chunk.iter().filter(|t| !t.is_override()) {
                 // Share effective predicate normalization with scope-only checks.
                 let signature = atomic_predicate_signature(t, true);
                 use std::collections::hash_map::DefaultHasher;

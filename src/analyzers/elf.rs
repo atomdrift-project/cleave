@@ -12,8 +12,7 @@
 use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::strings::StringExtractor;
 use crate::types::{
-    AnalysisReport, Criticality, Evidence, Finding, FindingKind, Section, StructuralFeature,
-    SyscallInfo, TargetInfo,
+    AnalysisReport, Criticality, Finding, FindingKind, Section, SyscallInfo, TargetInfo,
 };
 use crate::yara_engine::YaraEngine;
 use anyhow::{Context, Result};
@@ -147,7 +146,6 @@ impl ElfAnalyzer {
             ]);
 
             let struct_start = std::time::Instant::now();
-            self.fill_structure_from_ctx(ctx, &mut report);
             self.fill_dynamic_symbols_from_ctx(ctx, &mut report);
             self.fill_sections_from_ctx(ctx, &mut report);
             self.fill_syscalls_from_ctx(ctx, &mut report);
@@ -332,84 +330,6 @@ impl ElfAnalyzer {
         report.shrink_to_fit();
 
         report
-    }
-
-    /// `analyze_structure`'s filefacts-backed counterpart. Synthesises the
-    /// same `binary/format/elf`, `binary/arch/*`, `binary/stripped` and
-    /// `binary/pie` features but pulls every input from filefacts's view of
-    /// the file.
-    fn fill_structure_from_ctx(&self, ctx: &Ctx<'_>, report: &mut AnalysisReport) {
-        let parsed = &ctx.parsed;
-        let metrics = parsed.metrics();
-        let values = parsed.values();
-
-        report.structure.push(StructuralFeature {
-            id: "binary/format/elf".to_string(),
-            desc: "ELF binary format".to_string(),
-            evidence: vec![Evidence {
-                method: "magic".to_string(),
-                source: "filefacts".to_string(),
-                value: "0x7f".to_string(), // ELF magic byte 0
-                location: Some("0x0".to_string()),
-                ..Default::default()
-            }],
-        });
-
-        // Architecture comes from filefacts's `elf.machine` string (e.g.
-        // "x86_64"). Fall back to "unknown" when filefacts couldn't
-        // identify the machine.
-        let arch = values
-            .get("elf.machine")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
-        report.structure.push(StructuralFeature {
-            id: format!("binary/arch/{}", arch),
-            desc: format!("{} architecture", arch),
-            evidence: vec![Evidence {
-                method: "header".to_string(),
-                source: "filefacts".to_string(),
-                value: format!("elf.machine={}", arch),
-                location: Some("0x0".to_string()),
-                ..Default::default()
-            }],
-        });
-
-        // Full symbol-table absence is observable even in a header-only
-        // member. It does not establish that symbols were removed by a tool.
-        if metrics
-            .get("binary.full_symbol_table_absent_or_empty")
-            .unwrap_or(0.0)
-            > 0.0
-        {
-            report.structure.push(StructuralFeature {
-                id: "binary/full-symbol-table-absent-or-empty".to_string(),
-                desc: "Full symbol table absent or empty".to_string(),
-                evidence: vec![Evidence {
-                    method: "symbols".to_string(),
-                    source: "filefacts".to_string(),
-                    value: "no_symtab".to_string(),
-                    location: Some("0x0".to_string()),
-                    ..Default::default()
-                }],
-            });
-        }
-
-        // PIE detection: filefacts flags `binary.is_pie = 1.0` for
-        // dynamically-linked ET_DYN executables (shared libraries that
-        // are also ET_DYN don't count).
-        if metrics.get("binary.is_pie").unwrap_or(0.0) > 0.0 {
-            report.structure.push(StructuralFeature {
-                id: "binary/pie".to_string(),
-                desc: "Position Independent Executable".to_string(),
-                evidence: vec![Evidence {
-                    method: "header".to_string(),
-                    source: "filefacts".to_string(),
-                    value: "ET_DYN".to_string(),
-                    location: Some("0x0".to_string()),
-                    ..Default::default()
-                }],
-            });
-        }
     }
 
     /// Project filefacts's typed Imports / Exports into the report. Symbol

@@ -24,10 +24,7 @@ pub(crate) use guards::{
 use crate::analyzers::{AnalysisInput, Analyzer, FileType, FileTypeExt};
 #[cfg(test)]
 use crate::types::FileAnalysis;
-use crate::types::{
-    AnalysisReport, ArchiveEntry, Criticality, Evidence, Finding, FindingKind, StructuralFeature,
-    TargetInfo,
-};
+use crate::types::{AnalysisReport, ArchiveEntry, Criticality, Finding, TargetInfo};
 use crate::yara_engine::YaraEngine;
 use anyhow::{Context, Result};
 use std::fs::{self};
@@ -56,9 +53,6 @@ use consistency::*;
 /// Default maximum file size to keep in memory (100 MB)
 pub(crate) const DEFAULT_MAX_MEMORY_FILE_SIZE: u64 = 100 * 1024 * 1024;
 const MAX_ARCHIVE_PATH_TRAVERSAL_EVIDENCE: usize = 10;
-/// Extraction notes attached as evidence to the incomplete-archive finding.
-/// The rest still reach `metadata.errors`; this only bounds the rendered set.
-const MAX_INCOMPLETE_ARCHIVE_EVIDENCE: usize = 5;
 
 /// Give container-owned findings an explicit archive-root location. An
 /// absent/value/offset-only location otherwise becomes the empty scope key,
@@ -490,17 +484,6 @@ impl ArchiveAnalyzer {
         let mut report = AnalysisReport::new(target);
 
         // Add structural feature for the directory analysis
-        report.structure.push(StructuralFeature {
-            id: "archive/directory".to_string(),
-            desc: "Extracted directory analysis".to_string(),
-            evidence: vec![Evidence {
-                method: "sfx_optimization".to_string(),
-                source: "archive_analyzer".to_string(),
-                value: "bypassed_tar_step".to_string(),
-                location: None,
-                ..Default::default()
-            }],
-        });
 
         // Proceed to analyze the directory contents (SFX installers are analyzed as generic archives)
         self.analyze_generic_archive(dir_path, &mut report, start);
@@ -530,17 +513,6 @@ impl ArchiveAnalyzer {
             architectures: None,
         };
         let mut report = AnalysisReport::new(target);
-        report.structure.push(StructuralFeature {
-            id: "archive/pyinstaller".to_string(),
-            desc: "PyInstaller-bundled Python executable".to_string(),
-            evidence: vec![Evidence {
-                method: "marker_detection".to_string(),
-                source: "pyinstx".to_string(),
-                value: "MEI cookie".to_string(),
-                location: None,
-                ..Default::default()
-            }],
-        });
         self.analyze_pyinstaller_archive_in_memory(data, archive_path, &mut report, start)?;
         Ok(report)
     }
@@ -698,21 +670,6 @@ impl ArchiveAnalyzer {
                 "archive_analyzer",
                 suppress_path_traversal,
             );
-            report.structure.push(StructuralFeature {
-                id: format!("archive/{}", archive_type_str),
-                desc: format!("{} archive", archive_type_str),
-                evidence: vec![Evidence {
-                    method: "extension".to_string(),
-                    source: "archive_analyzer".to_string(),
-                    value: archive_path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("unknown")
-                        .to_string(),
-                    location: None,
-                    ..Default::default()
-                }],
-            });
             report.prune_archive_directories();
             self.evaluate_container_findings(&mut report, data, file_type);
             return Ok(report);
@@ -754,21 +711,6 @@ impl ArchiveAnalyzer {
                 "archive_analyzer",
                 suppress_path_traversal,
             );
-            report.structure.push(StructuralFeature {
-                id: format!("archive/{}", archive_type_str),
-                desc: format!("{} archive", archive_type_str),
-                evidence: vec![Evidence {
-                    method: "extension".to_string(),
-                    source: "archive_analyzer".to_string(),
-                    value: archive_path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("unknown")
-                        .to_string(),
-                    location: None,
-                    ..Default::default()
-                }],
-            });
             report.prune_archive_directories();
             self.evaluate_container_findings(&mut report, data, file_type);
             return Ok(report);
@@ -892,21 +834,6 @@ impl ArchiveAnalyzer {
                 "archive_analyzer",
                 suppress_path_traversal,
             );
-            report.structure.push(StructuralFeature {
-                id: format!("archive/{}", archive_type_str),
-                desc: format!("{} archive", archive_type_str),
-                evidence: vec![Evidence {
-                    method: "extension".to_string(),
-                    source: "archive_analyzer".to_string(),
-                    value: archive_path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("unknown")
-                        .to_string(),
-                    location: None,
-                    ..Default::default()
-                }],
-            });
             // Container-level basename + composite evaluation. The
             // temp_dir extraction path runs the equivalent further
             // down; the in-memory short-circuit needs the same pass
@@ -1050,21 +977,6 @@ impl ArchiveAnalyzer {
                         "archive_analyzer",
                         suppress_path_traversal,
                     );
-                    report.structure.push(StructuralFeature {
-                        id: format!("archive/{}", archive_type_str),
-                        desc: format!("{} archive", archive_type_str),
-                        evidence: vec![Evidence {
-                            method: "extension".to_string(),
-                            source: "archive_analyzer".to_string(),
-                            value: archive_path
-                                .extension()
-                                .and_then(|ext| ext.to_str())
-                                .unwrap_or("unknown")
-                                .to_string(),
-                            location: None,
-                            ..Default::default()
-                        }],
-                    });
                     report.prune_archive_directories();
                     self.evaluate_container_findings(&mut report, data, file_type);
                     return Ok(report);
@@ -1087,22 +999,6 @@ impl ArchiveAnalyzer {
             "archive_analyzer",
             suppress_path_traversal,
         );
-
-        report.structure.push(StructuralFeature {
-            id: format!("archive/{}", archive_type_str),
-            desc: format!("{} archive", archive_type_str),
-            evidence: vec![Evidence {
-                method: "extension".to_string(),
-                source: "archive_analyzer".to_string(),
-                value: archive_path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("unknown")
-                    .to_string(),
-                location: None,
-                ..Default::default()
-            }],
-        });
 
         if self.is_cancelled() {
             anyhow::bail!("Analysis cancelled after archive extraction");

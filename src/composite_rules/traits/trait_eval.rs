@@ -5,6 +5,13 @@
 use super::*;
 
 impl TraitDefinition {
+    /// Whether this rule was written without an `if:`: it tunes an
+    /// engine-emitted finding of the same id (`unless:`, `downgrade:`) and
+    /// never matches anything itself.
+    pub(crate) fn is_override(&self) -> bool {
+        matches!(&self.r#if, Condition::Trait { id } if id.is_empty())
+    }
+
     /// Whether the rule's `exempt:` names `validator`.
     #[cfg(feature = "lint")]
     pub(crate) fn is_exempt(&self, validator: &str) -> bool {

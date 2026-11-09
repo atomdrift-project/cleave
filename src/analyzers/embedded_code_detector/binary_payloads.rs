@@ -129,11 +129,7 @@ pub(super) fn detect_base64_binary(
         precomputed_spans: None,
         src: None,
         kind: FindingKind::Capability,
-        id: if is_archive {
-            format!("metadata/file/encoding::base64-decoded-{inner_type}").into()
-        } else {
-            format!("binary/embedded/base64-{}", inner_type).into()
-        },
+        id: format!("metadata/file/encoding::base64-decoded-{inner_type}").into(),
         desc: if is_archive {
             format!(
                 "Base64-encoded {} archive ({} decoded bytes)",

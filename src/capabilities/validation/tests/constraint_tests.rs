@@ -964,13 +964,6 @@ fn test_composite_suppressed_by_own_leg_detected() {
     // Archive scope: the leg can come from another member, not provable.
     let mut archive = rule("x/y::archive", &["m/n::leg"], &[], &["m/n/"]);
     archive.scope = Some(Scope::Archive);
-    // builtin-* hook carriers are meant never to fire.
-    let builtin = rule(
-        "p/q::builtin-some-finding",
-        &["p/q::ctx"],
-        &[],
-        &["p/q::ctx"],
-    );
     // A downgrade whose only entry is a required leg pins the tier.
     let mut pinned = rule("x/y::pinned", &["s/t::leg", "u/v::other"], &[], &[]);
     pinned.downgrade = Some(DowngradeConditions {
@@ -1001,7 +994,6 @@ fn test_composite_suppressed_by_own_leg_detected() {
         one_any_survives,
         dir_leg_in_dir,
         archive,
-        builtin,
         pinned,
         conditional,
         sibling_prefix,

@@ -236,6 +236,7 @@ const VALIDATORS: &[(&str, Check)] = &[
     ("leg-suppressing-composites", references::leg_suppressing_composites),
     ("unresolved-trait-prefixes", references::unresolved_trait_prefixes),
     ("retired-internal-refs", references::retired_internal_refs),
+    ("invalid-overrides", references::invalid_overrides),
     ("third-party-config", references::third_party_config),
 
     // Tier boundaries and the `crit: exception` contract.

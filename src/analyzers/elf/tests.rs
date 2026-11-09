@@ -113,15 +113,6 @@ fn test_elf_records_string_count_metrics() {
 }
 
 #[test]
-fn test_elf_has_structure() {
-    let analyzer = ElfAnalyzer::new();
-    let test_file = test_elf_path();
-
-    let report = analyzer.analyze(&test_file).unwrap();
-    assert!(!report.structure.is_empty());
-}
-
-#[test]
 fn test_elf_architecture_detected() {
     let analyzer = ElfAnalyzer::new();
     let test_file = test_elf_path();

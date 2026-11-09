@@ -11,43 +11,15 @@ const MAX_OUTPUT: usize = 16 * 1024 * 1024;
 const MAX_KEYS: usize = 8192;
 const MAX_ATTEMPTS: usize = 32768;
 
-struct Key {
-    bytes: Vec<u8>,
-    source: usize,
-    offset: u64,
-}
-
 #[derive(Default)]
 pub(super) struct Collector {
-    keys: Vec<Key>,
+    keys: Vec<Vec<u8>>,
     seen_keys: HashSet<Vec<u8>>,
     sources: Vec<String>,
     assets: Vec<(String, Vec<u8>)>,
     dex_bytes: usize,
     asset_bytes: usize,
     limited: bool,
-}
-
-pub(super) struct Recovered {
-    pub(super) member: MemoryArchiveMember,
-    key_path: String,
-    key_offset: u64,
-}
-
-impl Recovered {
-    pub(super) fn record_provenance(&self, report: &mut crate::types::AnalysisReport) {
-        report.structure.push(crate::types::StructuralFeature {
-            id: "archive/rc4-asset-recovery".into(),
-            desc: "RC4 asset recovered using a referenced DEX string".into(),
-            evidence: vec![crate::types::Evidence {
-                method: "rc4-container-integrity".into(),
-                source: self.key_path.clone(),
-                value: self.member.relative_path.clone(),
-                location: Some(format!("offset:0x{:x}", self.key_offset)),
-                ..Default::default()
-            }],
-        });
-    }
 }
 
 fn opaque_asset(path: &str, data: &[u8]) -> bool {
@@ -95,7 +67,6 @@ impl Collector {
                 return;
             }
             self.dex_bytes += data.len();
-            let source = self.sources.len();
             self.sources.push(member.relative_path.clone());
             let parsed = filefacts::OpenOptions::new()
                 .cache(false)
@@ -114,11 +85,7 @@ impl Collector {
                     break;
                 }
                 self.seen_keys.insert(key.to_vec());
-                self.keys.push(Key {
-                    bytes: key.to_vec(),
-                    source,
-                    offset: literal.offset,
-                });
+                self.keys.push(key.to_vec());
             }
         } else if opaque_asset(&member.relative_path, data) {
             if self.assets.len() >= 32
@@ -137,7 +104,7 @@ impl Collector {
         self,
         mut diagnostic: impl FnMut(String),
         cancellation: Option<&AtomicBool>,
-    ) -> Vec<Recovered> {
+    ) -> Vec<MemoryArchiveMember> {
         let cancelled = || cancellation.is_some_and(|flag| flag.load(Ordering::Acquire));
         let mut out = Vec::new();
         if self.assets.is_empty() || self.keys.is_empty() {
@@ -160,8 +127,7 @@ impl Collector {
                     diagnostic("APK RC4 candidate search reached its 32768-probe budget".into());
                     return out;
                 }
-                let Some(decoded) =
-                    filefacts::recover::rc4::recover(&data, &key.bytes, cancellation)
+                let Some(decoded) = filefacts::recover::rc4::recover(&data, key, cancellation)
                 else {
                     continue;
                 };
@@ -174,16 +140,12 @@ impl Collector {
                     filefacts::recover::rc4::Kind::Dex => (FileType::Dex, "dex"),
                     filefacts::recover::rc4::Kind::Zip => (FileType::Zip, "zip"),
                 };
-                out.push(Recovered {
-                    key_path: self.sources[key.source].clone(),
-                    key_offset: key.offset,
-                    member: MemoryArchiveMember {
-                        relative_path: format!("{path}.rc4-decoded.{suffix}"),
-                        sha256: calculate_sha256(&decoded.data),
-                        data: decoded.data.into(),
-                        file_type,
-                        container_kind: Some("rc4-decoded-asset".into()),
-                    },
+                out.push(MemoryArchiveMember {
+                    relative_path: format!("{path}.rc4-decoded.{suffix}"),
+                    sha256: calculate_sha256(&decoded.data),
+                    data: decoded.data.into(),
+                    file_type,
+                    container_kind: Some("rc4-decoded-asset".into()),
                 });
                 break;
             }
@@ -229,14 +191,9 @@ mod tests {
             }
             let recovered = collector.recover(|_| {}, None);
             assert_eq!(recovered.len(), 1);
+            assert_eq!(&*recovered[0].data, include_bytes!("testdata/rc4-key.dex"));
             assert_eq!(
-                &*recovered[0].member.data,
-                include_bytes!("testdata/rc4-key.dex")
-            );
-            assert_eq!(recovered[0].key_path, "classes.dex");
-            assert!(recovered[0].key_offset > 0);
-            assert_eq!(
-                recovered[0].member.container_kind.as_deref(),
+                recovered[0].container_kind.as_deref(),
                 Some("rc4-decoded-asset")
             );
         }
@@ -247,11 +204,7 @@ mod tests {
         let mut collector = Collector::default();
         collector.sources.push("classes.dex".into());
         collector.keys = (0..MAX_KEYS)
-            .map(|i| Key {
-                bytes: (i as u64).to_le_bytes().to_vec(),
-                source: 0,
-                offset: 0,
-            })
+            .map(|i| (i as u64).to_le_bytes().to_vec())
             .collect();
         for i in 0..5 {
             collector.assets.push((

@@ -951,9 +951,13 @@ fn options_hash_with(
     // standalone `rizin` on/off flag is gone and `recovery=` carries the policy.
     // v=30: filefacts 3.0 renamed people, hash, summary and archive-member keys
     // (schema v11); older reports carry the old names.
+    // v=31: engine-emitted ids follow the taxonomy (`metadata/file/encoding::
+    // base64-decoded-<type>`, `metadata/file/format/installer::inno-setup-*`),
+    // `structure` is no longer populated and partial extraction is the
+    // `extraction-partial` analysis gap; older reports carry the old ids.
     let zip_passwords = Sha256::digest(options.zip_passwords.join("\0").as_bytes());
     let key = format!(
-        "v=30,cm={},3p={},yara={},yskip={},ybuiltin={},zpw={},upx={},plat={},hp={},sp={},ps={},fv={},recovery={}",
+        "v=31,cm={},3p={},yara={},yskip={},ybuiltin={},zpw={},upx={},plat={},hp={},sp={},ps={},fv={},recovery={}",
         settings.compact_members,
         settings.third_party_yara,
         settings.yara,

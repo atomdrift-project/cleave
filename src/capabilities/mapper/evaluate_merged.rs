@@ -715,26 +715,17 @@ impl super::CapabilityMapper {
         section_map: &SectionMap,
         sink: &crate::types::SuppressionSink,
     ) {
-        // The trait whose `downgrade:` governs `finding`, and whether it is the
-        // finding's hook carrier rather than its own definition. An
-        // engine-emitted finding has no definition; a `builtin-<slug>` trait
-        // stands in for it, and demotes from the finding's own criticality.
-        let hooks = &self.unless_index().downgrade_hook_by_leaf;
+        // The trait whose `downgrade:` governs `finding`: its own definition,
+        // or, for an engine-emitted finding, the override written at its id.
+        // An override demotes from the finding's own criticality, since it
+        // declares none.
         let candidate = |finding: &Finding| {
-            let governs = |rule: &&crate::composite_rules::TraitDefinition| {
-                rule.downgrade
-                    .as_ref()
-                    .is_some_and(|d| d.scope != Some(crate::composite_rules::Scope::Parent))
-            };
-            if let Some(&idx) = self.trait_id_map.get(finding.id.as_str()) {
-                return Some(&self.trait_definitions[idx])
-                    .filter(governs)
-                    .map(|r| (r, false));
-            }
-            let &idx = hooks.get(&Self::builtin_finding_hook_slug(&finding.id))?;
-            Some(&self.trait_definitions[idx])
-                .filter(governs)
-                .map(|r| (r, true))
+            let &idx = self.trait_id_map.get(finding.id.as_str())?;
+            let rule = &self.trait_definitions[idx];
+            rule.downgrade
+                .as_ref()
+                .is_some_and(|d| d.scope != Some(crate::composite_rules::Scope::Parent))
+                .then_some((rule, rule.is_override()))
         };
         if !report.findings.iter().any(|f| candidate(f).is_some()) {
             return;
@@ -881,10 +872,7 @@ impl super::CapabilityMapper {
                     })
                 })
                 .filter_map(|finding| {
-                    let source = (!index.by_hook_leaf.is_empty())
-                        .then(|| Self::builtin_finding_hook_slug(&finding.id))
-                        .and_then(|slug| index.by_hook_leaf.get(&slug))
-                        .or_else(|| index.by_id.get(finding.id.as_str()))?;
+                    let source = index.by_id.get(finding.id.as_str())?;
                     let unless_conds = self.unless_conditions(*source);
                     let should_suppress = unless_conds.iter().any(|cond| {
                         cond.trait_references()
@@ -936,11 +924,7 @@ impl super::CapabilityMapper {
         findings: &[Finding],
     ) -> Vec<crate::types::SuppressionLeg> {
         let index = self.unless_index();
-        let Some(source) = (!index.by_hook_leaf.is_empty())
-            .then(|| Self::builtin_finding_hook_slug(&finding.id))
-            .and_then(|slug| index.by_hook_leaf.get(&slug))
-            .or_else(|| index.by_id.get(finding.id.as_str()))
-        else {
+        let Some(source) = index.by_id.get(finding.id.as_str()) else {
             return Vec::new();
         };
         let mut legs = Vec::new();
@@ -1168,29 +1152,10 @@ impl super::CapabilityMapper {
                 .enumerate()
                 .filter(|(_, r)| r.unless.is_some())
                 .map(|(i, r)| (r.id.as_str(), super::UnlessSource::Composite(i)));
-            for (i, rule) in self.trait_definitions.iter().enumerate() {
-                if rule.downgrade.is_some()
-                    && let Some((_, leaf)) = rule.id.rsplit_once("::")
-                    && leaf.starts_with("builtin-")
-                {
-                    index
-                        .downgrade_hook_by_leaf
-                        .entry(leaf.to_owned())
-                        .or_insert(i);
-                }
-            }
             for (id, source) in traits.chain(composites) {
                 // Last insert wins: composites shadow a trait sharing their
                 // qualified ID, as in the map this index replaced.
                 index.by_id.insert(id.to_owned(), source);
-                // Hook leaves resolve first-definition-wins, the order the
-                // per-finding linear scan this replaces observed. Only
-                // `builtin-*` leaves can ever equal a hook slug.
-                if let Some((_, leaf)) = id.rsplit_once("::")
-                    && leaf.starts_with("builtin-")
-                {
-                    index.by_hook_leaf.entry(leaf.to_owned()).or_insert(source);
-                }
             }
             index
         })
@@ -1205,24 +1170,6 @@ impl super::CapabilityMapper {
             super::UnlessSource::Composite(i) => self.composite_rules[i].unless.as_deref(),
         }
         .unwrap_or_default()
-    }
-
-    fn builtin_finding_hook_slug(finding_id: &str) -> String {
-        let mut slug = String::from("builtin-");
-        let mut last_dash = false;
-        for ch in finding_id.chars() {
-            if ch.is_ascii_alphanumeric() {
-                slug.push(ch.to_ascii_lowercase());
-                last_dash = false;
-            } else if !last_dash {
-                slug.push('-');
-                last_dash = true;
-            }
-        }
-        while slug.ends_with('-') {
-            slug.pop();
-        }
-        slug
     }
 
     /// Check whether a trait ID from an `unless:` condition matches any finding in the set.

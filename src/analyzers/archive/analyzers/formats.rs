@@ -204,18 +204,14 @@ impl ArchiveAnalyzer {
                     self.cancelled.as_deref(),
                 ) {
                     if !guard.check_file_count()
-                        || !guard.check_bytes(
-                            recovered.member.data.len() as u64,
-                            &recovered.member.relative_path,
-                        )
+                        || !guard.check_bytes(recovered.data.len() as u64, &recovered.relative_path)
                     {
                         guard.add_extraction_note(
                             "RC4 code-asset recovery exceeded the archive extraction budget".into(),
                         );
                         break;
                     }
-                    recovered.record_provenance(report);
-                    window.push(recovered.member);
+                    window.push(recovered);
                 }
             }
 
@@ -490,18 +486,14 @@ impl ArchiveAnalyzer {
                     self.cancelled.as_deref(),
                 ) {
                     if !guard.check_file_count()
-                        || !guard.check_bytes(
-                            recovered.member.data.len() as u64,
-                            &recovered.member.relative_path,
-                        )
+                        || !guard.check_bytes(recovered.data.len() as u64, &recovered.relative_path)
                     {
                         guard.add_extraction_note(
                             "RC4 code-asset recovery exceeded the archive extraction budget".into(),
                         );
                         break;
                     }
-                    recovered.record_provenance(report);
-                    window.push(recovered.member);
+                    window.push(recovered);
                 }
             }
 

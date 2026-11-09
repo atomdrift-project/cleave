@@ -201,26 +201,11 @@ impl GenericAnalyzer {
         // `pyc.*` kv comes from filefacts's dual emission in the
         // capability mapper — no synthesis needed here.
 
-        // Add structural feature
-        let (parser_name, description) = if node_types.is_some() {
-            (
-                format!("tree-sitter-{file_type}"),
-                format!("{file_type} source code"),
-            )
+        let parser_name = if node_types.is_some() {
+            format!("tree-sitter-{file_type}")
         } else {
-            (
-                "text-analysis".to_string(),
-                format!("{file_type} file (text analysis)"),
-            )
+            "text-analysis".to_string()
         };
-
-        report
-            .structure
-            .push(crate::analyzers::utils::create_language_feature(
-                &file_type,
-                &parser_name,
-                &description,
-            ));
 
         // Symbol/import extraction reuses filefacts's cached tree. When
         // filefacts has no tree for this file type (or refused to parse,
@@ -730,7 +715,7 @@ impl Analyzer for GenericAnalyzer {
                 input.path,
                 &decoded,
             );
-            let mut report = self.analyze_source_internal(
+            let report = self.analyze_source_internal(
                 input.path,
                 &content,
                 Some(source_ctx.text_rows()),
@@ -741,13 +726,6 @@ impl Analyzer for GenericAnalyzer {
                 Some(&source_ctx),
                 input.cancellation.as_ref(),
             );
-            report
-                .structure
-                .push(crate::analyzers::utils::create_language_feature(
-                    "cfml",
-                    "allaire-des-template-decoder",
-                    "Allaire encrypted ColdFusion template (statically decoded)",
-                ));
             return Ok(report);
         }
 

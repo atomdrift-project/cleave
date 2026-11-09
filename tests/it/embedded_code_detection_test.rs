@@ -161,14 +161,6 @@ fn test_analyze_hex_encoded_javascript() {
                 !file_analysis.findings.is_empty(),
                 "Should detect capabilities in JavaScript"
             );
-            // Should have auto-generated language trait
-            assert!(
-                file_analysis
-                    .findings
-                    .iter()
-                    .any(|f| f.id.contains("metadata/lang/encoding/layer::hex")),
-                "Should have auto-generated metadata/lang/encoding/layer::hex trait"
-            );
         }
         EmbeddedAnalysisResult::PlainEmbedded(_) => {
             panic!("Encoded code should create a layer, not plain findings");

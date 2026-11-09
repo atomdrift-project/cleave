@@ -227,9 +227,8 @@ mod tests {
         assert!(limited.files.is_empty());
         assert!(
             limited
-                .findings
-                .iter()
-                .any(|finding| finding.id == "metadata/archive/parsing::partial-extraction")
+                .analysis_gaps
+                .contains(crate::types::AnalysisGap::ExtractionPartial)
         );
     }
 }

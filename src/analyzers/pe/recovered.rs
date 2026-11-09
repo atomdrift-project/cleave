@@ -6,7 +6,7 @@
 
 use super::PEAnalyzer;
 use crate::analyzers::{AnalysisInput, Analyzer};
-use crate::types::{AnalysisReport, Criticality, Evidence, Finding, StructuralFeature};
+use crate::types::AnalysisReport;
 use anyhow::Result;
 use std::path::Path;
 
@@ -62,14 +62,7 @@ impl PEAnalyzer {
                     );
                 }
             }
-            Err(error) => report.findings.push(
-                Finding::structural(
-                    "metadata/binary/layout/compression::mpress-recovery-failed".to_string(),
-                    error.to_string(),
-                    1.0,
-                )
-                .with_criticality(Criticality::Notable),
-            ),
+            Err(error) => tracing::debug!(%error, "MPRESS recovery failed"),
         }
 
         // Node single-executable-application resources: source and assets.
@@ -144,21 +137,7 @@ impl PEAnalyzer {
                     label: "Feedback/RC4 DLL",
                 },
             );
-            if attached {
-                report.structure.push(StructuralFeature {
-                    id: "encoding/feedback-rc4-dll".to_string(),
-                    desc: "DLL recovered from feedback-stream and RC4 envelope".to_string(),
-                    evidence: vec![Evidence {
-                        method: "crypto".to_string(),
-                        source: "metamorphic_graft".to_string(),
-                        value: "Code-relative stream parameters and trailer-derived RC4 key"
-                            .to_string(),
-                        location: Some(format!("offset:{}", payload.offset)),
-                        offsets: vec![payload.offset as u64],
-                        ..Evidence::default()
-                    }],
-                });
-            }
+            if attached {}
         }
 
         // PE files in a code-relative RC4 table.
@@ -308,18 +287,6 @@ impl PEAnalyzer {
                         &virtual_path,
                         &self.engine,
                     );
-                    report.structure.push(StructuralFeature {
-                        id: "encoding/rc4-script-resource".to_string(),
-                        desc: "PowerShell script recovered from converter RC4 resource".to_string(),
-                        evidence: vec![Evidence {
-                            method: "crypto".to_string(),
-                            source: "ps_to_exe".to_string(),
-                            value: "MD5-derived RC4 key from code-referenced seed".to_string(),
-                            location: Some(format!("offset:{}", payload.offset)),
-                            offsets: vec![payload.offset as u64],
-                            ..Evidence::default()
-                        }],
-                    });
                 }
                 Some(Err(error)) => report
                     .metadata

@@ -20,15 +20,6 @@ fn test_analyze_pe_file() {
 }
 
 #[test]
-fn test_pe_has_structure() {
-    let analyzer = PEAnalyzer::new();
-    let test_file = test_pe_path();
-
-    let report = analyzer.analyze(&test_file).unwrap();
-    assert!(!report.structure.is_empty());
-}
-
-#[test]
 fn test_pe_architecture_detected() {
     let analyzer = PEAnalyzer::new();
     let test_file = test_pe_path();

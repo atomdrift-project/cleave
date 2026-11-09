@@ -1,8 +1,8 @@
-//! Partial extraction is an archive parsing property, including through the CLI.
+//! Partial extraction is an analysis state, not a finding, including through the CLI.
 use std::{io::Write, process::Command};
 
 #[test]
-fn partial_archive_reports_parsing_property_and_retains_readable_members() {
+fn partial_archive_flags_the_analysis_and_retains_readable_members() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     std::fs::create_dir_all(root.join("metadata/filename/identity")).unwrap();
@@ -57,12 +57,8 @@ fn partial_archive_reports_parsing_property_and_retains_readable_members() {
         );
         let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         let source = String::from_utf8(output.stdout).unwrap();
-        assert!(!source.contains("metadata/file/archive::partial-extraction"));
-        assert_eq!(
-            source.contains("metadata/archive/parsing::partial-extraction"),
-            partial,
-            "{report}"
-        );
+        assert!(!source.contains("partial-extraction"));
+        assert_eq!(source.contains("extraction-partial"), partial, "{report}");
         assert!(
             source.contains("alpha.txt"),
             "readable prefix lost: {report}"

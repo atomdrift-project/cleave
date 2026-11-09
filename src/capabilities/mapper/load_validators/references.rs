@@ -593,6 +593,48 @@ pub(super) fn retired_internal_refs<'a>(input: &'a ValidationInput<'a>) -> Repor
     })
 }
 
+/// A rule without an `if:` tunes the finding the engine emits at its id, so
+/// the engine must be able to emit that id; and a rule with an `if:` must not
+/// shadow an id the engine emits.
+pub(super) fn invalid_overrides<'a>(input: &'a ValidationInput<'a>) -> Report<'a> {
+    report(move |warnings| {
+        use crate::capabilities::validation::emitted::check_emitted_ref;
+        let bad: Vec<(&str, String)> = input
+            .trait_definitions
+            .iter()
+            .filter_map(|t| {
+                let emitted = check_emitted_ref(&t.id);
+                let why = match (t.is_override(), emitted) {
+                    (true, Some(Ok(()))) if t.id.contains("::") => return None,
+                    (true, Some(Err(why))) => why,
+                    (true, _) => "no `if:`, and the engine never emits this id".to_string(),
+                    (false, Some(Ok(()))) if t.id.contains("::") => {
+                        "the engine emits this id; override it without an `if:`".to_string()
+                    }
+                    (false, _) => return None,
+                };
+                Some((t.id.as_str(), why))
+            })
+            .collect();
+        if bad.is_empty() {
+            return;
+        }
+        eprintln!(
+            "\n❌ ERROR: {} traits misuse an engine-emitted id",
+            bad.len()
+        );
+        for (id, why) in &bad {
+            let source = input
+                .rule_source_files
+                .get(*id)
+                .map_or("unknown", String::as_str);
+            eprintln!("   {source}: '{id}': {why}");
+        }
+        eprintln!();
+        warnings.push(format!("{} traits misuse an engine-emitted id", bad.len()));
+    })
+}
+
 /// References from composites and traits to ids that no trait or
 /// composite defines.
 pub(super) fn broken_references<'a>(input: &'a ValidationInput<'a>) -> Report<'a> {

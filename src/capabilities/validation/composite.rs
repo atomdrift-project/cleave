@@ -213,11 +213,7 @@ pub(crate) fn find_leg_suppressing_composites(
 ) -> Vec<(&CompositeTrait, String, String, &'static str)> {
     let mut violations = Vec::new();
     for rule in rules {
-        // `builtin-*` rules are hook carriers: the engine applies their
-        // `unless:` to an analyzer-emitted finding of the same slug, and the
-        // rule itself is meant never to fire.
-        let leaf = rule.id.rsplit("::").next().unwrap_or(&rule.id);
-        if leaf.starts_with("builtin-") || !scope_is_file_local(rule.scope) {
+        if !scope_is_file_local(rule.scope) {
             continue;
         }
         let unless: Vec<&str> = trait_ids(rule.unless.as_deref()).collect();
@@ -392,8 +388,10 @@ pub(crate) fn collect_trait_refs_from_trait_def(t: &TraitDefinition) -> Vec<(Str
         }
     }
 
-    for id in t.r#if.trait_references() {
-        refs.push((id.clone(), t.id.clone()));
+    if !t.is_override() {
+        for id in t.r#if.trait_references() {
+            refs.push((id.clone(), t.id.clone()));
+        }
     }
     if let Some(ref conditions) = t.unless {
         collect_from_conditions(conditions, &t.id, &mut refs);

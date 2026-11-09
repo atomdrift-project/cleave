@@ -10,11 +10,13 @@
 //! the shared pieces (signer normalization, category and name sets) are the
 //! emitters' own functions and constants, so the two cannot drift apart.
 
-use crate::analyzers::embedded_code_detector::{EMBEDDED_LANG_NAMES, ENCODED_LAYER_NAMES};
+use crate::analyzers::embedded_code_detector::EMBEDDED_LANG_NAMES;
 use crate::analyzers::signature::{INVALID_REASONS, KINDS, STATES, normalize_name};
 
 /// Fixed structural ids emitted by the analyzers.
 const EXACT_IDS: &[&str] = &[
+    crate::analyzers::sfx_detector::UNEXPECTED_LOADER_REVISION_ID,
+    crate::analyzers::sfx_detector::LOADER_CHECKSUM_MISMATCH_ID,
     crate::analyzers::embedded_code_detector::HEURISTIC_QUOTED_ORIGIN_ID,
     crate::analyzers::ci_secret_file_flow::FACT_ID,
     crate::analyzers::ci_secret_file_flow::COLLECTOR_FACT_ID,
@@ -39,6 +41,16 @@ pub(crate) fn check_emitted_ref(id: &str) -> Option<Result<(), String>> {
     };
     match (path, leaf) {
         ("metadata/signed", _) => Some(Err(RETIRED_SIGNED.to_string())),
+        ("metadata/file/encoding", Some(leaf))
+            if leaf.strip_prefix("base64-decoded-").is_some_and(|kind| {
+                !kind.is_empty()
+                    && kind
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+            }) =>
+        {
+            Some(Ok(()))
+        }
         ("metadata/signature" | "metadata/lang/embedded", None) => Some(Ok(())),
         ("metadata/lang/embedded", Some(lang)) => Some(if EMBEDDED_LANG_NAMES.contains(&lang) {
             Ok(())
@@ -49,16 +61,6 @@ pub(crate) fn check_emitted_ref(id: &str) -> Option<Result<(), String>> {
             ))
         }),
         _ => {
-            if path == "metadata/lang/encoding/layer" {
-                return Some(match leaf {
-                    Some(encoding) if ENCODED_LAYER_NAMES.contains(&encoding) => Ok(()),
-                    Some(_) => Err(format!(
-                        "decoded layer names are {}",
-                        ENCODED_LAYER_NAMES.join(", ")
-                    )),
-                    None => Err("decoded layers require a named leaf".to_string()),
-                });
-            }
             if path.starts_with("metadata/signed/") {
                 return Some(Err(RETIRED_SIGNED.to_string()));
             }
@@ -137,8 +139,6 @@ mod tests {
             "metadata/signature/unverified/signer/",
             "metadata/signature/invalid/tampered/",
             "metadata/lang/embedded::shell",
-            "metadata/lang/encoding/layer::base64",
-            "metadata/lang/encoding/layer::wide",
         ] {
             assert_eq!(check_emitted_ref(id), Some(Ok(())), "{id}");
         }
@@ -239,18 +239,30 @@ mod tests {
     }
 
     #[test]
-    fn every_encoded_layer_name_is_an_emitted_id() {
-        for name in ENCODED_LAYER_NAMES {
-            assert_eq!(
-                check_emitted_ref(&format!("metadata/lang/encoding/layer::{name}")),
-                Some(Ok(())),
-                "{name}"
-            );
+    fn base64_decoded_and_installer_diagnostics_are_emitted_ids() {
+        for id in [
+            "metadata/file/encoding::base64-decoded-pe",
+            "metadata/file/encoding::base64-decoded-gz",
+            "metadata/file/encoding::base64-decoded-powershell",
+            "metadata/file/format/installer::inno-setup-loader-checksum-mismatch",
+        ] {
+            assert_eq!(check_emitted_ref(id), Some(Ok(())), "{id}");
         }
-        assert!(matches!(
-            check_emitted_ref("metadata/lang/encoding/layer::rot47"),
-            Some(Err(_))
-        ));
+        for id in [
+            "metadata/file/encoding::base64-decoded-",
+            "metadata/file/encoding::base64-decoded-PE",
+            "metadata/file/encoding::hex-decoded-pe",
+        ] {
+            assert_eq!(check_emitted_ref(id), None, "{id}");
+        }
+    }
+
+    #[test]
+    fn retired_layer_ids_are_not_engine_emitted() {
+        assert_eq!(
+            check_emitted_ref("metadata/lang/encoding/layer::wide"),
+            None
+        );
         assert_eq!(check_emitted_ref("metadata/lang/encoded/base64"), None);
         assert_eq!(check_emitted_ref("metadata/lang/encoding/base64"), None);
     }

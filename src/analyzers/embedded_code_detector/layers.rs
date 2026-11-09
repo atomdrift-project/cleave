@@ -140,7 +140,9 @@ pub(super) fn encoded_powershell_finding(
         precomputed_spans: None,
         src: None,
         kind: FindingKind::Capability,
-        id: "binary/embedded/base64-powershell".to_string().into(),
+        id: "metadata/file/encoding::base64-decoded-powershell"
+            .to_string()
+            .into(),
         desc: format!(
             "PowerShell -EncodedCommand payload ({} chars decoded) at offset {:#x}",
             decoded_len, offset
@@ -429,12 +431,7 @@ pub(crate) fn analyze_batch_expansion_layer(
     let virtual_path = encode_decoded_path(parent_path, &encoding_chain, result.offset);
     let analyzer =
         super::super::generic::GenericAnalyzer::new(FileType::Batch).with_engine(engine.clone());
-    let mut report =
-        analyzer.analyze_source_as_configured(Path::new(&virtual_path), &result.decoded);
-    report.findings.extend(generate_encoded_layer_traits(
-        &encoding_chain,
-        result.offset as u64,
-    ));
+    let report = analyzer.analyze_source_as_configured(Path::new(&virtual_path), &result.decoded);
     let (mut entry, _, _) = report.into_file_analysis(0, engine);
     entry.path = virtual_path;
     entry.depth = 1;

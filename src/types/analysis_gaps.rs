@@ -31,9 +31,12 @@ pub enum AnalysisGap {
     /// so the AST facts (calls, imports, literals) are missing for this run
     /// only. A later run may parse: the report is not cached.
     SourceParseIncomplete,
+    /// An archive could only be read in part: members were skipped or failed
+    /// to extract. Each problem is in the report's `metadata.errors`.
+    ExtractionPartial,
 }
 
-const ALL: [AnalysisGap; 10] = [
+const ALL: [AnalysisGap; 11] = [
     AnalysisGap::FlowUnavailable,
     AnalysisGap::FlowSchemaUnsupported,
     AnalysisGap::FlowGraphLimited,
@@ -44,6 +47,7 @@ const ALL: [AnalysisGap; 10] = [
     AnalysisGap::EmbeddedSourceIncomplete,
     AnalysisGap::EvaluationDeadline,
     AnalysisGap::SourceParseIncomplete,
+    AnalysisGap::ExtractionPartial,
 ];
 
 impl AnalysisGap {
@@ -61,6 +65,7 @@ impl AnalysisGap {
             Self::EmbeddedSourceIncomplete => "embedded-source-incomplete",
             Self::EvaluationDeadline => "evaluation-deadline",
             Self::SourceParseIncomplete => "source-parse-incomplete",
+            Self::ExtractionPartial => "extraction-partial",
         }
     }
 }

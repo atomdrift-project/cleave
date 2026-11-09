@@ -8,7 +8,6 @@ use crate::analyzers::Analyzer;
 use crate::analyzers::elf::ElfAnalyzer;
 use crate::analyzers::input::AnalysisInput;
 use crate::analyzers::pe::PEAnalyzer;
-use crate::types::{Evidence, StructuralFeature};
 use crate::yara_engine::YaraEngine;
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
@@ -174,42 +173,6 @@ pub(crate) fn calculate_sha256(data: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
-/// Create a structural feature indicating the source code language.
-///
-/// This ensures all language analyzers create consistent structural features
-/// that can be used for filtering and categorization.
-///
-/// # Arguments
-///
-/// * `language` - The language identifier (e.g., "python", "ruby", "javascript")
-/// * `parser_name` - The parser used (e.g., "tree-sitter-python")
-/// * `description` - Human-readable description (e.g., "Python script")
-///
-/// # Examples
-///
-/// ```ignore
-/// let feature = create_language_feature("python", "tree-sitter-python", "Python script");
-/// report.structure.push(feature);
-/// ```
-#[must_use]
-pub(crate) fn create_language_feature(
-    language: &str,
-    parser_name: &str,
-    description: &str,
-) -> StructuralFeature {
-    StructuralFeature {
-        id: format!("source/language/{}", language),
-        desc: description.to_string(),
-        evidence: vec![Evidence {
-            method: "parser".to_string(),
-            source: parser_name.to_string(),
-            value: language.to_string(),
-            location: Some("AST".to_string()),
-            ..Default::default()
-        }],
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,31 +198,5 @@ mod tests {
             hash,
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
-    }
-
-    #[test]
-    fn test_create_language_feature() {
-        let feature = create_language_feature("python", "tree-sitter-python", "Python script");
-
-        assert_eq!(feature.id, "source/language/python");
-        assert_eq!(feature.desc, "Python script");
-        assert_eq!(feature.evidence.len(), 1);
-
-        let evidence = &feature.evidence[0];
-        assert_eq!(evidence.method, "parser");
-        assert_eq!(evidence.value, "python");
-        assert_eq!(evidence.location, Some("AST".to_string()));
-    }
-
-    #[test]
-    fn test_create_language_feature_different_languages() {
-        let ruby_feature = create_language_feature("ruby", "tree-sitter-ruby", "Ruby source code");
-        assert_eq!(ruby_feature.id, "source/language/ruby");
-        assert_eq!(ruby_feature.desc, "Ruby source code");
-
-        let js_feature =
-            create_language_feature("javascript", "tree-sitter-javascript", "JavaScript code");
-        assert_eq!(js_feature.id, "source/language/javascript");
-        assert_eq!(js_feature.desc, "JavaScript code");
     }
 }

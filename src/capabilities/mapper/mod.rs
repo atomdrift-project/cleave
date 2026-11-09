@@ -114,22 +114,17 @@ pub(super) enum UnlessSource {
 /// the definition lists (platforms don't apply here — the old linear build
 /// ignored them too). See `evaluate_merged.rs` for how findings resolve
 /// through these. `by_id` maps a qualified definition ID to its
-/// `unless:`-bearing definition; `by_hook_leaf` maps a `builtin-*` ID leaf
-/// (e.g. `builtin-macho-fat-binary`) to the first such definition in
-/// traits-then-composites order. Replaces per-finding scans over every
-/// definition that dominated large-archive scans.
+/// `unless:`-bearing definition, an override of an engine-emitted finding
+/// included. Replaces per-finding scans over every definition that dominated
+/// large-archive scans.
 #[derive(Debug, Default)]
 pub(super) struct UnlessIndex {
     pub(super) by_id: rustc_hash::FxHashMap<String, UnlessSource>,
-    pub(super) by_hook_leaf: rustc_hash::FxHashMap<String, UnlessSource>,
-    /// `builtin-*` ID leaf to the first trait carrying a `downgrade:`: the
-    /// hook carrier of an engine-emitted finding that is to be demoted.
-    pub(super) downgrade_hook_by_leaf: rustc_hash::FxHashMap<String, usize>,
 }
 
 impl UnlessIndex {
     pub(super) fn is_empty(&self) -> bool {
-        self.by_id.is_empty() && self.by_hook_leaf.is_empty()
+        self.by_id.is_empty()
     }
 }
 

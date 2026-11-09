@@ -126,7 +126,7 @@ yara-x = { version = "1.23", features = ["native-code-serialization"] }
 # without enabling it, so yara-x fails to compile against rc.22. Cargo
 # unifies features, so enabling it here fixes yara-x's build. Remove once
 # yara-x enables `pkcs1v15` itself.
-rsa = { version = "0.10.0-rc.22", default-features = false, features = ["pkcs1v15"] }
+rsa = { version = "0.10.0", default-features = false, features = ["pkcs1v15"] }
 
 # Tree-sitter core types only. Per-language grammars (and their parsers)
 # live in filefacts; cleave consumes the cached `tree_sitter::Tree`

@@ -2,7 +2,7 @@
 
 All notable changes to cleave. Versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## 3.0.0-beta.3 (unreleased)
+## 3.0.0-beta.2 (2026-11-09)
 
 ### Security
 

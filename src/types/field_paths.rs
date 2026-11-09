@@ -131,6 +131,16 @@ pub(crate) const CLEAVE_OWNED_METRIC_FIELDS: &[&str] = &[
     "archive.guard.member_limit_reached",
     "archive.guard.path_traversal_count",
     "archive.guard.total_size",
+    // What happened when a UPX-packed executable went to `upx -d` (see
+    // `upx::record_*`): an outcome of running the external tool, which only
+    // the caller that ran it can report.
+    "upx.packed",
+    "upx.tool_missing",
+    "upx.refused",
+    "upx.decompression_failed",
+    "upx.invalid_image",
+    "upx.checksum_mismatch",
+    "upx.checksum_repaired",
     // Cleave's own string-retention policy: filefacts offers every text row,
     // cleave's per-file caps decide what rules search. Only the side that
     // applies the cap can say how many rows it dropped.

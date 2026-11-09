@@ -68,7 +68,8 @@ pub(super) fn analyze_macho(
         crate::analysis_context::AnalysisContext::open_with(facts_options.clone(), path, arch_data);
     let mut report =
         analyzer.analyze_structural_with_ctx(path, arch_data, Some(sha256.to_owned()), &ctx);
-    let raw_regex = rules.precompute_raw_regex_matches(eval_data, &rules.detect_file_type("macho"));
+    let raw_regex =
+        rules.precompute_raw_regex_matches(eval_data, &rules.detect_file_type("macho"), false);
     report.filefacts = Some(crate::types::FilefactsView::of(
         &ctx,
         engine.compact_members(),
@@ -146,7 +147,8 @@ pub(super) fn analyze_elf(b: BinaryInput<'_, '_>) -> AnalysisReport {
         Some(ctx) => analyzer.analyze_structural_with_ctx(path, file_data, Some(sha256), ctx),
         None => analyzer.analyze_structural(path, file_data, Some(sha256)),
     };
-    let raw_regex = rules.precompute_raw_regex_matches(file_data, &rules.detect_file_type("elf"));
+    let raw_regex =
+        rules.precompute_raw_regex_matches(file_data, &rules.detect_file_type("elf"), false);
     report.filefacts =
         file_ctx.map(|ctx| crate::types::FilefactsView::of(ctx, engine.compact_members()));
     report.identity = file_ctx.and_then(crate::analysis_context::AnalysisContext::identity);
@@ -203,7 +205,8 @@ pub(super) fn analyze_pe(b: BinaryInput<'_, '_>) -> Result<AnalysisReport> {
         analyzer = analyzer.with_yara_arc(yara.clone());
     }
     let mut report = analyzer.analyze_structural_with_ctx(path, file_data, Some(sha256), ctx);
-    let raw_regex = rules.precompute_raw_regex_matches(file_data, &rules.detect_file_type("pe"));
+    let raw_regex =
+        rules.precompute_raw_regex_matches(file_data, &rules.detect_file_type("pe"), false);
     report.filefacts = Some(crate::types::FilefactsView::of(
         ctx,
         engine.compact_members(),

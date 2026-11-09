@@ -43,7 +43,7 @@ pub(super) fn head_decodes_to_known_magic(string_info: &StringInfo) -> bool {
         .iter()
         .any(|e| e == "base64" || e == "base64-obf")
     {
-        return magic_type(string_info.value.as_bytes()).is_some();
+        return filefacts::payload_magic(string_info.value.as_bytes()).is_some();
     }
     head_decodes_to_known_magic_text(&string_info.value)
 }
@@ -65,21 +65,8 @@ pub(super) fn head_decodes_to_known_magic_text(value: &str) -> bool {
             base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, trimmed)
         })
         .ok()
-        .and_then(|bytes| magic_type(&bytes))
+        .and_then(|bytes| filefacts::payload_magic(&bytes))
         .is_some()
-}
-
-/// Detect archive/binary type from raw magic bytes.
-pub(super) fn magic_type(data: &[u8]) -> Option<&'static str> {
-    filefacts::archive_magic(data).or_else(|| {
-        if data.starts_with(b"MZ") {
-            Some("pe")
-        } else if data.len() >= 4 && data[..4] == [0x7F, 0x45, 0x4C, 0x46] {
-            Some("elf")
-        } else {
-            None
-        }
-    })
 }
 
 /// Recognize the small Firefox profile bootstrap archive used by browser
@@ -216,7 +203,7 @@ pub(super) fn detect_base64_binary(
         }
     };
 
-    let Some(inner_type) = magic_type(&decoded) else {
+    let Some(inner_type) = filefacts::payload_magic(&decoded) else {
         return Vec::new();
     };
     if matches!(inner_type, "elf" | "pe") && decoded.len() < MIN_BASE64_EXECUTABLE_SIZE {
@@ -328,8 +315,8 @@ pub(super) fn detect_base64_binary(
     out
 }
 
-/// Map the `magic_type` string ("gz", "zip", …) back to a
-/// [`FileType`] using filefacts's magic detector. `magic_type`
+/// Map the `filefacts::payload_magic` string ("gz", "zip", …) back to a
+/// [`FileType`] using filefacts's magic detector. `filefacts::payload_magic`
 /// returned a stable string label ("gz", "tar.gz", "elf", "pe", …);
 /// re-running detect_file_type_from_data is the right way to get a
 /// strongly-typed [`FileType`] that the analyzer dispatcher
@@ -340,7 +327,7 @@ pub(super) fn inner_type_to_file_type(
     decoded: &[u8],
     virtual_path: &str,
 ) -> Option<crate::analyzers::FileType> {
-    // Re-detect from the full byte buffer (magic_type only inspects
+    // Re-detect from the full byte buffer (`payload_magic` only inspects
     // the leading magic; the full detector also distinguishes
     // bare-gz from tar.gz, plain-tar from .gem, etc.).
     let detected =
@@ -348,7 +335,7 @@ pub(super) fn inner_type_to_file_type(
     if detected != crate::analyzers::FileType::Unknown {
         return Some(detected);
     }
-    // Fall back to the magic_type label so callers get *some*
+    // Fall back to the `payload_magic` label so callers get *some*
     // dispatch decision — better an over-broad attempt than no
     // recursion at all for unusual file headers.
     match inner_type {

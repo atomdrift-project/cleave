@@ -1,6 +1,7 @@
-//! UPX executable unpacking.
+//! UPX executable unpacking: runs the `upx` tool on a private copy.
 //!
-//! This module detects and unpacks UPX-compressed binaries for analysis.
+//! What a refusal means and the checksum repair live in `unpack::upx`; this
+//! module owns the subprocess, its limits, and the triage policy.
 
 use std::io::Write;
 use std::process::Command;
@@ -14,187 +15,113 @@ const UPX_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 pub(crate) enum UPXError {
     #[error("UPX binary not installed or not in PATH")]
     NotInstalled,
+    /// `upx` refused the image; its stderr.
     #[error("UPX decompression failed: {0}")]
     DecompressionFailed(String),
+    #[error("UPX decompression timed out")]
+    TimedOut,
+    #[error("Decompressed UPX size exceeds limit ({0} > {MAX_UPX_DECOMPRESSED_SIZE})")]
+    TooLarge(u64),
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
 }
 
-/// A stable description of why UPX decompression failed.
-///
-/// `upx` reports errors against the temporary file it was handed, so its stderr
-/// carries a path that differs on every run:
-///
-/// ```text
-/// upx: /tmp/.tmpJYEaZH: Exception: checksum error
-/// ```
-///
-/// Findings use this fixed vocabulary instead, so two reports of one file
-/// diff cleanly; the raw stderr goes to the debug log.
-pub(crate) struct UpxFailure {
-    /// Fixed text, safe to compare across runs and machines.
-    pub description: &'static str,
-    /// Exact integrity failures are suspicious artifact evidence, distinct
-    /// from environmental recovery limits.
-    pub checksum_mismatch: bool,
-    /// A claimed UPX image is structurally invalid or rejected as unpacked.
-    pub invalid_image: bool,
-}
+/// Largest image `upx -d` may write back.
+const MAX_UPX_DECOMPRESSED_SIZE: u64 = 100 * 1024 * 1024;
 
-/// Triage policy: a file-specific refusal by standard UPX is hostile even
-/// when a later repair recovers its contents. Missing tools, I/O failures,
-/// timeouts and local size ceilings are limitations of the analysis run.
-pub(crate) fn standard_unpack_refusal(err: &UPXError) -> Option<crate::types::Finding> {
-    let failure = classify_failure(err);
-    if !matches!(err, UPXError::DecompressionFailed(_))
-        || matches!(
-            failure.description,
-            "UPX decompression timed out"
-                | "UPX payload exceeds decompression size limit"
-                | "UPX could not read the image"
-        )
-    {
-        return None;
-    }
-    Some(
-        crate::types::Finding::structural(
-            "objectives/anti-static/pack/upx::standard-unpack-refused".to_string(),
-            "UPX image resists standard unpacking".to_string(),
-            1.0,
-        )
-        .with_criticality(crate::types::Criticality::Hostile),
-    )
-}
-
-/// Map a decompression error onto one of a fixed set of reasons.
-///
-/// Matching is done on substrings of `upx`'s own exception names, which are
-/// stable across releases (`ChecksumException`, `CantUnpackException`,
-/// `NotPackedException`, `IOException`). Checksum failures are distinguished
-/// from environmental limits and ordinary tool refusals.
-pub(crate) fn classify_failure(err: &UPXError) -> UpxFailure {
-    let mut checksum_mismatch = false;
-    let mut invalid_image = false;
-    let description = match err {
-        UPXError::NotInstalled => "UPX tool not available to unpack",
-        UPXError::IoError(_) => "UPX decompression I/O error",
-        UPXError::DecompressionFailed(msg) => {
-            let m = msg.to_ascii_lowercase();
-            if m.contains("timed out") {
-                "UPX decompression timed out"
-            } else if m.contains("exceeds limit") {
-                "UPX payload exceeds decompression size limit"
-            } else if m.contains("checksum error") || m.contains("checksumexception") {
-                checksum_mismatch = true;
-                "UPX header checksum does not match payload"
-            } else if m.contains("notpacked") || m.contains("not packed") {
-                invalid_image = true;
-                "UPX markers present but image is not packed"
-            } else if m.contains("corrupt")
-                || m.contains("invalid header")
-                || m.contains("invalid packed data")
-                || m.contains("unexpected end of file")
-            {
-                invalid_image = true;
-                "UPX packed-image structure is invalid"
-            } else if m.contains("cantunpack") || m.contains("cantpack") {
-                "UPX image refuses to unpack"
-            } else if m.contains("ioexception") {
-                "UPX could not read the image"
-            } else {
-                "UPX decompression failed"
-            }
-        }
+/// Whether `upx` itself rejected the image, as opposed to a limit of this
+/// run: a missing tool, an I/O failure, a timeout, a size ceiling or an
+/// unreadable input say nothing about the file. Only the fact is recorded
+/// (`upx.refused`); what a refusal means is a trait's judgment.
+pub(crate) fn refused_by_tool(err: &UPXError) -> bool {
+    let UPXError::DecompressionFailed(stderr) = err else {
+        return false;
     };
-    UpxFailure {
+    unpack::upx::classify(stderr).description != "UPX could not read the image"
+}
+
+/// Record outcome metrics (each `1`) on `report` for traits to judge. They
+/// are set while the report is still being structured, before the rule
+/// engine runs.
+fn set_metrics(report: &mut crate::types::AnalysisReport, names: &[&str]) {
+    let metrics = report
+        .filefacts_metrics
+        .get_or_insert_with(Default::default);
+    for name in names {
+        metrics.insert(format!("upx.{name}"), 1.0);
+    }
+}
+
+/// Whether `report` carries the `upx.<name>` outcome metric.
+#[cfg(test)]
+pub(crate) fn recorded(report: &crate::types::AnalysisReport, name: &str) -> bool {
+    report
+        .filefacts_metrics
+        .as_ref()
+        .is_some_and(|metrics| metrics.get(&format!("upx.{name}")) == Some(&1.0))
+}
+
+/// The file carries UPX's packing marker.
+pub(crate) fn record_packed(report: &mut crate::types::AnalysisReport) {
+    set_metrics(report, &["packed"]);
+}
+
+/// The unpacked image was not analyzed because UPX is disabled or missing.
+pub(crate) fn record_tool_missing(report: &mut crate::types::AnalysisReport) {
+    set_metrics(report, &["tool_missing"]);
+}
+
+/// `upx -d` failed with `err`: `upx.refused` when the tool itself rejected
+/// the image, even if a later repair recovers it.
+pub(crate) fn record_attempt_failure(report: &mut crate::types::AnalysisReport, err: &UPXError) {
+    if refused_by_tool(err) {
+        set_metrics(report, &["refused"]);
+    }
+}
+
+/// The image only unpacked after its checksums were repaired on an
+/// analysis copy.
+pub(crate) fn record_checksum_repaired(report: &mut crate::types::AnalysisReport) {
+    set_metrics(report, &["checksum_mismatch", "checksum_repaired"]);
+}
+
+/// The final failure to unpack: `upx.decompression_failed`, the reason in
+/// the fixed vocabulary of [`classify_failure`] as the `upx.failure` value,
+/// and `upx.invalid_image` / `upx.checksum_mismatch` when the image itself
+/// is at fault.
+pub(crate) fn record_failure(report: &mut crate::types::AnalysisReport, err: &UPXError) {
+    let failure = classify_failure(err);
+    set_metrics(report, &["decompression_failed"]);
+    if failure.invalid_image {
+        set_metrics(report, &["invalid_image"]);
+    }
+    if failure.checksum_mismatch {
+        set_metrics(report, &["checksum_mismatch"]);
+    }
+    report.merge_kv_subtree("upx", serde_json::json!({"failure": failure.description}));
+}
+
+/// Why decompression failed, in a fixed vocabulary that diffs cleanly
+/// across runs; the raw stderr goes to the debug log. Conditions of the run
+/// (no tool, I/O, timeout, size ceiling) are never evidence about the image.
+pub(crate) fn classify_failure(err: &UPXError) -> unpack::upx::Refusal {
+    let run = |description| unpack::upx::Refusal {
         description,
-        checksum_mismatch,
-        invalid_image,
+        checksum_mismatch: false,
+        invalid_image: false,
+    };
+    match err {
+        UPXError::NotInstalled => run("UPX tool not available to unpack"),
+        UPXError::IoError(_) => run("UPX decompression I/O error"),
+        UPXError::TimedOut => run("UPX decompression timed out"),
+        UPXError::TooLarge(_) => run("UPX payload exceeds decompression size limit"),
+        UPXError::DecompressionFailed(stderr) => unpack::upx::classify(stderr),
     }
 }
 
 pub(crate) struct UPXDecompressor;
 
 impl UPXDecompressor {
-    /// Check if data appears to be UPX-packed by looking for "UPX!" or similar
-    /// tampered magic strings ([A-Z]PX!) near the executable headers.
-    pub(crate) fn is_upx_packed(data: &[u8]) -> bool {
-        // UPX PE section tables often place the "UPX!" marker after the DOS,
-        // PE, and section headers. 512 bytes misses valid small PE samples with
-        // three sections; 4 KiB keeps detection header-scoped while covering the
-        // normal UPX header area.
-        let search_range = data.len().min(4096);
-        let search_data = &data[..search_range];
-
-        // Look for "[A-Z]PX!" pattern
-        for window in search_data.windows(4) {
-            if window.len() == 4
-                && window[0] >= b'A'
-                && window[0] <= b'Z'
-                && &window[1..4] == b"PX!"
-            {
-                return true;
-            }
-        }
-
-        false
-    }
-
-    /// Repair checksums only on an analysis copy of a recognized PE32 NRV2B
-    /// stream. A bounded data decoder recovers the bytes without executing the
-    /// specimen. The caller must retain the original integrity finding, and
-    /// ordinary UPX must still accept the repaired copy before it is analyzed.
-    pub(crate) fn repair_nrv2b_checksums(data: &[u8]) -> Option<Vec<u8>> {
-        const LIMIT: usize = 64 * 1024 * 1024;
-        if data.len() > LIMIT || !data.starts_with(b"MZ") {
-            return None;
-        }
-        let at = data
-            .get(..data.len().min(4096))?
-            .windows(4)
-            .position(|v| v == b"UPX!")?;
-        let h = data.get(at..at.checked_add(32)?)?;
-        if !(10..=13).contains(&h[4])
-            || h[5] != 9
-            || h[6] != 2
-            || h[31] != (h[4..31].iter().map(|v| u32::from(*v)).sum::<u32>() % 251) as u8
-        {
-            return None;
-        }
-        let ulen = u32::from_le_bytes(h[16..20].try_into().ok()?) as usize;
-        let clen = u32::from_le_bytes(h[20..24].try_into().ok()?) as usize;
-        if ulen == 0 || ulen > LIMIT || clen == 0 || clen > LIMIT {
-            return None;
-        }
-        let start = at.checked_add(32)?;
-        let compressed = data.get(start..start.checked_add(clen)?)?;
-        let decoded = crate::extractors::nrv32::decode(compressed, ulen).ok()?;
-        if decoded.len() != ulen {
-            return None;
-        }
-        fn adler(bytes: &[u8]) -> u32 {
-            let (mut a, mut b) = (1u32, 0u32);
-            for chunk in bytes.chunks(5552) {
-                for byte in chunk {
-                    a += u32::from(*byte);
-                    b += a;
-                }
-                a %= 65521;
-                b %= 65521;
-            }
-            (b << 16) | a
-        }
-        let mut copy = data.to_vec();
-        copy[at + 8..at + 12].copy_from_slice(&adler(&decoded).to_le_bytes());
-        copy[at + 12..at + 16].copy_from_slice(&adler(compressed).to_le_bytes());
-        copy[at + 31] = (copy[at + 4..at + 31]
-            .iter()
-            .map(|v| u32::from(*v))
-            .sum::<u32>()
-            % 251) as u8;
-        Some(copy)
-    }
-
     /// The `upx` binary, probed once.
     fn command() -> Option<std::path::PathBuf> {
         static UPX: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
@@ -249,25 +176,16 @@ impl UPXDecompressor {
         crate::subprocess::scrub_env(&mut command);
         let Some(output) = crate::subprocess::output_with_timeout(&mut command, UPX_TIMEOUT)?
         else {
-            return Err(UPXError::DecompressionFailed(
-                "UPX decompression timed out".to_string(),
-            ));
+            return Err(UPXError::TimedOut);
         };
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(UPXError::DecompressionFailed(stderr.to_string()));
         }
 
-        // Read back the decompressed data with size limit (100 MB)
-        let metadata = std::fs::metadata(temp_path)?;
-        let size = metadata.len();
-        const MAX_UPX_DECOMPRESSED_SIZE: u64 = 100 * 1024 * 1024;
-
+        let size = std::fs::metadata(temp_path)?.len();
         if size > MAX_UPX_DECOMPRESSED_SIZE {
-            return Err(UPXError::DecompressionFailed(format!(
-                "Decompressed UPX size exceeds limit ({} > {})",
-                size, MAX_UPX_DECOMPRESSED_SIZE
-            )));
+            return Err(UPXError::TooLarge(size));
         }
 
         let decompressed = std::fs::read(temp_path)?;
@@ -280,145 +198,6 @@ impl UPXDecompressor {
 mod tests {
     use super::*;
     use std::io::Write;
-
-    // =========================================================================
-    // is_upx_packed tests
-    // =========================================================================
-
-    #[test]
-    fn test_is_upx_packed_with_magic_after_elf_header() {
-        // UPX! magic typically appears after ELF header
-        let data_with_magic = b"\x7fELF\x00\x00\x00\x00UPX!\x00\x00";
-        assert!(UPXDecompressor::is_upx_packed(data_with_magic));
-    }
-
-    #[test]
-    fn test_is_upx_packed_without_magic() {
-        // Regular ELF header without UPX magic
-        let data_without_magic = b"\x7fELF\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00";
-        assert!(!UPXDecompressor::is_upx_packed(data_without_magic));
-    }
-
-    #[test]
-    fn test_is_upx_packed_empty() {
-        let empty: &[u8] = &[];
-        assert!(!UPXDecompressor::is_upx_packed(empty));
-    }
-
-    #[test]
-    fn test_is_upx_packed_magic_at_start() {
-        let data = b"UPX!\x00\x00\x00\x00";
-        assert!(UPXDecompressor::is_upx_packed(data));
-    }
-
-    #[test]
-    fn test_is_upx_packed_magic_at_end_of_search_range() {
-        // Magic at byte 4088 (just within 4 KiB search range)
-        let mut data = vec![0u8; 4096];
-        data[4088..4092].copy_from_slice(b"UPX!");
-        assert!(UPXDecompressor::is_upx_packed(&data));
-    }
-
-    #[test]
-    fn test_is_upx_packed_pe_magic_after_section_table() {
-        // Valid PE UPX samples can carry UPX! around byte 992, after the
-        // section table, while still being unpackable by upx -d.
-        let mut data = vec![0u8; 1200];
-        data[0..2].copy_from_slice(b"MZ");
-        data[992..996].copy_from_slice(b"UPX!");
-        assert!(UPXDecompressor::is_upx_packed(&data));
-    }
-
-    #[test]
-    fn test_is_upx_packed_magic_at_exactly_512_boundary() {
-        // Magic starting at byte 512 IS detected.
-        let mut data = vec![0u8; 520];
-        data[512..516].copy_from_slice(b"UPX!");
-        assert!(UPXDecompressor::is_upx_packed(&data));
-    }
-
-    #[test]
-    fn test_is_upx_packed_magic_beyond_header_search() {
-        // Magic starting beyond 4 KiB should not drive UPX unpacking.
-        let mut data = vec![0u8; 4200];
-        data[4097..4101].copy_from_slice(b"UPX!");
-        assert!(!UPXDecompressor::is_upx_packed(&data));
-    }
-
-    #[test]
-    fn test_is_upx_packed_partial_magic() {
-        // Partial magic "UPX" without "!" should not match
-        let data = b"\x7fELF\x00\x00\x00\x00UPX\x00\x00\x00";
-        assert!(!UPXDecompressor::is_upx_packed(data));
-    }
-
-    #[test]
-    fn test_is_upx_packed_similar_but_wrong_magic() {
-        // Similar strings that are NOT UPX magic
-        let data1 = b"\x7fELF\x00\x00\x00\x00upx!\x00\x00"; // lowercase
-        assert!(!UPXDecompressor::is_upx_packed(data1));
-
-        let data2 = b"\x7fELF\x00\x00\x00\x00UPX?\x00\x00"; // wrong char
-        assert!(!UPXDecompressor::is_upx_packed(data2));
-
-        let data3 = b"\x7fELF\x00\x00\x00\x00 UPX!\x00\x00"; // space before
-        assert!(UPXDecompressor::is_upx_packed(data3)); // should still match
-    }
-
-    #[test]
-    fn test_is_upx_packed_multiple_occurrences() {
-        // Multiple UPX! strings - should still return true
-        let mut data = vec![0u8; 100];
-        data[10..14].copy_from_slice(b"UPX!");
-        data[50..54].copy_from_slice(b"UPX!");
-        assert!(UPXDecompressor::is_upx_packed(&data));
-    }
-
-    #[test]
-    fn test_is_upx_packed_small_file() {
-        // File smaller than 512 bytes with magic
-        let data = b"UPX!";
-        assert!(UPXDecompressor::is_upx_packed(data));
-    }
-
-    #[test]
-    fn test_is_upx_packed_exactly_4_bytes() {
-        // Exactly 4 bytes matching magic
-        assert!(UPXDecompressor::is_upx_packed(b"UPX!"));
-    }
-
-    #[test]
-    fn test_is_upx_packed_3_bytes() {
-        // Only 3 bytes - cannot contain full magic
-        assert!(!UPXDecompressor::is_upx_packed(b"UPX"));
-    }
-
-    #[test]
-    fn test_is_upx_packed_binary_data_with_magic() {
-        // Binary data with UPX magic embedded
-        let mut data = vec![0xffu8; 256];
-        data[100..104].copy_from_slice(b"UPX!");
-        assert!(UPXDecompressor::is_upx_packed(&data));
-    }
-
-    #[test]
-    fn test_is_upx_packed_real_elf_header_pattern() {
-        // Realistic ELF header followed by UPX magic (typical UPX-packed ELF)
-        let mut data = vec![0u8; 256];
-        // ELF magic
-        data[0..4].copy_from_slice(b"\x7fELF");
-        // 64-bit, little-endian
-        data[4] = 2; // 64-bit
-        data[5] = 1; // little-endian
-        data[6] = 1; // ELF version
-        // UPX magic typically appears in the packed data section
-        data[100..104].copy_from_slice(b"UPX!");
-        assert!(UPXDecompressor::is_upx_packed(&data));
-    }
-
-    // =========================================================================
-    // UPXError tests
-    // =========================================================================
 
     #[test]
     fn test_upx_error_not_installed_display() {
@@ -440,24 +219,25 @@ mod tests {
     /// happened to be handed: two scans of one sample have to produce the same
     /// description, or the reports cannot be diffed.
     #[test]
-    fn standard_unpack_policy_separates_refusal_from_environment() {
+    fn tool_refusal_is_separated_from_environment() {
         for message in [
             "checksum error",
             "CantUnpackException: unsupported format",
             "NotPackedException: not packed",
             "corrupt file",
         ] {
-            let finding = standard_unpack_refusal(&UPXError::DecompressionFailed(message.into()));
-            assert!(finding.is_some_and(|f| f.crit == crate::types::Criticality::Hostile));
+            assert!(refused_by_tool(&UPXError::DecompressionFailed(
+                message.into()
+            )));
         }
         for err in [
             UPXError::NotInstalled,
             UPXError::IoError(std::io::Error::other("unavailable input")),
-            UPXError::DecompressionFailed("UPX decompression timed out".into()),
-            UPXError::DecompressionFailed("Decompressed UPX size exceeds limit".into()),
+            UPXError::TimedOut,
+            UPXError::TooLarge(200),
             UPXError::DecompressionFailed("IOException".into()),
         ] {
-            assert!(standard_unpack_refusal(&err).is_none());
+            assert!(!refused_by_tool(&err));
         }
     }
 
@@ -481,10 +261,8 @@ mod tests {
     #[test]
     fn test_classify_failure_environmental_reasons_are_specific() {
         for err in [
-            UPXError::DecompressionFailed("UPX decompression timed out".to_string()),
-            UPXError::DecompressionFailed(
-                "Decompressed UPX size exceeds limit (200 > 100)".to_string(),
-            ),
+            UPXError::TimedOut,
+            UPXError::TooLarge(200),
             UPXError::NotInstalled,
         ] {
             let f = classify_failure(&err);
@@ -539,37 +317,6 @@ mod tests {
                 !classify_failure(&UPXError::DecompressionFailed(message.into())).invalid_image
             );
         }
-    }
-
-    #[test]
-    fn bounded_checksum_repair_recovers_literal_stream_without_touching_input() {
-        // NRV2B literals "Hi", followed by the end marker.
-        let stream = [0, 0, 0, 192, 72, 105, 0, 32, 1, 0, 255];
-        let mut data = vec![0u8; 64 + 32];
-        data[..2].copy_from_slice(b"MZ");
-        data[64..72].copy_from_slice(&[b'U', b'P', b'X', b'!', 13, 9, 2, 1]);
-        data[80..84].copy_from_slice(&2u32.to_le_bytes());
-        data[84..88].copy_from_slice(&(stream.len() as u32).to_le_bytes());
-        data[95] = (data[68..95].iter().map(|v| u32::from(*v)).sum::<u32>() % 251) as u8;
-        data.extend_from_slice(&stream);
-        let original = data.clone();
-        let fixed = UPXDecompressor::repair_nrv2b_checksums(&data).unwrap();
-        assert_eq!(data, original);
-        assert_eq!(&fixed[96..], &stream);
-        assert_eq!(
-            u32::from_le_bytes(fixed[72..76].try_into().unwrap()),
-            0x00fb00b2
-        );
-        assert_eq!(
-            fixed[95],
-            (fixed[68..95].iter().map(|v| u32::from(*v)).sum::<u32>() % 251) as u8
-        );
-        for len in 0..data.len() {
-            assert!(UPXDecompressor::repair_nrv2b_checksums(&data[..len]).is_none());
-        }
-        data[80..84].copy_from_slice(&u32::MAX.to_le_bytes());
-        data[95] = (data[68..95].iter().map(|v| u32::from(*v)).sum::<u32>() % 251) as u8;
-        assert!(UPXDecompressor::repair_nrv2b_checksums(&data).is_none());
     }
 
     #[test]

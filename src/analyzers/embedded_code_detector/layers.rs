@@ -334,14 +334,25 @@ pub(crate) fn analyze_script_deobfuscation_layers(
     }
 
     let mut layers = Vec::new();
-    for (offset, decoded, language) in super::super::literal_program::decode(content) {
+    for layer in unpack::literal_program::decode(content) {
+        let language = match layer.language {
+            Some(language) => language.name(),
+            // A string a Python recipe writes out is analyzed only as
+            // JavaScript; writing text does not establish that it ran.
+            None if stng::script::detect_script_language(layer.text.as_bytes())
+                == Some(stng::script::ScriptLanguage::JavaScript) =>
+            {
+                "javascript"
+            }
+            None => continue,
+        };
         let Some(file_type) = file_type_for_script_language(language) else {
             continue;
         };
         if let Some(layer) = analyze_decoded_script_layer(
             parent_path,
-            &decoded,
-            offset as u64,
+            &layer.text,
+            layer.offset as u64,
             file_type,
             vec![format!("{language}-literal-program")],
             engine,

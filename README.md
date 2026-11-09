@@ -57,6 +57,8 @@ Representative coverage includes:
 | **Signatures** | OpenPGP detached signatures, X.509 signature sidecars, Apple trust caches |
 
 See [FILE_FORMATS.md](FILE_FORMATS.md) for the maintained coverage reference.
+Parsing lives in [filefacts](https://github.com/atomdrift-project/filefacts);
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) explains which project owns what.
 
 ## License
 

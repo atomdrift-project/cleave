@@ -333,3 +333,42 @@ fn test_generic_python_bytecode_reports_detected_type() {
 
     assert_eq!(report.target.file_type, "python_bytecode");
 }
+
+/// A COM file whose patched entry jump leads to a word-XOR stub.
+fn dos_word_xor_fixture() -> Vec<u8> {
+    let key = [0x16, 0x44];
+    let mut decoded = [0x90; 64];
+    decoded[..3].copy_from_slice(&[0xe9, 0x0d, 0x00]);
+    let patch = [
+        decoded[0] ^ key[0],
+        decoded[1] ^ key[1],
+        decoded[2] ^ key[0],
+    ];
+    let mut encoded = decoded
+        .iter()
+        .enumerate()
+        .map(|(i, b)| b ^ key[i & 1])
+        .collect::<Vec<_>>();
+    encoded[..3].copy_from_slice(&[0xe9, 61, 0]);
+    encoded.extend_from_slice(&[
+        0xbe, 0, 1, 0x56, 0xb9, 32, 0, 0xc7, 4, patch[0], patch[1], 0xc6, 0x44, 2, patch[2], 0x81,
+        0x34, key[0], key[1], 0x46, 0x46, 0xe2, 0xf8, 0x31, 0xf6, 0x31, 0xc9, 0xc3,
+    ]);
+    encoded
+}
+
+#[test]
+fn dos_word_xor_com_yields_a_single_bounded_child() {
+    let input = dos_word_xor_fixture();
+    let path = std::path::Path::new("fixture.com");
+    let analyzer = GenericAnalyzer::new(FileType::DosCom);
+    let report = analyzer
+        .analyze_input(&AnalysisInput::new(path, &input, FileType::DosCom))
+        .expect("analysis");
+    assert_eq!(report.files.len(), 1);
+    assert_eq!(
+        report.files[0].encoding.as_deref(),
+        Some(["dos-word-xor".to_owned()].as_slice())
+    );
+    assert!(report.files[0].path.contains("##dos-word-xor@64"));
+}

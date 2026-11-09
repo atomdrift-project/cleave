@@ -24,7 +24,6 @@
 pub(crate) mod applescript;
 pub(crate) mod archive;
 pub(crate) mod ast_walker;
-pub(crate) mod cfml;
 pub(crate) mod chm;
 
 // Unified analysis input type
@@ -46,36 +45,17 @@ pub(crate) mod utils;
 // B2: PE-specific extractors (Rich header, imphash, VERSIONINFO).
 
 // Dedicated analyzers for binary/bytecode/manifest formats
-pub(crate) mod dos_word_xor;
 pub(crate) mod elf;
 pub(crate) mod embedded_images;
-pub(crate) mod font;
-pub(crate) mod java_class;
-pub(crate) mod jpeg;
-pub(crate) mod js_decimal_packer;
-pub(crate) mod js_edge_source;
-pub(crate) mod js_joined_module;
-pub(crate) mod js_literal_catalog;
-pub(crate) mod js_permutation;
-pub(crate) mod js_string_table;
-pub(crate) mod js_xor_command;
-pub(crate) mod literal_program;
+pub(crate) mod embedded_layers;
+pub(crate) mod facts;
 pub(crate) mod macho;
-pub(crate) mod media;
 pub(crate) mod office;
 pub(crate) mod package_json;
 pub mod pdf;
 pub mod pe;
-pub(crate) mod php_blocks;
-pub(crate) mod pickle;
-mod png;
-pub(crate) mod python_char_array;
-pub(crate) mod python_encoded_command;
-pub(crate) mod python_literal_catalog;
-pub(crate) mod rtf;
 pub(crate) mod sfx_detector;
 pub(crate) mod signature;
-pub(crate) mod vsix_manifest;
 
 // Unified source analyzer (handles all tree-sitter languages)
 pub(crate) mod unified;
@@ -142,19 +122,9 @@ pub(crate) fn analyzer_for_file_type_arc(
             pe::PEAnalyzer::new().with_engine(engine.clone()),
         )),
 
-        // Java bytecode - not source code
-        FileType::JavaClass | FileType::Jar => Some(Box::new(
-            java_class::JavaClassAnalyzer::new().with_engine(engine.clone()),
-        )),
-
         // Compiled AppleScript - binary format
         FileType::AppleScript => Some(Box::new(
             applescript::AppleScriptAnalyzer::new().with_engine(engine.clone()),
-        )),
-
-        // RTF documents - parse for embedded OLE objects
-        FileType::Rtf => Some(Box::new(
-            rtf::RtfAnalyzer::new().with_engine(engine.clone()),
         )),
 
         // Microsoft Office documents (OLE2 and OOXML)
@@ -167,19 +137,12 @@ pub(crate) fn analyzer_for_file_type_arc(
             pdf::PdfAnalyzer::new().with_engine(engine.clone()),
         )),
 
-        // Image analyzers - steganography detection
-        FileType::Jpeg => Some(Box::new(
-            jpeg::JpegAnalyzer::new().with_engine(engine.clone()),
-        )),
-        FileType::Png => Some(Box::new(
-            png::PngAnalyzer::new().with_engine(engine.clone()),
-        )),
-        FileType::Font => Some(Box::new(
-            font::FontAnalyzer::new().with_engine(engine.clone()),
-        )),
-        // One analyzer for every non-font, non-raster container: they all
-        // defer to filefacts and read the same shared `media.*` facts.
-        FileType::Wav
+        // Formats whose analysis is entirely filefacts' facts.
+        FileType::Rtf
+        | FileType::Jpeg
+        | FileType::Png
+        | FileType::Font
+        | FileType::Wav
         | FileType::Aiff
         | FileType::Mp3
         | FileType::Mp4
@@ -188,19 +151,14 @@ pub(crate) fn analyzer_for_file_type_arc(
         | FileType::Ico
         | FileType::Gif
         | FileType::Bmp
-        | FileType::Webp => Some(Box::new(
-            media::MediaAnalyzer::new().with_engine(engine.clone()),
-        )),
-
-        // Pickle - deserialization attack detection
-        FileType::Pickle => Some(Box::new(
-            pickle::PickleAnalyzer::new().with_engine(engine.clone()),
+        | FileType::Webp
+        | FileType::Pickle
+        | FileType::VsixManifest
+        | FileType::JavaClass => Some(Box::new(
+            facts::FactsAnalyzer::new().with_engine(engine.clone()),
         )),
 
         // Package manifests - structured data parsers
-        FileType::VsixManifest => Some(Box::new(
-            vsix_manifest::VsixManifestAnalyzer::new().with_engine(engine.clone()),
-        )),
         FileType::PackageJson => Some(Box::new(
             package_json::PackageJsonAnalyzer::new().with_engine(engine.clone()),
         )),
@@ -308,203 +266,12 @@ pub trait Analyzer {
     }
 }
 
-/// The type a file's *name* claims (extension or well-known filename).
-///
-/// This is a claim, never an identity: use it to report what a name declares
-/// (`declared_type`, extension-mismatch metadata) or to retry a member whose
-/// detected format failed to parse. To know what a file *is*, use
-/// [`detect_file_type`] / [`detect_file_type_from_data`], which every command
-/// and the scan pipeline share.
-#[must_use]
-#[inline]
-pub(crate) fn declared_file_type_from_name(file_path: &Path) -> FileType {
-    if is_dotenv_name(file_path) {
-        return FileType::Text;
-    }
-    if is_arch_package_metadata_name(file_path) {
-        return FileType::Text;
-    }
-    if is_routeros_script_name(file_path) {
-        return FileType::Text;
-    }
-
-    filefacts::fileid::detect_path(file_path)
-        .map(|d| d.file_type)
-        .filter(|ft| *ft != FileType::Unknown)
-        .or_else(|| known_manifest_type_from_basename(file_path))
-        .or_else(|| known_data_type_from_extension(file_path))
-        .unwrap_or(FileType::Unknown)
-}
-
-/// Detect file type from already-loaded data (content first, extension fallback).
-#[inline]
-pub(crate) fn detect_file_type_from_data(file_path: &Path, file_data: &[u8]) -> FileType {
-    detect_file_type_from_detected(
-        file_path,
-        file_data,
-        filefacts::fileid::detect(file_path, file_data).map(|d| d.file_type),
-    )
-}
-
-/// [`detect_file_type_from_data`] with the filefacts detection already done
-/// (`detected` is `filefacts::fileid::detect(..).map(|d| d.file_type)`).
-/// Lets a caller that also needs the full [`filefacts::FileId`] run the
-/// detection pipeline once — on a compressed tar it inflates up to 64 MiB
-/// to decide npm/sdist.
-pub(crate) fn detect_file_type_from_detected(
-    file_path: &Path,
-    file_data: &[u8],
-    detected: Option<FileType>,
-) -> FileType {
-    // A name like `.env`, `.PKGINFO` or `*.rsc` says "inert text", and the
-    // caller chooses the name: letting it outrank the bytes would let a script
-    // saved as `.env` — or an ELF, or a zip — be read as text. So for those
-    // names the bytes are asked alone, and code, binaries and archives are
-    // typed by what they are; content nothing recognizes keeps the name's type.
-    let inert_name = is_dotenv_name(file_path)
-        || is_arch_package_metadata_name(file_path)
-        || is_routeros_script_name(file_path);
-    let detected = inert_name
-        .then(|| filefacts::fileid::detect(Path::new("content"), file_data))
-        .flatten()
-        .map(|d| d.file_type)
-        .filter(|ft| ft.is_source_code() || ft.is_executable_code() || ft.is_archive())
-        .or(detected);
-    let detected = detected.filter(|ft| *ft != FileType::Unknown);
-
-    detected
-        .or_else(|| sniff_script_type_from_content(file_data))
-        .or_else(|| inert_name.then_some(FileType::Text))
-        .or_else(|| known_manifest_type_from_basename(file_path))
-        .or_else(|| known_data_type_from_extension(file_path))
-        .unwrap_or(FileType::Unknown)
-}
-
-/// VBScript idioms, lowercase ASCII spelling. A file is called VBScript when
-/// [`VBS_MARKER_THRESHOLD`] *distinct* markers appear anywhere in it.
-const VBS_MARKERS: [&str; 8] = [
-    "on error resume next",
-    "createobject(",
-    "createobject (",
-    "wscript.shell",
-    "wscript.scriptfullname",
-    "function ",
-    "end function",
-    ".run ",
-];
-
-const VBS_MARKER_THRESHOLD: u32 = 3;
-
-/// Markers in both ASCII and UTF-16LE spelling: pattern `i` is
-/// `VBS_MARKERS[i]`, pattern `i + VBS_MARKERS.len()` is its wide form, so
-/// `index % VBS_MARKERS.len()` recovers the marker either way. Matching is
-/// ASCII-case-insensitive, which leaves the wide form's interleaved NULs
-/// untouched.
-fn vbs_marker_automaton() -> Option<&'static aho_corasick::AhoCorasick> {
-    static AUTOMATON: std::sync::OnceLock<Option<aho_corasick::AhoCorasick>> =
-        std::sync::OnceLock::new();
-    AUTOMATON
-        .get_or_init(|| {
-            let ascii = VBS_MARKERS.iter().map(|m| m.as_bytes().to_vec());
-            let wide = VBS_MARKERS
-                .iter()
-                .map(|m| m.bytes().flat_map(|b| [b, 0]).collect::<Vec<u8>>());
-            aho_corasick::AhoCorasick::builder()
-                .ascii_case_insensitive(true)
-                .build(ascii.chain(wide).collect::<Vec<_>>())
-                .ok()
-        })
-        .as_ref()
-}
-
-/// Largest input the script sniff will look at. See
-/// [`sniff_script_type_from_content`] for why it is capped.
-const SCRIPT_SNIFF_MAX_BYTES: usize = 4 << 20;
-
-/// Last-resort VBScript sniff, for content that magic bytes, extension, and
-/// filefacts' prefix heuristics all left unidentified.
-///
-/// Scans the raw bytes once for VBScript idioms in both ASCII and UTF-16LE
-/// spelling, case-insensitively — the needle is transcoded, never the
-/// haystack, the same way stng matches wide strings. Overlapping iteration is
-/// required: markers nest (`end function` contains `function `), and
-/// non-overlapping matching would let the outer one consume the inner one's
-/// occurrence, which is not what "does this marker appear?" means.
-///
-/// **Capped by size**, because this sniff's precision collapses as inputs grow.
-/// Several markers are generic (`function `, `.run `), so the chance that a
-/// large file contains three of them *somewhere* approaches 1 regardless of
-/// what it holds. A 1.5 GB APFS partition image inside a `.dmg` hit exactly
-/// `function `, `end function`, and `.run ` — at offsets 157 MB, 268 MB and
-/// 397 MB, none within 100 MB of another — and was analyzed as VBScript, which
-/// pushed the whole disk image through the source-code path. Delivered
-/// VBScript is kilobytes; a file over the cap is not a script this fallback
-/// was built to catch, and both the magic and extension paths still see it.
-fn sniff_script_type_from_content(data: &[u8]) -> Option<FileType> {
-    if data.len() > SCRIPT_SNIFF_MAX_BYTES {
-        return None;
-    }
-
-    // Compiled YARA-X databases contain fragments from many unrelated scripts.
-    // Their binary header is not script source, even when those fragments
-    // satisfy the fallback VBScript marker threshold.
-    if data.starts_with(b"YARA-X\0\0") {
-        return None;
-    }
-
-    let mut seen: u32 = 0;
-    for m in vbs_marker_automaton()?.find_overlapping_iter(data) {
-        seen |= 1 << (m.pattern().as_usize() % VBS_MARKERS.len());
-        if seen.count_ones() >= VBS_MARKER_THRESHOLD {
-            return Some(FileType::Vbs);
-        }
-    }
-
-    None
-}
-
-fn is_dotenv_name(path: &Path) -> bool {
-    let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
-        return false;
-    };
-    name == ".env" || name == ".env.backup" || name.starts_with(".env.backup.")
-}
-
-fn known_manifest_type_from_basename(file_path: &Path) -> Option<FileType> {
-    let name = file_path.file_name()?.to_str()?.to_ascii_lowercase();
-    match name.as_str() {
-        "cargo.toml" => Some(FileType::CargoToml),
-        "go.mod" => Some(FileType::GoMod),
-        "pyproject.toml" => Some(FileType::PyProjectToml),
-        _ => None,
-    }
-}
-
-fn known_data_type_from_extension(file_path: &Path) -> Option<FileType> {
-    let extension = file_path.extension()?.to_str()?.to_ascii_lowercase();
-    matches!(
-        extension.as_str(),
-        "dat" | "bin" | "payload" | "raw" | "map"
-    )
-    .then_some(FileType::Data)
-}
-
-fn is_arch_package_metadata_name(file_path: &Path) -> bool {
-    let Some(name) = file_path.file_name().and_then(|name| name.to_str()) else {
-        return false;
-    };
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        ".pkginfo" | ".buildinfo" | ".mtree"
-    )
-}
-
-fn is_routeros_script_name(file_path: &Path) -> bool {
-    file_path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("rsc"))
-}
+// What a file is comes from filefacts alone; cleave keeps these names for
+// its call sites.
+pub(crate) use filefacts::fileid::{
+    declared_file_type as declared_file_type_from_name, file_type as detect_file_type_from_data,
+    file_type_with as detect_file_type_from_detected,
+};
 
 /// Detect a file's type from its full contents, exactly as a scan does.
 ///

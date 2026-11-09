@@ -1021,7 +1021,7 @@ pub(super) fn build_string_prefilter(
     binary_data: &[u8],
     report: &crate::types::AnalysisReport,
 ) -> StringPrefilter {
-    if file_type.uses_raw_text_search_for(binary_data) {
+    if file_type.uses_raw_text_search_in(report) {
         if let Some((mut matched, regex_candidates)) = index.find_matches_in_raw_source(binary_data)
         {
             let decoded: Vec<&crate::types::StringInfo> = report

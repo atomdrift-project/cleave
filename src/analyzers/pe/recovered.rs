@@ -4,7 +4,7 @@
 //! Every recoverer decodes bytes; none executes the sample. A recovered child
 //! never scans for further embedded images, so recovery cannot recurse.
 
-use super::{Ctx, PEAnalyzer};
+use super::PEAnalyzer;
 use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::types::{AnalysisReport, Criticality, Evidence, Finding, StructuralFeature};
 use anyhow::Result;
@@ -31,14 +31,13 @@ impl PEAnalyzer {
         &self,
         report: &mut AnalysisReport,
         pe_data: &[u8],
-        ctx: &Ctx<'_>,
         logical_path: &Path,
     ) {
         if self.skip_embedded_scan {
             return;
         }
         // MPRESS resources, by bounded LZMA decoding.
-        match crate::extractors::mpress::recover(pe_data) {
+        match unpack::mpress::recover(pe_data) {
             Ok(resources) => {
                 for resource in resources {
                     if self.is_cancelled() {
@@ -74,7 +73,7 @@ impl PEAnalyzer {
         }
 
         // Node single-executable-application resources: source and assets.
-        for member in crate::extractors::node_sea::recover(pe_data).unwrap_or_default() {
+        for member in unpack::node_sea::recover(pe_data).unwrap_or_default() {
             if self.is_cancelled() {
                 break;
             }
@@ -106,7 +105,7 @@ impl PEAnalyzer {
 
         // The x86 NRV2B stub's memory image: imports unresolved, never run.
         if self.engine.upx() && !self.is_cancelled() {
-            match crate::extractors::nrv32::recover(pe_data) {
+            match unpack::nrv32::recover(pe_data) {
                 Ok(Some(data)) => {
                     self.attach_recovered(
                         report,
@@ -131,7 +130,7 @@ impl PEAnalyzer {
 
         // A DLL inside a feedback-stream and RC4 envelope.
         if !self.is_cancelled()
-            && let Some(payload) = crate::extractors::metamorphic_graft::recover(pe_data)
+            && let Some(payload) = unpack::metamorphic_graft::recover(pe_data)
         {
             let attached = self.attach_recovered(
                 report,
@@ -163,7 +162,7 @@ impl PEAnalyzer {
         }
 
         // PE files in a code-relative RC4 table.
-        for payload in crate::extractors::rc4_pe_table::recover(pe_data) {
+        for payload in unpack::rc4_pe_table::recover(pe_data) {
             if self.is_cancelled() {
                 break;
             }
@@ -182,10 +181,10 @@ impl PEAnalyzer {
         }
 
         // Fragmented AES-GCM envelopes and hex/RC4 next-byte envelopes.
-        let mut sealed = crate::extractors::fragment_gcm_pe::recover_chain(pe_data);
-        if let Some(payload) = crate::extractors::hex_rc4_nextbyte::recover(pe_data) {
+        let mut sealed = unpack::fragment_gcm_pe::recover_chain(pe_data);
+        if let Some(payload) = unpack::hex_rc4_nextbyte::recover(pe_data) {
             sealed.push((
-                crate::extractors::fragment_gcm_pe::Member {
+                unpack::fragment_gcm_pe::Member {
                     offset: payload.offset,
                     data: payload.data,
                 },
@@ -210,7 +209,7 @@ impl PEAnalyzer {
             );
         }
 
-        self.analyze_converter_scripts(report, pe_data, ctx, logical_path);
+        self.analyze_converter_scripts(report, pe_data, logical_path);
     }
 
     /// Analyze `recovered` as a member of the host and attach it to `report`.
@@ -280,10 +279,9 @@ impl PEAnalyzer {
         &self,
         report: &mut AnalysisReport,
         pe_data: &[u8],
-        ctx: &Ctx<'_>,
         logical_path: &Path,
     ) {
-        for payload in crate::extractors::ps_to_exe::recover(pe_data, &ctx.parsed) {
+        for payload in unpack::ps_to_exe::recover(pe_data) {
             if self.is_cancelled() {
                 break;
             }

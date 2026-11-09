@@ -7,8 +7,7 @@
 //! evaluates the traits and analyzes JavaScript appended past the manifest
 //! object as an embedded layer.
 use crate::analysis_context::AnalysisContext;
-use crate::analyzers::unified::UnifiedSourceAnalyzer;
-use crate::analyzers::{AnalysisInput, Analyzer, FileType};
+use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::types::{AnalysisReport, TargetInfo};
 use anyhow::{Context, Result};
 use std::fs;
@@ -46,9 +45,13 @@ impl PackageJsonAnalyzer {
         });
         let ctx = AnalysisContext::open(file_path, data);
         report.imports = ctx.imports_from_filefacts();
-        if let Some(offset) = trailing_code_offset(&ctx) {
-            self.analyze_trailing_code(file_path, data, offset, &mut report);
-        }
+        // Code appended past the manifest object is an embedded source.
+        crate::analyzers::embedded_layers::attach(
+            &mut report,
+            &file_path.display().to_string(),
+            &ctx,
+            &self.engine,
+        );
         self.engine.evaluate_and_merge_findings_with_precomputed(
             &mut report,
             data,
@@ -62,49 +65,6 @@ impl PackageJsonAnalyzer {
         report.metadata.tools_used = vec!["filefacts".to_string()];
         report
     }
-
-    /// Analyze JavaScript appended past the manifest object at `offset` as
-    /// an embedded layer, with the full source pipeline: AST, capabilities,
-    /// YARA.
-    fn analyze_trailing_code(
-        &self,
-        file_path: &Path,
-        data: &[u8],
-        offset: usize,
-        report: &mut AnalysisReport,
-    ) {
-        let Some(trailer) = data.get(offset..) else {
-            return;
-        };
-        let Some(analyzer) = UnifiedSourceAnalyzer::for_file_type(&FileType::JavaScript) else {
-            return;
-        };
-        let trailer = String::from_utf8_lossy(trailer);
-        let virtual_path = format!("{}##trailing@{offset:#x}", file_path.display());
-        let js_report = analyzer
-            .with_engine(self.engine.clone())
-            .without_embedded_detection()
-            .analyze_source(Path::new(&virtual_path), trailer.trim());
-        let (mut layer, _, _) = js_report.into_file_analysis(0, &self.engine);
-        layer.path = virtual_path;
-        layer.depth = 1;
-        layer.compute_summary();
-        report.files.push(layer);
-    }
-}
-
-/// Where JavaScript appended past the manifest object begins, when
-/// filefacts found code there.
-fn trailing_code_offset(ctx: &AnalysisContext<'_>) -> Option<usize> {
-    ctx.parsed
-        .metrics()
-        .get("npm.manifest.trailing_code")
-        .filter(|&present| present > 0.0)?;
-    ctx.parsed
-        .values()
-        .get("npm.manifest.trailing_offset")?
-        .as_u64()
-        .and_then(|offset| usize::try_from(offset).ok())
 }
 
 impl Default for PackageJsonAnalyzer {

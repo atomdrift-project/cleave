@@ -27,7 +27,7 @@ var http = require('http'); var cp = require('child_process'); eval(cp.execSync(
     );
     assert_eq!(report.files.len(), 1);
     assert!(
-        report.files[0].path.ends_with("##trailing@0x24"),
+        report.files[0].path.ends_with("##javascript@36"),
         "{}",
         report.files[0].path
     );

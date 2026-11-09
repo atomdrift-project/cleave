@@ -222,7 +222,7 @@ impl DoomedSkipIndex {
                     traits,
                     mapper_platforms,
                     file_type,
-                    ctx.binary_data,
+                    file_type.uses_raw_text_search_in(ctx.report),
                     indexes,
                     cache,
                 )
@@ -364,7 +364,7 @@ fn partner_cannot_match(
     traits: &[TraitDefinition],
     mapper_platforms: &[Platform],
     file_type: FileType,
-    binary_data: &[u8],
+    raw_text: bool,
     indexes: &MatchIndexes,
     cache: &TraitEvalCache<'_>,
 ) -> bool {
@@ -383,9 +383,7 @@ fn partner_cannot_match(
         Condition::Raw(RawQuery { regex: Some(_), .. })
         | Condition::Raw(RawQuery { word: Some(_), .. }) => true,
         Condition::Text(TextQuery { regex: Some(_), .. })
-        | Condition::Text(TextQuery { word: Some(_), .. }) => {
-            file_type.uses_raw_text_search_for(binary_data)
-        }
+        | Condition::Text(TextQuery { word: Some(_), .. }) => raw_text,
         _ => false,
     };
     if has_content_regex
@@ -399,15 +397,14 @@ fn partner_cannot_match(
     {
         return true;
     }
-    let use_string_index =
-        cache.source_text_prefiltered || !file_type.uses_raw_text_search_for(binary_data);
+    let use_string_index = cache.source_text_prefiltered || !raw_text;
     if use_string_index
         && indexes.string_match_index.is_exact_trait(partner_idx)
         && !cache.string_matched_traits.contains(&partner_idx)
     {
         return true;
     }
-    if !file_type.uses_raw_text_search_for(binary_data)
+    if !raw_text
         && indexes.string_match_index.is_substr_trait(partner_idx)
         && !cache.string_matched_traits.contains(&partner_idx)
     {

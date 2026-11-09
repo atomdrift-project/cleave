@@ -20,7 +20,7 @@ default-run = "cleave"
 workspace = true
 
 [workspace]
-members = [".", "crates/sysmem", "crates/yara-classify", "crates/pyinstx", "crates/lzx", "cleave-macros"]
+members = [".", "crates/sysmem", "crates/yara-classify", "crates/lzx", "cleave-macros"]
 
 [workspace.package]
 edition = "2024"
@@ -100,6 +100,9 @@ cleave-macros = { path = "cleave-macros" }
 
 # Library only; the defaults enable filefacts' CLI plumbing and allocator.
 filefacts = { git = "https://github.com/atomdrift-project/filefacts.git", default-features = false }
+# Unpackers and payload decoders. TEMPORARY path dependency until the unpack
+# repository is pushed; then `{ git = "https://github.com/atomdrift-project/unpack.git", default-features = false, features = ["script"] }`.
+unpack = { path = "../unpack", default-features = false, features = ["script"] }
 
 cfb = "0.14"  # Microsoft OLE2/CFBF compound document parsing
 
@@ -110,7 +113,6 @@ cfb = "0.14"  # Microsoft OLE2/CFBF compound document parsing
 sysmem = { path = "crates/sysmem" }
 
 # PyInstaller archive extraction
-pyinstx = { path = "crates/pyinstx" }
 
 # YARA pattern matching
 yara-classify = { path = "crates/yara-classify" }
@@ -188,16 +190,7 @@ rayon = "1.12"
 # moves a task onto a fresh heap segment when headroom runs low.
 stacker = "0.1"
 
-# Cryptography (for decrypting obfuscated payloads)
-aes = "0.9"
-aes-gcm = "0.10"
-scrypt = { version = "0.11", default-features = false }
-cbc = { version = "0.2", features = ["alloc"] }
-des = "0.8"
-chacha20poly1305 = { version = "0.10.1", default-features = false, features = ["alloc"] }
-
 # Utilities
-md-5 = "0.10.6"
 sha2 = "0.11"  # ARM/x86 hardware SHA acceleration is automatic in 0.11 (no feature flag)
 regex = "1.13"
 # Trait-engine regexes are built on the meta engine directly (same engine the
@@ -220,7 +213,6 @@ thiserror = "2.0"
 chrono = { version = "0.4", features = ["serde"] }
 hex = "0.4"
 base64 = "0.22"
-data-encoding = "2.11"
 tempfile = "3.27"
 filetime = "0.2"
 strsim = "0.11"
@@ -418,6 +410,12 @@ opt-level = 3
 
 [profile.dev.package.aho-corasick]
 opt-level = 3
+
+# TEMPORARY: filefacts' `source.data_only`, `source.embedded` and
+# `binary.installer.python_version` are not pushed yet. Remove this section
+# once filefacts is pushed and `cargo update -p filefacts` runs.
+[patch."https://github.com/atomdrift-project/filefacts.git"]
+filefacts = { path = "../filefacts" }
 
 [patch.crates-io]
 # tree-sitter carries an illumos build fix not yet released upstream; both

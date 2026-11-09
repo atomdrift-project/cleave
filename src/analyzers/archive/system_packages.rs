@@ -320,7 +320,7 @@ pub(crate) fn extract_dmg_from_data(
     // budget before we shell out, since a subprocess extraction can't be
     // bounded entry-by-entry the way the in-process extractors are. Record the
     // reason and stop (not an error): the host-level metadata floor survives.
-    if let Some(uncompressed) = udif_uncompressed_size(data)
+    if let Some(uncompressed) = filefacts::size_probe::udif_volume_size(data)
         && uncompressed > MAX_TOTAL_SIZE
     {
         guard.add_hostile_reason(HostileArchiveReason::ExcessiveTotalSize(uncompressed));
@@ -350,7 +350,8 @@ pub(crate) fn extract_dmg_from_data(
         .context("Failed to create temp file for DMG reconstruction")?;
     // The rebuilt image is the mounted volume: no larger than the trailer
     // declares, and never past the total budget.
-    let budget = udif_uncompressed_size(data).map_or(MAX_TOTAL_SIZE, |n| n.min(MAX_TOTAL_SIZE));
+    let budget = filefacts::size_probe::udif_volume_size(data)
+        .map_or(MAX_TOTAL_SIZE, |n| n.min(MAX_TOTAL_SIZE));
     match reconstruct_dmg_raw(data, raw.path(), budget) {
         Ok(Reconstruction::Done) => {
             crate::analyzers::sfx_detector::run_7z(raw.path(), dest_dir);
@@ -476,18 +477,6 @@ fn clear_dir(dir: &Path) {
             fs::remove_file(&path)
         };
     }
-}
-
-/// The mounted (uncompressed) volume size declared in the UDIF `koly` trailer:
-/// `sector_count` (big-endian u64 at trailer offset 492) × 512. `None` when the
-/// trailer is absent or truncated.
-fn udif_uncompressed_size(data: &[u8]) -> Option<u64> {
-    let trailer = data.get(data.len().checked_sub(512)?..)?;
-    if !trailer.starts_with(b"koly") {
-        return None;
-    }
-    let sectors = u64::from_be_bytes(trailer.get(492..500)?.try_into().ok()?);
-    sectors.checked_mul(512)
 }
 
 /// Extract a macOS PKG (XAR) archive from an in-memory reader.

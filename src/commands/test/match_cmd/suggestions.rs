@@ -78,7 +78,7 @@ pub(super) fn suggest_alternatives(ctx: &MatchCtx<'_>, output: &mut String) {
             }
         }
         cli::SearchType::Text => {
-            if internal_file_type.uses_raw_text_search_for(binary_data) {
+            if internal_file_type.uses_raw_text_search_in(ctx.report) {
                 // For raw-text mode, `type: text exact:` matches a complete trimmed line.
                 // If the pattern appears as substring but never as a standalone line, the
                 // author almost certainly wanted `substr:` or a word-boundary regex.

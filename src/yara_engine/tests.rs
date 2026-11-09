@@ -333,7 +333,7 @@ composite_rules:
             String::from_utf8_lossy(&output.stderr)
         );
         let packed = std::fs::read(&path).unwrap();
-        assert!(crate::upx::UPXDecompressor::is_upx_packed(&packed));
+        assert!(unpack::upx::is_packed(&packed));
         let report = analyzer.analyze_structural(&path, &packed, None);
         let child = report
             .files

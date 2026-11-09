@@ -236,33 +236,27 @@ fn test_pe_upx_recovers_virtual_archive_member() {
         .expect("UPX payload must be recovered without a real source path");
     assert_eq!(unpacked.size, 4096);
     assert_eq!(unpacked.file_type, "pe");
-    assert!(!report.findings.iter().any(|finding| {
-        finding.id == "metadata/binary/layout/compression::upx-decompression-failed"
-    }));
+    assert!(!crate::upx::recorded(&report, "decompression_failed"));
 }
 
 #[test]
 fn test_pe_upx_detection_in_data() {
-    use crate::upx::UPXDecompressor;
-
     // PE with UPX magic
     let mut upx_data = vec![0u8; 256];
     // MZ header
     upx_data[0..2].copy_from_slice(b"MZ");
     // UPX magic
     upx_data[100..104].copy_from_slice(b"UPX!");
-    assert!(UPXDecompressor::is_upx_packed(&upx_data));
+    assert!(unpack::upx::is_packed(&upx_data));
 
     // PE without UPX magic
     let mut normal_data = vec![0u8; 256];
     normal_data[0..2].copy_from_slice(b"MZ");
-    assert!(!UPXDecompressor::is_upx_packed(&normal_data));
+    assert!(!unpack::upx::is_packed(&normal_data));
 }
 
 #[test]
 fn test_pe_upx_packed_creates_finding() {
-    use crate::upx::UPXDecompressor;
-
     let analyzer = PEAnalyzer::new();
 
     // Create minimal UPX-packed PE-like data (won't actually decompress)
@@ -278,7 +272,7 @@ fn test_pe_upx_packed_creates_finding() {
     // UPX magic
     upx_data[200..204].copy_from_slice(b"UPX!");
 
-    assert!(UPXDecompressor::is_upx_packed(&upx_data));
+    assert!(unpack::upx::is_packed(&upx_data));
 
     let temp_file = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(temp_file.path(), &upx_data).unwrap();
@@ -287,18 +281,13 @@ fn test_pe_upx_packed_creates_finding() {
 
     // Should have UPX packer finding
     assert!(
-        report
-            .findings
-            .iter()
-            .any(|f| f.id == "anti-static/packer/upx"),
+        crate::upx::recorded(&report, "packed"),
         "Should have UPX packer finding"
     );
 }
 
 #[test]
 fn test_pe_upx_tool_missing_creates_finding() {
-    use crate::upx::UPXDecompressor;
-
     // An engine with UPX off reports the unpacked image as not analyzed,
     // exactly as when the tool is missing.
     let analyzer = PEAnalyzer::new().with_engine(crate::Engine::empty().with_settings(
@@ -316,7 +305,7 @@ fn test_pe_upx_tool_missing_creates_finding() {
     upx_data[0x84..0x86].copy_from_slice(&[0x64, 0x86]);
     upx_data[200..204].copy_from_slice(b"UPX!");
 
-    assert!(UPXDecompressor::is_upx_packed(&upx_data));
+    assert!(unpack::upx::is_packed(&upx_data));
 
     let temp_file = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(temp_file.path(), &upx_data).unwrap();
@@ -325,17 +314,11 @@ fn test_pe_upx_tool_missing_creates_finding() {
 
     // Should have both UPX finding and tool-missing finding
     assert!(
-        report
-            .findings
-            .iter()
-            .any(|f| f.id == "anti-static/packer/upx"),
+        crate::upx::recorded(&report, "packed"),
         "Should have UPX packer finding"
     );
     assert!(
-        report
-            .findings
-            .iter()
-            .any(|f| f.id == "anti-static/packer/upx/tool-missing"),
+        crate::upx::recorded(&report, "tool_missing"),
         "Should have tool-missing finding when UPX is disabled"
     );
 
@@ -364,10 +347,7 @@ fn test_pe_non_upx_data_no_upx_finding() {
 
     // Should NOT have UPX packer finding
     assert!(
-        !report
-            .findings
-            .iter()
-            .any(|f| f.id == "anti-static/packer/upx"),
+        !crate::upx::recorded(&report, "packed"),
         "Should not have UPX finding for non-UPX binary"
     );
 
@@ -376,41 +356,6 @@ fn test_pe_non_upx_data_no_upx_finding() {
         report.files.is_empty(),
         "Should not have unpacked FileAnalysis for non-UPX binary"
     );
-}
-
-#[test]
-fn test_pe_upx_finding_criticality() {
-    use crate::upx::UPXDecompressor;
-
-    let analyzer = PEAnalyzer::new();
-
-    let mut upx_data = vec![0u8; 512];
-    upx_data[0..2].copy_from_slice(b"MZ");
-    upx_data[0x3c..0x40].copy_from_slice(&[0x80, 0x00, 0x00, 0x00]);
-    upx_data[0x80..0x84].copy_from_slice(b"PE\x00\x00");
-    upx_data[0x84..0x86].copy_from_slice(&[0x64, 0x86]);
-    upx_data[200..204].copy_from_slice(b"UPX!");
-
-    assert!(UPXDecompressor::is_upx_packed(&upx_data));
-
-    let temp_file = tempfile::NamedTempFile::new().unwrap();
-    std::fs::write(temp_file.path(), &upx_data).unwrap();
-
-    let report = analyzer.analyze_structural(temp_file.path(), &upx_data, None);
-
-    // Find the UPX finding
-    let upx_finding = report
-        .findings
-        .iter()
-        .find(|f| f.id == "anti-static/packer/upx");
-
-    assert!(upx_finding.is_some(), "Should have UPX finding");
-    let finding = upx_finding.unwrap();
-
-    // A stock UPX marker records packing; it does not establish evasion intent.
-    assert_eq!(finding.crit, Criticality::Notable);
-    assert_eq!(finding.conf, 1.0);
-    assert_eq!(finding.desc, "Binary contains a UPX packing marker");
 }
 
 // ──── Pure-function helpers ────────────────────────────────────

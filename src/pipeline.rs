@@ -1004,8 +1004,8 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // All other analyzers use analyze_input() for unified data flow.
     let structural_start = std::time::Instant::now();
     // Default structural phase for every file type. The specialized arms below
-    // (binary struct+yara, archive) refine it; the office / java-class /
-    // package-manifest arms set no phase of their own, so without this they would
+    // (binary struct+yara, archive) refine it; the office and factory arms set
+    // no phase of their own, so without this they would
     // report the prior `cleave:stng` phase for their entire structural pass.
     set_phase(&format!("analyze:{}", file_type.report_file_type()));
     let compact_nested_values = engine.compact_members();
@@ -1042,9 +1042,6 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             engine,
             prefetched_yara,
         }),
-        FileType::JavaClass => analyzers::java_class::JavaClassAnalyzer::new()
-            .with_engine(engine.clone())
-            .analyze_input(&input),
         FileType::OleDoc | FileType::Msi | FileType::Ooxml => {
             analyzers::office::OfficeAnalyzer::new()
                 .with_engine(engine.clone())
@@ -1066,15 +1063,6 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             }
             analyzer.analyze_input(&input)
         }
-        FileType::PackageJson => analyzers::package_json::PackageJsonAnalyzer::new()
-            .with_engine(engine.clone())
-            .analyze_input(&input),
-        FileType::PackageLockJson => analyzers::generic::GenericAnalyzer::new(file_type)
-            .with_engine(engine.clone())
-            .analyze_input(&input),
-        FileType::VsixManifest => analyzers::vsix_manifest::VsixManifestAnalyzer::new()
-            .with_engine(engine.clone())
-            .analyze_input(&input),
         // All source code languages use the unified analyzer (or generic fallback)
         _ => {
             if let Some(analyzer) = analyzers::analyzer_for_file_type_arc(&file_type, engine) {

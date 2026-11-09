@@ -80,10 +80,11 @@ fn run_direct(
 
     let data = fs::read(path)?;
 
-    // Compiled SCPT stores UTF-16BE literals that raw stng rows cannot expose.
-    // Use the same parsed-literal conversion as the AppleScript analyzer.
-    if crate::analyzers::applescript::is_compiled(&data) {
-        let mut rows = strings::strings_from_filefacts(path, &data);
+    // A binary encoding filefacts parsed (a compiled script's UTF-16BE
+    // literals) holds strings raw stng rows cannot expose.
+    let ctx = crate::analysis_context::AnalysisContext::open(path, &data);
+    if ctx.parsed.metrics().get("file.binary") == Some(1.0) {
+        let mut rows = strings::strings_from_context(&ctx);
         rows.retain(|s| s.value.len() >= min_length);
         return format_strings_output(&rows, format);
     }

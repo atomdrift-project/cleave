@@ -271,15 +271,9 @@ fn try_extract(
     let mut inno_diagnostics = vec![];
     let extracted = match kind {
         SfxKind::Nsis | SfxKind::IExpress => run_7z(extraction_path, tmp.path()),
-        SfxKind::Nuitka => marker_offset.is_some_and(|offset| {
-            if data.starts_with(&[0xcf, 0xfa, 0xed, 0xfe])
-                || data.starts_with(&[0xce, 0xfa, 0xed, 0xfe])
-            {
-                extract_nuitka_posix_cached_at(data, offset, tmp.path()).is_ok()
-            } else {
-                extract_nuitka_at(data, offset, tmp.path()).is_ok()
-            }
-        }),
+        SfxKind::Nuitka => {
+            marker_offset.is_some_and(|offset| extract_nuitka_to(data, offset, tmp.path()).is_ok())
+        }
         SfxKind::InnoSetup => {
             if let Some(innoextract) = innoextract_cmd() {
                 let result = run_innoextract(&innoextract, extraction_path, tmp.path());
@@ -343,7 +337,7 @@ fn analyze_pyinstaller_in_memory(
     match analyzer.analyze_pyinstaller_bytes(data, file_path) {
         Ok(report) => Some(report),
         Err(e) => {
-            tracing::debug!("pyinstx in-memory analysis failed: {e}");
+            tracing::debug!("PyInstaller in-memory analysis failed: {e}");
             None
         }
     }
@@ -536,73 +530,11 @@ fn analyze_dir(
         .ok()
 }
 
-// The Windows one-file payload starts with KA + Y (compressed), followed by
-// one Zstandard frame. Its decoded records are NUL-terminated UTF-16LE names,
-// u64 little-endian sizes and exact member bytes; an empty name ends the list.
-const NUITKA_MAX_TOTAL: u64 = 1024 * 1024 * 1024;
-const NUITKA_MAX_MEMBER: u64 = 512 * 1024 * 1024;
-
-fn nuitka_member_path(name: &str) -> std::io::Result<std::path::PathBuf> {
-    let name = name.replace('\\', "/");
-    if name.starts_with('/')
-        || name.contains(':')
-        || name
-            .split('/')
-            .any(|p| p.is_empty() || p == "." || p == "..")
-    {
-        return Err(std::io::Error::other("unsafe Nuitka member name"));
-    }
-    Ok(std::path::PathBuf::from(name))
-}
-
-fn read_nuitka_name(reader: &mut impl std::io::Read) -> std::io::Result<String> {
-    let mut units = Vec::new();
-    for _ in 0..4096 {
-        let mut pair = [0u8; 2];
-        reader.read_exact(&mut pair)?;
-        let unit = u16::from_le_bytes(pair);
-        if unit == 0 {
-            return String::from_utf16(&units).map_err(|err| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    anyhow::Error::new(err).context("invalid Nuitka UTF-16 name"),
-                )
-            });
-        }
-        units.push(unit);
-    }
-    Err(std::io::Error::other("Nuitka member name too long"))
-}
-
-fn extract_nuitka_at(data: &[u8], offset: usize, out: &Path) -> std::io::Result<()> {
-    use std::io::Read;
-    let decoder = zstd::stream::read::Decoder::new(&data[offset + 3..])?.single_frame();
-    // Cap both output and record overhead, even when the frame omits its size.
-    let mut reader = decoder.take(NUITKA_MAX_TOTAL + 1);
-    let mut total = 0u64;
-    let mut names = std::collections::HashSet::new();
-    for count in 0..4096 {
-        let name = read_nuitka_name(&mut reader)?;
-        if name.is_empty() {
-            let mut trailing = [0];
-            if count == 0 || reader.read(&mut trailing)? != 0 {
-                return Err(std::io::Error::other("invalid Nuitka record terminator"));
-            }
-            return Ok(());
-        }
-        let relative = nuitka_member_path(&name)?;
-        if !names.insert(relative.to_string_lossy().to_lowercase()) {
-            return Err(std::io::Error::other("duplicate Nuitka member"));
-        }
-        let mut size = [0u8; 8];
-        reader.read_exact(&mut size)?;
-        let size = u64::from_le_bytes(size);
-        total = total
-            .checked_add(size)
-            .ok_or_else(|| std::io::Error::other("Nuitka member size overflow"))?;
-        if size > NUITKA_MAX_MEMBER || total > NUITKA_MAX_TOTAL {
-            return Err(std::io::Error::other("Nuitka extraction byte limit"));
-        }
+/// Extract the Nuitka payload whose marker starts `offset` bytes into
+/// `data` into `out`, one new file per member. `unpack::nuitka` validates
+/// every name and bounds the output; members stream straight to disk.
+fn extract_nuitka_to(data: &[u8], offset: usize, out: &Path) -> std::io::Result<()> {
+    unpack::nuitka::extract(data, offset, |relative, member| {
         let path = out.join(relative);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -611,95 +543,9 @@ fn extract_nuitka_at(data: &[u8], offset: usize, out: &Path) -> std::io::Result<
             .write(true)
             .create_new(true)
             .open(path)?;
-        if std::io::copy(&mut reader.by_ref().take(size), &mut file)? != size {
-            return Err(std::io::Error::other("truncated Nuitka member"));
-        }
-    }
-    Err(std::io::Error::other("Nuitka member count limit"))
-}
-
-/// Cached POSIX Nuitka stream: UTF-8 name, flags, little-endian size,
-/// CRC32, then bytes. Reject links rather than creating filesystem links.
-/// Uncached and newer table-of-contents layouts are intentionally rejected;
-/// failing extraction must not be mistaken for complete coverage.
-fn extract_nuitka_posix_cached_at(data: &[u8], offset: usize, out: &Path) -> std::io::Result<()> {
-    use std::io::{Read, Write};
-    let frame = offset
-        .checked_add(3)
-        .and_then(|start| data.get(start..))
-        .ok_or_else(|| std::io::Error::other("invalid Nuitka frame offset"))?;
-    let decoder = zstd::stream::read::Decoder::new(frame)?.single_frame();
-    let mut reader = decoder.take(NUITKA_MAX_TOTAL + 1);
-    let mut total = 0u64;
-    let mut names = std::collections::HashSet::new();
-    for count in 0..4096 {
-        let mut name = Vec::new();
-        loop {
-            let mut byte = [0u8; 1];
-            reader.read_exact(&mut byte)?;
-            if byte[0] == 0 {
-                break;
-            }
-            if name.len() >= 4096 {
-                return Err(std::io::Error::other("Nuitka member name too long"));
-            }
-            name.push(byte[0]);
-        }
-        if name.is_empty() {
-            let mut trailing = [0u8; 1];
-            if count == 0 || reader.read(&mut trailing)? != 0 {
-                return Err(std::io::Error::other("invalid Nuitka record terminator"));
-            }
-            return Ok(());
-        }
-        let name = std::str::from_utf8(&name).map_err(|err| {
-            std::io::Error::other(format!("invalid Nuitka UTF-8 member name: {err}"))
-        })?;
-        let relative = nuitka_member_path(name)?;
-        if !names.insert(relative.to_string_lossy().to_lowercase()) {
-            return Err(std::io::Error::other("duplicate Nuitka member"));
-        }
-        let mut flag = [0u8; 1];
-        reader.read_exact(&mut flag)?;
-        if flag[0] & !1 != 0 {
-            return Err(std::io::Error::other("unsupported Nuitka member flags"));
-        }
-        let mut size_bytes = [0u8; 8];
-        let mut crc_bytes = [0u8; 4];
-        reader.read_exact(&mut size_bytes)?;
-        reader.read_exact(&mut crc_bytes)?;
-        let size = u64::from_le_bytes(size_bytes);
-        let expected_crc = u32::from_le_bytes(crc_bytes);
-        total = total
-            .checked_add(size)
-            .ok_or_else(|| std::io::Error::other("Nuitka size overflow"))?;
-        if size > NUITKA_MAX_MEMBER || total > NUITKA_MAX_TOTAL {
-            return Err(std::io::Error::other("Nuitka extraction byte limit"));
-        }
-        let path = out.join(relative);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)?;
-        let mut checksum = crc32fast::Hasher::new();
-        let mut remaining = size;
-        let mut buffer = [0u8; 32768];
-        while remaining > 0 {
-            let take = remaining.min(buffer.len() as u64) as usize;
-            reader.read_exact(&mut buffer[..take])?;
-            checksum.update(&buffer[..take]);
-            file.write_all(&buffer[..take])?;
-            remaining -= take as u64;
-        }
-        let actual = checksum.finalize();
-        if expected_crc != actual.max(1) {
-            return Err(std::io::Error::other("Nuitka member CRC mismatch"));
-        }
-    }
-    Err(std::io::Error::other("Nuitka member count limit"))
+        std::io::copy(member, &mut file).map(drop)
+    })
+    .map(drop)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

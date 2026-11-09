@@ -18,7 +18,6 @@ const EXACT_IDS: &[&str] = &[
     crate::analyzers::embedded_code_detector::HEURISTIC_QUOTED_ORIGIN_ID,
     crate::analyzers::ci_secret_file_flow::FACT_ID,
     crate::analyzers::ci_secret_file_flow::COLLECTOR_FACT_ID,
-    "objectives/anti-static/pack/upx::standard-unpack-refused",
 ];
 
 /// Validate a reference into a runtime-synthesized namespace.

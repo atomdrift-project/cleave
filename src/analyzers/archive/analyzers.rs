@@ -671,13 +671,13 @@ fn archive_entry_metadata(
     }
 }
 
-fn pyinstaller_entry_kind(kind: pyinstx::EntryKind) -> &'static str {
+fn pyinstaller_entry_kind(kind: unpack::pyinstaller::EntryKind) -> &'static str {
     match kind {
-        pyinstx::EntryKind::PySource => "py-source",
-        pyinstx::EntryKind::PyModule => "py-module",
-        pyinstx::EntryKind::PyzMember => "pyz-member",
-        pyinstx::EntryKind::Splash => "splash",
-        pyinstx::EntryKind::Binary => "binary",
+        unpack::pyinstaller::EntryKind::PySource => "py-source",
+        unpack::pyinstaller::EntryKind::PyModule => "py-module",
+        unpack::pyinstaller::EntryKind::PyzMember => "pyz-member",
+        unpack::pyinstaller::EntryKind::Splash => "splash",
+        unpack::pyinstaller::EntryKind::Binary => "binary",
     }
 }
 

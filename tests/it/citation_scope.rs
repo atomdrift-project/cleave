@@ -178,7 +178,7 @@ fn a_composite_in_a_carved_php_block_keeps_nothing_in_a_sibling() {
         ("init.php", "<?php\n// wrapleg notesignal\necho 1;\n"),
     ]);
     let at = PLAYER.find("<?php").unwrap();
-    let view = kept(&files, &format!("!!player.js##embedded-php@{at}"));
+    let view = kept(&files, &format!("!!player.js##php@{at}"));
     assert!(has(view, "in-view") && has(view, "wrap"), "{files:?}");
     let member = kept(&files, "!!init.php");
     assert!(has(member, "note"), "{files:?}");

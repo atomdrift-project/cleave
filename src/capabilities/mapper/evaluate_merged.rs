@@ -256,16 +256,14 @@ impl super::CapabilityMapper {
         &self,
         binary_data: &[u8],
         file_type: &RuleFileType,
+        raw_text: bool,
     ) -> Option<crate::capabilities::indexes::RawGateHits> {
         // Full gate (source offset recording / windowed `eval_raw`) is
         // profitable up to ~3 MiB; PE/ELF stay ungated above that. Source
         // 3–80 MiB gets a *presence-only* sweep: skip `eval_raw` when the
         // mandatory atom is absent, but do not record offsets or window,
         // which costs more than it saves at that size.
-        let record_offsets = raw_gate_plan(
-            binary_data.len(),
-            file_type.uses_raw_text_search_for(binary_data),
-        )?;
+        let record_offsets = raw_gate_plan(binary_data.len(), raw_text)?;
         let index = &self.match_indexes().raw_content_regex_index;
         if !index.has_patterns() {
             return None;
@@ -353,8 +351,13 @@ impl super::CapabilityMapper {
         }
 
         // Use precomputed regex matches if provided, otherwise compute now
-        let mut raw_regex_hits = precomputed_raw_regex
-            .unwrap_or_else(|| self.precompute_raw_regex_matches(binary_data, &file_type));
+        let mut raw_regex_hits = precomputed_raw_regex.unwrap_or_else(|| {
+            self.precompute_raw_regex_matches(
+                binary_data,
+                &file_type,
+                file_type.uses_raw_text_search_in(report),
+            )
+        });
         // The gate scanned raw bytes, but `type: text` also matches decoded
         // string layers (base64/xor chains — `eval_text`'s second pass). A
         // trait whose only match lives inside a decoded layer (English words

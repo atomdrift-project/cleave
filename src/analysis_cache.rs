@@ -955,9 +955,11 @@ fn options_hash_with(
     // base64-decoded-<type>`, `metadata/file/format/installer::inno-setup-*`),
     // `structure` is no longer populated and partial extraction is the
     // `extraction-partial` analysis gap; older reports carry the old ids.
+    // v=32: canonical child containment and universal child-composite evaluation.
+    // Older reports can omit inherited findings and carrier composites.
     let zip_passwords = Sha256::digest(options.zip_passwords.join("\0").as_bytes());
     let key = format!(
-        "v=31,cm={},3p={},yara={},yskip={},ybuiltin={},zpw={},upx={},plat={},hp={},sp={},ps={},fv={},recovery={}",
+        "v=32,cm={},3p={},yara={},yskip={},ybuiltin={},zpw={},upx={},plat={},hp={},sp={},ps={},fv={},recovery={}",
         settings.compact_members,
         settings.third_party_yara,
         settings.yara,

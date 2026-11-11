@@ -1136,3 +1136,88 @@ fn prune_archive_directories_keeps_only_members_with_content() {
     assert_eq!(paths, ["pkg/a.js"]);
     assert!(report.values_tree.is_none());
 }
+
+#[test]
+fn carrier_inheritance_uses_explicit_links_without_path_delimiters() {
+    let mut report = AnalysisReport::new(test_target());
+    let mut root = test_file("opaque-root", vec![]);
+    root.id = 10;
+    let mut child = test_file(
+        "opaque-child",
+        vec![test_finding("cap/payload", Criticality::Hostile)],
+    );
+    child.id = 20;
+    child.parent_id = Some(10);
+    child.depth = 1;
+    let mut unrelated = test_file("opaque-unrelated", vec![]);
+    unrelated.id = 30;
+    report.files = vec![root, child, unrelated];
+    assert_eq!(report.inherit_child_findings_into_wrappers(), vec![0]);
+    let finding = &report.files[0].findings[0];
+    assert_eq!(finding.id, "cap/payload");
+    assert_eq!(finding.src, Some(20));
+    assert!(report.files[2].findings.is_empty());
+}
+
+#[test]
+fn carrier_local_root_paths_are_rebased_for_every_file_type() {
+    for kind in crate::composite_rules::FileType::all_concrete_variants() {
+        let kind = serde_json::to_value(kind)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let mut report = AnalysisReport::new(TargetInfo {
+            path: "/samples/carrier".to_string(),
+            file_type: kind.to_string(),
+            size_bytes: 100,
+            sha256: "root".to_string(),
+            architectures: None,
+        });
+        let mut child = test_file(
+            "carrier!!payload",
+            vec![test_finding("cap/payload", Criticality::Hostile)],
+        );
+        child.depth = 1;
+        report.files.push(child);
+        report.finalize();
+        assert_eq!(report.files[1].path, "/samples/carrier!!payload", "{kind}");
+        assert_eq!(report.files[1].parent_id, Some(0), "{kind}");
+        assert!(
+            report.files[0]
+                .findings
+                .iter()
+                .any(|f| f.id == "cap/payload" && f.src == Some(1)),
+            "{kind}"
+        );
+    }
+}
+
+#[test]
+fn carrier_rebase_preserves_real_member_named_after_root() {
+    let mut report = AnalysisReport::new(TargetInfo {
+        path: "/samples/carrier".to_string(),
+        file_type: "zip".to_string(),
+        size_bytes: 100,
+        sha256: "root".to_string(),
+        architectures: None,
+    });
+    let mut inner = test_file("carrier", vec![]);
+    inner.depth = 1;
+    let mut payload = test_file(
+        "carrier!!payload",
+        vec![test_finding("cap/payload", Criticality::Hostile)],
+    );
+    payload.depth = 2;
+    report.files = vec![inner, payload];
+    report.finalize();
+    assert_eq!(report.files[1].path, "/samples/carrier!!carrier");
+    assert_eq!(report.files[2].path, "/samples/carrier!!carrier!!payload");
+    assert_eq!(report.files[2].parent_id, Some(1));
+    assert!(
+        report.files[0]
+            .findings
+            .iter()
+            .any(|f| f.id == "cap/payload")
+    );
+}

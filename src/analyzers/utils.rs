@@ -16,11 +16,12 @@ use std::sync::Arc;
 /// Extract embedded binary bytes to a temp file, analyze with the appropriate analyzer,
 /// and return a FileAnalysis suitable for inclusion as a nested child (depth=1).
 ///
+/// `host_path` is the complete logical parent path, including outer containers.
 /// Returns `None` if extraction or analysis fails — the parent finding is still emitted.
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn analyze_embedded_as_child(
     bytes: &[u8],
-    host_name: &str,
+    host_path: &str,
     kind_str: &str,
     display_kind: &str,
     offset: usize,
@@ -32,7 +33,7 @@ pub(crate) fn analyze_embedded_as_child(
     std::fs::write(temp.path(), bytes).ok()?;
 
     let child_path = crate::types::file_analysis::encode_archive_path(
-        host_name,
+        host_path,
         &format!("embedded:{}@{:#x}", display_kind, offset),
     );
     let child_path_buf = PathBuf::from(&child_path);
@@ -92,7 +93,7 @@ pub(crate) fn analyze_embedded_as_child(
         .as_deref()
         .map(|name| {
             crate::types::file_analysis::encode_archive_path(
-                host_name,
+                host_path,
                 &format!("embedded:{}:{}@{:#x}", display_kind, name, offset),
             )
         })

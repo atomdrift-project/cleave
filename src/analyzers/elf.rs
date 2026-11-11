@@ -254,11 +254,7 @@ impl ElfAnalyzer {
         // Embedded ELF / PE images filefacts located (it skips core dumps,
         // whose memory holds the images they ran), analyzed as children.
         if !self.skip_embedded_scan {
-            let host_name = std::path::Path::new(&report.target.path)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("binary.elf")
-                .to_string();
+            let host_path = report.target.path.clone();
             for image in
                 crate::analyzers::embedded_images::EmbeddedImage::from_values(parsed_values)
             {
@@ -270,7 +266,7 @@ impl ElfAnalyzer {
                 };
                 if let Some(files) = crate::analyzers::utils::analyze_embedded_as_child(
                     &bytes,
-                    &host_name,
+                    &host_path,
                     &image.family,
                     &image.display_kind(),
                     image.offset,

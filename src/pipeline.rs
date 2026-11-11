@@ -278,9 +278,6 @@ pub(crate) fn process_encoded_payloads(
     options: &AnalysisOptions,
     engine: &Engine,
 ) {
-    let has_mime = encoded_payloads
-        .iter()
-        .any(|p| p.encoding_chain.as_slice() == ["mime-base64"]);
     for payload in encoded_payloads {
         if options
             .cancellation
@@ -508,30 +505,38 @@ pub(crate) fn process_encoded_payloads(
             }
         }
     }
-    if has_mime {
-        let mut origins: rustc_hash::FxHashMap<String, composite_rules::TypeMask> =
-            rustc_hash::FxHashMap::default();
-        let root_bit = composite_rules::FileType::from_str(&report.target.file_type).type_bit();
-        for finding in &report.findings {
-            *origins.entry(finding.id.to_string()).or_default() |= root_bit;
-        }
-        let mut nested = Vec::new();
-        for child in &report.files {
-            let bit = composite_rules::FileType::from_str(&child.file_type).type_bit();
-            for finding in &child.findings {
-                *origins.entry(finding.id.to_string()).or_default() |= bit;
-                nested.push(finding);
-            }
-        }
-        let added = engine.rules().evaluate_container_composites(
-            report,
-            source,
-            nested,
-            &report.target.file_type,
-            Some(&origins),
-        );
-        report.findings.extend(added);
+    evaluate_child_composites(report, source, engine);
+}
+
+/// Shared container pass: format analyzers supply children, never their own
+/// pooling policy. Run before low-tier filtering, with the parent's real bytes.
+fn evaluate_child_composites(report: &mut AnalysisReport, source: &[u8], engine: &Engine) {
+    if report.files.is_empty() {
+        return;
     }
+    let mut origins = rustc_hash::FxHashMap::default();
+    let root_bit = crate::composite_rules::FileType::from_str(&report.target.file_type).type_bit();
+    for finding in &report.findings {
+        *origins.entry(finding.id.to_string()).or_default() |= root_bit;
+    }
+    let mut nested = Vec::new();
+    let members: Vec<_> = report.files.iter().collect();
+    for child in &report.files {
+        let bit = crate::composite_rules::FileType::from_str(&child.file_type).type_bit();
+        for finding in &child.findings {
+            *origins.entry(finding.id.to_string()).or_default() |= bit;
+            nested.push(finding);
+        }
+    }
+    let findings = engine.rules().evaluate_container_composites_with_members(
+        report,
+        source,
+        nested,
+        &report.target.file_type,
+        Some(&origins),
+        Some(&members),
+    );
+    report.findings.extend(findings);
 }
 
 /// An XOR "payload" whose evidence sits in ELF metadata that is never loaded
@@ -1319,3 +1324,6 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
 
     Ok(report)
 }
+
+#[cfg(test)]
+mod carrier_tests;

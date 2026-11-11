@@ -248,11 +248,7 @@ impl PEAnalyzer {
         pe_data: &[u8],
         embedded: &[crate::analyzers::embedded_images::EmbeddedImage],
     ) {
-        let host_name = std::path::Path::new(&report.target.path)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("binary.exe")
-            .to_string();
+        let host_path = report.target.path.clone();
         for image in embedded {
             if self.is_cancelled() {
                 break;
@@ -262,7 +258,7 @@ impl PEAnalyzer {
             };
             if let Some(files) = crate::analyzers::utils::analyze_embedded_as_child(
                 &bytes,
-                &host_name,
+                &host_path,
                 &image.family,
                 &image.display_kind(),
                 image.offset,

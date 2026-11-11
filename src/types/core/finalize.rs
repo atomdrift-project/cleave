@@ -192,6 +192,28 @@ impl AnalysisReport {
             .map(|(idx, file)| (file.path.clone(), idx))
             .collect();
 
+        let id_to_index: FxHashMap<u32, usize> = self
+            .files
+            .iter()
+            .enumerate()
+            .map(|(idx, file)| (file.id, idx))
+            .collect();
+        let parents: Vec<Option<usize>> = self
+            .files
+            .iter()
+            .enumerate()
+            .map(|(idx, file)| {
+                file.parent_id
+                    .and_then(|id| id_to_index.get(&id).copied())
+                    .filter(|&parent| parent != idx)
+                    .or_else(|| {
+                        immediate_wrapper_path(&file.path)
+                            .and_then(|path| path_to_index.get(path).copied())
+                            .filter(|&parent| parent != idx)
+                    })
+            })
+            .collect();
+
         // Sort key: deepest wrappers first, so findings propagate level by
         // level — a child merges into its immediate wrapper before that
         // wrapper is itself merged (as a child) into the next level up.
@@ -200,7 +222,7 @@ impl AnalysisReport {
             .files
             .iter()
             .enumerate()
-            .filter_map(|(idx, file)| immediate_wrapper_path(&file.path).map(|_| idx))
+            .filter_map(|(idx, _)| parents[idx].map(|_| idx))
             .collect();
         child_indices.sort_by_key(|&idx| std::cmp::Reverse(level_of(&self.files[idx])));
 
@@ -226,10 +248,7 @@ impl AnalysisReport {
                     break;
                 }
                 i += 1;
-                let Some(parent_path) = immediate_wrapper_path(&self.files[child_idx].path) else {
-                    continue;
-                };
-                let Some(&parent_idx) = path_to_index.get(parent_path) else {
+                let Some(parent_idx) = parents[child_idx] else {
                     continue;
                 };
                 if parent_idx == child_idx || self.files[child_idx].findings.is_empty() {
@@ -305,7 +324,7 @@ impl AnalysisReport {
     /// install-hook presence trait on a package.json) are gone by render/compact
     /// time, so this is the one point where the tie is recoverable.
     pub(super) fn attach_composite_sources(files: &mut [FileAnalysis]) {
-        use super::super::file_analysis::{ARCHIVE_DELIMITER, CompositeSource};
+        use super::super::file_analysis::CompositeSource;
         use rustc_hash::FxHashMap;
         use std::collections::BTreeMap;
 
@@ -313,20 +332,19 @@ impl AnalysisReport {
         // pattern, not targeted provenance — its sources are dropped (see below).
         const MAX_COMPOSITE_SOURCES: usize = 8;
 
-        // Component finding id → file indices carrying it (skip synthetic
-        // embedded-binary extractions; their carrier member stands in for them).
+        // Component finding id → files where it was observed. Anonymous
+        // embedded files are real sources too; inherited copies are proxies.
         let mut id_to_files: FxHashMap<&str, Vec<usize>> = FxHashMap::default();
         for (i, f) in files.iter().enumerate() {
-            if f.path.contains("embedded:") {
-                continue;
-            }
             for finding in &f.findings {
-                id_to_files.entry(finding.id.as_str()).or_default().push(i);
+                if finding.src.is_none_or(|source| source == f.id) {
+                    id_to_files.entry(finding.id.as_str()).or_default().push(i);
+                }
             }
         }
 
         // Invert containment ONCE: file index → member set, from every path
-        // ancestor (each ARCHIVE_DELIMITER boundary) plus the parent_id link.
+        // ancestor (archive or decoded boundary) plus the parent_id link.
         // The membership test below is then a set probe instead of a
         // per-candidate path prefix compare, and files with no members skip
         // resolution outright. The old shape tested every carrier of a
@@ -346,16 +364,14 @@ impl AnalysisReport {
             files.iter().enumerate().map(|(i, f)| (f.id, i)).collect();
         let mut members_of: FxHashMap<usize, FxHashSet<usize>> = FxHashMap::default();
         for (mi, member) in files.iter().enumerate() {
-            let p = member.path.as_str();
-            let mut pos = 0;
-            while let Some(off) = p[pos..].find(ARCHIVE_DELIMITER) {
-                let boundary = pos + off;
-                if let Some(&ci) = path_to_index.get(&p[..boundary])
+            let mut ancestor = immediate_wrapper_path(&member.path);
+            while let Some(path) = ancestor {
+                if let Some(&ci) = path_to_index.get(path)
                     && ci != mi
                 {
                     members_of.entry(ci).or_default().insert(mi);
                 }
-                pos = boundary + ARCHIVE_DELIMITER.len();
+                ancestor = immediate_wrapper_path(path);
             }
             // A grafted direct child (linked by `parent_id`, not path) — e.g.
             // the `*.registry.json` provenance node the fetch pass hangs off
@@ -680,19 +696,37 @@ impl AnalysisReport {
             // Files were pre-populated by archive/payload analyzers
             // Renumber IDs and insert root file at position 0
             let root_path = self.target.path.clone();
+            let root_name = std::path::Path::new(&root_path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(&root_path);
+            // A real member may share the root's basename. In that case the
+            // matching prefix belongs to that member and must stay nested.
+            let alias_is_member = self.files.iter().any(|file| file.path == root_name);
+            let wrapper_suffix = |suffix: &str| {
+                suffix.starts_with(super::super::file_analysis::ARCHIVE_DELIMITER)
+                    || suffix.starts_with(super::super::file_analysis::ENCODING_DELIMITER)
+            };
             for (idx, file) in self.files.iter_mut().enumerate() {
                 file.id = (idx + 1) as u32; // Shift IDs to make room for root
                 if file.depth == 1 && file.parent_id.is_none() {
                     file.parent_id = Some(0); // Point to root
                 }
                 // Ensure paths have proper archive prefix (!! for archives, ## for decoded)
-                let needs_root_prefix = !file.path.strip_prefix(&root_path).is_some_and(|suffix| {
-                    suffix.starts_with(super::super::file_analysis::ARCHIVE_DELIMITER)
-                        || suffix.starts_with(super::super::file_analysis::ENCODING_DELIMITER)
-                });
-                if needs_root_prefix {
-                    file.path =
-                        super::super::file_analysis::encode_archive_path(&root_path, &file.path);
+                if !file
+                    .path
+                    .strip_prefix(&root_path)
+                    .is_some_and(wrapper_suffix)
+                {
+                    let alias_suffix = file
+                        .path
+                        .strip_prefix(root_name)
+                        .filter(|suffix| wrapper_suffix(suffix));
+                    file.path = if !alias_is_member && let Some(suffix) = alias_suffix {
+                        format!("{root_path}{suffix}")
+                    } else {
+                        super::super::file_analysis::encode_archive_path(&root_path, &file.path)
+                    };
                 }
             }
             self.files.insert(0, root_file);
@@ -714,11 +748,18 @@ impl AnalysisReport {
             .files
             .iter()
             .map(|file| {
-                file.parent_id.or_else(|| {
-                    immediate_wrapper_path(&file.path)
-                        .and_then(|parent| path_ids.get(parent).copied())
-                        .filter(|id| *id != file.id)
-                })
+                let logical_parent = immediate_wrapper_path(&file.path)
+                    .and_then(|parent| path_ids.get(parent).copied())
+                    .filter(|id| *id != file.id);
+                if matches!(
+                    file.rel,
+                    super::super::file_analysis::Rel::Member
+                        | super::super::file_analysis::Rel::Unpacked
+                ) {
+                    logical_parent.or(file.parent_id)
+                } else {
+                    file.parent_id.or(logical_parent)
+                }
             })
             .collect();
         for (file, parent_id) in self.files.iter_mut().zip(parent_ids) {

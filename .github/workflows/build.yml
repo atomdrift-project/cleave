@@ -487,7 +487,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
 
       - name: Build in FreeBSD VM
-        uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1.5.9
+        uses: vmactions/freebsd-vm@811efaaac0668df8bfb8308c3ec997b5ab50037b # v1.6.0
         with:
           usesh: true
           # Newest stable image the builder publishes, pinned explicitly rather than
@@ -579,7 +579,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
 
       - name: Build in FreeBSD aarch64 VM
-        uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1.5.9
+        uses: vmactions/freebsd-vm@811efaaac0668df8bfb8308c3ec997b5ab50037b # v1.6.0
         with:
           usesh: true
           # Same pin and the same 15.x-only reach tradeoff as the x86_64 job.
@@ -718,7 +718,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
 
       - name: Build in NetBSD VM
-        uses: vmactions/netbsd-vm@c8a0d7ddb84619a7a8cc4e652efa7950b3fd9f92 # v1.5.2
+        uses: vmactions/netbsd-vm@5957cf330aef2e6ddc63c604364c99ce2e02b91d # v1.5.3
         with:
           usesh: true
           # Latest stable image published by vmactions.
@@ -1023,7 +1023,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
 
       - name: Build in OmniOS VM
-        uses: vmactions/omnios-vm@9576f0b6d15e7696548409baa533bc0a339caf42 # v1.3.7
+        uses: vmactions/omnios-vm@aeee92416495d9685b2997d954f6b063ae5b832d # v1.3.8
         with:
           usesh: true
           # Newest image the builder publishes. Unlike the FreeBSD pin, newer

@@ -1888,7 +1888,7 @@ checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 [[package]]
 name = "filefacts"
 version = "3.0.0-beta.1"
-source = "git+https://github.com/atomdrift-project/filefacts.git#7b4b29f8a90121abd626c6f00dd32e8256ff5c9c"
+source = "git+https://github.com/atomdrift-project/filefacts.git#c336713fbe59d7654ae2b0649a1a9d28bc040d62"
 dependencies = [
  "aes 0.9.4",
  "aho-corasick",
@@ -3153,9 +3153,9 @@ dependencies = [
 
 [[package]]
 name = "mio"
-version = "1.2.4"
+version = "1.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1788edb87fdc09c7e26304471e2f5be8cdefb1b6930d6e3985fc02ff53bf86ee"
+checksum = "20521a903f02b0a573cd6840e9d0a5a0cc043d361fe924092cd70f8556cc9c4a"
 dependencies = [
  "libc",
  "wasi",
@@ -5005,7 +5005,7 @@ dependencies = [
 [[package]]
 name = "stng"
 version = "3.0.0-beta.2"
-source = "git+https://github.com/atomdrift-project/stng.git#d8467a5b4f722822fde423e9ea98febfa7650b02"
+source = "git+https://github.com/atomdrift-project/stng.git#441cc228572e823c0cfa3cb00692b8f5da9537e2"
 dependencies = [
  "aho-corasick",
  "base64 0.22.1",
@@ -5134,9 +5134,9 @@ dependencies = [
 
 [[package]]
 name = "target-lexicon"
-version = "0.13.5"
+version = "0.13.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
+checksum = "8c447be3a2abfa84b2d91680c56600bd6b2873866de27b36ec911be705e291da"
 
 [[package]]
 name = "tempfile"
@@ -5567,7 +5567,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#7b4b29f8a90121abd626c6f00dd32e8256ff5c9c"
+source = "git+https://github.com/atomdrift-project/filefacts.git#c336713fbe59d7654ae2b0649a1a9d28bc040d62"
 dependencies = [
  "cc",
  "tree-sitter-language",

@@ -2,6 +2,21 @@
 
 All notable changes to cleave. Versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.0.0-beta.3 (2026-11-13)
+
+### Features
+
+- installshield ISSetupStream is now unpacked natively, with no external tool.
+- the nsis install script is decoded from the header, since 7-zip throws it away.
+
+### Fixes
+
+- msi cabinets were capped at 50 MB, but the 3cx trojan hid in 95 MB; now 2 GiB.
+- container composites ran only for mime mail and ignored every other container; fixed.
+- payloads carved from nested members lost their parent path, so findings never reached the outer container.
+- a script-only path rule could match the ELF a script was carved from, which is the wrong subject.
+- an unsigned installer stub was blamed on its payload, but the stub is the unsigned one.
+
 ## 3.0.0-beta.2 (2026-11-09)
 
 ### Security

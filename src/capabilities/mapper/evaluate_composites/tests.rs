@@ -843,13 +843,24 @@ traits:
     let path = "bundle.tar.gz!!PayloadsAllTheThings-4.2/payload.php##base64@12";
     assert!(
         mapper
-            .evaluate_path_traits_for_file(path, "php")
+            .evaluate_path_traits_for_file(path, "php", None)
             .iter()
             .any(|finding| finding.id == "test/corpus::release-member")
     );
     assert!(
         mapper
-            .evaluate_path_traits_for_file(path, "python")
+            .evaluate_path_traits_for_file(path, "python", None)
+            .is_empty()
+    );
+    // The path names the host: a php host qualifies, an ELF host does not.
+    assert!(
+        !mapper
+            .evaluate_path_traits_for_file(path, "php", Some("php"))
+            .is_empty()
+    );
+    assert!(
+        mapper
+            .evaluate_path_traits_for_file(path, "php", Some("elf"))
             .is_empty()
     );
 }

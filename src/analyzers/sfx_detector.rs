@@ -1,4 +1,4 @@
-//! SFX installer format detection for NSIS and Inno Setup.
+//! SFX installer format detection for NSIS, Inno Setup and InstallShield.
 //!
 //! Detects self-extracting installer formats that are heavily used in malware
 //! distribution. Unlike simple overlay archives (handled by overlay.rs), these
@@ -6,8 +6,11 @@
 //!
 //! # Extraction
 //!
-//! Extraction is attempted via system tools (`7zz`/`7z`, `innoextract`) when available.
-//! A detection finding is always emitted even if extraction fails or tooling is absent.
+//! Extraction is attempted via system tools (`7zz`/`7z`, `innoextract`) when
+//! available. InstallShield `ISSetupStream` launchers and NSIS install
+//! scripts are decoded by filefacts; [`installer_members`] writes what it
+//! decodes as members. A detection finding is always emitted even if
+//! extraction fails or tooling is absent.
 
 use crate::analyzers::archive::{ArchiveAnalyzer, ArchiveAnalyzerConfig};
 use crate::types::{AnalysisReport, Criticality, Evidence, Finding, FindingKind};
@@ -25,7 +28,11 @@ pub(crate) enum SfxKind {
     PyInstaller,
     Nuitka,
     IExpress,
+    /// An InstallShield launcher carrying an `ISSetupStream`.
+    InstallShield,
 }
+
+mod installer_members;
 
 /// The installer filefacts identified in a PE (`binary.installer`) and the
 /// offset its data starts at, moved back by `prefix` bytes of junk before
@@ -40,6 +47,7 @@ pub(crate) fn installer_from_values(
         "pyinstaller" => SfxKind::PyInstaller,
         "nuitka" => SfxKind::Nuitka,
         "iexpress" => SfxKind::IExpress,
+        "installshield" => SfxKind::InstallShield,
         _ => return None,
     };
     let marker_offset = values
@@ -203,34 +211,57 @@ fn try_extract(
         };
     };
 
-    // Always give the external extractor a private copy of the bytes Cleave
+    // Always give an external extractor a private copy of the bytes Cleave
     // actually analyzed. Archive members commonly carry only a logical path,
     // and trusting a same-sized file at that path can make an attacker-selected
     // member redirect extraction to an unrelated file in Cleave's working
-    // directory.
-    let Ok(materialized_input) = materialize_extraction_input(data) else {
-        return SfxExtraction {
-            archive_report: None,
-            inno_diagnostics: vec![],
-        };
+    // directory. Native extractors read `data` directly.
+    let materialized_input = match kind {
+        SfxKind::Nsis | SfxKind::IExpress | SfxKind::InnoSetup => {
+            match materialize_extraction_input(data) {
+                Ok(input) => Some(input),
+                Err(_) => {
+                    return SfxExtraction {
+                        archive_report: None,
+                        inno_diagnostics: vec![],
+                    };
+                }
+            }
+        }
+        SfxKind::Nuitka | SfxKind::InstallShield | SfxKind::PyInstaller => None,
     };
-    let extraction_path = materialized_input.path();
+    let extraction_path = materialized_input
+        .as_ref()
+        .map(tempfile::NamedTempFile::path);
 
     let mut inno_diagnostics = vec![];
     let extracted = match kind {
-        SfxKind::Nsis | SfxKind::IExpress => run_7z(extraction_path, tmp.path()),
+        SfxKind::Nsis => {
+            // The files come from 7-Zip; the install script, which 7-Zip
+            // leaves out, is decoded natively from the header.
+            let files = extraction_path.is_some_and(|input| run_7z(input, tmp.path()));
+            let script = installer_members::write_nsis_script(data, file_path, tmp.path());
+            files || script
+        }
+        SfxKind::IExpress => extraction_path.is_some_and(|input| run_7z(input, tmp.path())),
         SfxKind::Nuitka => {
             marker_offset.is_some_and(|offset| extract_nuitka_to(data, offset, tmp.path()).is_ok())
         }
-        SfxKind::InnoSetup => {
-            if let Some(innoextract) = innoextract_cmd() {
-                let result = run_innoextract(&innoextract, extraction_path, tmp.path());
+        SfxKind::InstallShield => marker_offset
+            .and_then(|offset| data.get(offset..))
+            .is_some_and(|stream| {
+                let members = installer_members::extract_installshield(stream, file_path, tmp.path());
+                tracing::info!(path = %file_path.display(), members, "extracted InstallShield ISSetupStream");
+                members > 0
+            }),
+        SfxKind::InnoSetup => match (innoextract_cmd(), extraction_path) {
+            (Some(innoextract), Some(input)) => {
+                let result = run_innoextract(&innoextract, input, tmp.path());
                 inno_diagnostics = result.diagnostics;
                 result.extracted
-            } else {
-                false
             }
-        }
+            _ => false,
+        },
         SfxKind::PyInstaller => {
             // Early return above ensures this is unreachable.
             return SfxExtraction {

@@ -49,6 +49,7 @@ impl PackageJsonAnalyzer {
         crate::analyzers::embedded_layers::attach(
             &mut report,
             &file_path.display().to_string(),
+            crate::analyzers::FileType::PackageJson,
             &ctx,
             &self.engine,
         );

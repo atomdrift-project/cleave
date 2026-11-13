@@ -54,11 +54,12 @@ fn sources<'a>(ctx: &'a AnalysisContext<'_>) -> Vec<Source<'a>> {
         .collect()
 }
 
-/// Analyze each source `ctx` lists as a depth-1 layer of `host` and attach
-/// it to `report`.
+/// Analyze each source `ctx` lists as a depth-1 layer of `host` (a file of
+/// type `host_type`) and attach it to `report`.
 pub(crate) fn attach(
     report: &mut AnalysisReport,
     host: &str,
+    host_type: crate::analyzers::FileType,
     ctx: &AnalysisContext<'_>,
     engine: &crate::Engine,
 ) {
@@ -77,6 +78,7 @@ pub(crate) fn attach(
         let view = analyzer
             .with_engine(engine.clone())
             .without_embedded_detection()
+            .with_fragment_host(Some(host_type))
             .analyze_source_as_configured(Path::new(&path), &text);
         let (mut entry, _, _) = view.into_file_analysis(0, engine);
         entry.path = path;

@@ -2280,6 +2280,7 @@ fn create_test_report(findings: Vec<Finding>, yara_matches: Vec<YaraMatch>) -> A
         values_tree: None,
         cached_member_kv: None,
         engine: None,
+        fragment_host_type: None,
         filefacts_metrics: None,
         filefacts_metric_spans: None,
         comments: vec![],

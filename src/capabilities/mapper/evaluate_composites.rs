@@ -1144,22 +1144,30 @@ impl super::CapabilityMapper {
     /// traits need this final pass to see the provenance-bearing `!!` / `##`
     /// path. Unlike archive-inventory matching, a file-type gate is available
     /// here and is applied before returning findings.
+    ///
+    /// A decoded file has no name of its own: the path names its host, whose
+    /// type is `host_file_type` when known. A trait must then admit the host
+    /// as well as the decoded file, so a shell layer inside an ELF does not
+    /// let a `for: [shell]` path rule match the ELF's location.
     pub(crate) fn evaluate_path_traits_for_file(
         &self,
         path: &str,
         file_type: &str,
+        host_file_type: Option<&str>,
     ) -> Vec<Finding> {
         let mut findings = self.evaluate_basename_traits_for_entries(&[path.to_string()]);
-        let rule_file_type = self.detect_file_type(file_type);
+        let rule_file_types: Vec<_> = std::iter::once(file_type)
+            .chain(host_file_type)
+            .map(|ft| self.detect_file_type(ft))
+            .collect();
         findings.retain(|finding| {
             self.trait_id_map
                 .get(finding.id.as_str())
                 .and_then(|&idx| self.trait_definitions.get(idx))
                 .is_some_and(|definition| {
-                    crate::composite_rules::FileType::rule_applies_to(
-                        &definition.r#for,
-                        rule_file_type,
-                    )
+                    rule_file_types.iter().all(|&ft| {
+                        crate::composite_rules::FileType::rule_applies_to(&definition.r#for, ft)
+                    })
                 })
         });
         findings

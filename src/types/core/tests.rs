@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 use super::*;
-use crate::types::traits_findings::FindingKind;
+use crate::types::traits_findings::{Evidence, FindingKind};
 
 fn test_target() -> TargetInfo {
     TargetInfo {
@@ -166,6 +166,86 @@ fn finalize_orders_findings_by_severity_then_id() {
     assert_eq!(ids, ["m/z::bad", "m/a::one", "m/b::two"]);
 }
 
+/// A member's value-matched finding rolls up to its container with the
+/// matcher's `value:<path>` label after the member name. It must still be
+/// attributed to the member: an unsigned installer otherwise listed its signed
+/// payload's signer record as its own.
+#[test]
+fn finalize_attributes_rolled_up_value_findings_to_their_member() {
+    let id = "metadata/signature/certificate/subject::pe-signer-subject-record";
+    let mut report = AnalysisReport::new(TargetInfo {
+        path: "/samples/setup.exe".to_string(),
+        file_type: "pe".to_string(),
+        size_bytes: 100,
+        sha256: "setup-sha".to_string(),
+        architectures: None,
+    });
+    let mut rolled_up = Finding::new(id.to_string(), FindingKind::Capability, id.to_string(), 1.0);
+    rolled_up.evidence.push(Evidence {
+        method: "value".to_string(),
+        source: "payload.exe".to_string(),
+        value: "pe.signatures[0].subject".to_string(),
+        location: Some("archive:payload.exe:value:pe.signatures[0].subject".to_string()),
+        ..Default::default()
+    });
+    report.findings.push(rolled_up);
+    let mut member = FileAnalysis::new(
+        0,
+        "payload.exe".to_string(),
+        "pe".to_string(),
+        "payload-sha".to_string(),
+        42,
+    );
+    member.depth = 1;
+    member.findings.push(Finding::new(
+        id.to_string(),
+        FindingKind::Capability,
+        id.to_string(),
+        1.0,
+    ));
+    report.files.push(member);
+
+    report.finalize();
+
+    let member_id = report.files[1].id;
+    let root = report.files[0]
+        .findings
+        .iter()
+        .find(|f| f.id == id)
+        .expect("rolled-up finding stays listed on the container");
+    assert_eq!(
+        root.src,
+        Some(member_id),
+        "it is the member's, not the root's"
+    );
+}
+
+#[test]
+fn located_member_id_ignores_matcher_labels_after_the_member() {
+    let members: rustc_hash::FxHashMap<String, u32> = [
+        ("payload.exe".to_string(), 2),
+        ("odd:name.txt".to_string(), 3),
+    ]
+    .into_iter()
+    .collect();
+    for (location, want) in [
+        ("archive:payload.exe", Some(2)),
+        ("archive:payload.exe:0x40", Some(2)),
+        (
+            "archive:payload.exe:value:pe.signatures[0].subject",
+            Some(2),
+        ),
+        ("archive:payload.exe:offset:12", Some(2)),
+        ("archive:outer.zip!!payload.exe:value:pe.machine", Some(2)),
+        ("archive:odd:name.txt", Some(3)),
+        ("archive:odd:name.txt:value:x", Some(3)),
+        ("archive:other.exe:value:x", None),
+        ("value:pe.signatures[0].subject", None),
+    ] {
+        assert_eq!(located_member_id(location, &members), want, "{location}");
+    }
+}
+
 #[test]
 fn finalize_rebases_a_local_nested_archive_chain_under_the_root() {
     let mut report = AnalysisReport::new(TargetInfo {
@@ -265,6 +345,64 @@ fn finalize_links_embedded_file_in_decoded_root() {
         "/samples/carrier.gif##base64@42!!embedded:pe:payload.dll@7"
     );
     assert_eq!(report.files[2].parent_id, Some(1));
+}
+
+/// An embedded image is filed under its host's local root (the ELF, PE and
+/// generic analyzers name it `<host name>!!embedded:<kind>@<off>`); finalize
+/// replaces that root with the full path instead of nesting the host under
+/// itself (`manager!!manager!!embedded:elf@0x268cc60`, the Kong dropper).
+#[test]
+fn finalize_replaces_the_local_root_of_an_embedded_member() {
+    let mut report = AnalysisReport::new(TargetInfo {
+        path: "/samples/kong/manager".into(),
+        file_type: "elf".into(),
+        size_bytes: 100,
+        sha256: "host-sha".into(),
+        architectures: None,
+    });
+    let mut embedded = FileAnalysis::new(
+        0,
+        "manager!!embedded:elf@0x268cc60".into(),
+        "elf".into(),
+        "child-sha".into(),
+        50,
+    );
+    embedded.depth = 1;
+    let mut nested = FileAnalysis::new(
+        1,
+        "manager!!embedded:elf@0x268cc60##base64@12".into(),
+        "shell".into(),
+        "nested-sha".into(),
+        10,
+    );
+    nested.depth = 2;
+    // A member whose name merely starts with the host's is not its root.
+    let mut lookalike = FileAnalysis::new(
+        2,
+        "manager-config!!x".into(),
+        "text".into(),
+        "lookalike-sha".into(),
+        5,
+    );
+    lookalike.depth = 1;
+    report.files.extend([embedded, nested, lookalike]);
+
+    report.finalize();
+
+    assert_eq!(
+        report.files[1].path,
+        "/samples/kong/manager!!embedded:elf@0x268cc60"
+    );
+    assert_eq!(report.files[1].parent_id, Some(0));
+    assert_eq!(
+        report.files[2].path,
+        "/samples/kong/manager!!embedded:elf@0x268cc60##base64@12"
+    );
+    assert_eq!(report.files[2].parent_id, Some(1));
+    assert_eq!(
+        report.files[3].path,
+        "/samples/kong/manager!!manager-config!!x"
+    );
 }
 
 fn local_ref(path: &str) -> filefacts::Reference {

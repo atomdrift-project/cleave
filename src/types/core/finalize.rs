@@ -703,31 +703,12 @@ impl AnalysisReport {
             // A real member may share the root's basename. In that case the
             // matching prefix belongs to that member and must stay nested.
             let alias_is_member = self.files.iter().any(|file| file.path == root_name);
-            let wrapper_suffix = |suffix: &str| {
-                suffix.starts_with(super::super::file_analysis::ARCHIVE_DELIMITER)
-                    || suffix.starts_with(super::super::file_analysis::ENCODING_DELIMITER)
-            };
             for (idx, file) in self.files.iter_mut().enumerate() {
                 file.id = (idx + 1) as u32; // Shift IDs to make room for root
                 if file.depth == 1 && file.parent_id.is_none() {
                     file.parent_id = Some(0); // Point to root
                 }
-                // Ensure paths have proper archive prefix (!! for archives, ## for decoded)
-                if !file
-                    .path
-                    .strip_prefix(&root_path)
-                    .is_some_and(wrapper_suffix)
-                {
-                    let alias_suffix = file
-                        .path
-                        .strip_prefix(root_name)
-                        .filter(|suffix| wrapper_suffix(suffix));
-                    file.path = if !alias_is_member && let Some(suffix) = alias_suffix {
-                        format!("{root_path}{suffix}")
-                    } else {
-                        super::super::file_analysis::encode_archive_path(&root_path, &file.path)
-                    };
-                }
+                file.path = rooted_member_path(&root_path, &file.path, alias_is_member);
             }
             self.files.insert(0, root_file);
         }
@@ -791,10 +772,10 @@ impl AnalysisReport {
                     if finding.src.is_some() {
                         continue;
                     }
-                    let src = finding.evidence.iter().find_map(|e| {
-                        let member = located_member(e.location.as_deref()?)?;
-                        member_to_id.get(member).copied()
-                    });
+                    let src = finding
+                        .evidence
+                        .iter()
+                        .find_map(|e| located_member_id(e.location.as_deref()?, &member_to_id));
                     // Only mark when it points at a *different* file — a member's
                     // own finding listed on the member itself stays native.
                     if let Some(id) = src
@@ -886,5 +867,34 @@ impl AnalysisReport {
 
         // Set version to v3
         self.version = "3".to_string();
+    }
+}
+
+/// `path` as a member of the root at `root_path`.
+///
+/// Nested analyzers file a child under their local root, the host's file
+/// name (`manager!!embedded:elf@0x10`, `doc.pdf!!pdf/js`), as an enclosing
+/// archive's rebase expects; that local root names the root itself and is
+/// replaced by its full path, not nested under it again
+/// (`/samples/manager!!manager!!embedded:elf@0x10`). A path already under
+/// the root is kept, and any other path becomes a member of the root.
+fn rooted_member_path(root_path: &str, path: &str, alias_is_member: bool) -> String {
+    use super::super::file_analysis::{ARCHIVE_DELIMITER, ENCODING_DELIMITER};
+
+    let under = |prefix: &str| {
+        path.strip_prefix(prefix).is_some_and(|rest| {
+            rest.starts_with(ARCHIVE_DELIMITER) || rest.starts_with(ENCODING_DELIMITER)
+        })
+    };
+    if under(root_path) {
+        return path.to_string();
+    }
+    let root_name = std::path::Path::new(root_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !alias_is_member && !name.is_empty() && under(name));
+    match root_name.and_then(|name| path.strip_prefix(name)) {
+        Some(rest) => format!("{root_path}{rest}"),
+        None => super::super::file_analysis::encode_archive_path(root_path, path),
     }
 }

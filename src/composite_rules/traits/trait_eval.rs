@@ -753,6 +753,20 @@ impl TraitDefinition {
             });
             return None;
         }
+        // The same split between subjects applies to `for:`: the gate above
+        // admitted the fragment's type, but the name belongs to the host. A
+        // shell snippet carved out of an ELF must not let a `for: [shell]`
+        // path rule match the ELF's location, so the host has to qualify too.
+        if matches!(self.r#if, Condition::Path(_))
+            && let Some(host_type) = ctx.report.fragment_host_type
+            && !FileType::rule_applies_to(&self.r#for, host_type)
+        {
+            ctx.record_skip(|| SkipReason::FileTypeMismatch {
+                rule: self.r#for.clone(),
+                context: host_type,
+            });
+            return None;
+        }
 
         // Check size constraints (from if: block)
         let file_size = ctx.report.target.size_bytes as usize;

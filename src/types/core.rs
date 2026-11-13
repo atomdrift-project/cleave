@@ -306,6 +306,14 @@ pub struct AnalysisReport {
     /// cache by an entry point that never built an engine.
     #[serde(skip)]
     pub(crate) engine: Option<crate::Engine>,
+    /// For a fragment carved out of a host file (a `##plain@` snippet or a
+    /// decoded `##<encoding>@` layer), the host's rule file type. A fragment
+    /// has no name of its own, so `type: path` reads its host's; the trait's
+    /// `for:` must then admit the host as well as the fragment, or a shell
+    /// snippet inside an ELF lets a `for: [shell]` path rule match the ELF's
+    /// location. Transient: never serialized.
+    #[serde(skip)]
+    pub(crate) fragment_host_type: Option<crate::composite_rules::FileType>,
     /// Filefacts's flat metric map (`{ "lnk.arguments_max_whitespace_run":
     /// 100.0, "pdf.action_count": 4.0, … }`) attached verbatim so
     /// trait-rule resolution for `type: metrics, field: …` reads
@@ -463,6 +471,7 @@ impl AnalysisReport {
             cache_hit: false,
             cached_member_kv: None,
             engine: None,
+            fragment_host_type: None,
             filefacts_metrics: None,
             filefacts_metric_spans: None,
             archive_contents: Vec::new(),
@@ -718,6 +727,7 @@ impl AnalysisReport {
             cache_hit: _,
             cached_member_kv: _,
             engine: _,
+            fragment_host_type: _,
             filefacts_metric_spans: _,
             archive_contents: _,
             scanned_path: _,
@@ -797,6 +807,7 @@ impl AnalysisReport {
             values_tree,
             cached_member_kv,
             engine: _,
+            fragment_host_type: _,
             files: nested_files,
             archive_contents,
             // Report-level only: not part of a per-file entry.
@@ -1465,6 +1476,26 @@ fn located_member(location: &str) -> Option<&str> {
         _ => rel,
     };
     Some(rel.rsplit(ARCHIVE_DELIMITER).next().unwrap_or(rel))
+}
+
+/// The id of the member an evidence location points at, looked up by leaf
+/// member name in `member_to_id`.
+///
+/// A matcher may append its own label after the member name -- a value match
+/// on `b.exe` rolls up as `archive:b.exe:value:pe.signatures[0].subject`. Such
+/// a location named no member at all, so the rolled-up finding lost its
+/// `from` and read as the container's own: an unsigned installer listed its
+/// payload's signer record as if it carried a signature itself. On a miss the
+/// name is retried with each trailing `:`-suffix cut off, longest first, so a
+/// member whose name contains `:` still resolves to itself.
+fn located_member_id(
+    location: &str,
+    member_to_id: &rustc_hash::FxHashMap<String, u32>,
+) -> Option<u32> {
+    let member = located_member(location)?;
+    std::iter::once(member.len())
+        .chain(member.rmatch_indices(':').map(|(at, _)| at))
+        .find_map(|end| member_to_id.get(member.get(..end)?).copied())
 }
 
 fn immediate_wrapper_path(path: &str) -> Option<&str> {

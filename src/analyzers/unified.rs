@@ -322,6 +322,9 @@ pub(crate) struct UnifiedSourceAnalyzer {
     encoded_context: Option<Vec<String>>,
     /// Trusted parser context, never inferred from a disk filename.
     heuristic_quoted_context: bool,
+    /// The type of the host file this source was carved out of, when it is a
+    /// fragment; recorded on the report as `fragment_host_type`.
+    fragment_host: Option<crate::analyzers::FileType>,
 }
 
 impl std::fmt::Debug for UnifiedSourceAnalyzer {
@@ -345,6 +348,7 @@ impl UnifiedSourceAnalyzer {
             cancellation: None,
             encoded_context: None,
             heuristic_quoted_context: false,
+            fragment_host: None,
         }
     }
 
@@ -387,6 +391,13 @@ impl UnifiedSourceAnalyzer {
     pub(crate) fn with_heuristic_quoted_context(mut self) -> Self {
         self.heuristic_quoted_context = true;
         self.encoded_context = None;
+        self
+    }
+
+    /// Mark the analyzed source as a fragment of a `host` file: path rules
+    /// then read the host's name only when they also admit the host's type.
+    pub(crate) fn with_fragment_host(mut self, host: Option<crate::analyzers::FileType>) -> Self {
+        self.fragment_host = host;
         self
     }
 
@@ -483,6 +494,9 @@ impl UnifiedSourceAnalyzer {
         };
 
         let mut report = AnalysisReport::new(target);
+        report.fragment_host_type = self
+            .fragment_host
+            .map(|host| crate::composite_rules::FileType::from_str(host.label()));
         if self.heuristic_quoted_context {
             report
                 .findings
@@ -678,6 +692,7 @@ impl UnifiedSourceAnalyzer {
                         .with_cancellation(cancellation.cloned())
                         .with_encoded_context(payload.encoding_chain.clone())
                         .without_embedded_detection()
+                        .with_fragment_host(Some(self.file_type))
                         .analyze_source_as_configured(
                             Path::new(&virtual_path),
                             &String::from_utf8_lossy(&payload_content),
@@ -755,6 +770,7 @@ impl UnifiedSourceAnalyzer {
                         analyzer
                             .with_engine(self.engine.clone())
                             .with_cancellation(cancellation.cloned())
+                            .with_fragment_host(Some(self.file_type))
                             .analyze_source(
                                 Path::new(&virtual_path),
                                 &String::from_utf8_lossy(&payload_content),
@@ -939,7 +955,13 @@ impl UnifiedSourceAnalyzer {
                 && let Some(ctx) = source_ctx
             {
                 // Plaintext views in another language, not concealment.
-                crate::analyzers::embedded_layers::attach(&mut report, &parent, ctx, &self.engine);
+                crate::analyzers::embedded_layers::attach(
+                    &mut report,
+                    &parent,
+                    self.file_type,
+                    ctx,
+                    &self.engine,
+                );
             }
             // Borrow the host haystack instead of copying `content` and
             // `report.strings` per member.

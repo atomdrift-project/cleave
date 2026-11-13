@@ -928,7 +928,8 @@ fn analyze_embedded_haystack(
     let mut analyzer = UnifiedSourceAnalyzer::for_file_type(&file_type)
         .context("Failed to create analyzer for language")?
         .with_engine(engine.clone())
-        .without_embedded_detection();
+        .without_embedded_detection()
+        .with_fragment_host(host_file_type.copied());
     if is_encoded {
         analyzer = analyzer.with_encoded_context(encoding_chain.to_vec());
     } else if inline_code.is_none() {

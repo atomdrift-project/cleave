@@ -116,6 +116,45 @@ pub(crate) fn merge_filefacts_context(
 /// views of its own text (no chain). Members of an archive report are not
 /// layers of it. See [`super::CapabilityMapper::evaluate_composite_rules`] for
 /// why the two are told apart.
+/// Merge a finding the file produced from its own content into `report`,
+/// returning whether its id is new to the report.
+///
+/// A container's report already lists its members' findings, each carrying an
+/// `archive:<member>` location (an installer's extracted payload is merged in
+/// before the installer's own rules run). When the file itself matches the
+/// same trait, its own finding replaces such a member-only copy unless the
+/// copy is more severe: an unsigned installer stub is unsigned in its own
+/// right, and listing that as a fact about one of its payloads misattributes
+/// it.
+fn merge_own_finding(
+    report: &mut AnalysisReport,
+    seen: &mut FxHashSet<crate::types::Istr>,
+    finding: Finding,
+) -> bool {
+    if seen.insert(finding.id.clone()) {
+        report.push_finding_capped(finding);
+        return true;
+    }
+    let member_only = |existing: &Finding| {
+        !existing.evidence.is_empty()
+            && existing.evidence.iter().all(|e| {
+                e.location
+                    .as_deref()
+                    .is_some_and(|loc| loc.starts_with("archive:"))
+            })
+    };
+    if let Some(existing) = report
+        .findings
+        .iter_mut()
+        .find(|existing| existing.id == finding.id)
+        && member_only(existing)
+        && finding.crit >= existing.crit
+    {
+        *existing = finding;
+    }
+    false
+}
+
 fn decoded_layer_findings(report: &AnalysisReport) -> (Vec<Finding>, Vec<Finding>) {
     let prefix = format!(
         "{}{}",
@@ -518,10 +557,7 @@ impl super::CapabilityMapper {
 
         // Merge independent findings into report
         for finding in independent_findings {
-            if !seen.contains(finding.id.as_str()) {
-                seen.insert(finding.id.clone().to_string().into());
-                report.push_finding_capped(finding);
-            }
+            merge_own_finding(report, &mut seen, finding);
         }
         let _d_eval1 = t_eval1.elapsed();
 
@@ -565,10 +601,9 @@ impl super::CapabilityMapper {
 
             let mut new_ids = Vec::new();
             for finding in dependent_findings {
-                if !seen.contains(finding.id.as_str()) {
-                    seen.insert(finding.id.clone().to_string().into());
-                    new_ids.push(finding.id.clone());
-                    report.push_finding_capped(finding);
+                let id = finding.id.clone();
+                if merge_own_finding(report, &mut seen, finding) {
+                    new_ids.push(id);
                 }
             }
 
@@ -600,10 +635,7 @@ impl super::CapabilityMapper {
 
         // Merge composite findings into report
         for finding in composite_findings {
-            if !seen.contains(finding.id.as_str()) {
-                seen.insert(finding.id.clone().to_string().into());
-                report.push_finding_capped(finding);
-            }
+            merge_own_finding(report, &mut seen, finding);
         }
         let _d_comp = t_comp.elapsed();
         let _d_total = t_total.elapsed();
@@ -1212,3 +1244,6 @@ impl super::CapabilityMapper {
 
 #[cfg(test)]
 mod raw_gate_plan_tests;
+
+#[cfg(test)]
+mod merge_own_finding_tests;

@@ -19,6 +19,7 @@ pub(crate) mod zip;
 pub(crate) use guards::MAX_ZIP_ENTRIES;
 pub(crate) use guards::{
     HostileArchiveReason, MAX_COMPRESSION_RATIO, MIN_ZIP_BOMB_UNCOMPRESSED_SIZE,
+    sanitize_entry_path,
 };
 
 use crate::analyzers::{AnalysisInput, Analyzer, FileType, FileTypeExt};
@@ -1232,14 +1233,28 @@ impl ArchiveAnalyzer {
         // reeval evaluator only reads report-level metadata (target.path,
         // values_tree) so this swap is safe.
         let mut files = std::mem::take(&mut report.files);
+        // The type of every member a decoded file (`host##layer`) was carved
+        // out of: its path names that host, so path rules must admit it too.
+        let fragment_hosts: rustc_hash::FxHashSet<&str> = files
+            .iter()
+            .filter_map(|file| crate::composite_rules::evaluators::fragment_host_path(&file.path))
+            .collect();
+        let host_types: rustc_hash::FxHashMap<String, String> = files
+            .iter()
+            .filter(|file| fragment_hosts.contains(file.path.as_str()))
+            .map(|file| (file.path.clone(), file.file_type.clone()))
+            .collect();
         // Each file's findings re-evaluate independently against the same
         // immutable container snapshot, so this parallelizes cleanly — on a
         // 13k-member archive the serial loop was a single-threaded tail that
         // ran after all member analysis had finished.
         let reeval_file = |file: &mut crate::types::FileAnalysis| {
             if file.path.contains("##") {
+                let host_type = crate::composite_rules::evaluators::fragment_host_path(&file.path)
+                    .and_then(|host| host_types.get(host))
+                    .map(String::as_str);
                 let path_findings =
-                    mapper.evaluate_path_traits_for_file(&file.path, &file.file_type);
+                    mapper.evaluate_path_traits_for_file(&file.path, &file.file_type, host_type);
                 if !path_findings.is_empty() {
                     for finding in path_findings {
                         if !file

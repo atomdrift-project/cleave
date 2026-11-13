@@ -15,9 +15,13 @@ use std::io::{Cursor, Read};
 /// Maximum executable or cabinet streams extracted per OLE2 document.
 const MAX_EMBEDDED_EXECUTABLES: usize = 32;
 
-/// Maximum embedded executable size to extract (50 MB).
+/// Maximum embedded executable or cabinet size to extract (2 GiB).
 /// Streams above this are reported as present but skipped for sub-analysis.
-const MAX_EMBEDDED_EXECUTABLE_SIZE: u64 = 50 * 1024 * 1024;
+/// An MSI keeps its whole payload in one cabinet stream, so a low cap hides
+/// every file a large installer ships: 3CXDesktopApp 18.12.416's trojaned
+/// DLLs sit in a ~95 MB cabinet. A stream is never larger than the compound
+/// file holding it, so for any real input the file's own size is the bound.
+const MAX_EMBEDDED_EXECUTABLE_SIZE: u64 = 2 * 1024 * 1024 * 1024;
 
 /// Minimum credible PE/ELF size — anything smaller is a stub or a false MZ.
 const MIN_EMBEDDED_EXECUTABLE_SIZE: u64 = 1024;
@@ -25,10 +29,10 @@ const MIN_EMBEDDED_EXECUTABLE_SIZE: u64 = 1024;
 /// Maximum attachments extracted per Outlook message.
 const MAX_MSG_ATTACHMENTS: usize = 32;
 
-/// Maximum attachment payload extracted for sub-analysis — the same ceiling
-/// as embedded executables. Larger attachments stay listed in the filefacts
-/// `office.msg.attachments` values but are not analyzed.
-const MAX_MSG_ATTACHMENT_SIZE: u64 = MAX_EMBEDDED_EXECUTABLE_SIZE;
+/// Maximum attachment payload extracted for sub-analysis (50 MB). Larger
+/// attachments stay listed in the filefacts `office.msg.attachments` values
+/// but are not analyzed.
+const MAX_MSG_ATTACHMENT_SIZE: u64 = 50 * 1024 * 1024;
 
 /// Maximum entries copied when rebuilding an attached message / OLE object
 /// storage into a standalone compound file.
@@ -121,12 +125,15 @@ pub(crate) fn extract_payloads(
             )
         })
         .collect();
-    let mut executables = find_embedded_executables(&mut comp, &entries);
+    // Directory lengths are attacker-written; a real stream never exceeds the
+    // file holding it, so the input's size caps every allocation below.
+    let max_size = MAX_EMBEDDED_EXECUTABLE_SIZE.min(data.len() as u64);
+    let mut executables = find_embedded_executables(&mut comp, &entries, max_size);
     for payload in located {
         if executables.len() >= MAX_EMBEDDED_EXECUTABLES {
             break;
         }
-        if let Some(executable) = carve(&mut comp, payload) {
+        if let Some(executable) = carve(&mut comp, payload, max_size) {
             executables.push(executable);
         }
     }
@@ -148,8 +155,9 @@ pub(crate) fn extract_payloads(
 fn carve(
     comp: &mut cfb::CompoundFile<Cursor<&[u8]>>,
     payload: &LocatedPayload,
+    max_size: u64,
 ) -> Option<EmbeddedExecutable> {
-    if payload.size < MIN_EMBEDDED_EXECUTABLE_SIZE || payload.size > MAX_EMBEDDED_EXECUTABLE_SIZE {
+    if payload.size < MIN_EMBEDDED_EXECUTABLE_SIZE || payload.size > max_size {
         return None;
     }
     let mut stream = comp.open_stream(&payload.stream).ok()?;
@@ -185,12 +193,14 @@ fn carve(
 /// PE/ELF analyzer pipeline.
 ///
 /// Bounds: skips streams below [`MIN_EMBEDDED_EXECUTABLE_SIZE`] (no real
-/// payload fits) or above [`MAX_EMBEDDED_EXECUTABLE_SIZE`] (avoid OOM on
-/// adversarial inputs); caps the result count at
+/// payload fits) or above `max_size` — [`MAX_EMBEDDED_EXECUTABLE_SIZE`] or the
+/// compound file's own length, whichever is smaller, so a forged directory
+/// length cannot buy an allocation; caps the result count at
 /// [`MAX_EMBEDDED_EXECUTABLES`].
 fn find_embedded_executables(
     comp: &mut cfb::CompoundFile<Cursor<&[u8]>>,
     entries: &[(String, u64, bool)],
+    max_size: u64,
 ) -> Vec<EmbeddedExecutable> {
     let mut found = Vec::new();
 
@@ -198,10 +208,7 @@ fn find_embedded_executables(
         if found.len() >= MAX_EMBEDDED_EXECUTABLES {
             break;
         }
-        if !*is_stream
-            || *size < MIN_EMBEDDED_EXECUTABLE_SIZE
-            || *size > MAX_EMBEDDED_EXECUTABLE_SIZE
-        {
+        if !*is_stream || *size < MIN_EMBEDDED_EXECUTABLE_SIZE || *size > max_size {
             continue;
         }
 

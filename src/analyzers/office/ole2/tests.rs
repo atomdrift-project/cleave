@@ -234,3 +234,16 @@ fn a_located_payload_past_its_stream_or_too_small_is_not_carved() {
         assert!(doc.executables.is_empty());
     }
 }
+
+#[test]
+fn an_installer_cabinet_over_50_mib_is_extracted() {
+    // MSI installers ship every file in one cabinet stream; 3CXDesktopApp's is
+    // ~95 MB. The old 50 MiB cap skipped it, hiding the trojaned DLLs inside.
+    let mut cab = vec![0u8; 51 * 1024 * 1024];
+    cab[..4].copy_from_slice(b"MSCF");
+    let cfb = build_cfb(&[("/Cabinet", &cab)]);
+    let doc = extract_payloads(&cfb, false, &[]).expect("parses");
+    assert_eq!(doc.executables.len(), 1);
+    assert_eq!(doc.executables[0].kind, EmbeddedExecKind::Cab);
+    assert_eq!(doc.executables[0].data.len(), cab.len());
+}

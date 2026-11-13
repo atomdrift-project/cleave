@@ -2465,3 +2465,41 @@ items["na" + "me"]["pro" + "p"]; eval(code); x = y;
         "the per-root batch leaves them to walk alone"
     );
 }
+
+/// Switching off wildcard-rooted patterns (`(_ …)`) must leave a query
+/// walkable. The query bank does this on a private copy whenever a file's
+/// gates rule a pattern out. tree-sitter before fork commit 1eccaf16 erased
+/// such a pattern's root entry without lowering its count of wildcard roots,
+/// so the next walk searched past the end of the pattern map and aborted the
+/// process (`ts_query__pattern_map_search`, seen on node-ipc 12.0.1 by a
+/// consumer that still locked the older fork).
+#[test]
+fn disabling_wildcard_rooted_patterns_keeps_a_query_walkable() {
+    use streaming_iterator::StreamingIterator;
+    let source = b"eval('x');";
+    let parsed = parsed_for_test("wildcard.js", source);
+    let tree = &parsed.source_ast().unwrap().tree;
+    let lang = tree.language();
+    // `(_ (identifier))` would be filed under `identifier`; an anchored
+    // child or a bare wildcard keeps the wildcard as the pattern's root.
+    let bank = "(_ . (identifier) @a)\n(_) @b\n(call_expression) @c";
+    let walk = |disabled: &[usize]| {
+        let mut query = tree_sitter::Query::new(&lang, bank).unwrap();
+        for &pattern in disabled {
+            query.disable_pattern(pattern);
+        }
+        let mut cursor = tree_sitter::QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), &source[..]);
+        let mut patterns = Vec::new();
+        while let Some(m) = matches.next() {
+            patterns.push(m.pattern_index);
+        }
+        patterns.sort_unstable();
+        patterns.dedup();
+        patterns
+    };
+    assert_eq!(walk(&[]), vec![0, 1, 2]);
+    assert_eq!(walk(&[0]), vec![1, 2], "one wildcard root left");
+    assert_eq!(walk(&[0, 1]), vec![2], "no wildcard root left");
+    assert_eq!(walk(&[2]), vec![0, 1], "only wildcard roots left");
+}

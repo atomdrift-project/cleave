@@ -550,9 +550,9 @@ dependencies = [
 
 [[package]]
 name = "bumpalo"
-version = "3.20.3"
+version = "3.20.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
+checksum = "87a0cf66fd1eb2fb7b822cb78370d82303750809bc6ba855f3f58e517d3238db"
 dependencies = [
  "allocator-api2",
 ]
@@ -1888,7 +1888,7 @@ checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 [[package]]
 name = "filefacts"
 version = "3.0.0-beta.1"
-source = "git+https://github.com/atomdrift-project/filefacts.git#c336713fbe59d7654ae2b0649a1a9d28bc040d62"
+source = "git+https://github.com/atomdrift-project/filefacts.git#5d30f355998de22efa2f2d043c52f372f9b073fc"
 dependencies = [
  "aes 0.9.4",
  "aho-corasick",
@@ -5005,7 +5005,7 @@ dependencies = [
 [[package]]
 name = "stng"
 version = "3.0.0-beta.2"
-source = "git+https://github.com/atomdrift-project/stng.git#441cc228572e823c0cfa3cb00692b8f5da9537e2"
+source = "git+https://github.com/atomdrift-project/stng.git#387fd4aa438b3e4bcf8b5a64c6c55a8c4070f28f"
 dependencies = [
  "aho-corasick",
  "base64 0.22.1",
@@ -5567,7 +5567,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#c336713fbe59d7654ae2b0649a1a9d28bc040d62"
+source = "git+https://github.com/atomdrift-project/filefacts.git#5d30f355998de22efa2f2d043c52f372f9b073fc"
 dependencies = [
  "cc",
  "tree-sitter-language",

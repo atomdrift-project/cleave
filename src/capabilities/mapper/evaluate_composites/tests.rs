@@ -2399,7 +2399,10 @@ traits:
                 path: (*path).into(),
                 depth: 1,
                 file_type: "tar".into(),
-                findings: vec![make_test_finding("test/target::guard", Criticality::Suspicious)],
+                findings: vec![make_test_finding(
+                    "test/target::guard",
+                    Criticality::Suspicious,
+                )],
                 ..Default::default()
             })
             .collect();
@@ -2408,7 +2411,12 @@ traits:
     };
 
     let report = build(false);
-    assert!(report.files.iter().all(|f| f.findings[0].crit == Criticality::Notable));
+    assert!(
+        report
+            .files
+            .iter()
+            .all(|f| f.findings[0].crit == Criticality::Notable)
+    );
     assert_eq!(report.findings[1].crit, Criticality::Notable);
     assert!(report.findings[1].downgraded);
 

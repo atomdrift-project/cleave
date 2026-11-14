@@ -107,8 +107,12 @@ fn lower_pooled_rollups(report: &mut AnalysisReport, touched: &rustc_hash::FxHas
         // more (or fewer) leading directories than that name.
         let same_member = |name: &str, leaf: &str| {
             name == leaf
-                || leaf.strip_suffix(name).is_some_and(|head| head.ends_with('/'))
-                || name.strip_suffix(leaf).is_some_and(|head| head.ends_with('/'))
+                || leaf
+                    .strip_suffix(name)
+                    .is_some_and(|head| head.ends_with('/'))
+                || name
+                    .strip_suffix(leaf)
+                    .is_some_and(|head| head.ends_with('/'))
         };
         let all_named = members.iter().all(|member| match member {
             Some(member) => {

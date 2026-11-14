@@ -39,6 +39,117 @@ fn immediate_parent_path(path: &str) -> Option<&str> {
     }
 }
 
+/// A container copy pooled from several members keeps its crit while each
+/// member is downgraded one at a time, since another member might still carry
+/// the finding undowngraded. Once every member edit is in, lower such a copy
+/// to the strongest crit any descendant still holds for that id. Only rollup
+/// copies are touched -- no `src`, and every located evidence item points into
+/// the archive (`archive:<member>`) -- so a container's own detection with the
+/// same id keeps its tier. Crits are only ever lowered here.
+fn lower_pooled_rollups(report: &mut AnalysisReport, touched: &rustc_hash::FxHashSet<String>) {
+    use crate::types::file_analysis::{ARCHIVE_DELIMITER, ENCODING_DELIMITER};
+    // A member's own archive-root evidence (`archive:value:<path>`, e.g. a
+    // nested layer's `archive_guard`) rolls up without naming the member. It
+    // can only be the root container's own observation if the root's value
+    // tree holds that path; otherwise it came from a descendant.
+    let root_lacks_value = |path: &str| {
+        let pointer = format!("/{}", path.replace('.', "/"));
+        report
+            .values_tree
+            .as_deref()
+            .is_none_or(|tree| tree.pointer(&pointer).is_none())
+    };
+    // Members named by a rollup's evidence (`archive:<rel>[:<inner>]`), with
+    // `None` entries for descendant-root evidence; `None` overall when the
+    // copy is not a pure rollup of member evidence.
+    let named_members = |copy: &Finding, at_root: bool| -> Option<Vec<Option<String>>> {
+        if copy.src.is_some() || !touched.contains(copy.id.as_str()) {
+            return None;
+        }
+        let mut members = Vec::new();
+        for location in copy.evidence.iter().filter_map(|e| e.location.as_deref()) {
+            let rel = location.strip_prefix("archive:")?;
+            if let Some(path) = rel.strip_prefix("value:") {
+                if !at_root || !root_lacks_value(path) {
+                    return None;
+                }
+                members.push(None);
+                continue;
+            }
+            members.push(Some(rel.rsplit('!').next().unwrap_or(rel).to_owned()));
+        }
+        (!members.is_empty()).then_some(members)
+    };
+    // The strongest crit for `id` among descendants of `under` (all files for
+    // the root), provided every named member is one of them and still carries
+    // the finding. A member that was not retained may hold it undowngraded.
+    let strongest = |id: &str, members: &[Option<String>], under: Option<&str>| {
+        let descendants: Vec<(&str, Criticality)> = report
+            .files
+            .iter()
+            .filter(|file| {
+                under.is_none_or(|container| {
+                    file.path.strip_prefix(container).is_some_and(|rest| {
+                        rest.starts_with(ARCHIVE_DELIMITER) || rest.starts_with(ENCODING_DELIMITER)
+                    })
+                })
+            })
+            .flat_map(|file| {
+                let leaf = crate::types::core::leaf_member(&file.path);
+                file.findings
+                    .iter()
+                    .filter(move |finding| finding.id.as_str() == id)
+                    .map(move |finding| (leaf, finding.crit))
+            })
+            .collect();
+        // Evidence names a member relative to the archive that rolled it up,
+        // optionally followed by `:<inner location>`; a file path may carry
+        // more (or fewer) leading directories than that name.
+        let same_member = |name: &str, leaf: &str| {
+            name == leaf
+                || leaf.strip_suffix(name).is_some_and(|head| head.ends_with('/'))
+                || name.strip_suffix(leaf).is_some_and(|head| head.ends_with('/'))
+        };
+        let all_named = members.iter().all(|member| match member {
+            Some(member) => {
+                let name = member.split(':').next().unwrap_or(member);
+                descendants.iter().any(|(leaf, _)| same_member(name, leaf))
+            }
+            None => !descendants.is_empty(),
+        });
+        all_named
+            .then(|| descendants.iter().map(|(_, crit)| *crit).max())
+            .flatten()
+    };
+    let mut edits: Vec<(Option<usize>, usize, Criticality)> = Vec::new();
+    for (index, copy) in report.findings.iter().enumerate() {
+        if let Some(members) = named_members(copy, true)
+            && let Some(crit) = strongest(copy.id.as_str(), &members, None)
+            && crit < copy.crit
+        {
+            edits.push((None, index, crit));
+        }
+    }
+    for (file_idx, file) in report.files.iter().enumerate() {
+        for (index, copy) in file.findings.iter().enumerate() {
+            if let Some(members) = named_members(copy, false)
+                && let Some(crit) = strongest(copy.id.as_str(), &members, Some(file.path.as_str()))
+                && crit < copy.crit
+            {
+                edits.push((Some(file_idx), index, crit));
+            }
+        }
+    }
+    for (file_idx, index, crit) in edits {
+        let copy = match file_idx {
+            None => &mut report.findings[index],
+            Some(file_idx) => &mut report.files[file_idx].findings[index],
+        };
+        copy.crit = crit;
+        copy.downgraded = true;
+    }
+}
+
 /// Which part of an archive entry name a path trait matches.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum PathScope {
@@ -396,10 +507,12 @@ impl super::CapabilityMapper {
                 updates.insert(idx, edits);
             }
         }
+        let mut touched: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
         for (idx, edits) in updates {
             let child_id = report.files[idx].id;
             for edit in edits {
                 edit.apply(&mut report.files[idx].findings);
+                touched.insert(report.files[idx].findings[edit.index].id.to_string());
                 // The member's finding was already rolled up into its
                 // containers (root and nested archives) before this pass, so
                 // lower the copies attributed to this child too, or the
@@ -444,6 +557,9 @@ impl super::CapabilityMapper {
                     }
                 }
             }
+        }
+        if !touched.is_empty() {
+            lower_pooled_rollups(report, &touched);
         }
     }
 

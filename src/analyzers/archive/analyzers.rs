@@ -1557,15 +1557,6 @@ impl ArchiveAnalyzer {
         true
     }
 
-    fn has_wrapped_binary(&self, file_type: &FileType, data: &[u8]) -> bool {
-        *file_type == FileType::Unknown
-            && data.len() <= 32 * 1024 * 1024
-            && (memchr::memmem::find(data, b"MZ").is_some()
-                || memchr::memmem::find(data, b"\x7fELF").is_some()
-                || memchr::memmem::find(data, b"TVq").is_some())
-            && filefacts::has_embedded_executable(data)
-    }
-
     fn archive_member_analysis_skip_reason(
         &self,
         file_type: &FileType,

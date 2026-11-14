@@ -4,6 +4,23 @@
 
 use std::borrow::Cow;
 
+use crate::analyzers::FileType;
+
+/// Largest unidentified carrier searched for wrapped executables.
+const WRAPPED_BINARY_MAX_SIZE: usize = 32 * 1024 * 1024;
+
+/// Whether an unidentified file carries a whole PE or ELF that should be
+/// carved and analyzed as a child. Shared by top-level files and archive
+/// members so the same bytes get the same treatment however they arrive.
+pub(crate) fn has_wrapped_binary(file_type: &FileType, data: &[u8]) -> bool {
+    *file_type == FileType::Unknown
+        && data.len() <= WRAPPED_BINARY_MAX_SIZE
+        && (memchr::memmem::find(data, b"MZ").is_some()
+            || memchr::memmem::find(data, b"\x7fELF").is_some()
+            || memchr::memmem::find(data, b"TVq").is_some())
+        && filefacts::has_embedded_executable(data)
+}
+
 /// One embedded PE or ELF image in its host.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EmbeddedImage {

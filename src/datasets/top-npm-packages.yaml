@@ -25,5 +25,6 @@ lookalikes:
   - gaxios
   - lodash3
   - preact
+  - reqwest
   - tslint
   - ttypescript

@@ -2341,3 +2341,77 @@ traits:
     assert_eq!(report.findings[2].crit, Criticality::Suspicious);
     assert!(!report.findings[2].downgraded);
 }
+
+/// Nested archives roll their own root-located evidence (`archive:value:...`)
+/// up without naming the member. Once every member carrying the finding is
+/// downgraded, the root copy follows -- unless the root's own value tree holds
+/// the observation, in which case the copy may be the root's own detection.
+#[test]
+#[allow(clippy::expect_used)]
+fn parent_tree_pass_lowers_unattributed_nested_root_rollup() {
+    let yaml = r#"
+defaults:
+  for: [tar]
+  platforms: [unix, windows]
+traits:
+  - id: "test/context::image"
+    desc: "Image identity"
+    crit: notable
+    if:
+      type: basename
+      exact: "image.tar"
+  - id: "test/target::guard"
+    desc: "Guard observation"
+    crit: suspicious
+    if:
+      type: basename
+      exact: "layer.tar"
+    downgrade:
+      scope: file-or-parent
+      any:
+        - id: "test/context::image"
+"#;
+    let source = write_test_traits(yaml);
+    let mapper =
+        super::super::CapabilityMapper::from_yaml(source.path()).expect("load rollup mapper");
+    let build = |own_value: bool| {
+        let mut report = make_test_report();
+        if own_value {
+            report.merge_kv_subtree(
+                "archive_guard",
+                serde_json::json!({"path_traversals": ["/x"]}),
+            );
+        }
+        let mut rollup = make_test_finding("test/target::guard", Criticality::Suspicious);
+        rollup.evidence.push(
+            Evidence::new("value", "fixture", "x")
+                .with_location("archive:value:archive_guard.path_traversals".to_string()),
+        );
+        report.findings = vec![
+            make_test_finding("test/context::image", Criticality::Notable),
+            rollup,
+        ];
+        report.files = ["a/layer.tar", "b/layer.tar"]
+            .iter()
+            .enumerate()
+            .map(|(i, path)| crate::types::FileAnalysis {
+                id: i as u32 + 1,
+                path: (*path).into(),
+                depth: 1,
+                file_type: "tar".into(),
+                findings: vec![make_test_finding("test/target::guard", Criticality::Suspicious)],
+                ..Default::default()
+            })
+            .collect();
+        mapper.reeval_parent_scope_in_file_tree(&mut report, &[], RuleFileType::All);
+        report
+    };
+
+    let report = build(false);
+    assert!(report.files.iter().all(|f| f.findings[0].crit == Criticality::Notable));
+    assert_eq!(report.findings[1].crit, Criticality::Notable);
+    assert!(report.findings[1].downgraded);
+
+    let report = build(true);
+    assert_eq!(report.findings[1].crit, Criticality::Suspicious);
+}

@@ -1066,6 +1066,13 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         _ => {
             if let Some(analyzer) = analyzers::analyzer_for_file_type_arc(&file_type, engine) {
                 analyzer.analyze_input(&input)
+            } else if analyzers::embedded_images::has_wrapped_binary(&file_type, file_data) {
+                // An unidentified carrier (filesystem image, firmware blob)
+                // holding a whole executable: carve it exactly as an archive
+                // member of the same bytes would be.
+                analyzers::generic::GenericAnalyzer::new(file_type)
+                    .with_engine(engine.clone())
+                    .analyze_input(&input)
             } else {
                 // No dedicated analyzer — return a minimal report with basic metadata.
                 // This allows callers (analyze_file, scan_directory with all_files=true)

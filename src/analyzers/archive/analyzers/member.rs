@@ -79,7 +79,7 @@ impl ArchiveAnalyzer {
         };
         // Unknown members are normally skipped, but a validated embedded PE or
         // ELF is executable content even when a wrapper obscures its file ID.
-        let wrapped_binary = self.has_wrapped_binary(file_type, data);
+        let wrapped_binary = crate::analyzers::embedded_images::has_wrapped_binary(file_type, data);
         if let Some(reason) = self.archive_member_analysis_skip_reason(file_type, relative_path)
             && !wrapped_binary
         {
@@ -503,7 +503,7 @@ impl ArchiveAnalyzer {
         // archive's members — fanned across the whole rayon pool — are all named.
         let _breadcrumb = crate::breadcrumb::scope("member", relative_path);
 
-        let wrapped_binary = self.has_wrapped_binary(file_type, data);
+        let wrapped_binary = crate::analyzers::embedded_images::has_wrapped_binary(file_type, data);
         if let Some(reason) = self.archive_member_analysis_skip_reason(file_type, relative_path)
             && !wrapped_binary
         {

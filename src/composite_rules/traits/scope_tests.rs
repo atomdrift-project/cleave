@@ -76,7 +76,6 @@ fn composite_with(n_conditions: usize, scope: Option<Scope>) -> CompositeTrait {
         unless: None,
         not: None,
         downgrade: None,
-        exempt: Box::default(),
         defined_in: std::path::PathBuf::new(),
         precision: None,
         required_trait_indices: Vec::new(),

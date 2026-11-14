@@ -3,14 +3,11 @@
 #
 #   1. No non-test Rust source file over 2,000 lines.
 #   2. No names of internal projects or personal paths in tracked files.
-#   3. Rule IDs hard-coded in the validators may only shrink: an exemption
-#      belongs on the rule (`exempt:` in its YAML), not in the engine.
 set -eu
 cd "$(dirname "$0")/.."
 status=0
 
-# 1. File length. The reviewed-exemption table is listed until its entries
-#    move into the trait corpus as `exempt:` fields.
+# 1. File length. The reviewed-exemption table is allowed to exceed the limit.
 MAX_LINES=2000
 LONG_FILE_ALLOWLIST="src/capabilities/validation/taxonomy/reviewed.rs"
 for f in $(git ls-files --cached --others --exclude-standard -- 'src/*.rs' 'crates/*.rs' | sort -u); do
@@ -36,20 +33,6 @@ if git ls-files -- ':!testdata' ':!tests/fixtures' ':!tests/data' ':!tests/yara_
     | xargs grep -nIiE "$PRIVATE" -- 2>/dev/null \
     | grep -v '/Users/x/traits-dev'; then
     echo "error: internal project names or personal paths above" >&2
-    status=1
-fi
-
-# 3. Rule IDs in the validators. Lower RULE_ID_BUDGET as exemptions move out.
-#    emitted.rs is the catalogue of ids the engine itself emits, not exemptions.
-#    `sort -u`: during a merge conflict git lists a file once per stage.
-RULE_ID_BUDGET=469
-count=$(git ls-files --cached --others --exclude-standard -- 'src/capabilities/validation/*.rs' \
-    | sort -u \
-    | grep -vE '(^|/)tests?(/|\.rs$)|_tests?\.rs$|/emitted\.rs$' \
-    | xargs grep -ohE '"[a-z-]+/[a-z0-9/_.-]+::[a-z0-9_.-]+"' -- 2>/dev/null | wc -l)
-if [ "$count" -gt "$RULE_ID_BUDGET" ]; then
-    echo "error: $count rule IDs hard-coded in src/capabilities/validation (budget $RULE_ID_BUDGET)." >&2
-    echo "       Put the exemption on the rule as an \`exempt:\` entry instead." >&2
     status=1
 fi
 

@@ -5,12 +5,6 @@
 use super::*;
 
 impl CompositeTrait {
-    /// Whether the rule's `exempt:` names `validator`.
-    #[cfg(feature = "lint")]
-    pub(crate) fn is_exempt(&self, validator: &str) -> bool {
-        self.exempt.iter().any(|v| &**v == validator)
-    }
-
     /// The scope this composite runs under when it omits `scope:`, chosen
     /// from `for:` rather than a single fixed default:
     ///

@@ -1,6 +1,27 @@
 use std::path::Path;
 
 #[test]
+#[allow(clippy::expect_used)]
+fn full_validation_rejects_unparseable_yaml_as_a_hard_error() {
+    let mut warnings = crate::validation_controls::ValidationIssues::new();
+    let error = super::report_validation(
+        &mut warnings,
+        &["Failed to parse YAML in traits.yaml: unknown field `future_field`".to_string()],
+        true,
+    )
+    .expect_err("unparseable rules must fail full validation");
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("YAML parsing error") || message.contains("parse error"),
+        "unexpected validation error: {message}"
+    );
+    assert!(
+        message.contains("traits.yaml"),
+        "parse failure should identify its source file: {message}"
+    );
+}
+
+#[test]
 fn registry_policy_is_identified_before_parsing_local_rule_id() {
     let yaml = r#"defaults:
   for: [registry]

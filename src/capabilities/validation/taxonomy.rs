@@ -977,16 +977,12 @@ pub(crate) fn find_all_platform_rules_outside_allowlist(
 ) -> Vec<(String, String)> {
     let mut violations: Vec<_> = trait_definitions
         .iter()
-        .map(|t| (&t.id, &t.platforms, t.is_exempt("all-platforms-directory")))
-        .chain(
-            composite_rules
-                .iter()
-                .map(|r| (&r.id, &r.platforms, r.is_exempt("all-platforms-directory"))),
-        )
-        .filter(|(id, platforms, exempt)| {
-            platforms.contains(&Platform::All) && !exempt && !all_platform_directory_allowed(id)
+        .map(|t| (&t.id, &t.platforms))
+        .chain(composite_rules.iter().map(|r| (&r.id, &r.platforms)))
+        .filter(|(id, platforms)| {
+            platforms.contains(&Platform::All) && !all_platform_directory_allowed(id)
         })
-        .map(|(id, _, _)| {
+        .map(|(id, _)| {
             (
                 id.clone(),
                 rule_source_files
@@ -1048,7 +1044,6 @@ pub(crate) fn find_broad_platform_traits(
             !t.platforms.contains(&Platform::All)
                 && effective_platform_count(&t.platforms) >= BROAD_PLATFORM_THRESHOLD
                 && !has_reviewed_platform_scope(t)
-                && !t.is_exempt("broad-platform-scope")
         })
         .map(|t| {
             let source = rule_source_files
@@ -1158,7 +1153,7 @@ pub(crate) fn find_broad_filetype_traits(
                     ty == category && filetype_allowlist_source_matches(source, prefix)
                 })
             });
-            if allowlisted || t.is_exempt("broad-filetype-cap") {
+            if allowlisted {
                 return None;
             }
             let matched_types = if t.r#for.contains(&FileType::All) {
@@ -1219,7 +1214,6 @@ pub(crate) fn find_wellknown_missing_size_filter(
         .iter()
         .filter(|t| {
             extract_trait_tier(&t.id) == "well-known"
-                && !t.is_exempt("wellknown-size-filter")
                 && trait_targets_binaries(t)
                 && !(is_basename_fact(t)
                     && matches!(t.crit, Criticality::Component | Criticality::Notable))
@@ -1377,7 +1371,6 @@ pub(crate) fn find_wellknown_missing_section_filter(
         .iter()
         .filter(|t| {
             extract_trait_tier(&t.id) == "well-known"
-                && !t.is_exempt("binary-section-filter")
                 && trait_targets_only_binaries(t)
                 && !is_jwe_library_reference(t)
                 && !is_windows_product_name_reference(t)

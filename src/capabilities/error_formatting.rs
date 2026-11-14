@@ -68,6 +68,14 @@ fn extract_yaml_context(
 
     // Try to find the actual problematic line (field with error, not struct start)
     let actual_error_line = find_actual_error_line(&lines, error_line, error_msg);
+    let actual_error_col = unknown_field_name(error_msg)
+        .and_then(|field| {
+            lines
+                .get(actual_error_line.saturating_sub(1))
+                .and_then(|line| line.find(field))
+                .map(|column| column + 1)
+        })
+        .or(error_col);
 
     let mut context = String::from("\n");
 
@@ -84,7 +92,7 @@ fn extract_yaml_context(
             context.push_str(&format!("   {:>3}│{}", line_num, line_content));
 
             // Add error marker
-            if let Some(col) = error_col {
+            if let Some(col) = actual_error_col {
                 context.push('\n');
                 let spaces = " ".repeat(7 + col);
                 context.push_str(&format!("      │{}← Error here", spaces));
@@ -306,22 +314,24 @@ fn find_actual_error_line(lines: &[&str], reported_line: usize, error_msg: &str)
     let start_idx = reported_line.saturating_sub(1);
 
     // For unknown field errors, try to find the field
-    if (error_msg.contains("unknown field") || error_msg.contains("Unknown field"))
-        && let Some(field_start) = error_msg.find("`")
-        && let Some(field_end) = error_msg[field_start + 1..].find("`")
-    {
-        let field_name = &error_msg[field_start + 1..field_start + 1 + field_end];
-        // Search for the field in nearby lines
-        for (i, &line) in lines
+    if let Some(field_name) = unknown_field_name(error_msg) {
+        // Serde can report the next YAML line after an unknown key, so search
+        // both sides of its reported position and use the nearest matching key.
+        let start = start_idx.saturating_sub(15);
+        let end = start_idx.saturating_add(16).min(lines.len());
+        if let Some((index, _)) = lines
             .iter()
             .enumerate()
-            .skip(start_idx)
-            .take(15.min(lines.len().saturating_sub(start_idx)))
+            .take(end)
+            .skip(start)
+            .filter(|(_, line)| {
+                line.trim_start()
+                    .strip_prefix(field_name)
+                    .is_some_and(|rest| rest.starts_with(':'))
+            })
+            .min_by_key(|(index, _)| (index + 1).abs_diff(reported_line))
         {
-            let trimmed = line.trim_start();
-            if trimmed.starts_with(&format!("{}:", field_name)) {
-                return i + 1; // Return 1-indexed line number
-            }
+            return index + 1;
         }
     }
 
@@ -345,6 +355,15 @@ fn find_actual_error_line(lines: &[&str], reported_line: usize, error_msg: &str)
 
     // If not found, return original line
     reported_line
+}
+
+fn unknown_field_name(error_msg: &str) -> Option<&str> {
+    if !error_msg.contains("unknown field") && !error_msg.contains("Unknown field") {
+        return None;
+    }
+    let field_start = error_msg.find('`')?;
+    let field_end = error_msg[field_start + 1..].find('`')? + field_start + 1;
+    Some(&error_msg[field_start + 1..field_end])
 }
 
 /// Clean up technical error messages for user consumption
@@ -701,6 +720,22 @@ mod tests {
         let (line, col) = extract_line_column(error);
         assert_eq!(line, Some(149));
         assert_eq!(col, Some(5));
+    }
+
+    #[test]
+    fn unknown_field_marker_points_to_the_field_above_serde_position() {
+        let yaml = "composite_rules:\n  - id: gsudo\n    all:\n      - id: first\n    exempt:\n      unverified-signature-suppressor: reason\n";
+        let context = extract_yaml_context(
+            yaml,
+            6,
+            Some(7),
+            "unknown field `exempt`, expected `all` at line 6 column 7",
+        )
+        .expect("context is rendered");
+        assert!(
+            context.contains("    exempt:\n      │            ← Error here"),
+            "the arrow should be on the unknown field: {context}"
+        );
     }
 
     #[test]

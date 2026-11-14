@@ -12,12 +12,6 @@ impl TraitDefinition {
         matches!(&self.r#if, Condition::Trait { id } if id.is_empty())
     }
 
-    /// Whether the rule's `exempt:` names `validator`.
-    #[cfg(feature = "lint")]
-    pub(crate) fn is_exempt(&self, validator: &str) -> bool {
-        self.exempt.iter().any(|v| &**v == validator)
-    }
-
     /// Pre-compile all regexes in this trait's conditions for performance.
     /// Returns an error if any regex pattern is invalid.
     pub(crate) fn precompile_regexes(&mut self) -> anyhow::Result<()> {

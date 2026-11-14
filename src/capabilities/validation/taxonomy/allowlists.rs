@@ -1,4 +1,4 @@
-//! Reviewed directory and scope allowlists. Each entry is to become an `exempt:` entry on the rules it covers.
+//! Reviewed directory and scope allowlists kept in validator code.
 
 // Split out of the parent module for size; it shares the parent's namespace.
 #[allow(clippy::wildcard_imports)]

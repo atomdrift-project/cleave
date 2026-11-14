@@ -103,9 +103,6 @@ const HARD_VALIDATOR_IDS: &[&str] = &[
     // The third-party YARA config does not parse, so all of its overrides
     // (disables, crit changes, unless guards) are dropped at scan time.
     "third-party-config",
-    // An `exempt:` entry names no validator, or gives no reason: the rule
-    // would silently keep a problem its author meant to justify.
-    "invalid-exemption",
     // Anchored tree-sitter evaluation found different matches than the
     // whole-tree walk: an engine fault that drops or invents detections.
     "ast-anchor-soundness",
@@ -1102,13 +1099,6 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         display_id: "for-all",
         description: "Trait uses for: [all] instead of concrete types or named groups.",
         fix: "Name concrete file types or combine groups explicitly (e.g. for: [binaries, scripts]).",
-    },
-    ValidatorSpec {
-        id: "invalid-exemption",
-        category: ValidatorCategory::Quality,
-        display_id: "invalid-exemption",
-        description: "An exempt: entry names an unknown validator or gives no reason.",
-        fix: "Use a validator id from `cleave validate --list` and say why the rule is exempt.",
     },
     ValidatorSpec {
         id: "third-party-config",

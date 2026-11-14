@@ -861,15 +861,60 @@ pub(crate) struct UnverifiedSignatureSuppressor {
     pub(crate) reference: String,
 }
 
-/// The id of the validator below, which `exempt:` names.
+/// Narrow, code-owned exceptions for rules whose signature references describe
+/// structure or signer identity without treating an unverified signature as
+/// trusted. Keep these out of the rule language so a rule cannot exempt itself.
+const REVIEWED_SIGNATURE_STRUCTURE_SUPPRESSORS: &[&str] = &[
+    "metadata/signature/certificate/integrity::pe-signature-digest-mismatch",
+    "metadata/lang/compiler/managed::signed-borland-vcl-application",
+    "metadata/signature/certificate/chain::ca-issued-intact-signature",
+    "metadata/signature/certificate/format::phar-unsigned",
+    "metadata/signature/certificate/format::screenconnect-msi-without-signature-stream",
+    "metadata/signature/certificate/subject::pe-verified-yandex-signer",
+    "metadata/signature/entitlements::get-task-allow-with-hardened-runtime",
+    "micro-behaviors/process/tty/pty::pty-api-cluster",
+    "objectives/anti-static/obfuscation/steganography/image::dotnet-unsigned-rgb-reflection-entropy",
+    "objectives/evasion/masquerade/cert::forged-microsoft-code-signing-ca",
+    "objectives/persistence/login/items::loginhook-persistence",
+    "well-known/app/utility/raspberry-pi-imager::raspberry-pi-imager-signed-inno-installer",
+    "metadata/signature/code-directory::hardened-runtime-dup",
+    "metadata/signature/certificate/chain::pe-cert-chain-depth-two-plus",
+    "metadata/file/format/structured::phar-archive",
+    "well-known/dual-use/remote-admin/screenconnect/installer::msi-screenconnect-installer",
+    "metadata/signature/certificate/integrity::pe-signature-verified-kv",
+    "metadata/signature/certificate/integrity::signed-image-recognized-trailer-context",
+    "metadata/signature/certificate/integrity::pe-authenticode-digest-matches",
+    "metadata/binary/bundle::embedded-plist-apple-namespace",
+    "well-known/lib/vendor-sdk/alibaba-securityguard::securityguard-signed-windows-library",
+    "well-known/app/security/bitwarden::verified-bitwarden-windows-binary",
+    "well-known/app/system/microsoft/platform::microsoft-signed-system-component-context",
+    "well-known/app/enterprise/microsoft-office-c2r::microsoft-office-integrated-office-context",
+    "well-known/app/enterprise/microsoft-office-c2r::microsoft-office-portal-connect-core-context",
+    "well-known/app/utility/yandex-pack::official-yandex-pack-downloader",
+    "metadata/installer/builder/inno-setup::inno-setup-loader-manifest-identity",
+    "well-known/tool/sysadmin/console::gsudo-powershell-wrapper",
+    "micro-behaviors/os/autorun/login-items::loginwindow-preference-domain",
+    "objectives/persistence/system/surface/policy::managed-login-items-payload",
+    "objectives/persistence/system/surface/policy::declarative-background-task",
+    "objectives/persistence/system/surface/policy::mdm-pppc-payload",
+    "metadata/signature/certificate/issuer/chain::pe-cert-issuer-in-verified-chain",
+    "objectives/evasion/masquerade/cert::signed-pe-expired-leaf-installer",
+    "objectives/evasion/masquerade/identity/app::unsigned-trainer-cheat-controls-only",
+    "objectives/anti-static/pack/section-anomaly::verified-google-signed-binary",
+    "objectives/anti-static/pack/section-anomaly::verified-sumatrapdf-signed-binary",
+    "metadata/binary/resource/size::clr-resource-large",
+    "micro-behaviors/process/tty/pty::ptsname",
+    "micro-behaviors/os/syscall/invoke::ptrace-import",
+];
+
 pub(crate) const UNVERIFIED_SIGNATURE_SUPPRESSOR: &str = "unverified-signature-suppressor";
 
 /// Find suppressions that trust a signature nothing verified. Only
 /// `metadata/signature/verified/` proves a signer; every other state is a
 /// claim its maker chose, so a rule excused by it is excused by the attacker.
 /// The bare parent `metadata/signature/` counts too: it matches every state.
-/// Detection legs (`all:`, `any:`) may cite any state. A rule that must cite
-/// another state in a suppression names this validator in `exempt:`.
+/// Detection legs (`all:`, `any:`) may cite any state. Narrow structure-only
+/// exceptions live in [`REVIEWED_SIGNATURE_STRUCTURE_SUPPRESSORS`].
 pub(crate) fn find_unverified_signature_suppressors(
     trait_definitions: &[TraitDefinition],
     composite_rules: &[CompositeTrait],
@@ -902,12 +947,12 @@ pub(crate) fn find_unverified_signature_suppressors(
             }
         };
     for t in trait_definitions {
-        if !t.is_exempt(UNVERIFIED_SIGNATURE_SUPPRESSOR) {
+        if !REVIEWED_SIGNATURE_STRUCTURE_SUPPRESSORS.contains(&t.id.as_str()) {
             check(t.id.as_str(), t.unless.as_ref(), t.downgrade.as_ref());
         }
     }
     for r in composite_rules {
-        if !r.is_exempt(UNVERIFIED_SIGNATURE_SUPPRESSOR) {
+        if !REVIEWED_SIGNATURE_STRUCTURE_SUPPRESSORS.contains(&r.id.as_str()) {
             check(r.id.as_str(), r.unless.as_ref(), r.downgrade.as_ref());
         }
     }

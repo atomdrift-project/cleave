@@ -256,7 +256,7 @@ pub(crate) fn print_version_banner(format: cli::OutputFormat) {
         let traits_ver = cleave::traits_repo::version()
             .map(|v| format!(": {v}"))
             .unwrap_or_default();
-        eprintln!(
+        println!(
             "cleave v{} ({} traits{traits_ver})\n",
             env!("CARGO_PKG_VERSION"),
             cleave::traits_repo::Edition::current().styled()

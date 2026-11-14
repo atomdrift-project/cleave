@@ -186,8 +186,6 @@ fn push_parsing_warning(
         warnings.push_id("empty-file-type", format!("{path_str}: {warning}"));
     } else if warning.contains("for: [all] is not allowed") {
         warnings.push_id("for-all", format!("{path_str}: {warning}"));
-    } else if warning.starts_with("Invalid exemption") {
-        warnings.push_id("invalid-exemption", format!("{path_str}: {warning}"));
     } else if warning.contains("Invalid criticality") {
         warnings.push_id("invalid-criticality", format!("{path_str}: {warning}"));
     } else if warning.starts_with("Invalid file type") {

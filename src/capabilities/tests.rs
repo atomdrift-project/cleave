@@ -138,7 +138,6 @@ fn test_parse_file_types_binary_alias() {
 #[test]
 fn test_apply_trait_defaults_applies_all_defaults() {
     let defaults = models::TraitDefaults {
-        exempt: Default::default(),
         r#for: Some(vec!["php".to_string()]),
         platforms: Some(vec!["linux".to_string()]),
         arch: None,
@@ -219,7 +218,6 @@ fn test_apply_trait_defaults_applies_all_defaults() {
 #[test]
 fn test_apply_trait_defaults_trait_overrides_defaults() {
     let defaults = models::TraitDefaults {
-        exempt: Default::default(),
         r#for: Some(vec!["php".to_string()]),
         platforms: Some(vec!["linux".to_string()]),
         arch: None,
@@ -297,7 +295,6 @@ fn test_apply_trait_defaults_trait_overrides_defaults() {
 #[test]
 fn test_apply_trait_defaults_unset_mbc_with_none() {
     let defaults = models::TraitDefaults {
-        exempt: Default::default(),
         r#for: None,
         platforms: None,
         arch: None,
@@ -370,7 +367,6 @@ fn test_apply_trait_defaults_unset_mbc_with_none() {
 #[test]
 fn test_apply_trait_defaults_unset_attack_with_none() {
     let defaults = models::TraitDefaults {
-        exempt: Default::default(),
         r#for: None,
         platforms: None,
         arch: None,
@@ -443,7 +439,6 @@ fn test_apply_trait_defaults_unset_attack_with_none() {
 #[test]
 fn test_apply_trait_defaults_unset_file_types_with_none() {
     let defaults = models::TraitDefaults {
-        exempt: Default::default(),
         r#for: Some(vec!["php".to_string()]),
         platforms: None,
         arch: None,
@@ -516,7 +511,6 @@ fn test_apply_trait_defaults_unset_file_types_with_none() {
 #[test]
 fn test_apply_trait_defaults_size_and_entropy_from_defaults() {
     let defaults = models::TraitDefaults {
-        exempt: Default::default(),
         r#for: Some(vec!["pe".to_string()]),
         platforms: Some(vec!["windows".to_string()]),
         arch: None,
@@ -648,7 +642,6 @@ fn test_apply_trait_defaults_size_and_entropy_from_defaults() {
 #[test]
 fn test_apply_composite_defaults_applies_all_defaults() {
     let defaults = models::TraitDefaults {
-        exempt: Default::default(),
         r#for: Some(vec!["elf".to_string(), "macho".to_string()]),
         platforms: Some(vec!["linux".to_string(), "macos".to_string()]),
         arch: None,
@@ -881,7 +874,6 @@ mod bare_or_hostile_ceiling {
 #[test]
 fn test_apply_composite_defaults_unset_with_none() {
     let defaults = models::TraitDefaults {
-        exempt: Default::default(),
         r#for: Some(vec!["elf".to_string()]),
         platforms: Some(vec!["linux".to_string()]),
         arch: None,
@@ -4213,51 +4205,25 @@ composite_rules:
 }
 
 #[test]
-fn exemptions_name_known_validators_with_reasons() {
-    let yaml = r#"
-defaults:
-  for: [elf]
-  exempt:
-    broad-platform-scope: "Every rule here names a portable protocol."
-traits:
-  - id: well-known/app/demo::banner
-    desc: "Demo banner"
-    crit: notable
-    exempt:
-      wellknown-size-filter: "A product banner is a reference, not the binary's identity."
-      no-such-validator: "Typo"
-      binary-section-filter: ""
-    if:
-      type: text
-      exact: "demo"
-"#;
-    let mappings: models::TraitMappings = crate::yaml::from_str(yaml).expect("parse YAML");
-    let mut warnings = Vec::new();
-    let raw = mappings.traits.into_iter().next().expect("one trait");
-    let t = parsing::apply_trait_defaults(
-        raw,
-        &mappings.defaults,
-        &mut warnings,
-        Path::new("demo.yaml"),
-        false,
-    );
-    assert!(t.is_exempt("wellknown-size-filter"));
-    assert!(t.is_exempt("broad-platform-scope"), "file defaults apply");
-    assert!(
-        !t.is_exempt("binary-section-filter"),
-        "an exemption needs a reason"
-    );
-    assert!(!t.is_exempt("no-such-validator"));
-    let invalid: Vec<_> = warnings
-        .iter()
-        .filter(|w| w.starts_with("Invalid exemption"))
-        .collect();
-    assert_eq!(invalid.len(), 2, "{warnings:?}");
+fn exempt_is_not_a_supported_rule_field() {
+    let cases = [
+        "defaults:\n  exempt:\n    validator: reason\n",
+        "traits:\n  - id: example\n    desc: Example\n    exempt:\n      validator: reason\n    if: {type: text, exact: example}\n",
+        "composite_rules:\n  - id: example\n    desc: Example\n    exempt:\n      validator: reason\n    all:\n      - id: a::b\n",
+    ];
+    for yaml in cases {
+        let error = crate::yaml::from_str::<models::TraitMappings>(yaml)
+            .expect_err("exempt is not part of the rule language");
+        assert!(
+            format!("{error:#}").contains("exempt"),
+            "unknown-field error should identify exempt: {error:#}"
+        );
+    }
 }
 
 /// A suppression may cite only a verified signature: any other state is a
 /// name whoever made the certificate chose. Detection legs may cite any
-/// state, and `exempt:` with a reason opts a reviewed rule out.
+/// state. The narrow reviewed exceptions live in validator code.
 #[test]
 fn suppressions_may_cite_only_verified_signatures() {
     let yaml = r#"
@@ -4286,8 +4252,6 @@ traits:
   - id: reviewed
     desc: "Reviewed exception"
     crit: suspicious
-    exempt:
-      unverified-signature-suppressor: "Reviewed: the claim only lowers a notable leg."
     if: { type: text, exact: "x" }
     unless:
       - id: metadata/signature/unverified/signer::example
@@ -4321,6 +4285,7 @@ traits:
                 "metadata/signature/self-signed/signer::adobe-inc."
             ),
             ("trusts-any-state", "metadata/signature/"),
+            ("reviewed", "metadata/signature/unverified/signer::example"),
         ],
         "{warnings:?}"
     );

@@ -114,7 +114,6 @@ mod defaults_tests {
         attack: Option<&str>,
     ) -> TraitDefaults {
         TraitDefaults {
-            exempt: Default::default(),
             r#for: file_types.map(|v| v.into_iter().map(str::to_string).collect()),
             platforms: platforms.map(|v| v.into_iter().map(str::to_string).collect()),
             arch: None,

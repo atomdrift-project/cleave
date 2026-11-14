@@ -12,9 +12,6 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize, Default, Clone)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TraitDefaults {
-    /// Validators this rule is exempt from, each with the reason.
-    #[serde(default)]
-    pub(crate) exempt: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub(crate) r#for: Option<Vec<String>>,
     #[serde(default)]
@@ -43,9 +40,6 @@ pub(crate) struct TraitDefaults {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawTraitDefinition {
-    /// Validators this rule is exempt from, each with the reason.
-    #[serde(default)]
-    pub(crate) exempt: std::collections::BTreeMap<String, String>,
     pub(crate) id: String,
     #[serde(alias = "description")]
     pub(crate) desc: String,
@@ -98,9 +92,6 @@ pub(crate) struct RawTraitDefinition {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawCompositeRule {
-    /// Validators this rule is exempt from, each with the reason.
-    #[serde(default)]
-    pub(crate) exempt: std::collections::BTreeMap<String, String>,
     pub(crate) id: String,
     #[serde(alias = "description")]
     pub(crate) desc: String,

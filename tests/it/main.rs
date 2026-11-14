@@ -48,6 +48,7 @@ mod lnk_anchor_and_member_yara_test;
 mod metaparse_integration_test;
 mod nuitka_macho;
 mod office_documents_test;
+mod output_discipline_test;
 mod package_type_test;
 mod packed_rules_cli;
 mod php_ast_call_kind_regression;

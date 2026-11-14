@@ -328,7 +328,15 @@ fn anchor_orphan_symbol_matches(findings: &mut [Finding], data: &[u8]) {
             {
                 continue;
             }
-            if let Some(off) = locate_nul_terminated(data, &e.value) {
+            // Mach-O import facts normalize the leading underscore and may
+            // strip an ABI suffix such as `$INODE64` from the on-disk name.
+            let off = if e.location.as_deref() == Some("import") {
+                locate_macho_import(data, &e.value)
+                    .or_else(|| locate_nul_terminated(data, &e.value))
+            } else {
+                locate_nul_terminated(data, &e.value)
+            };
+            if let Some(off) = off {
                 e.offsets.push(off);
             }
         }
@@ -346,6 +354,30 @@ fn locate_nul_terminated(data: &[u8], value: &str) -> Option<u64> {
     needle.extend_from_slice(value.as_bytes());
     needle.push(0);
     memchr::memmem::find(data, &needle).map(|pos| pos as u64)
+}
+
+/// Find a normalized Mach-O import at its on-disk spelling, allowing an ABI
+/// suffix (for example `_opendir$INODE64`) before the NUL terminator.
+fn locate_macho_import(data: &[u8], value: &str) -> Option<u64> {
+    if value.len() < 3 {
+        return None;
+    }
+    let mut needle = Vec::with_capacity(value.len() + 1);
+    needle.push(b'_');
+    needle.extend_from_slice(value.as_bytes());
+    let mut search_from = 0usize;
+    while let Some(relative) = memchr::memmem::find(data.get(search_from..)?, &needle) {
+        let position = search_from.checked_add(relative)?;
+        let suffix_at = position.checked_add(needle.len())?;
+        if data
+            .get(suffix_at)
+            .is_some_and(|byte| *byte == 0 || *byte == b'$')
+        {
+            return Some(position as u64);
+        }
+        search_from = position.checked_add(1)?;
+    }
+    None
 }
 
 /// Source position index used only to label byte-addressed text chunks. Window

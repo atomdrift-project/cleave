@@ -564,6 +564,28 @@ fn orphan_symbol_match_anchors_at_name_in_file() {
 }
 
 #[test]
+fn orphan_macho_import_anchors_with_its_leading_underscore() {
+    let data = b"...._opendir$INODE64\0....";
+    let mut f = finding("micro/opendir", Criticality::Notable, &[]);
+    f.evidence = vec![Evidence {
+        method: "symbol".to_string(),
+        value: "opendir".to_string(),
+        location: Some("import".to_string()),
+        ..Default::default()
+    }];
+
+    let mut r = report(vec![f]);
+    capture(&mut r, data, FileType::MachO, &FxHashSet::default());
+
+    assert_eq!(r.findings[0].evidence[0].byte_offset(), Some(4));
+    assert!(
+        note_ids(&r).iter().any(|id| id == "micro/opendir"),
+        "Mach-O import should render at the on-disk symbol name: {:?}",
+        r.context
+    );
+}
+
+#[test]
 fn binary_emits_raw_byte_window() {
     let data: Vec<u8> = (0u8..64).collect();
     let mut r = report(vec![finding("bin/x", Criticality::Notable, &[16])]);

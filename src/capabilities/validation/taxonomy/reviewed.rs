@@ -1,4 +1,4 @@
-//! Per-rule reviewed exemptions. Each is to become an `exempt:` entry on the rule it names.
+//! Rule-specific validation exceptions kept in validator code.
 
 // Split out of the parent module for size; it shares the parent's namespace.
 #[allow(clippy::wildcard_imports)]

@@ -413,7 +413,6 @@ pub(crate) fn apply_trait_defaults(
             }
         }
     }
-    let exempt = resolve_exemptions(&raw.exempt, defaults, &raw.id, warnings);
     for w in &mut warnings[warn_start..] {
         *w = format!("{} (in {})", w, path.display());
     }
@@ -445,7 +444,6 @@ pub(crate) fn apply_trait_defaults(
         not: raw.not,
         unless: raw.unless,
         downgrade: raw.downgrade,
-        exempt,
         defined_in: path.to_path_buf(),
         precision: None,
     };
@@ -1209,34 +1207,6 @@ fn resolve_criticality(
     })
 }
 
-/// The validators a rule is exempt from: its file's default `exempt:` entries
-/// and its own. Each must name a known validator and give a reason; one that
-/// does not is reported and ignored.
-fn resolve_exemptions(
-    own: &std::collections::BTreeMap<String, String>,
-    defaults: &TraitDefaults,
-    rule_id: &str,
-    warnings: &mut Vec<String>,
-) -> Box<[Box<str>]> {
-    let mut ids: Vec<Box<str>> = Vec::new();
-    for (validator, reason) in defaults.exempt.iter().chain(own) {
-        if crate::validation_controls::validator_spec(validator).is_none() {
-            warnings.push(format!(
-                "Invalid exemption on rule '{rule_id}': no validator is named '{validator}'"
-            ));
-        } else if reason.trim().is_empty() {
-            warnings.push(format!(
-                "Invalid exemption on rule '{rule_id}': exempting it from '{validator}' needs a reason"
-            ));
-        } else {
-            ids.push(validator.as_str().into());
-        }
-    }
-    ids.sort_unstable();
-    ids.dedup();
-    ids.into_boxed_slice()
-}
-
 /// A rule's `crit:`. `filtered` is an output-only level a rule cannot claim.
 pub(crate) fn parse_criticality(s: &str) -> Result<Criticality, String> {
     match s.parse() {
@@ -1473,7 +1443,6 @@ pub(crate) fn apply_composite_defaults(
         check_conditions(&downgrade.any, "downgrade.any");
         check_conditions(&downgrade.all, "downgrade.all");
     }
-    let exempt = resolve_exemptions(&raw.exempt, defaults, &raw.id, warnings);
     for w in &mut warnings[warn_start..] {
         *w = format!("{} (in {})", w, path.display());
     }
@@ -1505,7 +1474,6 @@ pub(crate) fn apply_composite_defaults(
         unless: raw.unless,
         not: raw.not,
         downgrade: raw.downgrade,
-        exempt,
         defined_in: path.to_path_buf(),
         precision: None,
         required_trait_indices: Vec::new(),

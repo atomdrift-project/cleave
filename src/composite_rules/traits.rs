@@ -898,10 +898,6 @@ pub(crate) struct TraitDefinition {
     /// Only levels LOWER than base `crit` are allowed (validated at load time)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub downgrade: Option<DowngradeConditions>,
-    /// Validators this rule is exempt from (`exempt:` in YAML, keyed by
-    /// validator id with a reason). Only validation reads it.
-    #[serde(skip_serializing_if = "<[_]>::is_empty", default)]
-    pub exempt: Box<[Box<str>]>,
     /// Path to the YAML file this trait was loaded from
     #[serde(skip)]
     pub defined_in: std::path::PathBuf,
@@ -943,7 +939,6 @@ impl Default for TraitDefinition {
             not: None,
             unless: None,
             downgrade: None,
-            exempt: Box::default(),
             defined_in: std::path::PathBuf::new(),
             precision: None,
         }
@@ -1061,10 +1056,6 @@ pub(crate) struct CompositeTrait {
     /// Only levels LOWER than base `crit` are allowed (validated at load time)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub downgrade: Option<DowngradeConditions>,
-    /// Validators this rule is exempt from (`exempt:` in YAML, keyed by
-    /// validator id with a reason). Only validation reads it.
-    #[serde(skip_serializing_if = "<[_]>::is_empty", default)]
-    pub exempt: Box<[Box<str>]>,
     /// Source file path where this composite rule was defined
     #[serde(skip)]
     pub defined_in: std::path::PathBuf,
@@ -1108,7 +1099,6 @@ impl Default for CompositeTrait {
             unless: None,
             not: None,
             downgrade: None,
-            exempt: Box::default(),
             defined_in: std::path::PathBuf::new(),
             precision: None,
             required_trait_indices: Vec::new(),

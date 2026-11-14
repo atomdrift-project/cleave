@@ -581,51 +581,6 @@ impl SyscallArg {
     }
 }
 
-/// Condition `type:` spellings that still load but are slated for retirement,
-/// each with the spelling that replaces it. `cleave validate` counts their uses
-/// (see [`count_retiring_condition_types`]) so the rules can be migrated before
-/// support is removed.
-#[cfg(feature = "lint")]
-pub(crate) const RETIRING_CONDITION_TYPES: &[(&str, &str)] = &[
-    ("string_literal", "literal"),
-    ("import", "symbol + kind: import"),
-    ("export", "symbol + kind: export"),
-    ("function", "symbol + kind: function"),
-    ("basename", "path + basename: true"),
-];
-
-/// Count `type: <spelling>` lines in rule YAML for each entry of
-/// [`RETIRING_CONDITION_TYPES`], in that order.
-#[must_use]
-#[cfg(feature = "lint")]
-pub(crate) fn count_retiring_condition_types<'a>(
-    yaml_files: impl IntoIterator<Item = &'a [u8]>,
-) -> Vec<usize> {
-    let mut counts = vec![0; RETIRING_CONDITION_TYPES.len()];
-    for bytes in yaml_files {
-        for line in bytes.split(|&b| b == b'\n') {
-            let Ok(line) = std::str::from_utf8(line) else {
-                continue;
-            };
-            let Some(value) = line
-                .trim_start()
-                .trim_start_matches("- ")
-                .strip_prefix("type:")
-                .map(|v| v.trim().trim_matches(['"', '\'']))
-            else {
-                continue;
-            };
-            if let Some(i) = RETIRING_CONDITION_TYPES
-                .iter()
-                .position(|(old, _)| *old == value)
-            {
-                counts[i] += 1;
-            }
-        }
-    }
-    counts
-}
-
 /// Payload of the legacy `type: import` / `export` / `function` conditions: a
 /// `type: symbol` with its `kind` implied by the type name.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1616,8 +1571,6 @@ pub(crate) struct MetricsQuery {
 }
 
 #[cfg(test)]
-mod retiring_condition_type_tests;
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod location_constraint_tests;

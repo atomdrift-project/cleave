@@ -1368,7 +1368,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e0b1fab2ae45819af2d0731d60f2afe17227ebb1a1538a236da84c93e9a60162"
 dependencies = [
  "dispatch2",
- "nix",
+ "nix 0.31.3",
  "windows-sys 0.61.2",
 ]
 
@@ -1888,7 +1888,7 @@ checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 [[package]]
 name = "filefacts"
 version = "3.0.0-beta.1"
-source = "git+https://github.com/atomdrift-project/filefacts.git#95c5fd2d8757105de3495a4952efef22c989bce4"
+source = "git+https://github.com/atomdrift-project/filefacts.git#c48572d029d3989121d5f19c6472971a78561073"
 dependencies = [
  "aes 0.9.4",
  "aho-corasick",
@@ -3181,6 +3181,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "nix"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77730ed34f01f4990cb2ea67fec715ecebc6fab9a6396cf83c5529b13f581bdc"
+dependencies = [
+ "bitflags",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
+
+[[package]]
 name = "no_std_io2"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3880,9 +3892,9 @@ dependencies = [
 
 [[package]]
 name = "psl"
-version = "2.1.254"
+version = "2.1.255"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb958e602bc5c9e07a3bdb78ce240402a490cd08f01e51deacfe637ed903d743"
+checksum = "cb40358efa8d957f3e793e45daedd2fef822c694e1e3a45b827b53de6175e724"
 dependencies = [
  "psl-types",
 ]
@@ -3980,7 +3992,7 @@ dependencies = [
  "bytes",
  "getrandom 0.4.3",
  "lru-slab",
- "rand 0.10.3",
+ "rand 0.10.4",
  "rand_pcg",
  "ring",
  "rustc-hash 2.1.3",
@@ -4041,9 +4053,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.10.3"
+version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "65c9fb96cbc91e3478eaae79a69fcd3f1ae4ad052e471fe6732fff548984b4af"
+checksum = "8f6fa277c67e6ea590466f04c3fe82cb509f0864fe470643e5570de9514a9b11"
 dependencies = [
  "chacha20 0.10.2",
  "getrandom 0.4.3",
@@ -5005,7 +5017,7 @@ dependencies = [
 [[package]]
 name = "stng"
 version = "3.0.0-beta.3"
-source = "git+https://github.com/atomdrift-project/stng.git#372c924fb7e4706a6016550a39f401eee2d41274"
+source = "git+https://github.com/atomdrift-project/stng.git#bdfafee49adb8b9e7167e5f2c49f7f5fdad2e5ca"
 dependencies = [
  "aho-corasick",
  "base64 0.22.1",
@@ -5567,7 +5579,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#95c5fd2d8757105de3495a4952efef22c989bce4"
+source = "git+https://github.com/atomdrift-project/filefacts.git#c48572d029d3989121d5f19c6472971a78561073"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -6746,9 +6758,9 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xxhash-rust"
-version = "0.8.19"
+version = "0.8.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "550a2b930b62486a393c52d5c3b84bff264b28aa437ed64694d31e93b1757af7"
+checksum = "40de123dbb523ebcc00d61ec01840ad192578afc378d859f3429caa38308fad5"
 
 [[package]]
 name = "xz2"
@@ -7004,9 +7016,9 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "9.5.1"
+version = "9.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3476fd497ac8af5b1ec7b51acab7bef380f7e8dd8e0487595bafd839417a302"
+checksum = "80cc68510ea7553c30a69c732de5278e94183f68765af6c642dbccefd6ec777e"
 dependencies = [
  "aes 0.9.4",
  "bzip2 0.6.1",
@@ -7020,7 +7032,7 @@ dependencies = [
  "libc",
  "lzma-rust2 0.25.0",
  "memchr",
- "nix",
+ "nix 0.32.0",
  "pbkdf2 0.13.0",
  "ppmd-rust",
  "sha1 0.11.0",

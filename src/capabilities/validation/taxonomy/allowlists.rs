@@ -296,42 +296,64 @@ pub(crate) const ALL_PLATFORM_DIRECTORY_ALLOWLIST: &[&str] = &[
     "micro-behaviors/communications/url/host",
 ];
 
-/// Reviewed enumerated scopes, not permission to use `all`. Match the exact
-/// atom and platform set; changed scopes return to review. In particular neither
-/// wireless configuration nor Swift Foundation is supported on z/OS by these
-/// observations. Source-language and matcher changes still receive their normal
-/// file-type, duplicate, and condition validation.
+/// Reviewed directory/platform-set contracts, not permission to use `all`.
+/// Descendants inherit the contract; sibling paths and changed platform sets
+/// return to review. Matcher and file-type validation still apply.
 pub(super) const REVIEWED_BROAD_PLATFORM_SCOPES: &[(&str, &[Platform])] = &[
+    // Browser timing and source-field observations retain the same meaning
+    // across desktop and mobile runtimes after moving into their neutral homes.
     (
-        "micro-behaviors/fs/read/file/content/unspecified::swift-direct-file-read-api",
+        "micro-behaviors/time/timing",
         &[
-            Platform::Ios,
-            Platform::MacOS,
-            Platform::Linux,
+            Platform::Unix,
             Platform::Windows,
-        ],
-    ),
-    (
-        "micro-behaviors/fs/read/file/content/unspecified::swift-data-file-read",
-        &[
-            Platform::Ios,
-            Platform::MacOS,
-            Platform::Linux,
-            Platform::Windows,
-        ],
-    ),
-    (
-        "micro-behaviors/hardware/wireless/network::wifi-ssid-identifier",
-        &[
-            Platform::Windows,
-            Platform::Linux,
-            Platform::MacOS,
             Platform::Android,
             Platform::Ios,
         ],
     ),
     (
-        "micro-behaviors/hardware/wireless/network::wifi-password-key",
+        "metadata/lang/source/naming",
+        &[
+            Platform::Unix,
+            Platform::Windows,
+            Platform::Android,
+            Platform::Ios,
+        ],
+    ),
+    // Browser HTTP callbacks and OAST content use browser APIs with the same
+    // semantics on desktop and mobile. Keep their mobile coverage intact.
+    (
+        "objectives/exfiltration/oob",
+        &[
+            Platform::Unix,
+            Platform::Windows,
+            Platform::Android,
+            Platform::Ios,
+        ],
+    ),
+    // Degradation includes portable browser main-thread blocking.
+    (
+        "objectives/impact/degrade",
+        &[
+            Platform::Unix,
+            Platform::Windows,
+            Platform::Android,
+            Platform::Ios,
+        ],
+    ),
+    // File reads include Foundation APIs with this desktop/mobile scope.
+    (
+        "micro-behaviors/fs/read/file",
+        &[
+            Platform::Ios,
+            Platform::MacOS,
+            Platform::Linux,
+            Platform::Windows,
+        ],
+    ),
+    // Wireless configuration is supported on these desktop/mobile systems.
+    (
+        "micro-behaviors/hardware/wireless",
         &[
             Platform::Windows,
             Platform::Linux,

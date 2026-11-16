@@ -116,7 +116,9 @@ pub(crate) const CLEAVE_OWNED_METRIC_FIELDS: &[&str] = &[
     "references.undeclared_import_count",
     "references.unresolved_count",
     "references.unavailable_command_count",
+    "references.unavailable_vsix_url_count",
     "references.unresolved_extension_count",
+    "references.unresolved_required_extension_count",
     // How many of a file's declared dependencies resolved to a registry
     // security hold — the provider's statement that it removed the package.
     // Counted from the registry documents a follow materializes, which is a

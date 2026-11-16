@@ -1018,10 +1018,16 @@ fn effective_filetype_count(t: &TraitDefinition) -> usize {
 }
 
 fn has_reviewed_platform_scope(t: &TraitDefinition) -> bool {
+    let Some((directory, _)) = t.id.split_once("::") else {
+        return false;
+    };
     REVIEWED_BROAD_PLATFORM_SCOPES
         .iter()
-        .any(|(id, platforms)| {
-            t.id == *id
+        .any(|(prefix, platforms)| {
+            (directory == *prefix
+                || directory
+                    .strip_prefix(prefix)
+                    .is_some_and(|rest| rest.starts_with('/')))
                 && t.platforms.len() == platforms.len()
                 && platforms
                     .iter()

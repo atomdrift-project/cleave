@@ -3,7 +3,7 @@ use crate::composite_rules::{Platform, TraitDefinition};
 use std::collections::HashMap;
 
 #[test]
-fn reviewed_platform_scope_requires_exact_atom_and_platform_set() {
+fn reviewed_platform_scope_requires_directory_and_platform_set() {
     let scope = vec![
         Platform::Ios,
         Platform::MacOS,
@@ -24,7 +24,7 @@ fn reviewed_platform_scope_requires_exact_atom_and_platform_set() {
         1
     );
     traits[0].platforms = scope;
-    traits[0].id = "micro-behaviors/fs/read/file/full::other-swift-api".to_string();
+    traits[0].id = "micro-behaviors/fs/read/directory::other-api".to_string();
     assert_eq!(
         find_broad_platform_traits(&traits, &HashMap::new()).len(),
         1
@@ -32,7 +32,7 @@ fn reviewed_platform_scope_requires_exact_atom_and_platform_set() {
 }
 
 #[test]
-fn platform_review_has_one_threshold_and_no_directory_exemptions() {
+fn platform_review_has_one_threshold_outside_reviewed_directories() {
     let mut traits = Vec::new();
     let mut sources = HashMap::new();
     for directory in [
@@ -74,4 +74,52 @@ fn platform_review_has_one_threshold_and_no_directory_exemptions() {
     );
     traits.reverse();
     assert_eq!(reviews, find_broad_platform_traits(&traits, &sources));
+}
+
+#[test]
+fn browser_scope_review_inherits_within_directory_boundaries() {
+    let scope = vec![
+        Platform::Unix,
+        Platform::Windows,
+        Platform::Android,
+        Platform::Ios,
+    ];
+    for directory in [
+        "objectives/exfiltration/oob/callback",
+        "objectives/exfiltration/oob/callback/http-get",
+        "objectives/exfiltration/oob/oast",
+        "objectives/impact/degrade/process",
+        "objectives/impact/degrade/process/browser",
+        "objectives/impact/degrade/browser-access",
+        "objectives/exfiltration/oob/tunnel",
+    ] {
+        let atom = TraitDefinition {
+            id: format!("{directory}::future-observation"),
+            platforms: scope.clone(),
+            ..Default::default()
+        };
+        assert!(find_broad_platform_traits(&[atom.clone()], &HashMap::new()).is_empty());
+        let mut expanded = atom;
+        expanded.platforms.push(Platform::Zos);
+        assert_eq!(
+            find_broad_platform_traits(&[expanded], &HashMap::new()).len(),
+            1
+        );
+    }
+    for directory in [
+        "objectives/exfiltration/oob-extra",
+        "objectives/exfiltration/http",
+        "objectives/impact/degrade-extra",
+        "objectives/impact/destroy",
+    ] {
+        let atom = TraitDefinition {
+            id: format!("{directory}::unreviewed-observation"),
+            platforms: scope.clone(),
+            ..Default::default()
+        };
+        assert_eq!(
+            find_broad_platform_traits(&[atom], &HashMap::new()).len(),
+            1
+        );
+    }
 }

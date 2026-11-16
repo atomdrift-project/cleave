@@ -94,7 +94,7 @@ pub(super) fn render_ascii_context(
                     "{marker} {} {:x} {}",
                     note.crit.letter(),
                     note.off,
-                    annotate_desc(&terse_description(&note.desc), &note.id)
+                    annotate_desc(&display_description(&note.desc), &note.id)
                 );
             }
 
@@ -796,7 +796,7 @@ pub(super) fn render_source_line(out: &mut String, row: &SourceRow<'_>, layout: 
             out.push_str(&marker.truecolor(r, g, b).to_string());
             out.push(' ');
             out.push_str(
-                &truncate_with_ellipsis(&terse_description(&n.desc), budget)
+                &truncate_with_ellipsis(&display_description(&n.desc), budget)
                     .bright_white()
                     .to_string(),
             );
@@ -850,7 +850,7 @@ pub(super) fn render_source_line(out: &mut String, row: &SourceRow<'_>, layout: 
             out.push_str(&col.to_string());
         }
         out.push(' ');
-        out.push_str(&annotate_desc(&terse_description(&n.desc), &n.id));
+        out.push_str(&annotate_desc(&display_description(&n.desc), &n.id));
         out.push('\n');
     }
 
@@ -1044,7 +1044,7 @@ pub(super) fn render_hex_unit(
                 let (r, g, b) = crit_rgb(n.crit);
                 out.push_str(&marker.truecolor(r, g, b).to_string());
                 out.push(' ');
-                let desc = truncate_with_ellipsis(&terse_description(&n.desc), desc_budget);
+                let desc = truncate_with_ellipsis(&display_description(&n.desc), desc_budget);
                 out.push_str(&desc.bright_white().to_string());
             }
             out.push('\n');
@@ -1058,7 +1058,7 @@ pub(super) fn render_hex_unit(
                 out.push_str(&format!(
                     "  {marker} {} {}",
                     n.crit.letter(),
-                    annotate_desc(&terse_description(&n.desc), &n.id)
+                    annotate_desc(&display_description(&n.desc), &n.id)
                 ));
             }
             out.push('\n');

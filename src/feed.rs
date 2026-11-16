@@ -1,28 +1,33 @@
-//! Atomdrift Uplink: the subscription token, and the switch it throws.
+//! Rule feeds: which published ruleset a host scans with.
 //!
-//! A token — `ISOTOPE13_TOKEN`, else the one saved in
-//! `<config>/atomdrift/isotope13-api.json` — selects the zero-hour ruleset in
-//! `traits-enriched/`, and in scan, remote verdicts and the hosted LLM. Once a
-//! computer is connected it stays connected: the token is used for every
-//! refresh until the rules Worker refuses it, and only then does a run fall
-//! back to the open-source rules, saying so. `--uplink` (or
-//! `ATOMDRIFT_UPLINK=1`) adds insistence: with no token it connects this
-//! computer — on a terminal, through [`crate::rule_update::sign_in`], with a
-//! code approved at <https://dash.isotope13.io/device> — and a refusal is an
-//! error rather than a fall back. `ATOMDRIFT_UPLINK=0` keeps the open-source
-//! rules whatever the host holds (`ATOMDRIFT_ENRICHED` is accepted as a legacy
-//! alias).
+//! Three feeds carry the same rules and differ only in how long a ruleset
+//! waits after it clears QA:
 //!
-//! The token is opaque here. Whether it is valid, and what it is entitled to,
-//! is the server's to say, so the saved file holds the token and nothing that
+//! | feed | delay | needs |
+//! |---|---|---|
+//! | `zero-day` | none | a Business, POC, or Critical plan |
+//! | `supporter` | 72 hours | an Early Supporter plan or better |
+//! | `oss-delayed` | the eight-day public roll-up | nothing |
+//!
+//! A run's feed is, in order: `--feed` (or `ATOMDRIFT_FEED`), the choice saved
+//! by `cleave feed <name>` in `<config>/atomdrift/feed`, the zero-day feed when
+//! an isotope13 token is held, else `oss-delayed`. A feed named on the command
+//! line is insisted on: a refusal is an error. Any other choice that the rules
+//! service refuses falls back to the best feed the plan still opens, saying so.
+//!
+//! The paid feeds need a token — `ISOTOPE13_TOKEN`, else the one saved in
+//! `<config>/atomdrift/isotope13-api.json` when this computer was connected.
+//! The token is opaque here: whether it is valid, and which feeds it opens, is
+//! the server's to say, so the saved file holds the token and nothing that
 //! could go stale beside it. It travels only to isotope13's own hosts, in an
 //! `Authorization` header, and never into a log: logs carry its
-//! [`Token::fingerprint`], the same one the service's dashboard shows.
+//! [`Token::fingerprint`], the same one the service's dashboard shows. The
+//! `oss-delayed` feed is fetched with no token, from atomdrift's own bucket.
 
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -30,111 +35,319 @@ use sha2::{Digest, Sha256};
 /// Environment variable holding a token. Checked before the saved file; how CI
 /// supplies one with no file and no prompt.
 pub const TOKEN_ENV: &str = "ISOTOPE13_TOKEN";
-/// Environment equivalent of `--uplink`.
-pub const ENABLE_ENV: &str = "ATOMDRIFT_UPLINK";
-/// Legacy spelling of [`ENABLE_ENV`], honoured when [`ENABLE_ENV`] is unset.
-const LEGACY_ENABLE_ENV: &str = "ATOMDRIFT_ENRICHED";
+/// Environment equivalent of `--feed`.
+pub const FEED_ENV: &str = "ATOMDRIFT_FEED";
 /// Where a customer mints a token.
 pub const DASH_URL: &str = "https://dash.isotope13.io/";
 /// The saved token, under `<config>/atomdrift/`. Shared by every atomdrift tool.
 const TOKEN_FILE: &str = "isotope13-api.json";
+/// The saved feed choice, under `<config>/atomdrift/`. Shared likewise.
+const CHOICE_FILE: &str = "feed";
 /// Longer than any token dash mints, short enough that a stray paste of a
 /// whole document is refused rather than sent.
 const MAX_TOKEN_LEN: usize = 256;
 
-static ENABLED: AtomicBool = AtomicBool::new(false);
-static REQUIRED: AtomicBool = AtomicBool::new(false);
+/// A published ruleset stream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum Feed {
+    /// Each ruleset as soon as it clears QA.
+    ZeroDay,
+    /// The ruleset that cleared QA at least 72 hours ago.
+    Supporter,
+    /// The open-source roll-up, published every eight days.
+    OssDelayed,
+}
 
-/// Turn enriched mode on or off for this process.
+impl Feed {
+    /// Every feed, best first.
+    pub const ALL: [Feed; 3] = [Feed::ZeroDay, Feed::Supporter, Feed::OssDelayed];
+
+    /// The name on the command line, in headers, and in JSON.
+    #[must_use]
+    pub fn slug(self) -> &'static str {
+        match self {
+            Feed::ZeroDay => "zero-day",
+            Feed::Supporter => "supporter",
+            Feed::OssDelayed => "oss-delayed",
+        }
+    }
+
+    /// The feed for a slug the rules service sent.
+    #[must_use]
+    pub fn from_slug(slug: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|feed| feed.slug() == slug)
+    }
+
+    /// How long a ruleset waits after QA before this feed carries it.
+    #[must_use]
+    pub fn delay(self) -> &'static str {
+        match self {
+            Feed::ZeroDay => "none",
+            Feed::Supporter => "72 hours",
+            Feed::OssDelayed => "up to 8 days",
+        }
+    }
+
+    /// Whether fetching this feed takes an isotope13 token.
+    #[must_use]
+    pub fn needs_token(self) -> bool {
+        self != Feed::OssDelayed
+    }
+
+    /// The installed tree's directory name, under `<data>/atomdrift/cleave/`.
+    #[must_use]
+    pub fn dir_name(self) -> &'static str {
+        match self {
+            Feed::ZeroDay => "traits-zero-day",
+            Feed::Supporter => "traits-supporter",
+            Feed::OssDelayed => "traits-oss-delayed",
+        }
+    }
+
+    fn index(self) -> u8 {
+        match self {
+            Feed::ZeroDay => 0,
+            Feed::Supporter => 1,
+            Feed::OssDelayed => 2,
+        }
+    }
+}
+
+impl fmt::Display for Feed {
+    /// The name in a sentence or a banner: "zero-day feed".
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Feed::ZeroDay => "zero-day feed",
+            Feed::Supporter => "supporter feed",
+            Feed::OssDelayed => "opensource delayed feed",
+        })
+    }
+}
+
+/// This run's feed, as a [`Feed::index`]. Open source until [`resolve`] runs.
+static CURRENT: AtomicU8 = AtomicU8::new(2);
+static EXPLICIT: AtomicBool = AtomicBool::new(false);
+
+/// The feed this run uses.
+#[must_use]
+pub fn current() -> Feed {
+    match CURRENT.load(Ordering::Relaxed) {
+        0 => Feed::ZeroDay,
+        1 => Feed::Supporter,
+        _ => Feed::OssDelayed,
+    }
+}
+
+/// Whether this run's feed was named on the command line (`--feed` or
+/// [`FEED_ENV`]), so a refusal is an error rather than a fall back, and a
+/// missing token is asked for.
+#[must_use]
+pub fn explicit() -> bool {
+    EXPLICIT.load(Ordering::Relaxed)
+}
+
+/// Use `feed` for the rest of this run.
 ///
-/// The default traits directory follows this switch, so the capability mapper
-/// and traits fingerprint built from the other one are dropped, exactly as
+/// The default traits directory follows the feed, so the capability mapper and
+/// traits fingerprint built from another one are dropped, exactly as
 /// [`crate::traits_repo::set_override_dir`] does. Calling it before the first
 /// analysis costs nothing.
-pub fn set_enabled(on: bool) {
-    if ENABLED.swap(on, Ordering::Relaxed) != on {
+pub fn select(feed: Feed, explicit: bool) {
+    EXPLICIT.store(explicit, Ordering::Relaxed);
+    if CURRENT.swap(feed.index(), Ordering::Relaxed) != feed.index() {
         crate::shared_resources::invalidate_capability_mapper();
         crate::cache::invalidate_traits_scan();
     }
 }
 
-/// Whether this run uses the Uplink rules: decided by [`resolve`], and
-/// withdrawn by [`fall_back`].
-#[must_use]
-pub fn enabled() -> bool {
-    ENABLED.load(Ordering::Relaxed)
-}
-
-/// Whether `--uplink` insisted: no token connects this computer, and a
-/// refusal is an error rather than a fall back to the open-source rules.
-#[must_use]
-pub fn required() -> bool {
-    REQUIRED.load(Ordering::Relaxed)
-}
-
-/// Decide this run's rules from what the host holds. Called once, before
-/// anything resolves a traits directory.
+/// Decide this run's feed from the flag and what the host holds. Called once,
+/// before anything resolves a traits directory.
 ///
-/// A held token means Uplink. `required` — `--uplink`, or [`ENABLE_ENV`] set
-/// to `1` — means Uplink too, with the token asked for by
-/// [`crate::rule_update::sign_in`] when there is none. [`ENABLE_ENV`] set to
-/// `0` means the open-source rules, whatever is held.
+/// `flag` is `--feed`; without one, [`FEED_ENV`]. Without either: the saved
+/// choice, else the zero-day feed when a token is held (refused, it falls back
+/// to whatever the plan opens), else `oss-delayed`. A saved paid feed with no
+/// token held any more is `oss-delayed`, with a warning.
 ///
 /// # Errors
 ///
 /// A saved token file that others can read, or that cannot be read or
 /// parsed: a fault to fix rather than a token to quietly do without.
-pub fn resolve(required: bool) -> anyhow::Result<()> {
-    let switch = env_switch(
-        std::env::var(ENABLE_ENV)
-            .or_else(|_| std::env::var(LEGACY_ENABLE_ENV))
-            .ok()
-            .as_deref(),
-    );
-    let required = required || switch == Some(true);
-    REQUIRED.store(required, Ordering::Relaxed);
-    // Opted out, and the flag did not overrule it: whatever is held stays unused.
-    let opted_out = switch == Some(false) && !required;
-    let held = if opted_out { None } else { token()? };
-    let on = held.is_some() || required;
-    set_enabled(on);
-    tracing::info!(
-        event = "enriched.mode",
-        enabled = on,
-        required,
-        token = held.map_or("none", |(_, source)| source.as_str())
-    );
+pub fn resolve(flag: Option<Feed>) -> anyhow::Result<()> {
+    // The CLIs read the variable through clap; this covers callers that have
+    // no flag to give (hood).
+    let flag = flag.or_else(env_feed);
+    let (feed, from) = match flag {
+        Some(feed) => (feed, "flag"),
+        None => match saved_choice() {
+            Some(feed) if feed.needs_token() && token()?.is_none() => {
+                tracing::warn!(
+                    event = "feed.fallback",
+                    saved = feed.slug(),
+                    "the {feed} needs an isotope13 token and none is held; using the {}",
+                    Feed::OssDelayed
+                );
+                (Feed::OssDelayed, "saved")
+            }
+            Some(feed) => (feed, "saved"),
+            None if token()?.is_some() => (Feed::ZeroDay, "token"),
+            None => (Feed::OssDelayed, "default"),
+        },
+    };
+    select(feed, flag.is_some());
+    tracing::info!(event = "feed.mode", feed = feed.slug(), from);
     Ok(())
 }
 
-/// Leave the Uplink channel for the rest of this run, because it could not
-/// be had and `--uplink` did not insist: the open-source rules are used
-/// from here on, and the one warning says why.
+/// The feed [`FEED_ENV`] names. Anything else there is ignored, with a warning:
+/// a typo must not quietly decide which rules a host scans with.
+fn env_feed() -> Option<Feed> {
+    let value = std::env::var(FEED_ENV).ok()?;
+    let feed = Feed::from_slug(value.trim());
+    if feed.is_none() && !value.trim().is_empty() {
+        tracing::warn!(
+            value = %value.escape_debug(),
+            "{FEED_ENV} names no feed (zero-day, supporter, oss-delayed); ignoring it"
+        );
+    }
+    feed
+}
+
+/// Leave the current feed for the rest of this run, because the rules service
+/// refused it (or could not be reached for a first install) and the feed was
+/// not named on the command line: the best of `opened` — the feeds the plan
+/// opens, best first — is used instead, else `oss-delayed`, and the one
+/// warning says why.
 ///
-/// A traits override pinned to the Uplink tree (scan pins the installed
-/// tree so a checkout in the working directory cannot supply the rules)
-/// follows, or the open-source rules would never be resolved.
-pub fn fall_back(why: &str) {
+/// When the host had saved no choice and the token was `recognised`, the feed
+/// fallen back to is saved, so later runs start there instead of asking for a
+/// feed the plan does not include every time.
+///
+/// A traits override pinned to the refused feed's tree (scan pins the
+/// installed tree so a checkout in the working directory cannot supply the
+/// rules) follows, or the new feed's rules would never be resolved.
+pub fn fall_back(opened: &[Feed], recognised: bool, why: &str) {
+    let from = current();
+    let to = opened
+        .iter()
+        .copied()
+        .find(|&feed| feed != from)
+        .unwrap_or(Feed::OssDelayed);
     tracing::warn!(
-        event = "enriched.fallback",
+        event = "feed.fallback",
+        from = from.slug(),
+        to = to.slug(),
         reason = %why,
-        "Atomdrift Uplink unavailable; using the open-source rules"
+        "the {from} is unavailable; using the {to}"
     );
-    set_enabled(false);
+    select(to, false);
+    if recognised && saved_choice().is_none() {
+        match save_choice(to) {
+            Ok(path) => {
+                tracing::info!(event = "feed.saved", feed = to.slug(), path = %path.display())
+            }
+            Err(e) => tracing::debug!(error = %e, "feed choice not saved"),
+        }
+    }
     if crate::traits_repo::override_dir()
-        .is_some_and(|dir| dir == crate::traits_repo::installed_dir(true))
+        .is_some_and(|dir| dir == crate::traits_repo::installed_dir(from))
     {
-        crate::traits_repo::set_override_dir(Some(crate::traits_repo::installed_dir(false)));
+        crate::traits_repo::set_override_dir(Some(crate::traits_repo::installed_dir(to)));
     }
 }
 
-/// What [`ENABLE_ENV`] says: on, off, or nothing.
-fn env_switch(value: Option<&str>) -> Option<bool> {
-    match value?.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => Some(true),
-        "0" | "false" | "no" | "off" => Some(false),
-        _ => None,
+/// The saved choice's path: `<config>/atomdrift/feed`.
+#[must_use]
+pub fn choice_path() -> Option<PathBuf> {
+    Some(dirs::config_dir()?.join("atomdrift").join(CHOICE_FILE))
+}
+
+/// The feed `cleave feed <name>` saved, if any. A file holding anything else is
+/// no choice, with a warning: it is only ever written by this module.
+#[must_use]
+pub fn saved_choice() -> Option<Feed> {
+    let path = choice_path()?;
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "could not read the saved feed");
+            return None;
+        }
+    };
+    let feed = Feed::from_slug(text.trim());
+    if feed.is_none() {
+        tracing::warn!(path = %path.display(), "the saved feed is not one this build knows; ignoring it");
     }
+    feed
+}
+
+/// Save `feed` as this host's choice for every later run, by every atomdrift
+/// tool.
+///
+/// # Errors
+///
+/// When there is no config directory, or it cannot be written.
+pub fn save_choice(feed: Feed) -> anyhow::Result<PathBuf> {
+    let path =
+        choice_path().ok_or_else(|| anyhow::anyhow!("no config directory to save the feed in"))?;
+    write_choice(&path, feed)?;
+    Ok(path)
+}
+
+fn write_choice(path: &Path, feed: Feed) -> anyhow::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| anyhow::anyhow!("creating {}: {e}", dir.display()))?;
+    }
+    crate::cache::atomic_write(path, format!("{}\n", feed.slug()).as_bytes())
+        .map_err(|e| anyhow::anyhow!("writing {}: {e}", path.display()))
+}
+
+/// The feeds, one per line, for `cleave feed`: which this run uses, how
+/// delayed each is, and what is installed for it. Reads only the disk.
+#[must_use]
+pub fn list() -> String {
+    use std::fmt::Write;
+    let mut out = format!("  {:<13} {:<14} INSTALLED\n", "FEED", "DELAY");
+    for feed in Feed::ALL {
+        let mark = if feed == current() { '*' } else { ' ' };
+        let installed = crate::rule_update::installed(&crate::traits_repo::installed_dir(feed))
+            .map_or_else(
+                || "—".to_string(),
+                |i| {
+                    format!(
+                        "{}  {}",
+                        i.commit.chars().take(7).collect::<String>(),
+                        i.date
+                    )
+                },
+            );
+        let _ = writeln!(
+            out,
+            "{mark} {:<13} {:<14} {installed}",
+            feed.slug(),
+            feed.delay()
+        );
+    }
+    let tool = tool();
+    let _ = write!(out, "\nSwitch with `{tool} feed <name>`.");
+    if matches!(token(), Ok(None)) {
+        let _ = write!(
+            out,
+            " The zero-day and supporter feeds need a plan: {DASH_URL}plans"
+        );
+    }
+    out.push('\n');
+    out
+}
+
+/// The running tool's name (its executable's file stem, `cleave` by
+/// default), for a command to suggest.
+pub(crate) fn tool() -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.file_stem().map(|s| s.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "cleave".to_string())
 }
 
 /// A subscription token. Its `Debug` shows only the fingerprint, so a token
@@ -329,29 +542,18 @@ pub fn interactive() -> bool {
 #[must_use]
 pub fn how_to_get_one() -> String {
     format!(
-        "set {TOKEN_ENV}, or run with --uplink on a terminal to connect this computer (hood: `hood uplink`). Plans are at {DASH_URL}"
+        "set {TOKEN_ENV}, or run `{} feed zero-day` (or `supporter`) on a terminal to connect this computer. Plans are at {DASH_URL}plans",
+        tool()
     )
 }
 
-/// "Atomdrift Uplink" in its colours: the one way the subscription is named on
-/// a terminal, from the welcome to every tool's `version`.
-#[must_use]
-pub fn brand() -> String {
-    use colored::Colorize;
-    format!(
-        "{} {}",
-        "Atomdrift".truecolor(255, 0, 204).bold(),
-        "Uplink".truecolor(0, 158, 142).bold()
-    )
-}
-
-/// The welcome: one line on what Uplink is, and the link to approve.
+/// The welcome: what connecting is for, and the link to approve.
 fn welcome(link: &str) {
     use colored::Colorize;
     eprintln!(
-        "\n⚛️  {} — zero-hour rules, remote dependency verdicts, and hosted LLM grading.\n\n   \
-         Approve this computer in your browser:  {}\n",
-        brand(),
+        "\n⚛️  Connect this computer to your {} plan.\n\n   \
+         Approve it in your browser:  {}\n",
+        "isotope¹³".bold(),
         link.bold(),
     );
 }
@@ -513,7 +715,7 @@ pub fn connect(label: &str) -> anyhow::Result<Connected> {
     use std::time::{Duration, Instant};
     if !interactive() {
         return Err(anyhow::anyhow!(
-            "Atomdrift Uplink needs a token: {}",
+            "this computer has no isotope13 token: {}",
             how_to_get_one()
         ));
     }
@@ -573,7 +775,7 @@ pub fn connect(label: &str) -> anyhow::Result<Connected> {
             (200, Some(token)) => {
                 let token = Token::parse(&token)
                     .ok_or_else(|| anyhow::anyhow!("dash issued a token that is not one"))?;
-                tracing::info!(event = "enriched.device", outcome = "connected", tid = %token.fingerprint());
+                tracing::info!(event = "feed.device", outcome = "connected", tid = %token.fingerprint());
                 return Ok(Connected { token, progress });
             }
             (202, _) => {}
@@ -685,31 +887,42 @@ mod tests {
     }
 
     #[test]
-    fn uplink_help_and_brand_name_atomdrift_uplink() {
-        assert_eq!(ENABLE_ENV, "ATOMDRIFT_UPLINK");
-        assert_eq!(LEGACY_ENABLE_ENV, "ATOMDRIFT_ENRICHED");
-        let hint = how_to_get_one();
-        assert!(hint.contains("--uplink"), "{hint}");
-        assert!(hint.contains("hood uplink"), "{hint}");
-        assert!(!hint.contains("enrich"), "{hint}");
-        let shown = brand();
-        assert!(
-            shown.contains("Atomdrift") && shown.contains("Uplink"),
-            "{shown}"
-        );
+    fn feeds_are_named_and_ordered_best_first() {
+        let slugs: Vec<_> = Feed::ALL.iter().map(|f| f.slug()).collect();
+        assert_eq!(slugs, ["zero-day", "supporter", "oss-delayed"]);
+        for feed in Feed::ALL {
+            assert_eq!(Feed::from_slug(feed.slug()), Some(feed));
+            // The CLI spells a feed the way the rules service does.
+            let value = clap::ValueEnum::to_possible_value(&feed).unwrap();
+            assert_eq!(value.get_name(), feed.slug());
+            assert!(feed.dir_name().starts_with("traits-"));
+            assert!(feed.dir_name().ends_with(feed.slug()));
+        }
+        assert_eq!(Feed::from_slug("Zero-Day"), None);
+        assert_eq!(Feed::from_slug("enriched"), None);
+        assert_eq!(Feed::ZeroDay.to_string(), "zero-day feed");
+        assert_eq!(Feed::OssDelayed.to_string(), "opensource delayed feed");
+        assert!(Feed::ZeroDay.needs_token() && Feed::Supporter.needs_token());
+        assert!(!Feed::OssDelayed.needs_token());
     }
 
     #[test]
-    fn the_env_switch_is_on_off_or_absent() {
-        for on in ["1", "true", " YES ", "on"] {
-            assert_eq!(env_switch(Some(on)), Some(true), "{on:?}");
-        }
-        for off in ["0", "false", "No", "off"] {
-            assert_eq!(env_switch(Some(off)), Some(false), "{off:?}");
-        }
-        for unset in [None, Some(""), Some("maybe")] {
-            assert_eq!(env_switch(unset), None, "{unset:?}");
-        }
+    fn the_hint_names_the_feed_command_and_the_plans() {
+        let hint = how_to_get_one();
+        assert!(hint.contains(" feed zero-day`"), "{hint}");
+        assert!(hint.contains(TOKEN_ENV), "{hint}");
+        assert!(hint.contains("plans"), "{hint}");
+        assert!(!hint.to_lowercase().contains("uplink"), "{hint}");
+    }
+
+    #[test]
+    fn a_saved_choice_is_one_slug_per_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("atomdrift").join(CHOICE_FILE);
+        write_choice(&path, Feed::Supporter).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "supporter\n");
+        write_choice(&path, Feed::ZeroDay).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "zero-day\n");
     }
 
     #[test]

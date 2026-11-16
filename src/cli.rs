@@ -121,16 +121,12 @@ pub struct Args {
     #[arg(long, value_name = "DIR")]
     pub traits_dir: Option<String>,
 
-    /// Insist on Atomdrift Uplink: zero-hour rules, the moment they clear QA.
-    /// A computer that holds a token (ISOTOPE13_TOKEN, or the one saved when
-    /// it was connected) uses them without this flag. With it, a computer that
-    /// holds none is connected — a terminal shows a code to approve at
-    /// dash.isotope13.io — and a refused token stops the run instead of
-    /// falling back to the open-source rules. Env: ATOMDRIFT_UPLINK=1; =0
-    /// keeps the open-source rules. Hidden from `--help` until Uplink is
-    /// generally available.
-    #[arg(long, hide = true)]
-    pub uplink: bool,
+    /// Rule feed for this run: zero-day, supporter, or oss-delayed. Overrides
+    /// the feed saved by `cleave feed <name>`. A paid feed with no token held
+    /// connects this computer on a terminal, and a refusal stops the run
+    /// instead of falling back.
+    #[arg(long, global = true, value_enum, env = "ATOMDRIFT_FEED")]
+    pub feed: Option<crate::feed::Feed>,
 
     /// Warn when a single rule takes longer than this many milliseconds to evaluate.
     /// During validation this is a soft rule-performance failure (CPU time where available).
@@ -573,6 +569,13 @@ pub enum Command {
         /// Maximum file size in bytes (for metrics searches)
         #[arg(long)]
         max_size: Option<u64>,
+    },
+
+    /// Show the rule feeds, or switch to one (zero-day, supporter, oss-delayed)
+    Feed {
+        /// Feed to switch to; omit to list them
+        #[arg(value_enum)]
+        name: Option<crate::feed::Feed>,
     },
 
     /// Update trait rules from the upstream repository

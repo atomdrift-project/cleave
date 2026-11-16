@@ -9,17 +9,17 @@
 //! manifest is already cosign-signed upstream, so authenticity checking can be
 //! added later without changing the publish side.
 //!
-//! # Channels
+//! # Feeds
 //!
-//! There are two, and they publish the same layout. The public bucket carries
-//! the open-source release, rolled up every four hours, and is fetched with no
-//! token. The enriched channel carries each ruleset the moment it clears QA, and
-//! is reached through the rules Worker, which checks a subscription token and
-//! serves the private bucket behind it.
+//! Three feeds publish the same layout (see [`crate::feed`]). `oss-delayed` is
+//! the public bucket, rolled up every eight days and fetched with no token.
+//! `zero-day` and `supporter` are served by the rules Worker, which checks a
+//! subscription token and answers from the private bucket, or refuses with
+//! the feeds the token's plan does open.
 //!
-//! [`crate::enriched::enabled`] chooses the channel; holding a token does not.
-//! Asked for enriched, a token the Worker will not honour is an error, never a
-//! quiet downgrade to public rules — see `enriched_manifest`.
+//! [`crate::feed::current`] chooses the feed; holding a token does not. A feed
+//! the Worker refuses is an error carrying what the plan opens, never a quiet
+//! downgrade — [`refresh`] decides whether to fall back.
 
 use std::collections::BTreeMap;
 use std::io::{self, Cursor, Read};
@@ -32,18 +32,21 @@ use sha2::{Digest, Sha256};
 /// Base URL for the public update bucket (`<base>/versions.toml`, `<base>/traits/...`).
 const BASE_URL: &str = "https://updates.atomdrift.org/cleave";
 
-/// Base URL for the enriched channel, which serves the identical layout from
-/// the private bucket once the key has been checked.
+/// Base URL for the paid feeds: `<FEED_URL>/<feed>/versions.toml` and the
+/// bundles beside it, served from the private bucket once the token has been
+/// checked.
 ///
-/// The counterpart of [`BASE_URL`] rather than a different shape: both are
-/// `updates.<org>` and both resolve the manifest's relative `file` paths the
-/// same way, so the only thing this constant changes is which bucket answers.
-const ENRICHED_URL: &str = "https://updates.isotope13.ai/v1/rules/cleave";
+/// The counterpart of [`BASE_URL`] rather than a different shape: both resolve
+/// the manifest's relative `file` paths the same way, so the only thing a feed
+/// changes is which base answers.
+const FEED_URL: &str = "https://updates.isotope13.ai/v1/rules/cleave";
 
 /// The manifest's name under either base.
 const MANIFEST: &str = "versions.toml";
-/// The rules Worker's answer to "which bucket did this token open".
-const CHANNEL_HEADER: &str = "x-isotope13-channel";
+/// The feed the rules Worker served.
+const FEED_HEADER: &str = "x-isotope13-feed";
+/// The feeds the caller's token opens, best first.
+const FEEDS_HEADER: &str = "x-isotope13-feeds";
 /// The plan a recognised token is on; absent for one the Worker never minted.
 const TIER_HEADER: &str = "x-isotope13-tier";
 
@@ -71,22 +74,42 @@ const MAX_BUNDLE_ENTRIES: usize = 500_000;
 /// Why rules were not updated.
 ///
 /// Two kinds, because callers treat them oppositely. A host that cannot reach
-/// the bucket keeps scanning with the rules it has; a host asked for enriched
-/// rules that cannot have them must say so, not quietly scan with something
-/// else.
+/// the bucket keeps scanning with the rules it has; a host whose feed cannot
+/// be had must say so, or fall back, not quietly scan with something else.
 #[derive(Debug)]
 pub enum Error {
-    /// `--uplink` cannot be honoured: no token, or one the rules Worker
-    /// refused.
-    Enriched(String),
+    /// The feed cannot be had: no token, or one the rules Worker refused.
+    Refused(Refusal),
     /// Anything else: the network, the bucket, the manifest, the disk.
     Other(String),
+}
+
+/// A feed the rules service would not serve, and what it would.
+#[derive(Debug)]
+pub struct Refusal {
+    /// What was wrong and what to do, in words.
+    pub message: String,
+    /// The feeds the token opens, best first; empty when it opened none.
+    pub opened: Vec<crate::feed::Feed>,
+    /// Whether the service recognised the token, so `opened` reflects a plan.
+    pub recognised: bool,
+}
+
+impl Refusal {
+    fn new(message: String) -> Self {
+        Self {
+            message,
+            opened: Vec::new(),
+            recognised: false,
+        }
+    }
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::Enriched(message) | Error::Other(message) => f.write_str(message),
+            Error::Refused(refusal) => f.write_str(&refusal.message),
+            Error::Other(message) => f.write_str(message),
         }
     }
 }
@@ -184,8 +207,8 @@ pub fn update(dir: &Path, force: bool, quiet: bool) -> Result<(), Error> {
 
     if !quiet {
         print_status(&format!(
-            "Installing {} traits {} ({}) for cleave {} [{}]...",
-            channel.name(),
+            "Installing {} rules {} ({}) for cleave {} [{}]...",
+            channel.feed(),
             key,
             artifact.date,
             our_version(),
@@ -194,8 +217,8 @@ pub fn update(dir: &Path, force: bool, quiet: bool) -> Result<(), Error> {
     }
     install(dir, artifact, &source, &channel).map_err(Error::Other)?;
     tracing::info!(
-        event = "enriched.rules",
-        channel = channel.name(),
+        event = "feed.rules",
+        feed = channel.feed().slug(),
         commit = %artifact.commit,
         date = %artifact.date,
         outcome = "installed"
@@ -338,47 +361,48 @@ fn warn_if_behind(m: &Manifest) {
     }
 }
 
-/// Which channel answered, carried from the manifest fetch to the bundle fetch.
+/// Which feed answered, carried from the manifest fetch to the bundle fetch.
 ///
-/// Threaded rather than recomputed on purpose: a manifest from the enriched
-/// channel names bundles that exist only there, so resolving the two against
+/// Threaded rather than recomputed on purpose: a manifest from a paid feed
+/// names bundles that exist only there, so resolving the two against
 /// different bases would 404 on a subscriber whose token was revoked between
 /// the two requests. One decision, made once, used twice.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Channel {
     Public,
-    Enriched(crate::enriched::Token),
+    Paid(crate::feed::Feed, crate::feed::Token),
 }
 
 impl Channel {
-    fn base(&self) -> &'static str {
+    fn base(&self) -> String {
         match self {
-            Channel::Public => BASE_URL,
-            Channel::Enriched(_) => ENRICHED_URL,
+            Channel::Public => BASE_URL.to_string(),
+            Channel::Paid(feed, _) => format!("{FEED_URL}/{}", feed.slug()),
         }
     }
 
-    /// The channel's name, which is also its traits directory's suffix.
-    fn name(&self) -> &'static str {
+    fn feed(&self) -> crate::feed::Feed {
         match self {
-            Channel::Public => "oss",
-            Channel::Enriched(_) => "enriched",
+            Channel::Public => crate::feed::Feed::OssDelayed,
+            Channel::Paid(feed, _) => *feed,
         }
     }
 
-    fn token(&self) -> Option<&crate::enriched::Token> {
+    fn token(&self) -> Option<&crate::feed::Token> {
         match self {
             Channel::Public => None,
-            Channel::Enriched(token) => Some(token),
+            Channel::Paid(_, token) => Some(token),
         }
     }
 }
 
 fn fetch_manifest(connect: Option<Duration>) -> Result<(Manifest, Channel), Error> {
-    let (bytes, channel) = if crate::enriched::enabled() {
-        let held = crate::enriched::token().map_err(|e| Error::Enriched(format!("{e:#}")))?;
-        let (bytes, token, _) = enriched_manifest(held, connect)?;
-        (bytes, Channel::Enriched(token))
+    let feed = crate::feed::current();
+    let (bytes, channel) = if feed.needs_token() {
+        let held =
+            crate::feed::token().map_err(|e| Error::Refused(Refusal::new(format!("{e:#}"))))?;
+        let (bytes, token) = paid_manifest(feed, held, connect)?;
+        (bytes, Channel::Paid(feed, token))
     } else {
         let fetched =
             download(&Channel::Public, MANIFEST, connect).map_err(|e| Error::Other(e.message))?;
@@ -397,23 +421,69 @@ fn fetch_manifest(connect: Option<Duration>) -> Result<(Manifest, Channel), Erro
 
 /// Install or refresh the rules this run uses, in the tree it chose.
 ///
-/// A held token opens the Uplink channel. When the rules Worker refuses it
-/// and `--uplink` did not insist, the run falls back to the open-source
-/// rules — says so once, through [`crate::enriched::fall_back`] — and
-/// refreshes those instead. With `--uplink`, the refusal is the error. A
-/// network failure is neither: it is returned, and the rules on disk serve.
+/// When the rules Worker refuses the feed and it was not named on the command
+/// line, the run falls back to the best feed the plan opens — says so once,
+/// through [`crate::feed::fall_back`] — and refreshes that instead. A named
+/// feed's refusal is the error. A network failure is neither: it is returned,
+/// and the rules on disk serve.
 pub fn refresh(force: bool, quiet: bool) -> Result<(), Error> {
     match update(&crate::traits_repo::install_target(), force, quiet) {
-        Err(Error::Enriched(why)) if !crate::enriched::required() => {
-            crate::enriched::fall_back(&why);
-            // The target moved with the fall back: it is the open-source tree now.
+        Err(Error::Refused(refusal)) if !crate::feed::explicit() => {
+            crate::feed::fall_back(&refusal.opened, refusal.recognised, &refusal.message);
+            // The target moved with the fall back: it is the new feed's tree now.
             update(&crate::traits_repo::install_target(), force, quiet)
         }
         done => done,
     }
 }
 
-/// The token `--uplink` needs, asked for now if this host holds none.
+/// Switch this host to `feed`: connect this computer if the feed needs a token
+/// and none is held, install the feed's rules, and only then save the choice
+/// for every later run. What `cleave feed <name>` runs.
+///
+/// # Errors
+///
+/// No token and no terminal to connect on, a plan that does not include the
+/// feed, or a failed download. Nothing is saved on any of them.
+pub fn switch(feed: crate::feed::Feed) -> Result<(), Error> {
+    crate::feed::select(feed, true);
+    sign_in()?;
+    let dir = crate::traits_repo::installed_dir(feed);
+    update(&dir, false, false)?;
+    let saved = crate::feed::save_choice(feed).map_err(|e| Error::Other(format!("{e:#}")))?;
+    let installed = installed(&dir).map_or_else(String::new, |i| {
+        format!(
+            " ({} {})",
+            i.commit.chars().take(7).collect::<String>(),
+            i.date
+        )
+    });
+    print_status(&format!(
+        "✓ Using the {feed}{installed}. Saved to {}.",
+        crate::feed::tilde(&saved)
+    ));
+    // A pin to another feed's tree (scan pins the installed tree) follows the
+    // switch; any other override is the operator's, and still wins.
+    match crate::traits_repo::override_dir() {
+        Some(dir)
+            if crate::feed::Feed::ALL
+                .into_iter()
+                .any(|other| dir == crate::traits_repo::installed_dir(other)) =>
+        {
+            crate::traits_repo::set_override_dir(Some(crate::traits_repo::installed_dir(feed)));
+        }
+        Some(dir) => print_status(&format!(
+            "Note: the traits directory is overridden ({}), and the override still wins.",
+            dir.display()
+        )),
+        None => {}
+    }
+    Ok(())
+}
+
+/// The token a named paid feed needs, asked for now if this host holds none.
+/// Does nothing for `oss-delayed`, or for a feed that was not named on the
+/// command line (that one falls back instead of asking).
 ///
 /// Called once, before anything fetches rules, so the asking happens at the
 /// start of a run rather than inside whichever download happens first — and
@@ -423,32 +493,39 @@ pub fn refresh(force: bool, quiet: bool) -> Result<(), Error> {
 ///
 /// No token and no terminal to ask on, or none accepted.
 pub fn sign_in() -> Result<(), Error> {
-    match crate::enriched::token().map_err(|e| Error::Enriched(format!("{e:#}")))? {
+    let feed = crate::feed::current();
+    if !feed.needs_token() || !crate::feed::explicit() {
+        return Ok(());
+    }
+    match crate::feed::token().map_err(|e| Error::Refused(Refusal::new(format!("{e:#}"))))? {
         Some(_) => Ok(()),
-        None => enrich(),
+        None if crate::feed::interactive() => connect_device(Some(feed), None).map(drop),
+        None => Err(needs_a_token()),
     }
 }
 
-/// Connect this computer to Atomdrift Uplink, check the token it is issued
-/// against the uplink channel, and save it. What `hood uplink` runs, and
-/// what `--uplink` runs when it finds no token.
+/// Connect this computer to its isotope13 plan, check the token it is issued,
+/// and save it. What `hood connect` runs, and what scan runs when
+/// `--analyze=remote` finds no token.
 ///
 /// # Errors
 ///
-/// No terminal to show the code on, no approval, or a token the channel
-/// will not honour.
-pub fn enrich() -> Result<(), Error> {
-    if !crate::enriched::interactive() {
+/// No terminal to show the code on, no approval, or a token the rules service
+/// does not recognise.
+pub fn connect() -> Result<(), Error> {
+    if !crate::feed::interactive() {
         return Err(needs_a_token());
     }
-    connect_device(None).map(drop)
+    let feed = crate::feed::current();
+    connect_device(feed.needs_token().then_some(feed), None).map(drop)
 }
 
 fn needs_a_token() -> Error {
-    Error::Enriched(format!(
-        "Atomdrift Uplink needs a token: {}",
-        crate::enriched::how_to_get_one()
-    ))
+    Error::Refused(Refusal::new(format!(
+        "the {} needs an isotope13 token: {}",
+        crate::feed::current(),
+        crate::feed::how_to_get_one()
+    )))
 }
 
 /// How long a newly issued token may take to reach the rules Worker. Dash
@@ -461,32 +538,33 @@ const ISSUE_RECHECK: Duration = Duration::from_secs(5);
 
 /// Connect, check, save: the one place a token is asked for.
 ///
+/// The issued token is checked against `feed` — the paid feed this run needs —
+/// or, when only connecting, against the zero-day feed: either way the answer
+/// says whether the rules service knows the token and which feeds its plan
+/// opens. Returns the feed's manifest when the token opened it.
+///
 /// A token dash has just issued is real, so it is saved whatever plan it is
-/// on: a Community computer keeps its token, says so, and picks up an upgrade
-/// with no second connection. What it is not, yet, is everywhere — so a
-/// check that does not recognise it waits out KV's propagation before
-/// believing that.
+/// on. What it is not, yet, is everywhere — so a check that does not
+/// recognise it waits out KV's propagation before believing that.
 fn connect_device(
+    feed: Option<crate::feed::Feed>,
     connect: Option<Duration>,
-) -> Result<(Vec<u8>, crate::enriched::Token, Option<String>), Error> {
-    use crate::enriched::{Connected, Source};
+) -> Result<Option<(Vec<u8>, crate::feed::Token)>, Error> {
+    use crate::feed::{Connected, Feed, Source};
     // What dash records the device as: the tool and the OS, nothing that
     // names the person or the machine.
-    let tool = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.file_stem().map(|s| s.to_string_lossy().into_owned()))
-        .unwrap_or_else(|| "atomdrift".to_string());
-    let label = format!("{tool} on {}", std::env::consts::OS);
+    let label = format!("{} on {}", crate::feed::tool(), std::env::consts::OS);
     let Connected { token, progress } =
-        crate::enriched::connect(&label).map_err(|e| Error::Enriched(format!("{e:#}")))?;
+        crate::feed::connect(&label).map_err(|e| Error::Refused(Refusal::new(format!("{e:#}"))))?;
     progress.set("Approved. Connecting…");
 
+    let probe = feed.unwrap_or(Feed::ZeroDay);
     let started = std::time::Instant::now();
     let checked = loop {
-        match check_token(&token, Source::Device, connect)? {
-            Err(Answer::Public(None)) if started.elapsed() < ISSUE_PROPAGATION => {
+        match check_token(&token, Source::Device, probe, connect)? {
+            Err(Answer::Refused { tier: None, .. }) if started.elapsed() < ISSUE_PROPAGATION => {
                 if crate::cancellation::is_cancelled() {
-                    return Err(Error::Enriched("connection cancelled".into()));
+                    return Err(Error::Refused(Refusal::new("connection cancelled".into())));
                 }
                 let waited = started.elapsed().as_secs();
                 tracing::debug!(
@@ -506,110 +584,121 @@ fn connect_device(
     };
     let tid = token.fingerprint();
     match checked {
-        Ok(Opened {
-            manifest: bytes,
-            tier,
-        }) => {
-            let plan = tier.as_deref().map(crate::enriched::plan_name);
+        Ok(Opened { manifest, tier }) => {
+            let plan = tier.as_deref().map(crate::feed::plan_name);
             progress.finish(&match plan {
                 Some(plan) => format!("✓ Connected on the {plan} plan."),
                 None => "✓ Connected.".to_string(),
             });
             save_issued(&token);
-            Ok((bytes, token, tier))
+            Ok(Some((manifest, token)))
         }
-        Err(Answer::Public(Some(tier))) => {
+        // Only connecting: a recognised token is a connection, whatever its
+        // plan includes.
+        Err(Answer::Refused {
+            tier: Some(tier), ..
+        }) if feed.is_none() => {
+            progress.finish(&format!(
+                "✓ Connected on the {} plan.",
+                crate::feed::plan_name(&tier)
+            ));
+            save_issued(&token);
+            Ok(None)
+        }
+        Err(answer @ Answer::Refused { tier: Some(_), .. }) => {
             drop(progress);
             let saved = save_issued(&token);
-            Err(Error::Enriched(format!(
-                "connected, but the {} plan gets the public rules. Upgrade at {}plans for the latest rules the moment they clear QA; this computer picks up the upgrade on its own.{saved}",
-                crate::enriched::plan_name(&tier),
-                crate::enriched::DASH_URL
-            )))
+            let refused = refusal(&tid, Source::Device, probe, answer);
+            Err(Error::Refused(Refusal {
+                message: format!("connected, but {}.{saved}", refused.message),
+                ..refused
+            }))
         }
-        Err(Answer::Public(None)) => Err(Error::Enriched(format!(
+        Err(Answer::Refused { tier: None, .. }) => Err(Error::Refused(Refusal::new(format!(
             "isotope13 issued token {tid}, but the rules service had not seen it after {}s; run again in a minute",
             ISSUE_PROPAGATION.as_secs()
-        ))),
-        Err(answer) => Err(Error::Enriched(refusal(&tid, Source::Device, &answer))),
+        )))),
+        Err(answer) => Err(Error::Refused(refusal(&tid, Source::Device, probe, answer))),
     }
 }
 
 /// Save a token this computer was just issued, and say where, quietly. A
-/// token that could not be saved still opens the channel for this run; the
+/// token that could not be saved still opens the feed for this run; the
 /// next one connects again. Returns what was said, for an error to carry.
-fn save_issued(token: &crate::enriched::Token) -> String {
+fn save_issued(token: &crate::feed::Token) -> String {
     use colored::Colorize;
-    let said = match crate::enriched::save(token) {
-        Ok(path) => format!("Token saved to {}", crate::enriched::tilde(&path)),
+    let said = match crate::feed::save(token) {
+        Ok(path) => format!("Token saved to {}", crate::feed::tilde(&path)),
         Err(e) => format!("The token could not be saved ({e}); it is used for this run only"),
     };
     eprintln!("   {}\n", said.dimmed());
     format!(" {said}.")
 }
 
-/// The enriched manifest, the token that opened it, and the plan it is on.
+/// A paid feed's manifest, and the token that opened it.
 ///
-/// The rules Worker answers a token it will not honour (revoked, Community
-/// tier, a typo) with the *public* manifest and a 200, so that old clients keep
-/// running. Asked for uplink, that is a refusal: the channel header must say
-/// `fresh`. Under `--uplink`, a saved token the Worker no longer recognises
-/// — revoked, or this computer disconnected — is replaced by connecting
-/// again, on a terminal; any other refusal is an error that says what was
-/// wrong and where the token came from, and [`refresh`] turns it into a fall
-/// back when `--uplink` did not insist. No token at all is the same error —
-/// the CLIs ask through [`sign_in`] before they get here.
-fn enriched_manifest(
-    held: Option<(crate::enriched::Token, crate::enriched::Source)>,
+/// A feed named on the command line whose saved token the Worker no longer
+/// recognises — revoked, or this computer disconnected — is reached by
+/// connecting again, on a terminal; any other refusal is an error that says
+/// what was wrong, where the token came from, and which feeds the plan does
+/// open, and [`refresh`] turns it into a fall back when the feed was not
+/// named. No token at all is the same error — the CLIs ask through
+/// [`sign_in`] before they get here.
+fn paid_manifest(
+    feed: crate::feed::Feed,
+    held: Option<(crate::feed::Token, crate::feed::Source)>,
     connect: Option<Duration>,
-) -> Result<(Vec<u8>, crate::enriched::Token, Option<String>), Error> {
-    use crate::enriched::Source;
+) -> Result<(Vec<u8>, crate::feed::Token), Error> {
+    use crate::feed::Source;
     let Some((token, source)) = held else {
         return Err(needs_a_token());
     };
-    let answer = match check_token(&token, source, connect)? {
-        Ok(Opened { manifest, tier }) => return Ok((manifest, token, tier)),
+    let answer = match check_token(&token, source, feed, connect)? {
+        Ok(Opened { manifest, .. }) => return Ok((manifest, token)),
         Err(answer) => answer,
     };
-    let unknown = matches!(answer, Answer::Public(None) | Answer::Status(_));
-    if source == Source::File
-        && unknown
-        && crate::enriched::required()
-        && crate::enriched::interactive()
-    {
+    let unknown = matches!(
+        answer,
+        Answer::Refused { tier: None, .. } | Answer::Status(_)
+    );
+    if source == Source::File && unknown && crate::feed::explicit() && crate::feed::interactive() {
         print_status(&format!(
             "✗ {}.\n",
-            refusal(&token.fingerprint(), source, &answer)
+            refusal(&token.fingerprint(), source, feed, answer).message
         ));
-        return connect_device(connect);
+        return connect_device(Some(feed), connect)?
+            .ok_or_else(|| Error::Other(format!("connected, but the {feed} did not answer")));
     }
-    Err(Error::Enriched(refusal(
+    Err(Error::Refused(refusal(
         &token.fingerprint(),
         source,
-        &answer,
+        feed,
+        answer,
     )))
 }
 
-/// The enriched manifest a token opened, and the plan it is on.
+/// A paid feed's manifest, and the plan the token that opened it is on.
 struct Opened {
     manifest: Vec<u8>,
     tier: Option<String>,
 }
 
-/// Ask the rules Worker about a token: what it opened, or what it said
-/// instead. Only a transport or bucket failure is an `Error`; a refusal is an
-/// answer.
+/// Ask the rules Worker for `feed` with a token: what it opened, or what it
+/// said instead. Only a transport or bucket failure is an `Error`; a refusal
+/// is an answer.
 fn check_token(
-    token: &crate::enriched::Token,
-    source: crate::enriched::Source,
+    token: &crate::feed::Token,
+    source: crate::feed::Source,
+    feed: crate::feed::Feed,
     connect: Option<Duration>,
 ) -> Result<Result<Opened, Answer>, Error> {
     let tid = token.fingerprint();
-    let answer = match download(&Channel::Enriched(token.clone()), MANIFEST, connect) {
-        Ok(got) if got.fresh => {
+    let answer = match download(&Channel::Paid(feed, token.clone()), MANIFEST, connect) {
+        Ok(got) if got.feed == Some(feed) => {
             tracing::info!(
-                event = "enriched.token",
+                event = "feed.token",
                 source = source.as_str(),
+                feed = feed.slug(),
                 outcome = "ok",
                 tier = got.tier.as_deref().unwrap_or(""),
                 %tid
@@ -619,15 +708,25 @@ fn check_token(
                 tier: got.tier,
             }));
         }
-        Ok(got) => Answer::Public(got.tier),
+        // The Worker names the feed it served; anything else is not the feed
+        // asked for, whatever the bytes are.
+        Ok(got) => Answer::Status(format!(
+            "an answer for {} instead",
+            got.feed.map_or("no named feed", crate::feed::Feed::slug)
+        )),
+        Err(err) if err.status == Some(403) => Answer::Refused {
+            opened: err.feeds,
+            tier: err.tier,
+        },
         Err(err) if err.unauthorized() => Answer::Status(err.status_text()),
         Err(err) => return Err(Error::Other(err.message)),
     };
     // Info, not warn: the caller turns a refusal into an error that says the
     // same thing in words, and a terminal should not read it twice.
     tracing::info!(
-        event = "enriched.token",
+        event = "feed.token",
         source = source.as_str(),
+        feed = feed.slug(),
         outcome = "refused",
         %tid,
         refused = %answer
@@ -635,54 +734,93 @@ fn check_token(
     Ok(Err(answer))
 }
 
-/// What the rules Worker said about a token it did not honour.
+/// What the rules Worker said instead of serving a feed.
 enum Answer {
-    /// The public manifest, and the plan the token resolved to, if it is one
-    /// the Worker has heard of.
-    Public(Option<String>),
-    /// A 401 or 403, which the Worker does not send today.
+    /// A 403: the feeds the token opens, and the plan it resolved to when the
+    /// Worker recognised it.
+    Refused {
+        opened: Vec<crate::feed::Feed>,
+        tier: Option<String>,
+    },
+    /// A 401, or an answer that was not the feed asked for.
     Status(String),
 }
 
 impl std::fmt::Display for Answer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Answer::Public(Some(tier)) => write!(f, "public channel; {tier} plan"),
-            Answer::Public(None) => f.write_str("public channel; token not recognised"),
+            Answer::Refused {
+                tier: Some(tier),
+                opened,
+            } => {
+                let opened: Vec<_> = opened.iter().map(|feed| feed.slug()).collect();
+                write!(f, "{tier} plan; opens {}", opened.join(","))
+            }
+            Answer::Refused { tier: None, .. } => f.write_str("token not recognised"),
             Answer::Status(status) => f.write_str(status),
         }
     }
 }
 
-/// A refusal in words someone can act on: what was wrong, where the token came
-/// from, and what to do about it.
-fn refusal(tid: &str, source: crate::enriched::Source, answer: &Answer) -> String {
-    use crate::enriched::Source;
-    let dash = crate::enriched::DASH_URL;
-    let env = crate::enriched::TOKEN_ENV;
+/// A refusal in words someone can act on — what was wrong, where the token
+/// came from, and what to do about it — with the feeds the plan does open.
+fn refusal(
+    tid: &str,
+    source: crate::feed::Source,
+    feed: crate::feed::Feed,
+    answer: Answer,
+) -> Refusal {
+    use crate::feed::Source;
+    let dash = crate::feed::DASH_URL;
+    let env = crate::feed::TOKEN_ENV;
     let saved = || {
-        crate::enriched::token_path().map_or_else(
+        crate::feed::token_path().map_or_else(
             || "the saved token".to_string(),
             |p| p.display().to_string(),
         )
     };
-    match (answer, source) {
-        (Answer::Public(Some(tier)), _) => format!(
-            "isotope13 token {tid} is on the {tier} plan, which gets the public rules; upgrade at {dash}plans for the latest rules the moment they clear QA"
-        ),
-        (Answer::Public(None), Source::Env) => format!(
+    let message = match (&answer, source) {
+        (
+            Answer::Refused {
+                tier: Some(tier),
+                opened,
+            },
+            _,
+        ) => {
+            let plan = crate::feed::plan_name(tier);
+            match opened.iter().find(|open| open.needs_token()) {
+                Some(best) => format!(
+                    "isotope13 token {tid} is on the {plan} plan, which does not include the {feed}; it includes the {best}: run `{} feed {}`, or upgrade at {dash}plans",
+                    crate::feed::tool(),
+                    best.slug()
+                ),
+                None => format!(
+                    "isotope13 token {tid} is on the {plan} plan, which includes only the {}; upgrade at {dash}plans for the supporter and zero-day feeds",
+                    crate::feed::Feed::OssDelayed
+                ),
+            }
+        }
+        (Answer::Refused { tier: None, .. }, Source::Env) => format!(
             "isotope13 does not recognise the token in {env} ({tid}): check it holds the whole token, and that it has not been revoked at {dash}"
         ),
-        (Answer::Public(None), Source::File) => format!(
+        (Answer::Refused { tier: None, .. }, Source::File) => format!(
             "isotope13 no longer recognises this computer's token ({tid}, saved at {}): it was revoked, or the computer was disconnected",
             saved()
         ),
-        (Answer::Public(None), Source::Device) => {
+        (Answer::Refused { tier: None, .. }, Source::Device) => {
             format!("isotope13 does not recognise the token it just issued ({tid})")
         }
         (Answer::Status(status), _) => {
-            format!("isotope13 refused token {tid} ({status}); see {dash}")
+            format!("isotope13 refused token {tid} for the {feed} ({status}); see {dash}")
         }
+    };
+    match answer {
+        Answer::Refused { opened, tier } => Refusal {
+            message,
+            opened,
+            recognised: tier.is_some(),
+        },
+        Answer::Status(_) => Refusal::new(message),
     }
 }
 
@@ -704,8 +842,7 @@ fn install(dir: &Path, artifact: &Artifact, source: &str, channel: &Channel) -> 
     let parent = dir.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
 
-    // Named for the directory they replace: `traits-oss` and `traits-enriched`
-    // share a parent, and two installs must not share a staging tree.
+    // Named for the directory they replace: each feed's tree shares a parent, and two installs must not share a staging tree.
     let name = dir
         .file_name()
         .map_or_else(|| "traits".into(), |n| n.to_string_lossy());
@@ -912,11 +1049,11 @@ fn sibling(parent: &Path, name: &str) -> PathBuf {
     parent.join(name)
 }
 
-/// A successful download, and whether the rules Worker said it came from the
-/// fresh bucket.
+/// A successful download, and the feed the rules Worker said it served.
 struct Fetched {
     bytes: Vec<u8>,
-    fresh: bool,
+    /// `x-isotope13-feed`; absent from the public bucket.
+    feed: Option<crate::feed::Feed>,
     /// The plan the token resolved to, when the Worker recognised it.
     tier: Option<String>,
 }
@@ -926,9 +1063,14 @@ struct Fetched {
 /// The status is what tells a refused token apart from a bucket that is down:
 /// the first asks for another token, the second is an error the operator needs
 /// to see, and neither is retried into the other.
+#[derive(Default)]
 struct FetchError {
     status: Option<u16>,
     message: String,
+    /// `x-isotope13-feeds` on a refusal: what the token does open.
+    feeds: Vec<crate::feed::Feed>,
+    /// `x-isotope13-tier` on a refusal from a Worker that knew the token.
+    tier: Option<String>,
 }
 
 impl FetchError {
@@ -965,7 +1107,7 @@ const RETRY_MAX: Duration = Duration::from_secs(8);
 /// scanning with whatever it installed last, silently a week behind. Only
 /// transport errors and 5xx are retried: a 404 means the manifest names a
 /// bundle that is not published, and a 401 means the token was refused, which
-/// [`enriched_manifest`] answers by asking for another. Asking either of those
+/// [`paid_manifest`] answers by asking for another. Asking either of those
 /// again just spends the user's time.
 fn download(
     channel: &Channel,
@@ -1033,8 +1175,8 @@ fn download_once(
         builder = builder.connect_timeout(connect);
     }
     let client = builder.build().map_err(|e| FetchError {
-        status: None,
         message: format!("http client: {e}"),
+        ..FetchError::default()
     })?;
 
     let mut request = client.get(&url);
@@ -1042,41 +1184,50 @@ fn download_once(
         request = request.bearer_auth(token.secret());
     }
     let resp = request.send().map_err(|e| FetchError {
-        status: None,
         message: format!("GET {url}: {e}"),
+        ..FetchError::default()
     })?;
 
     let status = resp.status();
+    let header = |name: &str| {
+        resp.headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+    };
+    // Echoed by the Worker; only a plain identifier is believed.
+    let tier = header(TIER_HEADER)
+        .filter(|t| !t.is_empty() && t.len() <= 32 && t.bytes().all(|b| b.is_ascii_alphanumeric()));
     if !status.is_success() {
         return Err(FetchError {
             status: Some(status.as_u16()),
             message: format!("GET {url}: {status}"),
+            feeds: header(FEEDS_HEADER).map_or_else(Vec::new, |feeds| {
+                feeds
+                    .split(',')
+                    .filter_map(|slug| crate::feed::Feed::from_slug(slug.trim()))
+                    .collect()
+            }),
+            tier,
         });
     }
-    let fresh = resp
-        .headers()
-        .get(CHANNEL_HEADER)
-        .is_some_and(|v| v.as_bytes() == b"fresh");
-    let tier = resp
-        .headers()
-        .get(TIER_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .filter(|t| !t.is_empty() && t.len() <= 32 && t.bytes().all(|b| b.is_ascii_alphanumeric()))
-        .map(str::to_owned);
+    let feed = header(FEED_HEADER).and_then(|slug| crate::feed::Feed::from_slug(&slug));
     let mut bytes = Vec::new();
     resp.take(MAX_DOWNLOAD_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| FetchError {
             status: Some(status.as_u16()),
             message: format!("reading {url}: {e}"),
+            ..FetchError::default()
         })?;
     if bytes.len() as u64 > MAX_DOWNLOAD_BYTES {
         return Err(FetchError {
             status: Some(status.as_u16()),
             message: format!("{url} is larger than {MAX_DOWNLOAD_BYTES} bytes"),
+            ..FetchError::default()
         });
     }
-    Ok(Fetched { bytes, fresh, tier })
+    Ok(Fetched { bytes, feed, tier })
 }
 
 fn hex(bytes: &[u8]) -> String {

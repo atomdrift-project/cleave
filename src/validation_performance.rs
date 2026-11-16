@@ -195,7 +195,7 @@ const CONFIRMATION_RUNS: usize = 3;
 const CONFIRMATION_ROUNDS: usize = 4;
 
 /// Confirm a fixture's AST cost outliers while its evaluation context can
-/// still run them.
+/// still run them. Callers check [`active`] first.
 ///
 /// Every query ran once as the fixture was evaluated. A cost over the peer
 /// fence may be the query's, or may be whatever happened to run cold under
@@ -205,28 +205,39 @@ const CONFIRMATION_ROUNDS: usize = 4;
 /// cut short; the lowest cost seen stands. Running only the outliers again,
 /// rather than every query three times as the fixture is evaluated, is what
 /// keeps a bundle-sized source from costing minutes in validation.
+///
+/// The peers' median was recorded earlier, under whatever load the machine
+/// had then. Each rerun is paired with a rerun of the median query itself,
+/// so a rerun slowed by a contended or efficiency core is scaled back by the
+/// same factor: an outlier must stay slow relative to its peers, not merely
+/// slower than they were a moment ago. The scaling only ever lowers a cost.
 pub(crate) fn confirm_outliers(
     path: &str,
     sha256: &str,
     mut remeasure: impl FnMut(&str, bool) -> Option<Duration>,
 ) {
     let key = |full_count: bool| (path.to_owned(), sha256.to_owned(), full_count);
-    if !active() {
-        return;
-    }
     for _ in 0..CONFIRMATION_ROUNDS {
         // Snapshot the candidates: the lock is not held while queries run.
-        let candidates: Vec<(bool, String, String, Duration)> = [false, true]
+        let candidates: Vec<Candidate> = [false, true]
             .into_iter()
             .flat_map(|full_count| {
                 let costs = QUERY_COSTS.lock();
                 let over_fence: Option<Vec<_>> = costs.get(&key(full_count)).and_then(|rules| {
-                    let (_, fence) = outlier_fence(rules)?;
+                    let (median, fence) = outlier_fence(rules)?;
+                    let reference = median_query(rules)?;
                     Some(
                         rules
                             .iter()
                             .filter(|(_, c)| c.cost > fence && !c.confirmed)
-                            .map(|(id, c)| (full_count, id.clone(), c.query.clone(), c.cost))
+                            .map(|(id, c)| Candidate {
+                                full_count,
+                                id: id.clone(),
+                                query: c.query.clone(),
+                                cost: c.cost,
+                                reference: reference.clone(),
+                                median,
+                            })
                             .collect(),
                     )
                 });
@@ -237,24 +248,56 @@ pub(crate) fn confirm_outliers(
         if candidates.is_empty() {
             return;
         }
-        for (full_count, id, query, original) in candidates {
-            let mut best = original;
+        for c in candidates {
+            // The first sample ran beside the peers and stands as recorded;
+            // each rerun is restated at the speed of the median query timed
+            // right after it, while the thread is likely on the same core.
+            let mut best = c.cost;
             for _ in 0..CONFIRMATION_RUNS {
-                match remeasure(&query, full_count) {
-                    Some(cost) => best = best.min(cost),
-                    None => break,
-                }
+                let Some(cost) = remeasure(&c.query, c.full_count) else {
+                    break;
+                };
+                let now = remeasure(&c.reference, c.full_count);
+                best = best.min(match now {
+                    Some(now) if now > c.median => scale(cost, c.median, now),
+                    _ => cost,
+                });
             }
             let mut costs = QUERY_COSTS.lock();
             if let Some(cost) = costs
-                .get_mut(&key(full_count))
-                .and_then(|rules| rules.get_mut(&id))
+                .get_mut(&key(c.full_count))
+                .and_then(|rules| rules.get_mut(&c.id))
             {
                 cost.cost = cost.cost.min(best);
                 cost.confirmed = true;
             }
         }
     }
+}
+
+/// An outlier awaiting confirmation, with the file's median query to time
+/// beside it.
+struct Candidate {
+    full_count: bool,
+    id: String,
+    query: String,
+    cost: Duration,
+    reference: String,
+    median: Duration,
+}
+
+/// The query whose recorded cost is the peers' median.
+fn median_query(rules: &BTreeMap<String, QueryCost>) -> Option<String> {
+    let mut by_cost: Vec<_> = rules.values().collect();
+    by_cost.sort_unstable_by_key(|c| c.cost);
+    by_cost.get(by_cost.len() / 2).map(|c| c.query.clone())
+}
+
+/// `cost * recorded / now`: a cost measured while the machine ran the median
+/// query in `now`, restated at the speed the peers were recorded at.
+fn scale(cost: Duration, recorded: Duration, now: Duration) -> Duration {
+    let nanos = cost.as_nanos() * recorded.as_nanos() / now.as_nanos().max(1);
+    Duration::from_nanos(nanos.min(u128::from(u64::MAX)) as u64)
 }
 
 // Cheap queries vary by many peer multiples while costing less than a
@@ -558,6 +601,65 @@ mod tests {
                 .collect();
             assert_eq!(flagged, ["8"]);
         }
+    }
+
+    /// Record eight 30us peers and one 2.6ms candidate (fence 2.2ms) for
+    /// `path`, confirm them with reruns that cost `candidate_rerun` and a
+    /// median query that now costs `reference_rerun`, and return the
+    /// candidate's confirmed cost.
+    fn confirmed_cost(path: &str, candidate_rerun: u64, reference_rerun: u64) -> Duration {
+        let rules = (0..9)
+            .map(|i| {
+                let (query, us) = if i == 8 {
+                    ("candidate".to_owned(), 2600)
+                } else {
+                    (format!("peer{i}"), 30)
+                };
+                (
+                    i.to_string(),
+                    QueryCost {
+                        cost: Duration::from_micros(us),
+                        query,
+                        confirmed: false,
+                    },
+                )
+            })
+            .collect();
+        let key = (path.to_owned(), "sha".to_owned(), false);
+        QUERY_COSTS.lock().insert(key.clone(), rules);
+        confirm_outliers(path, "sha", |query, full_count| {
+            (!full_count).then(|| {
+                Duration::from_micros(if query == "candidate" {
+                    candidate_rerun
+                } else {
+                    reference_rerun
+                })
+            })
+        });
+        QUERY_COSTS.lock().remove(&key).unwrap()["8"].cost
+    }
+
+    #[test]
+    fn a_rerun_on_a_slower_core_is_judged_against_its_peers_at_that_speed() {
+        // The machine ran the median query 3x slower during the reruns.
+        assert_eq!(
+            confirmed_cost("zz-slow-core.js", 3000, 90),
+            Duration::from_micros(1000)
+        );
+    }
+
+    #[test]
+    fn a_query_slow_beside_its_peers_stays_an_outlier() {
+        // The median query ran at its recorded speed: nothing to scale.
+        assert_eq!(
+            confirmed_cost("zz-real-outlier.js", 3000, 30),
+            Duration::from_micros(2600)
+        );
+        // A faster machine never raises a recorded cost.
+        assert_eq!(
+            confirmed_cost("zz-fast-core.js", 2400, 10),
+            Duration::from_micros(2400)
+        );
     }
 
     #[test]

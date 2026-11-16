@@ -41,6 +41,26 @@ cd cleave
 make install
 ```
 
+## Rule feeds
+
+cleave downloads its rules on first use. There are three feeds; they carry the
+same rules and differ only in how long a ruleset waits after it passes QA:
+
+| Feed | Delay | Needs |
+| --- | --- | --- |
+| `oss-delayed` | up to 8 days | nothing |
+| `supporter` | 72 hours | an isotope¹³ Early Supporter plan |
+| `zero-day` | none | an isotope¹³ Business or Critical plan |
+
+```bash
+cleave feed               # list the feeds and what's installed
+cleave feed supporter     # switch; connects this computer if needed
+cleave update-rules       # refresh the current feed
+```
+
+`--feed <name>` (or `ATOMDRIFT_FEED`) picks a feed for one run. CI can supply
+a token with `ISOTOPE13_TOKEN`.
+
 ## What it analyzes
 
 Representative coverage includes:

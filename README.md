@@ -12,11 +12,11 @@ all of the operations a program is capable of, and highlights the security sensi
 operations. cleave was specifically designed for malware and differential supply-chain analysis, so
 all inputs are assumed to be hostile.
 
-There are three primary output modes, annotate, index, and JSON (for automation):
+There are three primary output modes: index (the default), annotate (`--annotate`, source context alongside each trait), and JSON (`--json`, for automation):
 
 <p align="center">
-  <img src="media/annotate.png" alt="cleave annotate a sample" width="760">
   <img src="media/toc.png" alt="cleave analyzing a sample (toc)" width="760">
+  <img src="media/annotate.png" alt="cleave annotate a sample" width="760">
 </p>
 
 ## Install

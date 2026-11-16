@@ -204,7 +204,33 @@ fn test_parse_json_flag() {
 fn test_parse_no_json_flag() {
     let args = Args::try_parse_from(["cleave", "file.bin"]).unwrap();
     assert!(!args.json);
-    assert!(matches!(args.format(), OutputFormat::Annotate));
+    assert_eq!(args.format(), OutputFormat::Index);
+}
+
+#[test]
+fn chosen_format_is_none_only_without_a_flag() {
+    let parse = |extra: &[&str]| {
+        let mut argv = vec!["cleave"];
+        argv.extend_from_slice(extra);
+        argv.push("file.bin");
+        Args::try_parse_from(argv).unwrap()
+    };
+    // Skip the unflagged case when the environment picks a format.
+    if std::env::var_os("CLEAVE_FORMAT").is_none() {
+        assert_eq!(parse(&[]).chosen_format(), None);
+    }
+    assert_eq!(
+        parse(&["--index"]).chosen_format(),
+        Some(OutputFormat::Index)
+    );
+    assert_eq!(
+        parse(&["--annotate"]).chosen_format(),
+        Some(OutputFormat::Annotate)
+    );
+    assert_eq!(
+        parse(&["--format", "json"]).chosen_format(),
+        Some(OutputFormat::Json)
+    );
 }
 
 #[test]

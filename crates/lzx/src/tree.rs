@@ -65,10 +65,10 @@ impl CanonicalTree {
 
             // The codes correspond with the indices of the path length (because
             // `path_lengths[code]` is its path length).
-            for code in 0..self.path_lengths.len() {
+            for (code, &length) in self.path_lengths.iter().enumerate() {
                 // As soon as a code's path length matches with our bit index write the code as
                 // many times as the bit index itself represents.
-                if self.path_lengths[code] == bit {
+                if length == bit {
                     huffman_tree
                         .get_mut(pos..pos + amount)
                         .ok_or(DecodeFailed::InvalidPathLengths)?

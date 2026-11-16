@@ -90,6 +90,7 @@ pub mod report_input;
 pub mod theme;
 pub(crate) mod third_party_config;
 pub(crate) mod third_party_yara;
+pub mod tip;
 pub mod tool_resolution;
 pub mod types;
 pub(crate) mod typo_validator;

@@ -248,11 +248,17 @@ fn run() -> Result<()> {
     // Facts always returns JSON, even without --format. Applying the terminal
     // sanitizer to it replaces raw DEL/C1/bidi characters with non-JSON \u{...}
     // escapes and corrupts the authoring data stream.
+    let chosen_format = args.chosen_format();
     let format = if matches!(args.command, Some(cli::Command::Facts { .. })) {
         cli::OutputFormat::Json
     } else {
-        args.format()
+        chosen_format.unwrap_or(cli::OutputFormat::Index)
     };
+    // Only an analysis that fell back to the index view earns the --annotate
+    // tip; anyone who picked a format already knows the choices.
+    let suggest_annotate = chosen_format.is_none()
+        && args.output.is_none()
+        && matches!(args.command, None | Some(cli::Command::Analyze { .. }));
     // `cleave validate` is meant to print a single summary line on success, so
     // suppress the global `warn` tracing floor (e.g. goblin's benign fat-Mach-O
     // offset warnings on testdata fixtures) unless `--verbose` is requested.
@@ -322,6 +328,9 @@ fn run() -> Result<()> {
     };
 
     write_output(&result, output_path, format)?;
+    if suggest_annotate {
+        cleave::tip::maybe_suggest_annotate();
+    }
     log_exit_summary();
     Ok(())
 }

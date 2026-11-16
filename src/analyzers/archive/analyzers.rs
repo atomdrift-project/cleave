@@ -1420,14 +1420,10 @@ fn should_log_progress(
         return true;
     }
     let last = last_log_ms.load(Ordering::Relaxed);
-    if elapsed_ms.saturating_sub(last) >= EVERY_T_MS
+    elapsed_ms.saturating_sub(last) >= EVERY_T_MS
         && last_log_ms
             .compare_exchange(last, elapsed_ms, Ordering::Relaxed, Ordering::Relaxed)
             .is_ok()
-    {
-        return true;
-    }
-    false
 }
 
 struct ThreadLocalCacheClearGuard;

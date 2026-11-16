@@ -77,7 +77,7 @@ pub struct Args {
     #[arg(value_name = "PATH")]
     pub paths: Vec<String>,
 
-    /// Output format: annotate (default), index, or json. The last of --format,
+    /// Output format: index (default), annotate, or json. The last of --format,
     /// --annotate, --index, and --json wins.
     #[arg(long, value_enum, global = true, overrides_with_all = ["annotate", "index", "json"])]
     pub format: Option<OutputFormat>,
@@ -158,29 +158,37 @@ impl Args {
     }
 
     /// The output format from --format or its shorthands, else the
-    /// CLEAVE_FORMAT env var, else annotate. Clap keeps only the last of
+    /// CLEAVE_FORMAT env var, else index. Clap keeps only the last of
     /// --format, --annotate, --index, and --json.
     #[must_use]
     pub fn format(&self) -> OutputFormat {
-        if let Some(format) = self.format {
-            return format;
+        self.chosen_format().unwrap_or(OutputFormat::Index)
+    }
+
+    /// The output format the user asked for, through a flag or
+    /// CLEAVE_FORMAT; `None` when [`Args::format`] falls back to the default.
+    #[must_use]
+    pub fn chosen_format(&self) -> Option<OutputFormat> {
+        if self.format.is_some() {
+            return self.format;
         }
         if self.json {
-            return OutputFormat::Json;
+            return Some(OutputFormat::Json);
         }
         if self.index {
-            return OutputFormat::Index;
+            return Some(OutputFormat::Index);
         }
         if self.annotate {
-            return OutputFormat::Annotate;
+            return Some(OutputFormat::Annotate);
         }
-        if let Ok(val) = std::env::var("CLEAVE_FORMAT") {
-            match <OutputFormat as clap::ValueEnum>::from_str(&val, true) {
-                Ok(format) => return format,
-                Err(_) => eprintln!("warning: unknown CLEAVE_FORMAT '{val}', using annotate"),
+        let val = std::env::var("CLEAVE_FORMAT").ok()?;
+        match <OutputFormat as clap::ValueEnum>::from_str(&val, true) {
+            Ok(format) => Some(format),
+            Err(_) => {
+                eprintln!("warning: unknown CLEAVE_FORMAT '{val}', using index");
+                None
             }
         }
-        OutputFormat::Annotate
     }
 
     /// Return the built-in archive passwords followed by unique CLI additions.

@@ -1420,14 +1420,10 @@ fn should_log_progress(
         return true;
     }
     let last = last_log_ms.load(Ordering::Relaxed);
-    if elapsed_ms.saturating_sub(last) >= EVERY_T_MS
+    elapsed_ms.saturating_sub(last) >= EVERY_T_MS
         && last_log_ms
             .compare_exchange(last, elapsed_ms, Ordering::Relaxed, Ordering::Relaxed)
             .is_ok()
-    {
-        return true;
-    }
-    false
 }
 
 struct ThreadLocalCacheClearGuard;
@@ -1472,6 +1468,11 @@ impl ArchiveAnalyzer {
             guard.add_extraction_note(note.clone());
         }
         if self.current_depth >= self.max_depth {
+            // The PE holding this bundle is cached by content; at a shallower
+            // depth its bundle members are analyzed.
+            report
+                .analysis_gaps
+                .record(crate::types::AnalysisGap::NestingLimit);
             guard.add_extraction_note(".NET bundle: maximum archive depth reached".to_string());
             super::drain_extraction_notes(report, &guard);
             return true;
@@ -1607,61 +1608,14 @@ impl ArchiveAnalyzer {
         None
     }
 
+    /// Member YARA policy: the same as a standalone file's, see
+    /// [`crate::engine::yara_skip_reason`].
     fn archive_member_yara_skip_reason(
         relative_path: &str,
         file_type: &FileType,
         size_bytes: usize,
     ) -> Option<&'static str> {
-        // Skip the YARA pass for an unidentified member: with no bucket it
-        // would scan with a `None` filter and hit EVERY tier, materializing all
-        // per-filetype rule sets (the cold-start blow-up). Identified members
-        // scan only their own label bucket plus fallback. The member's string /
-        // trait / encoded-payload analysis still runs either way.
-        if Self::archive_member_yara_filetypes(file_type).is_empty() {
-            return Some("no targeted YARA tier for file type");
-        }
-
-        let lower_path = relative_path.to_ascii_lowercase();
-        let file_name = Path::new(relative_path)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or(relative_path)
-            .to_ascii_lowercase();
-
-        if lower_path.ends_with(".asar") {
-            return Some("archive-like asar container");
-        }
-
-        // A YARA rule file *is* a list of the strings and hex patterns that YARA
-        // rules search for, so scanning one with the YARA engine is guaranteed
-        // self-detection: any packaged rule corpus lights up the third-party
-        // tiers and reports the rule's own subject as a hostile hit. The
-        // member's string/trait analysis still runs; only the YARA pass is
-        // skipped. The traits side already handles the first-party half of this
-        // via `metadata/file/extension/identity::yara-extension`.
-        if lower_path.ends_with(".yar") || lower_path.ends_with(".yara") {
-            return Some("YARA rule source");
-        }
-
-        if size_bytes >= 512 * 1024 && lower_path.ends_with(".map") {
-            return Some("large source map");
-        }
-
-        let is_licenseish = file_name.starts_with("license")
-            || file_name.starts_with("licenses")
-            || file_name.starts_with("copying")
-            || file_name.starts_with("notice");
-        if size_bytes >= 128 * 1024
-            && is_licenseish
-            && matches!(
-                file_type,
-                FileType::Html | FileType::Markdown | FileType::Unknown
-            )
-        {
-            return Some("large license/notice document");
-        }
-
-        None
+        crate::engine::yara_skip_reason(relative_path, *file_type, size_bytes)
     }
 
     fn archive_member_yara_filetypes(file_type: &FileType) -> Vec<&'static str> {

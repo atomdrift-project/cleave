@@ -192,6 +192,7 @@ impl GenericAnalyzer {
                     image.offset,
                     self.engine.clone(),
                     None,
+                    &report.analysis_gaps,
                 ) {
                     report.files.extend(files);
                 }

@@ -775,6 +775,7 @@ impl ArchiveAnalyzer {
     pub(super) fn triage_jar_classes<T: Sync>(
         &self,
         yara_engine: Option<&crate::yara_engine::YaraEngine>,
+        gaps: &crate::types::AnalysisGaps,
         classes: &[T],
         bytes: impl for<'a> Fn(&'a T) -> Option<std::borrow::Cow<'a, [u8]>> + Sync,
     ) -> Vec<JarClassTriage> {
@@ -793,12 +794,16 @@ impl ArchiveAnalyzer {
                     yara.scan_bytes(&data, filter)
                 })) {
                     Ok(Ok(scan)) => scan,
+                    // A class scored without its YARA matches may be triaged
+                    // out of analysis; either way the jar's report is short.
                     Ok(Err(e)) => {
                         debug!("YARA scan failed for class {i}: {e}");
+                        gaps.record(crate::types::AnalysisGap::YaraIncomplete);
                         YaraScan::default()
                     }
                     Err(_panic) => {
                         tracing::error!(class = i, "panic during YARA scan (caught)");
+                        gaps.record(crate::types::AnalysisGap::YaraIncomplete);
                         YaraScan::default()
                     }
                 }
@@ -863,10 +868,12 @@ impl ArchiveAnalyzer {
         let mut flagged_classes = HashSet::<String>::new();
         let mut collected_yara = Vec::<YaraMatch>::with_capacity(50);
         let mut class_scores = vec![0usize; class_members.len()];
-        let triage_results =
-            self.triage_jar_classes(self.yara_engine.as_deref(), &class_members, |m| {
-                Some(std::borrow::Cow::Borrowed(&m.data[..]))
-            });
+        let triage_results = self.triage_jar_classes(
+            self.yara_engine.as_deref(),
+            &report.analysis_gaps,
+            &class_members,
+            |m| Some(std::borrow::Cow::Borrowed(&m.data[..])),
+        );
         for triage in triage_results {
             class_scores[triage.index] = triage.score;
             if triage.retain {

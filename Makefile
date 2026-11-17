@@ -170,7 +170,7 @@ fmt: ## Format all code with rustfmt
 
 fix: ## Auto-fix clippy lints, then format with rustfmt
 	@echo "Applying clippy fixes..."
-	@cargo clippy --fix --workspace --all-targets --all-features --allow-dirty --allow-staged
+	@cargo clippy --fix --workspace --all-targets --features jemalloc-prof,memprofile,deadlock-detection,yara-profiling --allow-dirty --allow-staged
 	@cargo fmt --all
 	@echo "✓ Fixes applied"
 
@@ -182,7 +182,12 @@ lint: ## Run code formatting and linting checks
 	@echo "✓ Hygiene passed (file length, internal names)"
 	@echo ""
 	@echo "Running clippy with workspace lints..."
-	@cargo clippy --workspace --all-targets --all-features -- -D warnings
+	@# Not --all-features: memprofile-win replaces jemalloc as the global
+	@# allocator, so enabling both leaves tikv-jemallocator unused. Lint each
+	@# allocator configuration on its own instead.
+	@cargo clippy --workspace --all-targets --features jemalloc-prof,memprofile,deadlock-detection,yara-profiling -- -D warnings
+	@echo "Running clippy with the memprofile-win allocator..."
+	@cargo clippy --lib --bins --no-default-features --features memprofile-win -- -D warnings
 	@echo "Running clippy without the rule linter (library-only build)..."
 	@cargo clippy --lib --bins --no-default-features -- -D warnings
 	@echo "Checking rustdoc links..."

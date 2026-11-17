@@ -38,10 +38,10 @@ pub mod cache;
 pub mod cancellation;
 pub mod context;
 mod engine;
-pub mod enriched;
 mod entropy;
 pub mod env;
 pub(crate) mod extractors;
+pub mod feed;
 pub mod file_io;
 pub(crate) mod ip_validator;
 mod leaf_affinity;
@@ -90,6 +90,7 @@ pub mod report_input;
 pub mod theme;
 pub(crate) mod third_party_config;
 pub(crate) mod third_party_yara;
+pub mod tip;
 pub mod tool_resolution;
 pub mod types;
 pub(crate) mod typo_validator;
@@ -244,6 +245,13 @@ where
         Some(Err(e)) => {
             tracing::warn!(error = %e, "YARA scan failed, continuing without YARA results");
             report.metadata.errors.push(format!("yara: {e:#}"));
+            // Missing for this run only; see `AnalysisGap::YaraIncomplete`.
+            // No rules at all is the same for every run, not a failure.
+            if e.downcast_ref::<yara_engine::NoYaraRules>().is_none() {
+                report
+                    .analysis_gaps
+                    .record(types::AnalysisGap::YaraIncomplete);
+            }
             return HashMap::new();
         }
         None => return HashMap::new(),
@@ -1166,8 +1174,8 @@ pub fn version_info() -> VersionInfo {
 }
 
 /// The `version` text every atomdrift tool prints: the tool, the cleave it
-/// embeds, and the rules it is using — edition before revision, because
-/// "Uplink or open source?" is the first thing a support thread asks.
+/// embeds, and the rules it is using — feed before revision, because "which
+/// feed?" is the first thing a support thread asks.
 ///
 /// Loads the rule engines to count them, like [`version_info`].
 #[must_use]
@@ -1188,17 +1196,40 @@ pub fn version_report(tool: &str, tool_version: &str) -> String {
         .unwrap_or_default();
     let at = match &info.traits_edition {
         traits_repo::Edition::Checkout(dir) => format!("  {}", dir.display()),
-        traits_repo::Edition::Enriched | traits_repo::Edition::OpenSource => String::new(),
+        traits_repo::Edition::Feed(_) => String::new(),
     };
     format!(
         "{tool:<7} {tool_version}\n{embeds}traits  {}  {}{built}{at}\nrules   {} ({} atomic, {} composite, {} yara)",
-        info.traits_edition.styled(),
+        info.traits_edition,
         info.traits_version.as_deref().unwrap_or("not installed"),
         info.trait_count + info.composite_count + info.yara_rules,
         info.trait_count,
         info.composite_count,
         info.yara_rules
     )
+}
+
+/// The rules a banner names, `zero-day feed: c4521a7` or `checkout: c4521a7`:
+/// what every atomdrift tool prints in brackets after its own name.
+///
+/// The revision is cut to git's seven characters for display;
+/// [`traits_repo::version`] keeps its nine, which consumers use as a dedupe
+/// key. A checkout with edited rules has no commit to name.
+#[must_use]
+pub fn rules_label() -> String {
+    rules_label_for(
+        &traits_repo::Edition::current(),
+        traits_repo::version().as_deref(),
+    )
+}
+
+fn rules_label_for(edition: &traits_repo::Edition, version: Option<&str>) -> String {
+    let rev = match version {
+        None => "not installed",
+        Some(v) if v.len() == 17 && v.starts_with('w') => "uncommitted changes",
+        Some(v) => v.get(..7).unwrap_or(v),
+    };
+    format!("{edition}: {rev}")
 }
 
 /// Report whether `pattern` makes the lazy DFA explode on bundle-shaped text.

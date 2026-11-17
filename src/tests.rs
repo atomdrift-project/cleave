@@ -288,3 +288,28 @@ fn test_analysis_depth_zero_no_deep_nesting_finding() {
         "depth-0 analysis should not produce deep-nesting finding"
     );
 }
+
+#[test]
+fn rules_label_names_the_feed_and_a_seven_char_revision() {
+    use crate::feed::Feed;
+    use crate::traits_repo::Edition;
+    let zero_day = Edition::Feed(Feed::ZeroDay);
+    assert_eq!(
+        rules_label_for(&zero_day, Some("c4521a7f0")),
+        "zero-day feed: c4521a7"
+    );
+    assert_eq!(
+        rules_label_for(&Edition::Feed(Feed::OssDelayed), Some("9f00e12ab")),
+        "opensource delayed feed: 9f00e12"
+    );
+    assert_eq!(
+        rules_label_for(&Edition::Feed(Feed::Supporter), None),
+        "supporter feed: not installed"
+    );
+    let checkout = Edition::Checkout("/src/traits".into());
+    assert_eq!(rules_label_for(&checkout, Some("abc")), "checkout: abc");
+    assert_eq!(
+        rules_label_for(&checkout, Some("w0123456789abcdef")),
+        "checkout: uncommitted changes"
+    );
+}

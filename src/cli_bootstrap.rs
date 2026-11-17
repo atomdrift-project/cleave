@@ -253,13 +253,10 @@ pub(crate) fn configure_rayon_thread_pool(validating: bool) {
 
 pub(crate) fn print_version_banner(format: cli::OutputFormat) {
     if format != cli::OutputFormat::Json {
-        let traits_ver = cleave::traits_repo::version()
-            .map(|v| format!(": {v}"))
-            .unwrap_or_default();
         println!(
-            "cleave v{} ({} traits{traits_ver})\n",
+            "Atomdrift Cleave v{} [{}]\n",
             env!("CARGO_PKG_VERSION"),
-            cleave::traits_repo::Edition::current().styled()
+            cleave::rules_label()
         );
     }
 }

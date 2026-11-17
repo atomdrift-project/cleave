@@ -67,12 +67,7 @@ pub(crate) fn is_base64_candidate(s: &str) -> bool {
     }
 
     // Check padding (max 2 '=' at end)
-    let padding_count = s.bytes().rev().take_while(|&b| b == b'=').count();
-    if padding_count > 2 {
-        return false;
-    }
-
-    true
+    s.bytes().rev().take_while(|&b| b == b'=').count() <= 2
 }
 
 /// Check if a string is hex-encoded (for nested detection)

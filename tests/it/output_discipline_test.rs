@@ -91,3 +91,15 @@ fn analyze_benign_directory_is_silent_short_and_json_parses() {
     assert_max_lines(&run(traits.path(), &["analyze", d]), MAX_DIR_LINES);
     assert_json_parses(&run(traits.path(), &["--json", "analyze", d]));
 }
+
+#[test]
+fn iter_files_is_jsonl_whatever_the_format() {
+    let traits = quiet_traits();
+    let dir = TempDir::new().unwrap();
+    fs::copy(BENIGN, dir.path().join("rust_native")).unwrap();
+    let d = dir.path().to_str().unwrap();
+    // No format named: the default (index) must not open with the banner.
+    for args in [&["iter-files", d][..], &["iter-files", "--json", d][..]] {
+        assert_json_parses(&run(traits.path(), args));
+    }
+}

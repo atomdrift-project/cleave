@@ -34,9 +34,20 @@ pub enum AnalysisGap {
     /// An archive could only be read in part: members were skipped or failed
     /// to extract. Each problem is in the report's `metadata.errors`.
     ExtractionPartial,
+    /// Decoding or carving stopped at a nesting limit. The limit counts from
+    /// where the analysis started, so the same bytes reached through fewer
+    /// containers analyze further: the report is not cached.
+    NestingLimit,
+    /// A YARA scan timed out, failed or panicked, so its matches are missing
+    /// for this run only: the report is not cached.
+    YaraIncomplete,
+    /// A temporary file a decoded or embedded child is analyzed from could
+    /// not be written, so that child is missing for this run only: the
+    /// report is not cached.
+    IoFailure,
 }
 
-const ALL: [AnalysisGap; 11] = [
+const ALL: [AnalysisGap; 14] = [
     AnalysisGap::FlowUnavailable,
     AnalysisGap::FlowSchemaUnsupported,
     AnalysisGap::FlowGraphLimited,
@@ -48,6 +59,9 @@ const ALL: [AnalysisGap; 11] = [
     AnalysisGap::EvaluationDeadline,
     AnalysisGap::SourceParseIncomplete,
     AnalysisGap::ExtractionPartial,
+    AnalysisGap::NestingLimit,
+    AnalysisGap::YaraIncomplete,
+    AnalysisGap::IoFailure,
 ];
 
 impl AnalysisGap {
@@ -66,6 +80,9 @@ impl AnalysisGap {
             Self::EvaluationDeadline => "evaluation-deadline",
             Self::SourceParseIncomplete => "source-parse-incomplete",
             Self::ExtractionPartial => "extraction-partial",
+            Self::NestingLimit => "nesting-limit",
+            Self::YaraIncomplete => "yara-incomplete",
+            Self::IoFailure => "io-failure",
         }
     }
 }

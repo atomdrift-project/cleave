@@ -555,7 +555,16 @@ fn scan_traits_dir_with_sources(
             if !entry.file_type().is_file() {
                 continue;
             }
-            let (is_yaml, is_yar) = match path.extension().and_then(|e| e.to_str()) {
+            // A packed rule file (`name.yaml.zst`) is the rule its inner
+            // extension names, as `RuleSources` presents it; its compressed
+            // bytes change whenever the rule does, which is all the digest
+            // needs.
+            let logical = if path.extension().is_some_and(|e| e == "zst") {
+                Path::new(path.file_stem().unwrap_or_default())
+            } else {
+                path
+            };
+            let (is_yaml, is_yar) = match logical.extension().and_then(|e| e.to_str()) {
                 Some("yaml" | "yml") => (true, false),
                 Some("yar" | "yara") => (false, true),
                 _ => continue,
@@ -1276,29 +1285,12 @@ pub(crate) fn maintain_filefacts_cache() {
     });
 }
 
-/// Clean up old cache files (keep only current one)
+/// Clean up cache files nothing will load again. `current_cache` is the YARA
+/// cache directory this process just wrote.
 pub fn cleanup_old_caches(current_cache: &Path) -> Result<()> {
     let cache_dir = cache_dir()?;
 
-    for entry in fs::read_dir(&cache_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        // Remove stale YARA caches (except the current one): v3 single-file
-        // blobs (`yara-rules-*.bin`) and v4 per-tier directories
-        // (`yara-rules-v4-*`).
-        let is_yara_cache = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.starts_with("yara-rules-"));
-        if is_yara_cache && path != current_cache {
-            if path.is_dir() {
-                let _ = fs::remove_dir_all(&path);
-            } else {
-                let _ = fs::remove_file(&path);
-            }
-        }
-    }
+    prune_yara_caches(&cache_dir, current_cache);
 
     // Prune superseded capability-mapper caches (stale crate-version and
     // trait-mtime variants accumulate otherwise — each a multi-MB file, the one
@@ -1308,10 +1300,80 @@ pub fn cleanup_old_caches(current_cache: &Path) -> Result<()> {
     Ok(())
 }
 
+/// A YARA cache directory unused this long is dropped: its traits tree is
+/// most likely gone (a removed worktree, a temporary snapshot). Shorter than
+/// [`UNUSED_MAPPER_TTL`] because hosts that scan from short-lived trees mint
+/// a directory per tree.
+const UNUSED_YARA_CACHE_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
+/// The name prefix of the YARA cache layout this build reads and writes.
+const YARA_CACHE_PREFIX: &str = "yara-rules-v5-";
+
+/// Remove YARA caches nothing will load again: other layouts (v3 single-file
+/// blobs, v4 per-tier directories) and current-layout directories unused for
+/// [`UNUSED_YARA_CACHE_TTL`].
+///
+/// A current-layout directory for ANOTHER traits tree is left alone. Each
+/// tree has a directory of its own, and processes scanning from different
+/// trees run side by side (a service's live checkout, its worktrees, a QA
+/// snapshot). Deleting every directory but one's own made each of them evict
+/// the rest, so nearly every process started cold: it re-read the whole rule
+/// tree and reclassified every rule, seconds of work per scan. Best-effort.
+fn prune_yara_caches(cache_dir: &Path, current_cache: &Path) {
+    let Ok(read_dir) = fs::read_dir(cache_dir) else {
+        return;
+    };
+    let now = SystemTime::now();
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.starts_with("yara-rules-") || path == current_cache {
+            continue;
+        }
+        if name.starts_with(YARA_CACHE_PREFIX) {
+            // The manifest is touched on every load (see `mark_used`); a
+            // directory without one was never completed, so age it by itself.
+            let last_used = fs::metadata(path.join("manifest.json"))
+                .or_else(|_| fs::metadata(&path))
+                .and_then(|m| m.modified());
+            let unused = last_used.is_ok_and(|used| {
+                now.duration_since(used)
+                    .is_ok_and(|age| age > UNUSED_YARA_CACHE_TTL)
+            });
+            if !unused {
+                continue;
+            }
+        }
+        if path.is_dir() {
+            let _ = fs::remove_dir_all(&path);
+        } else {
+            let _ = fs::remove_file(&path);
+        }
+    }
+}
+
 /// A mapper family unused this long is dropped: its traits directory is most
 /// likely gone (a removed checkout, a test's temporary tree), and nothing
 /// else would ever remove it. A family still in use costs one rebuild.
 const UNUSED_MAPPER_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+
+/// Most mapper families kept, least recently used dropped first.
+///
+/// A family is per traits directory, and a service that checks traits out
+/// into a fresh worktree per job makes a new ~100 MB family for every job:
+/// one host held 4,339 of them, 487 GB, inside the TTL. Dropping a family
+/// still in use costs one rebuild.
+const MAX_MAPPER_FAMILIES: usize = 64;
+
+/// Prune the mapper cache after a mapper is written. The YARA cold path was
+/// the only other caller, so a host with a warm YARA cache never pruned.
+pub(crate) fn prune_mapper_caches() {
+    if let Ok(dir) = cache_dir() {
+        prune_superseded_mappers(&dir);
+    }
+}
 
 /// Record that a cache file was just used, so pruning ages it by last use
 /// rather than by when it was written. Best-effort.
@@ -1364,13 +1426,24 @@ fn prune_superseded_mappers(dir: &Path) {
             }
         }
     }
-    // A whole family whose newest member went unused for the TTL goes too.
+    // A whole family whose newest member went unused for the TTL goes too,
+    // and past the family cap the least recently used go.
     let now = SystemTime::now();
-    superseded.extend(newest.into_values().filter_map(|(path, mtime)| {
-        now.duration_since(mtime)
+    let mut kept: Vec<(PathBuf, SystemTime)> = Vec::with_capacity(newest.len());
+    for (path, mtime) in newest.into_values() {
+        if now
+            .duration_since(mtime)
             .is_ok_and(|age| age > UNUSED_MAPPER_TTL)
-            .then_some(path)
-    }));
+        {
+            superseded.push(path);
+        } else {
+            kept.push((path, mtime));
+        }
+    }
+    if kept.len() > MAX_MAPPER_FAMILIES {
+        kept.sort_unstable_by_key(|(_, mtime)| std::cmp::Reverse(*mtime));
+        superseded.extend(kept.drain(MAX_MAPPER_FAMILIES..).map(|(path, _)| path));
+    }
     for path in superseded {
         let _ = fs::remove_file(path);
     }

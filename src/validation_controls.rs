@@ -72,6 +72,12 @@ const HARD_VALIDATOR_IDS: &[&str] = &[
     // A suppression that trusts an unverified signature lets whoever made the
     // certificate excuse the rule.
     "unverified-signature-suppressor",
+    // A signature rule outside claim/ reads a name the signer chose, so its
+    // path claims a structure fact it cannot prove.
+    "misfiled-signature-claim",
+    // A composite that excuses other rules rests on a certificate name its
+    // maker chose, so the maker can trigger the excuse.
+    "unproven-signer-suppressor",
     // A composite references a trait id that does not exist — it never fires.
     "broken-reference",
     // size/count/needs bounds make the rule unsatisfiable (or always-true).
@@ -1155,6 +1161,20 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         display_id: "unverified-signature-suppressor",
         description: "unless:/downgrade: cites a signature outside metadata/signature/verified/, which proves nothing about the signer.",
         fix: "Cite a metadata/signature/verified/ finding, or move the reference into a detection leg.",
+    },
+    ValidatorSpec {
+        id: "misfiled-signature-claim",
+        category: ValidatorCategory::Policy,
+        display_id: "misfiled-signature-claim",
+        description: "A metadata/signature/ rule outside claim/ tests a certificate subject, issuer or code identifier the signer chose.",
+        fix: "Move the rule to metadata/signature/claim/ and describe it as \"Claims ...\", or cite the engine's <state>/signer:: finding instead.",
+    },
+    ValidatorSpec {
+        id: "unproven-signer-suppressor",
+        category: ValidatorCategory::Policy,
+        display_id: "unproven-signer-suppressor",
+        description: "An exception, or a composite cited by unless:/downgrade:, requires a certificate subject or code identifier without a verified signature.",
+        fix: "Add metadata/signature/verified/ to all:, or cite metadata/signature/verified/signer::<name>.",
     },
     ValidatorSpec {
         id: "dead-downgrade",

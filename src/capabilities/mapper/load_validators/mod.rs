@@ -227,6 +227,8 @@ const VALIDATORS: &[(&str, Check)] = &[
     ("self-referencing-traits", references::self_referencing_traits),
     ("dead-downgrades", references::dead_downgrades),
     ("unverified-signature-suppressors", references::unverified_signature_suppressors),
+    ("misfiled-signature-claims", references::misfiled_signature_claims),
+    ("unproven-signer-suppressors", references::unproven_signer_suppressors),
     ("exhaustive-suppressors", references::exhaustive_suppressors),
     ("directory-shadowed-refs", references::directory_shadowed_refs),
     ("uncallable-symbol-matchers", references::uncallable_symbol_matchers),

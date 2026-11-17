@@ -26,7 +26,7 @@ done
 # 2. Internal names. Contributors cannot see these projects, so references to
 #    them in code, docs or tests explain nothing.
 # tools/model_facts_manifest*.py read a model checkout by its name on purpose.
-PRIVATE='\b(litmus|hopper|isomer|atomscan|postdoc|gauntlet|collimator|cyclotron|cleave-tuna|beamline)\b|/Users/t/|traits-dev'
+PRIVATE='\b(litmus|hopper|isomer|postdoc|gauntlet|collimator|cyclotron|cleave-tuna|beamline)\b|/Users/t/|traits-dev'
 if git ls-files -- ':!testdata' ':!tests/fixtures' ':!tests/data' ':!tests/yara_tier_fixtures' \
         ':!scripts/check-hygiene.sh' ':!*.json' ':!release.mk' ':!tools/model_facts_manifest.py' \
         ':!tools/test_model_facts_manifest.py' \

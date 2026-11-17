@@ -89,69 +89,125 @@ fn bundle_rejects_links_before_the_sidecar_write_can_follow_them() {
 
 #[test]
 fn a_refusal_says_what_was_wrong_and_what_to_do() {
-    use crate::enriched::Source;
+    use crate::feed::{Feed, Source};
     let tid = "8f2d0497b4e2c5a7";
-    let community = refusal(tid, Source::File, &Answer::Public(Some("free".into())));
-    assert!(
-        community.contains("free plan") && community.contains("upgrade at"),
-        "{community}"
-    );
-    assert!(
-        community.contains("the latest rules the moment they clear QA"),
-        "{community}"
-    );
+    let refused = |opened: &[Feed], tier: Option<&str>| Answer::Refused {
+        opened: opened.to_vec(),
+        tier: tier.map(str::to_owned),
+    };
 
-    let env = refusal(tid, Source::Env, &Answer::Public(None));
-    assert!(
-        env.contains("ISOTOPE13_TOKEN") && env.contains("whole token"),
-        "{env}"
+    // A supporter plan asking for zero-day is pointed at the feed it has.
+    let supporter = refusal(
+        tid,
+        Source::File,
+        Feed::ZeroDay,
+        refused(&[Feed::Supporter, Feed::OssDelayed], Some("supporter")),
     );
-    let saved = refusal(tid, Source::File, &Answer::Public(None));
+    let message = &supporter.message;
     assert!(
-        saved.contains("isotope13-api.json") && saved.contains("disconnected"),
-        "{saved}"
+        message.contains("Early Supporter plan")
+            && message.contains("does not include the zero-day feed")
+            && message.contains(" feed supporter`")
+            && message.contains("plans"),
+        "{message}"
     );
-    let issued = refusal(tid, Source::Device, &Answer::Public(None));
-    assert!(issued.contains("just issued"), "{issued}");
-    // Nothing is pasted any more, so nothing says to check a paste.
-    for message in [&community, &env, &saved, &issued] {
-        assert!(!message.contains("pasted"), "{message}");
-        assert!(message.contains(tid), "{message}");
+    assert_eq!(supporter.opened, [Feed::Supporter, Feed::OssDelayed]);
+    assert!(supporter.recognised);
+
+    // Community opens only the open-source feed: upgrade, nothing to switch to.
+    let community = refusal(
+        tid,
+        Source::File,
+        Feed::Supporter,
+        refused(&[Feed::OssDelayed], Some("free")),
+    );
+    assert!(
+        community.message.contains("Community plan")
+            && community
+                .message
+                .contains("includes only the opensource delayed feed"),
+        "{}",
+        community.message
+    );
+    assert!(community.recognised);
+
+    let env = refusal(
+        tid,
+        Source::Env,
+        Feed::ZeroDay,
+        refused(&[Feed::OssDelayed], None),
+    );
+    assert!(
+        env.message.contains("ISOTOPE13_TOKEN") && env.message.contains("whole token"),
+        "{}",
+        env.message
+    );
+    assert!(
+        !env.recognised,
+        "an unknown token says nothing about a plan"
+    );
+    let saved = refusal(tid, Source::File, Feed::ZeroDay, refused(&[], None));
+    assert!(
+        saved.message.contains("isotope13-api.json") && saved.message.contains("disconnected"),
+        "{}",
+        saved.message
+    );
+    let issued = refusal(tid, Source::Device, Feed::ZeroDay, refused(&[], None));
+    assert!(issued.message.contains("just issued"), "{}", issued.message);
+    for refusal in [&supporter, &community, &env, &saved, &issued] {
+        assert!(refusal.message.contains(tid), "{}", refusal.message);
+        assert!(
+            !refusal.message.to_lowercase().contains("uplink"),
+            "{}",
+            refusal.message
+        );
     }
 
-    let status = refusal(tid, Source::Env, &Answer::Status("HTTP 401".into()));
-    assert!(
-        status.contains("(HTTP 401)") && status.contains(crate::enriched::DASH_URL),
-        "{status}"
+    let status = refusal(
+        tid,
+        Source::Env,
+        Feed::ZeroDay,
+        Answer::Status("HTTP 401".into()),
     );
+    assert!(
+        status.message.contains("(HTTP 401)") && status.message.contains(crate::feed::DASH_URL),
+        "{}",
+        status.message
+    );
+    assert!(status.opened.is_empty() && !status.recognised);
 }
 
 #[test]
-fn only_the_enriched_channel_sends_a_token() {
+fn only_paid_feeds_send_a_token_and_each_has_its_own_base() {
+    use crate::feed::Feed;
     let public = Channel::Public;
     assert_eq!(public.base(), BASE_URL);
     assert_eq!(public.token(), None);
+    assert_eq!(public.feed(), Feed::OssDelayed);
 
-    let token = crate::enriched::Token::parse("i13_krypton85_abc").unwrap();
-    let enriched = Channel::Enriched(token.clone());
-    assert_eq!(enriched.base(), ENRICHED_URL);
-    assert_eq!(enriched.token(), Some(&token));
+    let token = crate::feed::Token::parse("i13_krypton85_abc").unwrap();
+    let zero_day = Channel::Paid(Feed::ZeroDay, token.clone());
+    assert_eq!(
+        zero_day.base(),
+        "https://updates.isotope13.ai/v1/rules/cleave/zero-day"
+    );
+    assert_eq!(zero_day.token(), Some(&token));
+    let supporter = Channel::Paid(Feed::Supporter, token);
+    assert_eq!(
+        supporter.base(),
+        "https://updates.isotope13.ai/v1/rules/cleave/supporter"
+    );
+    assert_eq!(supporter.feed(), Feed::Supporter);
 }
 
 #[test]
 fn only_failures_that_could_answer_differently_are_retried() {
     let at = |status| FetchError {
         status: Some(status),
-        message: String::new(),
+        ..FetchError::default()
     };
     // A dropped connection is the commonest thing worth asking again about.
-    assert!(
-        FetchError {
-            status: None,
-            message: String::new(),
-        }
-        .retryable()
-    );
+    assert!(FetchError::default().retryable());
     assert!(at(500).retryable());
     assert!(at(503).retryable());
     assert!(at(429).retryable());
@@ -179,7 +235,7 @@ fn backoff_jitter_never_exceeds_its_step() {
 fn a_refused_token_is_told_apart_from_an_outage() {
     let refused = |status| FetchError {
         status: Some(status),
-        message: String::new(),
+        ..FetchError::default()
     };
     // A refused token asks for another...
     assert!(refused(401).unauthorized());
@@ -188,13 +244,7 @@ fn a_refused_token_is_told_apart_from_an_outage() {
     // a reason to prompt anyone for a token.
     assert!(!refused(404).unauthorized());
     assert!(!refused(500).unauthorized());
-    assert!(
-        !FetchError {
-            status: None,
-            message: String::new(),
-        }
-        .unauthorized()
-    );
+    assert!(!FetchError::default().unauthorized());
     assert_eq!(refused(401).status_text(), "HTTP 401");
 }
 

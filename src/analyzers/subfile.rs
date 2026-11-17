@@ -22,7 +22,7 @@
 //! deeper than the policy ceiling.
 
 use crate::analyzers::archive::ArchiveAnalyzer;
-use crate::analyzers::{AnalysisInput, FileType, analyzer_for_file_type_arc};
+use crate::analyzers::{AnalysisInput, FileType, FileTypeExt, analyzer_for_file_type_arc};
 use crate::types::{AnalysisReport, FileAnalysis, Finding};
 use std::collections::HashMap;
 use std::path::Path;
@@ -72,7 +72,16 @@ pub fn analyze_subfile_bytes(
             parent_depth,
             "sub-file recursion depth ceiling hit; skipping",
         );
-        return Vec::new();
+        // The ceiling counts from where the analysis began, so a container
+        // reached through fewer layers analyzes this payload. Leave an entry
+        // carrying the gap: the parent's report must not be cached as if
+        // the payload had been analyzed and found empty.
+        return vec![nesting_limited_entry(
+            bytes,
+            virtual_path,
+            file_type,
+            child_depth,
+        )];
     }
 
     let Some(analyzer) = pick_analyzer(file_type, engine) else {
@@ -101,6 +110,28 @@ pub fn analyze_subfile_bytes(
     let doomed = engine.rules().doomed_low_value_ids(&report.findings);
     crate::context::capture(&mut report, bytes, file_type, &doomed);
     flatten_subreport(report, virtual_path, location_prefix, child_depth, engine)
+}
+
+/// The entry for a payload left unanalyzed at the nesting ceiling.
+fn nesting_limited_entry(
+    bytes: &[u8],
+    virtual_path: &str,
+    file_type: FileType,
+    depth: u32,
+) -> FileAnalysis {
+    use sha2::Digest;
+    let mut entry = FileAnalysis::new(
+        0,
+        virtual_path.to_string(),
+        file_type.report_file_type(),
+        hex::encode(sha2::Sha256::digest(bytes)),
+        bytes.len() as u64,
+    );
+    entry.depth = depth;
+    entry
+        .analysis_gaps
+        .record(crate::types::AnalysisGap::NestingLimit);
+    entry
 }
 
 /// Attach an analyzed format-embedded payload (an Office VBA module, an OLE2
@@ -268,8 +299,9 @@ mod tests {
     use super::*;
 
     /// Recursion ceiling is enforced — at depth `MAX_SUBFILE_DEPTH`
-    /// the helper refuses to dispatch (returns empty) regardless of
-    /// the bytes' contents.
+    /// the helper refuses to dispatch regardless of the bytes' contents,
+    /// and leaves one entry carrying `NestingLimit` so the parent's report
+    /// is not cached as if the payload had been analyzed.
     #[test]
     fn refuses_to_recurse_past_ceiling() {
         let engine = crate::Engine::empty();
@@ -281,10 +313,12 @@ mod tests {
             MAX_SUBFILE_DEPTH, // parent already at ceiling → child > ceiling
             &engine,
         );
+        assert_eq!(result.len(), 1, "one placeholder entry at the ceiling");
+        assert!(result[0].findings.is_empty(), "the payload is not analyzed");
         assert!(
-            result.is_empty(),
-            "expected no entries at recursion ceiling, got {} files",
-            result.len(),
+            result[0]
+                .analysis_gaps
+                .contains(crate::types::AnalysisGap::NestingLimit)
         );
     }
 

@@ -3,12 +3,14 @@
 
 use super::{Report, ValidationInput, is_dynamic_metadata_ref, report};
 use crate::capabilities::validation::{
-    MAX_NOTABLE_DOWNGRADE_DIRECT, MAX_NOTABLE_DOWNGRADE_EXPANDED, UNVERIFIED_SIGNATURE_SUPPRESSOR,
-    collect_trait_refs_from_rule, collect_trait_refs_from_trait_def, find_broad_notable_downgrades,
-    find_dead_downgrades, find_directory_shadowed_refs, find_exhaustive_suppressors,
-    find_invalid_trait_ids, find_leg_suppressing_composites, find_line_number,
+    MAX_NOTABLE_DOWNGRADE_DIRECT, MAX_NOTABLE_DOWNGRADE_EXPANDED, MISFILED_SIGNATURE_CLAIM,
+    UNPROVEN_SIGNER_SUPPRESSOR, UNVERIFIED_SIGNATURE_SUPPRESSOR, collect_trait_refs_from_rule,
+    collect_trait_refs_from_trait_def, find_broad_notable_downgrades, find_dead_downgrades,
+    find_directory_shadowed_refs, find_exhaustive_suppressors, find_invalid_trait_ids,
+    find_leg_suppressing_composites, find_line_number, find_misfiled_signature_claims,
     find_self_referencing_composites, find_self_referencing_traits, find_self_suppressing_traits,
-    find_uncallable_symbol_matchers, find_unverified_signature_suppressors,
+    find_uncallable_symbol_matchers, find_unproven_signer_suppressors,
+    find_unverified_signature_suppressors,
 };
 use crate::composite_rules::{CompositeTrait, MetricsQuery, TraitDefinition};
 use rayon::prelude::*;
@@ -162,6 +164,69 @@ pub(super) fn unverified_signature_suppressors<'a>(input: &'a ValidationInput<'a
         warnings.push_id(
             UNVERIFIED_SIGNATURE_SUPPRESSOR,
             format!("{} suppressions trust an unverified signature", found.len()),
+        );
+    })
+}
+
+/// Under `metadata/signature/`, only `claim/` may read a name the signer
+/// chose, so the path says whether a finding is proven.
+pub(super) fn misfiled_signature_claims<'a>(input: &'a ValidationInput<'a>) -> Report<'a> {
+    let found = find_misfiled_signature_claims(input.trait_definitions);
+    report(move |warnings| {
+        if found.is_empty()
+            || crate::validation_controls::is_validator_disabled(MISFILED_SIGNATURE_CLAIM)
+        {
+            return;
+        }
+        eprintln!(
+            "\n❌ ERROR: {} signature rules read a signer-chosen name outside claim/",
+            found.len()
+        );
+        eprintln!(
+            "   A certificate subject or issuer, or a code identifier, is whatever the signer\n   \
+             typed. The engine reports it under its trust state; a YAML rule that reads it\n   \
+             is a claim and belongs in metadata/signature/claim/, described as \"Claims ...\".\n"
+        );
+        for id in &found {
+            eprintln!("   {id}");
+        }
+        eprintln!();
+        warnings.push_id(
+            MISFILED_SIGNATURE_CLAIM,
+            format!("{} signature claims outside claim/", found.len()),
+        );
+    })
+}
+
+/// A composite that excuses other rules may not rest on a signer-chosen name
+/// unless it also requires a verified signature.
+pub(super) fn unproven_signer_suppressors<'a>(input: &'a ValidationInput<'a>) -> Report<'a> {
+    let found = find_unproven_signer_suppressors(input.trait_definitions, input.composite_rules);
+    report(move |warnings| {
+        if found.is_empty()
+            || crate::validation_controls::is_validator_disabled(UNPROVEN_SIGNER_SUPPRESSOR)
+        {
+            return;
+        }
+        eprintln!(
+            "\n❌ ERROR: {} suppressing composites rest on an unverified signer name",
+            found.len()
+        );
+        eprintln!(
+            "   These excuse other rules and require a certificate subject or code identifier,\n   \
+             which whoever made the certificate chose. Add metadata/signature/verified/ to\n   \
+             all:, or cite metadata/signature/verified/signer::<name> instead.\n"
+        );
+        for id in &found {
+            eprintln!("   {id}");
+        }
+        eprintln!();
+        warnings.push_id(
+            UNPROVEN_SIGNER_SUPPRESSOR,
+            format!(
+                "{} suppressing composites trust an unverified signer name",
+                found.len()
+            ),
         );
     })
 }

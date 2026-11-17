@@ -406,6 +406,10 @@ fn test_identity_finding_is_notable() {
         "macho.code_signature.identifier",
     ));
     identity.trust = filefacts::Trust::Platform;
+    let mut signer = filefacts::Signer::new("macho.code_signature");
+    signer.common_name = Some("Software Signing".to_string());
+    signer.organization = Some("Apple Inc.".to_string());
+    identity.signer = Some(signer);
     let mut report = AnalysisReport::new(crate::types::TargetInfo {
         path: "/bin/ls".to_string(),
         file_type: "macho".to_string(),
@@ -433,13 +437,13 @@ fn test_identity_finding_is_notable() {
         .find(|f| f.id == "metadata/signature/verified/platform::apple")
         .expect("platform-trust finding emitted");
     assert_eq!(platform.crit, Criticality::Notable);
-    assert_eq!(platform.desc, "Verified platform signature: apple");
+    assert_eq!(platform.desc, "Platform signer: Apple Inc.");
     // The signer finding still anchors at the signature blob.
     assert_eq!(platform.evidence[0].location.as_deref(), Some("0xb3a0"));
 }
 
 /// A Developer-ID-signed binary yields `metadata/signature/verified/developer::<team>`
-/// trait keyed by Team ID, with the signer organization in the description,
+/// trait keyed by Team ID (the signer organization is its own `signer::` finding),
 /// sourced from filefacts's `Identity`, not a re-parse. This is the
 /// supply-chain signal an analyst reads first: who signed it.
 #[test]
@@ -469,10 +473,7 @@ fn test_developer_signed_findings() {
         .find(|f| f.id == "metadata/signature/verified/developer::abcde12345")
         .expect("developer-trust finding keyed by team id");
     assert_eq!(dev.crit, Criticality::Notable);
-    assert_eq!(
-        dev.desc,
-        "Verified Apple Developer ID: Acme Inc. (ABCDE12345)"
-    );
+    assert_eq!(dev.desc, "Apple Developer ID team: ABCDE12345");
 }
 
 #[test]

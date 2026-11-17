@@ -3614,3 +3614,25 @@ fn rejected_stream_releases_scratch_before_finishing_decode() {
         } if *size == uncompressed
     )));
 }
+
+/// Members are keyed under the options they are analyzed with. An analyzer
+/// built without options applies its own in-memory limit, not the library
+/// default's, and its members' key must say so.
+#[test]
+fn member_cache_options_carry_the_analyzer_memory_limit() {
+    let bare = ArchiveAnalyzer::new();
+    assert_eq!(
+        bare.options_or_default().max_memory_file_size,
+        DEFAULT_MAX_MEMORY_FILE_SIZE
+    );
+    let options = crate::AnalysisOptions {
+        max_memory_file_size: 7 << 20,
+        ..Default::default()
+    };
+    let configured =
+        ArchiveAnalyzerConfig::from_analysis_options(&options).apply(ArchiveAnalyzer::new());
+    assert_eq!(
+        configured.options_or_default().max_memory_file_size,
+        7 << 20
+    );
+}

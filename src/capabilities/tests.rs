@@ -4290,3 +4290,130 @@ traits:
         "{warnings:?}"
     );
 }
+
+/// Under `metadata/signature/`, a rule that tests a name the signer chose is
+/// a claim and must live in `claim/`; testing a field's presence is structure.
+#[test]
+fn signer_chosen_names_are_read_only_under_claim() {
+    let yaml = r#"
+defaults:
+  for: [pe]
+  crit: notable
+traits:
+  - id: metadata/signature/certificate/subject::names-acme
+    desc: "Subject names Acme"
+    if: { type: value, path: "pe.signatures[0].subject", substr: "Acme" }
+  - id: metadata/signature/code-directory::apple-prefix
+    desc: "Identifier has an Apple prefix"
+    if: { type: value, path: macho.code_signature.identifier, regex: '^com\.apple\.' }
+  - id: metadata/signature/claim/subject::names-acme
+    desc: "Claims Acme certificate subject"
+    if: { type: value, path: "pe.signatures[0].subject", substr: "Acme" }
+  - id: metadata/signature/certificate/subject::has-subject
+    desc: "Has a subject record"
+    if: { type: value, path: "pe.signatures[0].subject", exists: true }
+  - id: metadata/signature/certificate/security::no-eku
+    desc: "Leaf lacks codeSigning EKU"
+    if: { type: value, path: "pe.signatures[0].eku_code_signing", exact: "false" }
+"#;
+    let mappings: models::TraitMappings = crate::yaml::from_str(yaml).expect("parse YAML");
+    let mut warnings = Vec::new();
+    let traits: Vec<_> = mappings
+        .traits
+        .into_iter()
+        .map(|raw| {
+            parsing::apply_trait_defaults(
+                raw,
+                &mappings.defaults,
+                &mut warnings,
+                Path::new("demo.yaml"),
+                false,
+            )
+        })
+        .collect();
+    assert_eq!(
+        crate::capabilities::validation::find_misfiled_signature_claims(&traits),
+        [
+            "metadata/signature/certificate/subject::names-acme",
+            "metadata/signature/code-directory::apple-prefix",
+        ],
+        "{warnings:?}"
+    );
+}
+
+/// A composite that excuses other rules may require a signer-chosen name only
+/// alongside a verified signature. Detection composites, and claims offered as
+/// one `any:` alternative, are not excuses resting on the name.
+#[test]
+fn suppressing_composites_need_proof_for_a_signer_name() {
+    let yaml = r#"
+defaults:
+  for: [pe]
+  crit: notable
+traits:
+  - id: well-known/app/acme::acme-subject
+    desc: "Claims Acme certificate subject"
+    if: { type: value, path: "pe.signatures[0].subject", substr: "Acme" }
+  - id: well-known/app/acme::acme-product
+    desc: "Acme product name"
+    if: { type: value, path: pe.version.product_name, exact: "Acme" }
+  - id: detect::noisy
+    desc: "Noisy detection"
+    crit: suspicious
+    if: { type: text, exact: "x" }
+    unless:
+      - id: well-known/app/acme::acme-identity
+composite_rules:
+  - id: well-known/app/acme::unproven-exception
+    desc: "Acme context"
+    crit: exception
+    all:
+      - id: well-known/app/acme::acme-subject
+      - id: well-known/app/acme::acme-product
+  - id: well-known/app/acme::acme-identity
+    desc: "Acme identity cited by unless"
+    all:
+      - id: well-known/app/acme::acme-subject
+  - id: well-known/app/acme::proven-exception
+    desc: "Acme context"
+    crit: exception
+    all:
+      - id: metadata/signature/verified/
+      - id: well-known/app/acme::acme-subject
+  - id: well-known/app/acme::any-alternative
+    desc: "Acme context"
+    crit: exception
+    any:
+      - id: well-known/app/acme::acme-subject
+      - id: well-known/app/acme::acme-product
+  - id: well-known/app/acme::detection
+    desc: "Fake Acme installer"
+    crit: hostile
+    all:
+      - id: well-known/app/acme::acme-subject
+      - id: detect::noisy
+"#;
+    let mappings: models::TraitMappings = crate::yaml::from_str(yaml).expect("parse YAML");
+    let mut warnings = Vec::new();
+    let path = Path::new("demo.yaml");
+    let traits: Vec<_> = mappings
+        .traits
+        .into_iter()
+        .map(|raw| {
+            parsing::apply_trait_defaults(raw, &mappings.defaults, &mut warnings, path, false)
+        })
+        .collect();
+    let rules: Vec<_> = mappings
+        .composite_rules
+        .into_iter()
+        .map(|raw| parsing::apply_composite_defaults(raw, &mappings.defaults, &mut warnings, path))
+        .collect();
+    assert_eq!(
+        crate::capabilities::validation::find_unproven_signer_suppressors(&traits, &rules),
+        [
+            "well-known/app/acme::unproven-exception",
+            "well-known/app/acme::acme-identity",
+        ],
+        "{warnings:?}"
+    );
+}

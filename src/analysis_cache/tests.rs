@@ -272,7 +272,9 @@ fn byte_identical_twins_keep_their_own_rows() {
 /// holding such a member.
 #[test]
 fn incomplete_reports_are_not_cached() {
-    use crate::types::AnalysisGap::{EvaluationDeadline, SourceParseIncomplete};
+    use crate::types::AnalysisGap::{
+        EvaluationDeadline, IoFailure, NestingLimit, SourceParseIncomplete, YaraIncomplete,
+    };
     let opts = AnalysisOptions::default();
     let settings = settings_of(&opts);
     let revision = ambient_traits_revision();
@@ -280,9 +282,15 @@ fn incomplete_reports_are_not_cached() {
         report_cache_lookup(sha, "elf", &opts, &settings, &report.target.path, None)
     };
 
-    for (n, gap) in [EvaluationDeadline, SourceParseIncomplete]
-        .into_iter()
-        .enumerate()
+    for (n, gap) in [
+        EvaluationDeadline,
+        SourceParseIncomplete,
+        NestingLimit,
+        YaraIncomplete,
+        IoFailure,
+    ]
+    .into_iter()
+    .enumerate()
     {
         let sha = format!("6e1d00de{:056x}", 2 * n + 1);
         let cut_short = test_report(&sha);
@@ -1143,4 +1151,29 @@ fn test_file_cache_options_hash_excludes_cancellation() {
         options_hash(&opts_without, &settings_of(&opts_without)),
         options_hash(&opts_with, &settings_of(&opts_with))
     );
+}
+
+/// A decoded payload merged into its parent leaves its file list behind, so
+/// the gaps that keep it out of the caches move to the parent, whether the
+/// payload or one of its files carries them. Other gaps stay with the child.
+#[test]
+fn merged_payload_carries_its_incomplete_gaps_to_the_parent() {
+    use crate::types::AnalysisGap::{FlowQueryIncomplete, NestingLimit, YaraIncomplete};
+    let parent = test_report(&format!("ca7a{:060x}", 1));
+    let child = test_report(&format!("ca7a{:060x}", 2));
+    child.analysis_gaps.record(FlowQueryIncomplete);
+    let mut nested = test_report(&format!("ca7a{:060x}", 3));
+    nested.analysis_gaps.record(NestingLimit);
+    let member = FileAnalysis::new(1, "x##base64@0".into(), "python".into(), "s".into(), 1);
+    member.analysis_gaps.record(YaraIncomplete);
+    nested.files.push(member);
+
+    carry_incomplete_gaps(&child, &parent.analysis_gaps);
+    assert!(!evaluation_incomplete(&parent), "a flow gap does not block caching");
+    assert!(!parent.analysis_gaps.contains(FlowQueryIncomplete));
+
+    carry_incomplete_gaps(&nested, &parent.analysis_gaps);
+    assert!(parent.analysis_gaps.contains(NestingLimit));
+    assert!(parent.analysis_gaps.contains(YaraIncomplete));
+    assert!(evaluation_incomplete(&parent));
 }

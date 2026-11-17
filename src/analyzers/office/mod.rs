@@ -270,6 +270,12 @@ impl OfficeAnalyzer {
     ) {
         let child_depth = depth.saturating_add(1);
         if child_depth > super::subfile::MAX_SUBFILE_DEPTH {
+            if !executables.is_empty() {
+                // Counted from where the analysis began; see `NestingLimit`.
+                report
+                    .analysis_gaps
+                    .record(crate::types::AnalysisGap::NestingLimit);
+            }
             return;
         }
         for exec in executables {

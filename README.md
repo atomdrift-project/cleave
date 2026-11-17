@@ -12,11 +12,11 @@ all of the operations a program is capable of, and highlights the security sensi
 operations. cleave was specifically designed for malware and differential supply-chain analysis, so
 all inputs are assumed to be hostile.
 
-There are three primary output modes, annotate, index, and JSON (for automation):
+There are three primary output modes: index (the default), annotate (`--annotate`, source context alongside each trait), and JSON (`--json`, for automation):
 
 <p align="center">
-  <img src="media/annotate.png" alt="cleave annotate a sample" width="760">
   <img src="media/toc.png" alt="cleave analyzing a sample (toc)" width="760">
+  <img src="media/annotate.png" alt="cleave annotate a sample" width="760">
 </p>
 
 ## Install
@@ -40,6 +40,26 @@ git clone https://github.com/atomdrift-project/cleave.git
 cd cleave
 make install
 ```
+
+## Rule feeds
+
+cleave downloads its rules on first use. There are three feeds; they carry the
+same rules and differ only in how long a ruleset waits after it passes QA:
+
+| Feed | Delay | Needs |
+| --- | --- | --- |
+| `oss-delayed` | up to 8 days | nothing |
+| `supporter` | 72 hours | an isotope¹³ Early Supporter plan |
+| `zero-day` | none | an isotope¹³ Business or Critical plan |
+
+```bash
+cleave feed               # list the feeds and what's installed
+cleave feed supporter     # switch; connects this computer if needed
+cleave update-rules       # refresh the current feed
+```
+
+`--feed <name>` (or `ATOMDRIFT_FEED`) picks a feed for one run. CI can supply
+a token with `ISOTOPE13_TOKEN`.
 
 ## What it analyzes
 

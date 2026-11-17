@@ -144,12 +144,12 @@ pub fn resolve_and_ensure() -> anyhow::Result<PathBuf> {
     checked_explicit_dir().unwrap_or_else(ensure_data_dir)
 }
 
-/// The installed tree for this run's rules edition, installing it on first
-/// use.
+/// The installed tree for this run's feed, installing it on first use.
 ///
-/// When a held token alone chose the Uplink tree and it cannot be installed
-/// — refused, or offline — the run falls back to the open-source tree rather
-/// than scan with no rules at all. Under `--uplink` the failure stands.
+/// When a paid feed that was not named on the command line cannot be
+/// installed — refused, or offline — the run falls back (to the best feed the
+/// plan opens, or `oss-delayed`) rather than scan with no rules at all. A
+/// feed named with `--feed` fails instead.
 fn ensure_data_dir() -> anyhow::Result<PathBuf> {
     let data_dir = default_traits_dir();
     if has_traits(&data_dir) {
@@ -166,8 +166,13 @@ fn ensure_data_dir() -> anyhow::Result<PathBuf> {
     }
     match crate::rule_update::update(&data_dir, false, false) {
         Ok(()) => Ok(data_dir),
-        Err(e) if crate::enriched::enabled() && !crate::enriched::required() => {
-            crate::enriched::fall_back(&e.to_string());
+        Err(e) if crate::feed::current().needs_token() && !crate::feed::explicit() => {
+            match &e {
+                crate::rule_update::Error::Refused(refusal) => {
+                    crate::feed::fall_back(&refusal.opened, refusal.recognised, &refusal.message)
+                }
+                crate::rule_update::Error::Other(why) => crate::feed::fall_back(&[], false, why),
+            }
             ensure_data_dir()
         }
         Err(e) => Err(anyhow::anyhow!(
@@ -203,35 +208,28 @@ pub fn install_target() -> PathBuf {
 }
 
 /// Where the update bucket's traits are installed for this process: the
-/// uplink tree under `--uplink`, the open-source one otherwise.
+/// current feed's tree.
 pub(crate) fn default_traits_dir() -> PathBuf {
-    installed_dir(crate::enriched::enabled())
+    installed_dir(crate::feed::current())
 }
 
-/// Where the update bucket installs one channel's traits:
-/// `<data>/atomdrift/cleave/traits-oss` or `…/traits-enriched`.
+/// Where one feed's traits are installed:
+/// `<data>/atomdrift/cleave/traits-<feed>`.
 ///
-/// The two sit side by side so a host can hold both, and so the open-source
-/// tree is never overwritten by, or mistaken for, the paid one. The directory
-/// name is the channel.
+/// The trees sit side by side so a host can hold several and switch between
+/// them without a download, and so one feed's tree is never overwritten by, or
+/// mistaken for, another's. The directory name is the feed.
 #[must_use]
-pub fn installed_dir(enriched: bool) -> PathBuf {
-    installed_root().join(if enriched {
-        "traits-enriched"
-    } else {
-        "traits-oss"
-    })
+pub fn installed_dir(feed: crate::feed::Feed) -> PathBuf {
+    installed_root().join(feed.dir_name())
 }
 
 /// Which rules a process is using, read from the tree it resolved rather than
-/// from the flag it was given: `--uplink` with no Uplink tree installed
-/// still scans with the open-source one, and `version` should say so.
+/// from the flag it was given: a run that fell back says so.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Edition {
-    /// `traits-enriched`: Atomdrift Uplink rules, the moment they clear QA.
-    Enriched,
-    /// `traits-oss`: the open-source rules.
-    OpenSource,
+    /// A feed's installed tree.
+    Feed(crate::feed::Feed),
     /// A checkout or an explicit directory, whatever it holds.
     Checkout(PathBuf),
 }
@@ -244,41 +242,30 @@ impl Edition {
     }
 
     fn of(dir: PathBuf) -> Self {
-        match dir.file_name().and_then(|name| name.to_str()) {
-            Some("traits-enriched") => Self::Enriched,
-            Some("traits-oss") => Self::OpenSource,
-            _ => Self::Checkout(dir),
-        }
+        let name = dir.file_name().and_then(|name| name.to_str());
+        crate::feed::Feed::ALL
+            .into_iter()
+            .find(|feed| name == Some(feed.dir_name()))
+            .map_or(Self::Checkout(dir), Self::Feed)
     }
 
-    /// The one-word form, for JSON and logs.
+    /// The one-word form, for JSON and logs: the feed's slug, or `checkout`.
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Enriched => "enriched",
-            Self::OpenSource => "oss",
+            Self::Feed(feed) => feed.slug(),
             Self::Checkout(_) => "checkout",
-        }
-    }
-
-    /// The form for a terminal: the paid edition in its colours, so a glance
-    /// at any tool's `version` says which rules it is on.
-    #[must_use]
-    pub fn styled(&self) -> String {
-        match self {
-            Self::Enriched => crate::enriched::brand(),
-            other => other.to_string(),
         }
     }
 }
 
 impl std::fmt::Display for Edition {
+    /// "zero-day feed", or "checkout".
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Enriched => "Atomdrift Uplink",
-            Self::OpenSource => "open source",
-            Self::Checkout(_) => "checkout",
-        })
+        match self {
+            Self::Feed(feed) => write!(f, "{feed}"),
+            Self::Checkout(_) => f.write_str("checkout"),
+        }
     }
 }
 
@@ -289,19 +276,29 @@ fn installed_root() -> PathBuf {
         .join("cleave")
 }
 
-/// Move a `traits/` left by a cleave from before the split to `traits-oss/`,
-/// once per process, before anything resolves or installs the default tree.
-/// One atomic rename, so a host that is offline right after an upgrade still
-/// has rules.
+/// Move trees left by older cleaves to their feed's name, once per process,
+/// before anything resolves or installs the default tree: the Uplink-era
+/// `traits-enriched/` (each ruleset as it cleared QA) becomes
+/// `traits-zero-day/`, and `traits-oss/`, or the pre-split `traits/`, becomes
+/// `traits-oss-delayed/`. Atomic renames, so a host that is offline right
+/// after an upgrade still has rules.
 fn migrate_legacy_install() {
+    use crate::feed::Feed;
     static MIGRATE: std::sync::Once = std::sync::Once::new();
     MIGRATE.call_once(|| {
         let root = installed_root();
-        migrate_legacy_dir(&root.join("traits"), &root.join("traits-oss"));
+        let renames = [
+            ("traits-enriched", Feed::ZeroDay),
+            ("traits-oss", Feed::OssDelayed),
+            ("traits", Feed::OssDelayed),
+        ];
+        for (legacy, feed) in renames {
+            migrate_legacy_dir(&root.join(legacy), &installed_dir(feed));
+        }
     });
 }
 
-/// Rename the pre-split `traits/` to `traits-oss/`, unless the new one exists.
+/// Rename a legacy tree to its feed's name, unless that one exists.
 ///
 /// Whatever it is moves: an installed bundle, a checkout, or a symlink to one —
 /// a rename moves the link, not its target, so a developer's `traits` link to
@@ -567,13 +564,21 @@ mod tests {
 
     #[test]
     fn the_edition_is_the_name_of_the_tree_in_use() {
-        assert_eq!(Edition::of(installed_dir(true)), Edition::Enriched);
-        assert_eq!(Edition::of(installed_dir(false)), Edition::OpenSource);
+        use crate::feed::Feed;
+        for feed in Feed::ALL {
+            assert_eq!(Edition::of(installed_dir(feed)), Edition::Feed(feed));
+            assert_eq!(Edition::Feed(feed).as_str(), feed.slug());
+        }
         let checkout = PathBuf::from("/src/traits");
-        assert_eq!(Edition::of(checkout.clone()), Edition::Checkout(checkout));
-        assert_eq!(Edition::Enriched.as_str(), "enriched");
-        assert_eq!(Edition::Enriched.to_string(), "Atomdrift Uplink");
-        assert_eq!(Edition::OpenSource.to_string(), "open source");
+        assert_eq!(
+            Edition::of(checkout.clone()),
+            Edition::Checkout(checkout.clone())
+        );
+        // A pre-feed tree name is a directory like any other, not a feed.
+        let legacy = installed_root().join("traits-enriched");
+        assert!(matches!(Edition::of(legacy), Edition::Checkout(_)));
+        assert_eq!(Edition::Feed(Feed::ZeroDay).to_string(), "zero-day feed");
+        assert_eq!(Edition::Checkout(checkout).to_string(), "checkout");
     }
 
     #[test]
@@ -734,8 +739,10 @@ mod tests {
 
     #[test]
     fn test_default_traits_dir_is_under_cleave() {
-        assert!(installed_dir(false).ends_with("atomdrift/cleave/traits-oss"));
-        assert!(installed_dir(true).ends_with("atomdrift/cleave/traits-enriched"));
+        use crate::feed::Feed;
+        assert!(installed_dir(Feed::ZeroDay).ends_with("atomdrift/cleave/traits-zero-day"));
+        assert!(installed_dir(Feed::Supporter).ends_with("atomdrift/cleave/traits-supporter"));
+        assert!(installed_dir(Feed::OssDelayed).ends_with("atomdrift/cleave/traits-oss-delayed"));
     }
 
     /// A git-managed traits checkout must still report a version. It carries no

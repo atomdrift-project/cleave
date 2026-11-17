@@ -870,7 +870,7 @@ const REVIEWED_SIGNATURE_STRUCTURE_SUPPRESSORS: &[&str] = &[
     "metadata/signature/certificate/chain::ca-issued-intact-signature",
     "metadata/signature/certificate/format::phar-unsigned",
     "metadata/signature/certificate/format::screenconnect-msi-without-signature-stream",
-    "metadata/signature/certificate/subject::pe-verified-yandex-signer",
+    "metadata/signature/claim/subject::yandex-signer-on-intact-signature",
     "metadata/signature/entitlements::get-task-allow-with-hardened-runtime",
     "micro-behaviors/process/tty/pty::pty-api-cluster",
     "objectives/anti-static/obfuscation/steganography/image::dotnet-unsigned-rgb-reflection-entropy",
@@ -957,6 +957,98 @@ pub(crate) fn find_unverified_signature_suppressors(
         }
     }
     found
+}
+
+pub(crate) const MISFILED_SIGNATURE_CLAIM: &str = "misfiled-signature-claim";
+
+/// Certificate and code-signature fields whose value the signer chose.
+const SIGNER_CHOSEN_FIELDS: &[&str] = &[
+    "subject",
+    "issuer",
+    "identifier",
+    "common_name",
+    "organization",
+];
+
+/// Whether `t` tests the value of a code-signature field the signer chose
+/// (`pe.signatures[0].subject`, `macho.code_signature.identifier`). Presence
+/// checks (`exists`) are structure, not a claim.
+fn reads_signer_chosen_value(t: &TraitDefinition) -> bool {
+    let Condition::Kv(q) = &t.r#if else {
+        return false;
+    };
+    let field = q.path.rsplit('.').next().unwrap_or_default();
+    let field = field.split('[').next().unwrap_or_default();
+    q.path.contains("signature")
+        && SIGNER_CHOSEN_FIELDS.contains(&field)
+        && (q.exact.is_some() || q.substr.is_some() || q.regex.is_some())
+}
+
+/// Traits under `metadata/signature/`, outside `claim/`, that test the value
+/// of a field the signer chose. Such a value is a claim: the engine reports
+/// it under its trust state, and a YAML rule that reads it belongs in
+/// `metadata/signature/claim/`.
+pub(crate) fn find_misfiled_signature_claims(trait_definitions: &[TraitDefinition]) -> Vec<&str> {
+    trait_definitions
+        .iter()
+        .filter(|t| {
+            t.id.starts_with("metadata/signature/")
+                && !t.id.starts_with("metadata/signature/claim/")
+                && reads_signer_chosen_value(t)
+        })
+        .map(|t| t.id.as_str())
+        .collect()
+}
+
+pub(crate) const UNPROVEN_SIGNER_SUPPRESSOR: &str = "unproven-signer-suppressor";
+
+/// Composites that can excuse other rules (`crit: exception`, or cited by an
+/// `unless:` or `downgrade:`) and require, in `all:`, a trait that reads a
+/// name the signer chose, without also requiring a verified signature.
+/// Whoever minted the certificate chose that name, so the excuse would be
+/// theirs to give. A claim that is one `any:` alternative among other
+/// product markers adds nothing an attacker could not forge another way, so
+/// only required claims count.
+pub(crate) fn find_unproven_signer_suppressors<'a>(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &'a [CompositeTrait],
+) -> Vec<&'a str> {
+    let claims: HashSet<&str> = trait_definitions
+        .iter()
+        .filter(|t| reads_signer_chosen_value(t))
+        .map(|t| t.id.as_str())
+        .collect();
+    let cited: HashSet<&str> = trait_definitions
+        .iter()
+        .map(|t| (t.unless.as_ref(), t.downgrade.as_ref()))
+        .chain(
+            composite_rules
+                .iter()
+                .map(|r| (r.unless.as_ref(), r.downgrade.as_ref())),
+        )
+        .flat_map(|(unless, downgrade)| {
+            let downgrade = downgrade
+                .into_iter()
+                .flat_map(|d| d.any.iter().flatten().chain(d.all.iter().flatten()));
+            unless.into_iter().flatten().chain(downgrade)
+        })
+        .filter_map(trait_ref)
+        .collect();
+    composite_rules
+        .iter()
+        .filter(|r| {
+            (r.crit == crate::types::Criticality::Exception || cited.contains(r.id.as_str()))
+                && r.crit < crate::types::Criticality::Suspicious
+        })
+        .filter(|r| {
+            let legs: Vec<&str> = r.all.iter().flatten().filter_map(trait_ref).collect();
+            legs.iter().any(|id| claims.contains(id))
+                && !legs
+                    .iter()
+                    .any(|id| id.starts_with("metadata/signature/verified/"))
+        })
+        .map(|r| r.id.as_str())
+        .collect()
 }
 
 /// Count the `unless:` and `downgrade:` conditions declared directly on a single rule.

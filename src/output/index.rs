@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, HashSet};
 use colored::Colorize;
 
 use super::{
-    aggregate_findings_by_directory, display_file_type, display_path, file_rule, terminal_width,
-    terse_description, truncate_with_ellipsis,
+    aggregate_findings_by_directory, display_description, display_file_type, display_path,
+    file_rule, terminal_width, truncate_with_ellipsis,
 };
 use crate::theme;
 use crate::types::traits_findings::finding_spans;
@@ -182,7 +182,7 @@ pub fn format_index(report: &AnalysisReport) -> String {
             .max()
             .unwrap_or(20);
         let desc_width = rows()
-            .map(|f| terse_description(&f.desc).len())
+            .map(|f| display_description(&f.desc).len())
             .max()
             .unwrap_or(30)
             .min(term_width.saturating_sub(OVERHEAD + trait_width + MIN_EVIDENCE_WIDTH));
@@ -222,7 +222,7 @@ pub fn format_index(report: &AnalysisReport) -> String {
                     output.push_str(&format!("{bullet} {trait_id}\n"));
                     continue;
                 }
-                let desc = truncate_with_ellipsis(&terse_description(&finding.desc), desc_width);
+                let desc = truncate_with_ellipsis(&display_description(&finding.desc), desc_width);
                 for (j, line) in lines.iter().take(MAX_EVIDENCE_LINES).enumerate() {
                     let value = paint(&truncate_with_ellipsis(line, evidence_width), finding.crit);
                     if j == 0 {

@@ -128,7 +128,7 @@ pub(super) fn render_no_anchor(
         if !seen.insert(f.id.as_str()) {
             continue;
         }
-        let desc = terse_description(&f.desc);
+        let desc = display_description(&f.desc);
         if !rich {
             // LLM/tiny view: a whole-file finding that anchored to no line renders
             // as a bare annotation — `{marker} SEV desc`, no location — matching

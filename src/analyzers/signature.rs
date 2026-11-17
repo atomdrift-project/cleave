@@ -16,6 +16,10 @@
 //!
 //! The leaf after `::` is the claimed name, which whoever made the certificate
 //! chose; [`normalize_name`] confines it to a small alphabet and length.
+//! Descriptions follow the path: a `verified/` finding states a fact
+//! ("Signer: Apple Inc."), every other state a claim ("Claimed signer: Adobe
+//! Inc."). Only the engine names a signer; YAML rules that read raw
+//! certificate names live under `claim/`.
 //! Every finding here is Notable: a signature is identity, and identity is
 //! what an analyst reads first. Judging an invalid signature (Suspicious,
 //! Hostile) is left to the trait rules under `metadata/signature/invalid/`,
@@ -100,12 +104,13 @@ pub(crate) enum Failure {
     Tampered,
 }
 
-/// The signature path for `trust`, or `None` when there is no certificate
-/// identity to report (unsigned, or ad-hoc, whose trait rules read the
-/// code-signature flags directly). `issuer` is the pinned CA that signed the
-/// leaf, if one did.
-fn state_path(trust: Trust, failure: Option<Failure>, issuer: Option<&str>) -> Option<String> {
-    let state = match (trust, failure) {
+/// How far a signature is trusted, as its path segment under
+/// `metadata/signature/`, or `None` when there is no certificate identity to
+/// report (unsigned, or ad-hoc, whose trait rules read the code-signature
+/// flags directly). `issuer` is the pinned CA that signed the leaf, if one
+/// did.
+fn state(trust: Trust, failure: Option<Failure>, issuer: Option<&str>) -> Option<&'static str> {
+    Some(match (trust, failure) {
         (Trust::Unsigned | Trust::AdHoc, _) => return None,
         (_, Some(Failure::Tampered)) => "invalid/tampered",
         (_, Some(Failure::BadSignature)) => "invalid/bad-signature",
@@ -115,8 +120,19 @@ fn state_path(trust: Trust, failure: Option<Failure>, issuer: Option<&str>) -> O
         // `CaSigned` otherwise: a CA's key signed the leaf, but nothing here
         // vouches for that CA, and an attacker can mint a two-level chain.
         _ => "unverified",
-    };
-    Some(format!("metadata/signature/{state}"))
+    })
+}
+
+/// "Signer: X" for a verified fact, "Claimed signer: X" for every other
+/// state. The path already names the state, so the description does not
+/// repeat it. `what` is lowercase.
+fn describe(state: &str, what: &str, value: &str) -> String {
+    if state != "verified" {
+        return format!("Claimed {what}: {value}");
+    }
+    let mut chars = what.chars();
+    let first = chars.next().map(|c| c.to_ascii_uppercase());
+    format!("{}{}: {value}", first.unwrap_or_default(), chars.as_str())
 }
 
 /// A claimed name as an identifier leaf: lowercased ASCII letters, digits
@@ -172,30 +188,14 @@ fn platform_vendor(identity: &Identity) -> &'static str {
     }
 }
 
-/// The signer findings for a file whose filefacts identity is `identity`.
-/// `failure` is what the format's own integrity check found; `method` and
-/// `location` anchor the evidence.
-pub(crate) fn findings(
-    identity: &Identity,
-    failure: Option<Failure>,
-    issuer: Option<&str>,
-    method: &str,
-    location: Option<&str>,
-) -> Vec<Finding> {
-    let Some(path) = state_path(identity.trust, failure, issuer) else {
-        return Vec::new();
-    };
-    let signer = identity.signer.as_ref();
-    let organization = signer.and_then(|s| s.organization.as_deref());
-    let common_name = signer.and_then(|s| s.common_name.as_deref());
-    let claimed = organization.or(common_name).unwrap_or("unknown");
-    let state = path.trim_start_matches("metadata/signature/");
-    let finding = |kind: &str, leaf: String, desc: String, value: String| Finding {
+/// A Notable signature finding sourced from filefacts.
+fn finding(id: String, desc: String, method: &str, value: &str, location: Option<&str>) -> Finding {
+    Finding {
         precomputed_spans: None,
         src: None,
         kind: FindingKind::Capability,
         trait_refs: vec![],
-        id: format!("{path}/{kind}::{leaf}").into(),
+        id: id.into(),
         desc: desc.into(),
         conf: 1.0,
         crit: Criticality::Notable,
@@ -204,60 +204,87 @@ pub(crate) fn findings(
         evidence: vec![Evidence {
             method: method.to_string(),
             source: "filefacts".to_string(),
-            value,
+            value: value.to_string(),
             location: location.map(str::to_string),
             ..Default::default()
         }],
         match_count: 1,
         source_file: None,
         downgraded: false,
-    };
+    }
+}
 
-    let vouched = match issuer {
-        Some(issuer) if state == "verified" => format!(" (issued by {issuer})"),
-        _ => String::new(),
+/// The signer findings for a file whose filefacts identity is `identity`.
+/// `failure` is what the format's own integrity check found; `method` and
+/// `location` anchor the evidence.
+///
+/// A verified platform signature reports `platform::<vendor>` in place of
+/// `signer::`: filefacts grants that tier only to a leaf whose organization
+/// is exactly the vendor's, so a signer finding would repeat it.
+pub(crate) fn findings(
+    identity: &Identity,
+    failure: Option<Failure>,
+    issuer: Option<&str>,
+    method: &str,
+    location: Option<&str>,
+) -> Vec<Finding> {
+    let Some(state) = state(identity.trust, failure, issuer) else {
+        return Vec::new();
     };
-    let mut out = vec![finding(
-        "signer",
-        normalize_name(claimed),
-        format!("Signer ({state}): {claimed}{vouched}"),
-        claimed.to_string(),
-    )];
+    let path = format!("metadata/signature/{state}");
+    let signer = identity.signer.as_ref();
+    let organization = signer.and_then(|s| s.organization.as_deref());
+    let common_name = signer.and_then(|s| s.common_name.as_deref());
+    let claimed = organization.or(common_name).unwrap_or("unknown");
+    let platform = failure.is_none() && matches!(identity.trust, Trust::Platform | Trust::System);
+
+    let mut out = Vec::new();
+    if platform {
+        out.push(finding(
+            format!("{path}/platform::{}", platform_vendor(identity)),
+            describe(state, "platform signer", claimed),
+            method,
+            claimed,
+            location,
+        ));
+    } else {
+        let desc = match issuer {
+            Some(issuer) if state == "verified" => {
+                format!("Signer: {claimed}, issued by {issuer}")
+            }
+            _ => describe(state, "signer", claimed),
+        };
+        out.push(finding(
+            format!("{path}/signer::{}", normalize_name(claimed)),
+            desc,
+            method,
+            claimed,
+            location,
+        ));
+    }
     if let Some(cn) = common_name
         && normalize_name(cn) != normalize_name(claimed)
     {
         out.push(finding(
-            "subject",
-            normalize_name(cn),
-            format!("Certificate subject ({state}): {cn}"),
-            cn.to_string(),
+            format!("{path}/subject::{}", normalize_name(cn)),
+            describe(state, "certificate subject", cn),
+            method,
+            cn,
+            location,
         ));
     }
-    if failure.is_none() {
-        match identity.trust {
-            Trust::Platform | Trust::System => {
-                let vendor = platform_vendor(identity);
-                out.push(finding(
-                    "platform",
-                    vendor.to_string(),
-                    format!("Verified platform signature: {vendor}"),
-                    claimed.to_string(),
-                ));
-            }
-            Trust::DeveloperId => {
-                let team = identity
-                    .team_id
-                    .as_ref()
-                    .map_or("unknown", |c| c.value.as_str());
-                out.push(finding(
-                    "developer",
-                    normalize_name(team),
-                    format!("Verified Apple Developer ID: {claimed} ({team})"),
-                    team.to_string(),
-                ));
-            }
-            _ => {}
-        }
+    if failure.is_none() && identity.trust == Trust::DeveloperId {
+        let team = identity
+            .team_id
+            .as_ref()
+            .map_or("unknown", |c| c.value.as_str());
+        out.push(finding(
+            format!("{path}/developer::{}", normalize_name(team)),
+            describe(state, "Apple Developer ID team", team),
+            method,
+            team,
+            location,
+        ));
     }
     out
 }
@@ -272,29 +299,17 @@ pub(crate) fn identifier_finding(
     identifier: &str,
     location: &str,
 ) -> Option<Finding> {
-    let path = state_path(identity.trust, failure, issuer)?;
-    Some(Finding {
-        precomputed_spans: None,
-        src: None,
-        kind: FindingKind::Capability,
-        trait_refs: vec![],
-        id: format!("{path}/id::{}", normalize_name(identifier)).into(),
-        desc: format!("Identifier: {identifier}").into(),
-        conf: 1.0,
-        crit: Criticality::Notable,
-        mbc: None,
-        attack: None,
-        evidence: vec![Evidence {
-            method: "code_directory".to_string(),
-            source: "filefacts".to_string(),
-            value: identifier.to_string(),
-            location: Some(location.to_string()),
-            ..Default::default()
-        }],
-        match_count: 1,
-        source_file: None,
-        downgraded: false,
-    })
+    let state = state(identity.trust, failure, issuer)?;
+    Some(finding(
+        format!(
+            "metadata/signature/{state}/id::{}",
+            normalize_name(identifier)
+        ),
+        describe(state, "identifier", identifier),
+        "code_directory",
+        identifier,
+        Some(location),
+    ))
 }
 
 #[cfg(test)]
@@ -385,6 +400,17 @@ mod tests {
             ids(&self_signed),
             ["metadata/signature/self-signed/signer::adobe-inc."]
         );
+        assert_eq!(self_signed[0].desc, "Claimed signer: Adobe Inc.");
+    }
+
+    #[test]
+    fn an_ad_hoc_signature_has_no_identity_to_report() {
+        // No certificate: the identifier is whatever the signer typed, and
+        // every locally linked arm64 binary carries one. Rules read the
+        // CodeDirectory claim directly under metadata/signature/claim/id.
+        let ad_hoc = identity(Trust::AdHoc, "Apple Inc.", "Apple Inc.");
+        assert!(findings(&ad_hoc, None, None, "t", None).is_empty());
+        assert!(identifier_finding(&ad_hoc, None, None, "com.apple.test", "0x10").is_none());
     }
 
     #[test]
@@ -403,6 +429,7 @@ mod tests {
             ]
         );
         assert!(tampered.iter().all(|f| f.crit == Criticality::Notable));
+        assert_eq!(tampered[0].desc, "Claimed signer: Microsoft Corporation");
     }
 
     #[test]
@@ -412,20 +439,33 @@ mod tests {
             "Microsoft Corporation",
             "Microsoft Windows",
         );
-        assert!(
-            ids(&findings(&microsoft, None, None, "t", None))
-                .contains(&"metadata/signature/verified/platform::microsoft".to_string())
+        let platform = findings(&microsoft, None, None, "t", None);
+        // The platform finding names the signer; no separate signer:: repeats it.
+        assert_eq!(
+            ids(&platform),
+            [
+                "metadata/signature/verified/platform::microsoft",
+                "metadata/signature/verified/subject::microsoft-windows",
+            ]
         );
+        assert_eq!(platform[0].desc, "Platform signer: Microsoft Corporation");
         let mut developer = identity(
             Trust::DeveloperId,
             "Example Ltd",
             "Developer ID Application: Example Ltd (ABCDE12345)",
         );
         developer.team_id = Some(filefacts::Claim::claimed("ABCDE12345", "test"));
-        assert!(
-            ids(&findings(&developer, None, None, "t", None))
-                .contains(&"metadata/signature/verified/developer::abcde12345".to_string())
+        let found = findings(&developer, None, None, "t", None);
+        assert_eq!(
+            ids(&found)[..],
+            [
+                "metadata/signature/verified/signer::example-ltd",
+                "metadata/signature/verified/subject::developer-id-application-example-ltd-abcde12345",
+                "metadata/signature/verified/developer::abcde12345",
+            ]
         );
+        assert_eq!(found[0].desc, "Signer: Example Ltd");
+        assert_eq!(found[2].desc, "Apple Developer ID team: ABCDE12345");
         assert!(findings(&identity(Trust::Unsigned, "x", "x"), None, None, "t", None).is_empty());
     }
 

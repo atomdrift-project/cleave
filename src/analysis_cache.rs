@@ -957,9 +957,13 @@ fn options_hash_with(
     // `extraction-partial` analysis gap; older reports carry the old ids.
     // v=32: canonical child containment and universal child-composite evaluation.
     // Older reports can omit inherited findings and carrier composites.
+    // `af=`/`mm=`: `all_files` decides which archive members are analyzed and
+    // `max_memory_file_size` which .NET bundle members are skipped, so a
+    // report from a run with other values lists different members.
+    // `tools=`: which external extractors this host has (see `external_tools`).
     let zip_passwords = Sha256::digest(options.zip_passwords.join("\0").as_bytes());
     let key = format!(
-        "v=32,cm={},3p={},yara={},yskip={},ybuiltin={},zpw={},upx={},plat={},hp={},sp={},ps={},fv={},recovery={}",
+        "v=32,cm={},3p={},yara={},yskip={},ybuiltin={},zpw={},upx={},plat={},hp={},sp={},ps={},fv={},af={},mm={},tools={},recovery={}",
         settings.compact_members,
         settings.third_party_yara,
         settings.yara,
@@ -972,11 +976,36 @@ fn options_hash_with(
         settings.min_suspicious_precision,
         settings.precision_scoring,
         settings.full_validation,
+        options.all_files,
+        options.max_memory_file_size,
+        external_tools(),
         filefacts::RECOVERY_FINGERPRINT,
     );
     let hash = Sha256::digest(key.as_bytes());
     // First 16 hex chars is plenty for a small option space
     hex::encode(hash)[..16].to_string()
+}
+
+/// The external extractors this process found, as a cache-key component.
+///
+/// UPX unpacks packed executables, 7-Zip opens NSIS, IExpress, VHD and DMG
+/// images, and innoextract opens Inno Setup installers. Without one, those
+/// payloads are not analyzed and the report says so only in metrics or
+/// extraction notes, so a report from a host without the tool must not be
+/// served on a host with it. Probed once: a missing tool is re-probed (a
+/// process spawn) on every call otherwise, and the key is computed per lookup.
+fn external_tools() -> &'static str {
+    static TOOLS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    TOOLS.get_or_init(|| {
+        let bit = |present: bool| if present { '1' } else { '0' };
+        [
+            bit(crate::upx::UPXDecompressor::is_available()),
+            bit(crate::analyzers::sfx_detector::sevenzip_cmd().is_some()),
+            bit(crate::analyzers::sfx_detector::innoextract_cmd().is_some()),
+        ]
+        .iter()
+        .collect()
+    })
 }
 
 /// Add the detected file type to the analysis key. Detection may depend on a
@@ -1320,18 +1349,45 @@ fn yara_degraded() -> bool {
     crate::yara_engine::yara_degradation().is_some()
 }
 
-/// Whether `report` or any file in it is missing results a later run may
-/// produce: rule evaluation ran out of time (findings depend on how loaded the
-/// machine was), or a source parse was cut short.
-/// Caching it would serve the shortfall to every later run.
+/// Whether `report` or any file in it is missing results another analysis of
+/// the same bytes would produce: rule evaluation ran out of time (findings
+/// depend on how loaded the machine was), a source parse was cut short, a
+/// YARA scan failed, a child's temporary file could not be written, or
+/// decoding stopped at a nesting limit that counts from where this analysis
+/// started. The cache keys on content, so caching it
+/// would serve the shortfall to every later analysis of those bytes.
 pub(crate) fn evaluation_incomplete(report: &AnalysisReport) -> bool {
-    use crate::types::AnalysisGap::{EvaluationDeadline, SourceParseIncomplete};
     let incomplete = |gaps: &crate::types::AnalysisGaps| {
-        [EvaluationDeadline, SourceParseIncomplete]
-            .into_iter()
-            .any(|gap| gaps.contains(gap))
+        INCOMPLETE_GAPS.into_iter().any(|gap| gaps.contains(gap))
     };
     incomplete(&report.analysis_gaps) || report.files.iter().any(|f| incomplete(&f.analysis_gaps))
+}
+
+/// The gaps [`evaluation_incomplete`] refuses to cache.
+const INCOMPLETE_GAPS: [crate::types::AnalysisGap; 5] = [
+    crate::types::AnalysisGap::EvaluationDeadline,
+    crate::types::AnalysisGap::SourceParseIncomplete,
+    crate::types::AnalysisGap::NestingLimit,
+    crate::types::AnalysisGap::YaraIncomplete,
+    crate::types::AnalysisGap::IoFailure,
+];
+
+/// Record on `into` every cache-refusing gap `from` or its files carry.
+///
+/// For a report folded into a parent without its file list (a decoded
+/// payload whose findings are merged into the file it was decoded from): the
+/// parent is as incomplete as the child, and without this it was cached
+/// under its own content key while the child's shortfall was dropped.
+pub(crate) fn carry_incomplete_gaps(from: &AnalysisReport, into: &crate::types::AnalysisGaps) {
+    let sources =
+        std::iter::once(&from.analysis_gaps).chain(from.files.iter().map(|f| &f.analysis_gaps));
+    for gaps in sources {
+        for gap in INCOMPLETE_GAPS {
+            if gaps.contains(gap) {
+                into.record(gap);
+            }
+        }
+    }
 }
 
 /// Store a toplevel analysis report in the cache.

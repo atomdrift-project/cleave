@@ -77,7 +77,7 @@ pub struct Args {
     #[arg(value_name = "PATH")]
     pub paths: Vec<String>,
 
-    /// Output format: annotate (default), index, or json. The last of --format,
+    /// Output format: index (default), annotate, or json. The last of --format,
     /// --annotate, --index, and --json wins.
     #[arg(long, value_enum, global = true, overrides_with_all = ["annotate", "index", "json"])]
     pub format: Option<OutputFormat>,
@@ -121,16 +121,12 @@ pub struct Args {
     #[arg(long, value_name = "DIR")]
     pub traits_dir: Option<String>,
 
-    /// Insist on Atomdrift Uplink: zero-hour rules, the moment they clear QA.
-    /// A computer that holds a token (ISOTOPE13_TOKEN, or the one saved when
-    /// it was connected) uses them without this flag. With it, a computer that
-    /// holds none is connected — a terminal shows a code to approve at
-    /// dash.isotope13.io — and a refused token stops the run instead of
-    /// falling back to the open-source rules. Env: ATOMDRIFT_UPLINK=1; =0
-    /// keeps the open-source rules. Hidden from `--help` until Uplink is
-    /// generally available.
-    #[arg(long, hide = true)]
-    pub uplink: bool,
+    /// Rule feed for this run: zero-day, supporter, or oss-delayed. Overrides
+    /// the feed saved by `cleave feed <name>`. A paid feed with no token held
+    /// connects this computer on a terminal, and a refusal stops the run
+    /// instead of falling back.
+    #[arg(long, global = true, value_enum, env = "ATOMDRIFT_FEED")]
+    pub feed: Option<crate::feed::Feed>,
 
     /// Warn when a single rule takes longer than this many milliseconds to evaluate.
     /// During validation this is a soft rule-performance failure (CPU time where available).
@@ -158,29 +154,37 @@ impl Args {
     }
 
     /// The output format from --format or its shorthands, else the
-    /// CLEAVE_FORMAT env var, else annotate. Clap keeps only the last of
+    /// CLEAVE_FORMAT env var, else index. Clap keeps only the last of
     /// --format, --annotate, --index, and --json.
     #[must_use]
     pub fn format(&self) -> OutputFormat {
-        if let Some(format) = self.format {
-            return format;
+        self.chosen_format().unwrap_or(OutputFormat::Index)
+    }
+
+    /// The output format the user asked for, through a flag or
+    /// CLEAVE_FORMAT; `None` when [`Args::format`] falls back to the default.
+    #[must_use]
+    pub fn chosen_format(&self) -> Option<OutputFormat> {
+        if self.format.is_some() {
+            return self.format;
         }
         if self.json {
-            return OutputFormat::Json;
+            return Some(OutputFormat::Json);
         }
         if self.index {
-            return OutputFormat::Index;
+            return Some(OutputFormat::Index);
         }
         if self.annotate {
-            return OutputFormat::Annotate;
+            return Some(OutputFormat::Annotate);
         }
-        if let Ok(val) = std::env::var("CLEAVE_FORMAT") {
-            match <OutputFormat as clap::ValueEnum>::from_str(&val, true) {
-                Ok(format) => return format,
-                Err(_) => eprintln!("warning: unknown CLEAVE_FORMAT '{val}', using annotate"),
+        let val = std::env::var("CLEAVE_FORMAT").ok()?;
+        match <OutputFormat as clap::ValueEnum>::from_str(&val, true) {
+            Ok(format) => Some(format),
+            Err(_) => {
+                eprintln!("warning: unknown CLEAVE_FORMAT '{val}', using index");
+                None
             }
         }
-        OutputFormat::Annotate
     }
 
     /// Return the built-in archive passwords followed by unique CLI additions.
@@ -565,6 +569,13 @@ pub enum Command {
         /// Maximum file size in bytes (for metrics searches)
         #[arg(long)]
         max_size: Option<u64>,
+    },
+
+    /// Show the rule feeds, or switch to one (zero-day, supporter, oss-delayed)
+    Feed {
+        /// Feed to switch to; omit to list them
+        #[arg(value_enum)]
+        name: Option<crate::feed::Feed>,
     },
 
     /// Update trait rules from the upstream repository

@@ -776,6 +776,7 @@ fn save_mapper_cache(
                     bytes.len(),
                     cache_path
                 );
+                crate::cache::prune_mapper_caches();
                 // Also save rule stats for fast banner display
                 if let Err(e) =
                     crate::cache::save_rule_stats(trait_definitions.len(), composite_rules.len())

@@ -350,9 +350,19 @@ impl ArchiveAnalyzer {
         self
     }
 
-    /// Analyze under `engine`: its rules and settings.
+    /// Analyze under `engine`: its rules, settings and, unless one was set
+    /// explicitly, its YARA rules.
+    ///
+    /// The standalone pipeline scans with `engine.yara()`. An archive built
+    /// here without YARA (a PDF, Office or PowerShell carrier, a PyInstaller
+    /// bundle) analyzed its members without it, and the members' YARA-less
+    /// verdicts went into the analysis cache under the same content key a full
+    /// analysis of those bytes uses.
     #[must_use]
     pub(crate) fn with_engine(mut self, engine: crate::Engine) -> Self {
+        if self.yara_engine.is_none() {
+            self.yara_engine = engine.yara().cloned();
+        }
         self.engine = engine;
         self
     }
@@ -383,6 +393,23 @@ impl ArchiveAnalyzer {
     pub(crate) fn with_cancellation(mut self, flag: Arc<std::sync::atomic::AtomicBool>) -> Self {
         self.cancelled = Some(flag);
         self
+    }
+
+    /// The options members are analyzed and cached under: the request's, or
+    /// the defaults a standalone analysis without explicit options uses,
+    /// carrying the in-memory limit this analyzer actually applies (it keys
+    /// the caches, and an analyzer built without options uses its own).
+    pub(crate) fn options_or_default(&self) -> Arc<crate::AnalysisOptions> {
+        match &self.analysis_options {
+            Some(options) if options.max_memory_file_size == self.max_memory_file_size => {
+                options.clone()
+            }
+            options => {
+                let mut options = options.as_deref().cloned().unwrap_or_default();
+                options.max_memory_file_size = self.max_memory_file_size;
+                Arc::new(options)
+            }
+        }
     }
 
     /// Set analysis options for member-level file cache lookups.
@@ -1101,6 +1128,9 @@ impl ArchiveAnalyzer {
                     Err(error) => {
                         tracing::warn!(%error, "archive inline YARA scan failed");
                         report.metadata.errors.push(format!("yara: {error:#}"));
+                        report
+                            .analysis_gaps
+                            .record(crate::types::AnalysisGap::YaraIncomplete);
                         None
                     }
                 }

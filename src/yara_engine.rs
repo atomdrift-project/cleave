@@ -493,6 +493,20 @@ fn serialize_sorted_contexts<S: serde::Serializer>(
     out.end()
 }
 
+/// `scan_bytes` with no rules loaded. Not a failed scan: with no rules there
+/// are no matches to miss, and every run without rules sees the same, so the
+/// report needs no `YaraIncomplete` gap and may be cached.
+#[derive(Debug)]
+pub(crate) struct NoYaraRules;
+
+impl std::fmt::Display for NoYaraRules {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("No YARA rules loaded")
+    }
+}
+
+impl std::error::Error for NoYaraRules {}
+
 #[derive(Debug)]
 pub(crate) struct YaraEngine {
     /// Per-bucket compiled rule sets, materialized lazily. The map is keyed by
@@ -1154,6 +1168,11 @@ impl YaraEngine {
         // the first scan that needs it (see `build_tier`), so only the tiers a
         // run actually touches ever allocate.
         if let Some(manifest) = manifest {
+            // Age this tree's cache by last use, so pruning spares it while
+            // it is still being loaded (see `cache::cleanup_old_caches`).
+            if let Some(dir) = &cache_dir {
+                crate::cache::mark_used(&dir.join("manifest.json"));
+            }
             self.rule_counts = (manifest.builtin_count, manifest.third_party_count);
             self.rule_contexts = manifest.rule_contexts;
             self.compiled_inline_namespaces = manifest.inline_namespaces;
@@ -1219,6 +1238,8 @@ impl YaraEngine {
                     bucket_tags: bucket_tags.clone(),
                 },
             );
+            // An unchanged manifest is not rewritten; it was still used.
+            crate::cache::mark_used(&dir.join("manifest.json"));
             let _ = crate::cache::cleanup_old_caches(dir);
         }
 
@@ -1443,7 +1464,7 @@ impl YaraEngine {
             );
         }
         if self.populated_tiers.is_empty() {
-            anyhow::bail!("No YARA rules loaded");
+            return Err(NoYaraRules.into());
         }
 
         // Determine which buckets to scan. A concrete file-type filter loads the

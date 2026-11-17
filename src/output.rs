@@ -134,26 +134,11 @@ pub(crate) fn aggregate_findings_by_directory(findings: &[Finding]) -> Vec<Findi
     result
 }
 
-/// Make descriptions more terse by removing redundant explanatory
-/// parentheticals. Engine findings put sample text in descriptions (a signer
-/// name, an embedded file's name), so controls are made visible first.
-fn terse_description(desc: &str) -> String {
-    // Remove common verbose patterns that are redundant given the context
-    sample_text(desc)
-        .replace(" (timing attacks or sandbox detection)", "")
-        .replace(" (C2 communication pattern)", "")
-        .replace(" (comprehensive stealer)", "")
-        .replace(" (monolithic multicall binary)", "")
-        .replace(" (packer pattern)", "")
-        .replace(" (potential stealer)", "")
-        .replace(" (potential keylogger)", "")
-        .replace(" (hardcoded alphabet + decode table)", "")
-        .replace(" reveals directory contents", "")
-        .replace(" (opendir + readdir + stat)", "")
-        .replace(".DS_Store ", "")
-        .replace(" (excluding known legitimate)", "")
-        .trim()
-        .to_string()
+/// A description as displayed. Engine findings put sample text in
+/// descriptions (a signer name, an embedded file's name), so controls are
+/// made visible.
+fn display_description(desc: &str) -> String {
+    sample_text(desc).trim().to_string()
 }
 
 /// Append the trait/finding id to a plain-view annotation so an LLM reading tiny
@@ -800,7 +785,7 @@ pub fn format_context_badged(
                 format!(
                     "{marker} {} {}\n",
                     f.crit.letter(),
-                    annotate_desc(&terse_description(&f.desc), &f.id)
+                    annotate_desc(&display_description(&f.desc), &f.id)
                 )
             })
             .collect();

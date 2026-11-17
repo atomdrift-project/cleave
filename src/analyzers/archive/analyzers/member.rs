@@ -70,13 +70,8 @@ impl ArchiveAnalyzer {
         // FileAnalysis cache where safe, and single-flight the first analysis
         // when duplicate members arrive concurrently (within one archive or
         // from two archives in a diff).
-        let default_options;
-        let options = if let Some(options) = self.analysis_options.as_deref() {
-            options
-        } else {
-            default_options = crate::AnalysisOptions::default();
-            &default_options
-        };
+        let options = self.options_or_default();
+        let options = options.as_ref();
         // Unknown members are normally skipped, but a validated embedded PE or
         // ELF is executable content even when a wrapper obscures its file ID.
         let wrapped_binary = crate::analyzers::embedded_images::has_wrapped_binary(file_type, data);
@@ -380,6 +375,19 @@ impl ArchiveAnalyzer {
             Some(&flight),
         );
         match &result {
+            // Cancellation stops payload decoding, embedded-image carving and
+            // YARA wherever they are, and most of those exits return a report
+            // without a gap. The standalone pipeline refuses to store a
+            // cancelled analysis; a member must not either, nor hand its
+            // partial report to a waiter from another request. A report the
+            // persistent cache refuses (a gap another analysis of these bytes
+            // would not have) is not shared in-process either: the waiter
+            // may sit shallower, or run after the failure has passed.
+            Ok(Some(report))
+                if self.is_cancelled() || crate::analysis_cache::evaluation_incomplete(report) =>
+            {
+                flight.complete(None)
+            }
             Ok(Some(report)) => {
                 // Archive reports contain nested members whose paths depend on
                 // the containing archive, so retain only ordinary members in
@@ -653,10 +661,6 @@ impl ArchiveAnalyzer {
                 crate::analyzers::analyzer_for_file_type_arc(file_type, &self.engine)
             }
         } {
-            let extract_payloads =
-                crate::analyzers::unified::UnifiedSourceAnalyzer::for_file_type(file_type)
-                    .is_some();
-
             // Archive members get the SAME string-extraction treatment as a
             // standalone file (`lib.rs` uses `stng_analysis_opts` for every
             // non-archive input). The previous code downgraded text/script
@@ -689,35 +693,12 @@ impl ArchiveAnalyzer {
             );
             let stng_strings = member_ctx.text_rows();
             crate::memory_tracker::clear_current_phase();
-            let mut payloads = if extract_payloads {
-                crate::extractors::encoded_payload::extract_encoded_payloads(stng_strings)
-            } else {
-                Vec::new()
-            };
-            payloads.extend(crate::extractors::encoded_payload::xor_encoded_pe(
-                member_ctx.parsed.fileid(),
-                data,
-            ));
-            if matches!(
-                file_type,
-                FileType::Gif | FileType::Jpeg | FileType::Png | FileType::Bmp | FileType::Webp
-            ) {
-                payloads.extend(crate::extractors::encoded_payload::extract_media_base64_pes(data));
-                payloads.extend(crate::extractors::encoded_payload::extract_media_xor_pes(
-                    data,
-                ));
-            }
-            // Binary recovery must not depend on the source/string-decoding
-            // gate: a packed PE needs the same child analysis in an archive.
-            if *file_type == FileType::Pe {
-                payloads.extend(crate::extractors::encoded_payload::nrv8_encoded_pes(data));
-            }
-            if extract_payloads {
-                payloads.extend(crate::extractors::encoded_payload::xor_encoded_machos(
-                    data,
-                    stng_strings,
-                ));
-            }
+            // The standalone extractor, not a member variant: payload
+            // decoding is independent of which analyzer handles the member
+            // (`process_encoded_payloads` below runs for every type), and a
+            // gate here once left base64 in a text member undecoded.
+            let payloads =
+                crate::encoded_payloads(*file_type, data, stng_strings, Some(&member_ctx));
             let mut input = AnalysisInput::with_payloads(
                 logical_path,
                 data,
@@ -736,12 +717,6 @@ impl ArchiveAnalyzer {
                 file_type = %file_type.report_file_type(),
                 string_count = stng_strings.len(),
                 payload_count = payloads.len(),
-                payload_mode = if extract_payloads { "enabled" } else { "skipped" },
-                payload_reason = if extract_payloads {
-                    "unified source analyzer consumes encoded payloads"
-                } else {
-                    "non-unified analyzer path does not consume encoded payloads"
-                },
                 "Analyzing archive member via unified AnalysisInput path"
             );
 
@@ -781,13 +756,11 @@ impl ArchiveAnalyzer {
             // archive member (npm tarball, zip, jar) silently lost its
             // encoded-payload finding and every trait derived from the decoded
             // content — detection that the same file gets when scanned
-            // standalone. Guarded on the options the recursion needs;
-            // `payloads` was extracted above (empty when extract_payloads=false,
-            // making this a no-op). `payloads` is moved — `input` (which
-            // borrowed it) is no longer used after `analyze_input` above.
-            if !payloads.is_empty()
-                && let Some(opts) = self.analysis_options.as_ref()
-            {
+            // standalone. An archive built without explicit options decodes
+            // under the defaults it is cached under, never not at all.
+            // `payloads` is moved — `input` (which borrowed it) is no longer
+            // used after `analyze_input` above.
+            if !payloads.is_empty() {
                 crate::process_encoded_payloads(
                     payloads,
                     &mut report,
@@ -795,7 +768,7 @@ impl ArchiveAnalyzer {
                     data,
                     *file_type,
                     (self.current_depth + 1) as u32,
-                    opts,
+                    &self.options_or_default(),
                     &self.engine,
                 );
             }

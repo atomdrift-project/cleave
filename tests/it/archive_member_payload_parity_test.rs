@@ -109,6 +109,39 @@ fn base64_encoded_payload_detected_in_archive_member_same_as_standalone() -> any
     Ok(())
 }
 
+/// A plain-text member has no source analyzer, and once lost its payload
+/// decode to a gate that only admitted source types. Archive first, then the
+/// standalone copy, in one process: the order in which the member's result,
+/// keyed by the same bytes and name, used to be served to the standalone file
+/// from the analysis cache and turn its notable verdict into baseline.
+#[test]
+fn base64_text_member_decodes_and_does_not_mask_standalone_copy() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let stage = b"cHJpbnQoImxvY2FsIG1ldGFkYXRhIHN0YWdlIikK\n";
+
+    let tgz_path = dir.path().join("bundle.tar.gz");
+    write_tar_gz(&tgz_path, "bundle/stage.b64", stage)?;
+    let archive = analyze_file(&tgz_path, &opts())?;
+    let member = archive
+        .files
+        .iter()
+        .find(|f| f.path.ends_with("bundle/stage.b64"))
+        .ok_or_else(|| anyhow::anyhow!("stage.b64 member missing"))?;
+    assert!(
+        !encoded_payload_ids(&member.findings).is_empty(),
+        "text member must decode its base64 payload as a standalone file does"
+    );
+
+    let standalone_path = dir.path().join("stage.b64");
+    std::fs::write(&standalone_path, stage)?;
+    let standalone = analyze_file(&standalone_path, &opts())?;
+    assert!(
+        report_encoded_payload_count(&standalone) > 0,
+        "standalone stage.b64 lost its base64 finding after the archive ran"
+    );
+    Ok(())
+}
+
 #[test]
 fn media_encoded_pe_keeps_child_attribution_inside_and_outside_archive() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;

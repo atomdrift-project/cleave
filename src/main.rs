@@ -248,11 +248,17 @@ fn run() -> Result<()> {
     // Facts always returns JSON, even without --format. Applying the terminal
     // sanitizer to it replaces raw DEL/C1/bidi characters with non-JSON \u{...}
     // escapes and corrupts the authoring data stream.
+    let chosen_format = args.chosen_format();
     let format = if matches!(args.command, Some(cli::Command::Facts { .. })) {
         cli::OutputFormat::Json
     } else {
-        args.format()
+        chosen_format.unwrap_or(cli::OutputFormat::Index)
     };
+    // Only an analysis that fell back to the index view earns the --annotate
+    // tip; anyone who picked a format already knows the choices.
+    let suggest_annotate = chosen_format.is_none()
+        && args.output.is_none()
+        && matches!(args.command, None | Some(cli::Command::Analyze { .. }));
     // `cleave validate` is meant to print a single summary line on success, so
     // suppress the global `warn` tracing floor (e.g. goblin's benign fat-Mach-O
     // offset warnings on testdata fixtures) unless `--verbose` is requested.
@@ -270,11 +276,13 @@ fn run() -> Result<()> {
 
     let disabled = args.disabled_components();
     apply_runtime_overrides(args.traits_dir.as_deref());
-    // A held token means the Uplink rules; `--uplink` insists on them,
-    // and is asked for a token here, once, rather than by whichever rules
-    // download would otherwise be the first to need it.
-    cleave::enriched::resolve(args.uplink)?;
-    if cleave::enriched::required() {
+    // The rule feed: `--feed`, the saved choice, or what the held token
+    // implies. A named paid feed with no token is asked for one here, once,
+    // rather than by whichever rules download would otherwise need it first.
+    // `cleave feed` manages feeds itself, and loads no rules.
+    cleave::feed::resolve(args.feed)?;
+    let is_feed_command = matches!(args.command, Some(cli::Command::Feed { .. }));
+    if !is_feed_command {
         cleave::rule_update::sign_in()?;
     }
     // `cleave validate` defaults to deterministic scoring with YARA disabled;
@@ -282,14 +290,23 @@ fn run() -> Result<()> {
     // Skip the ~4 s (release) / ~18 s (debug) compile of 14 k+ inline YARA
     // rules that the prefetch triggers. Trait-structure validation doesn't
     // require YARA to have compiled either — mapper loading is independent.
-    if !disabled.yara && !is_validate_command {
+    // The prefetch would also install a missing feed, which `cleave feed`
+    // must not do just to list them.
+    if !disabled.yara && !is_validate_command && !is_feed_command {
         cleave::prefetch_yara_engine(!disabled.third_party);
     }
-    // `Version` prints its own banner; `Validate` emits a single summary line
-    // and suppresses the banner to stay terse on success.
+    // `Version` prints its own banner, and `feed` reports the feed itself;
+    // `Validate` emits a single summary line and stays terse on success.
+    // `iter-files` is JSONL for a pipeline whatever the format, and a banner
+    // ahead of its first record breaks every reader of it.
     if !matches!(
         args.command,
-        Some(cli::Command::Version) | Some(cli::Command::Validate { .. })
+        Some(
+            cli::Command::Version
+                | cli::Command::Validate { .. }
+                | cli::Command::Feed { .. }
+                | cli::Command::IterFiles { .. }
+        )
     ) {
         print_version_banner(format);
     }
@@ -322,6 +339,9 @@ fn run() -> Result<()> {
     };
 
     write_output(&result, output_path, format)?;
+    if suggest_annotate {
+        cleave::tip::maybe_suggest_annotate();
+    }
     log_exit_summary();
     Ok(())
 }

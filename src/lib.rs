@@ -830,6 +830,20 @@ pub fn prefetch_shared_resources(enable_third_party: bool) {
     prefetch_capability_mapper();
 }
 
+/// [`prefetch_shared_resources`] for a process that scans a few named files
+/// and exits. Both resources are still built before this returns, so the
+/// first analysis cannot race a rayon worker into either init; only the
+/// indexes a fan-out pre-builds for all of its workers are left lazy (see
+/// `CapabilityMapper::warm_indexes_for_few_files`). A directory scan, a large
+/// batch, or a long-lived worker wants [`prefetch_shared_resources`].
+pub fn prefetch_shared_resources_for_few_files(enable_third_party: bool) {
+    prefetch_yara_engine(enable_third_party);
+    match shared_resources::capability_mapper() {
+        Ok(mapper) => mapper.warm_indexes_for_few_files(),
+        Err(e) => tracing::warn!(error = %e, "capability mapper prefetch failed"),
+    }
+}
+
 /// Log end-of-scan engine statistics at `info`: per-phase thread-time (and
 /// heap totals under the `memprofile` feature) plus compiled-regex store
 /// occupancy/churn. For embedders like scan whose single-payload path doesn't

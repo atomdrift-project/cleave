@@ -94,6 +94,11 @@ pub const VARIABLES: &[Variable] = &[
         "Recompile YARA rules instead of loading compiled ones.",
     ),
     var(
+        "CLEAVE_TRAITS_FULL_CHECK",
+        Configuration,
+        "Re-check every rule file for changes, not only directories, in a rules tree outside git.",
+    ),
+    var(
         "CLEAVE_VALIDATE",
         Configuration,
         "Run full rule validation while loading rules.",

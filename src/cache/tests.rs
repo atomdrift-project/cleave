@@ -47,6 +47,9 @@ fn traits_index_serves_the_scan_until_the_tree_changes() {
     let tmp = tempfile::tempdir().unwrap();
     let traits = tmp.path().join("traits");
     let (rule, _) = traits_tree(&traits);
+    // A checkout: rules are edited in place there, so every file is checked
+    // (see `TreeCheck::for_tree`).
+    fs::create_dir(traits.join(".git")).unwrap();
     let canonical = fs::canonicalize(&traits).unwrap();
     let index = tmp.path().join("index");
     // As if the tree's last change were long past (see `RuleSources::read`).

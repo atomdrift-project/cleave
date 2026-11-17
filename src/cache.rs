@@ -878,7 +878,7 @@ fn traits_scan_for(traits_dir: &Path) -> Arc<TraitsScan> {
 }
 
 /// Bumped whenever [`TraitsScan`] or the index layout changes shape.
-const TREE_INDEX_VERSION: u32 = 1;
+const TREE_INDEX_VERSION: u32 = 2;
 
 /// What a tree index file holds before its [`crate::rule_sources::TreeStamp`].
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -934,8 +934,9 @@ fn read_tree_index(path: &Path, traits_dir: &Path, canonical: &Path) -> Option<T
         tracing::debug!(path = %path.display(), "traits index is for another build or directory");
         return None;
     }
-    let unchanged = crate::rule_sources::TreeStamp::decode(stamp)?.matches(canonical);
-    tracing::info!(dir = %traits_dir.display(), unchanged,
+    let check = crate::rule_sources::TreeCheck::for_tree(canonical);
+    let unchanged = crate::rule_sources::TreeStamp::decode(stamp)?.matches_with(canonical, check);
+    tracing::info!(dir = %traits_dir.display(), unchanged, ?check,
         elapsed_ms = started.elapsed().as_millis(), "checked traits index");
     unchanged.then_some(header.scan)
 }

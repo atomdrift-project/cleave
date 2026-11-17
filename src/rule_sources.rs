@@ -113,26 +113,83 @@ impl Stamp {
 /// [`TIMESTAMP_GRANULARITY`] of starting, has no stamp.
 #[derive(Clone, Debug)]
 pub(crate) struct TreeStamp {
-    /// Root-relative paths as stored on disk, each NUL-terminated.
+    /// Root-relative paths as stored on disk, each NUL-terminated:
+    /// directories first, then files.
     listing: Vec<u8>,
     digest: [u8; 32],
+    /// How many leading entries of `listing` are directories, and the digest
+    /// of those alone, for [`Self::matches_directories`].
+    directory_count: u32,
+    directories_digest: [u8; 32],
+}
+
+/// How thoroughly a later process re-checks a [`TreeStamp`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TreeCheck {
+    /// Every directory and file: sees any change, at a `stat` per entry.
+    Full,
+    /// Directories only: sees entries added, removed or renamed, but not a
+    /// file rewritten in place. About a quarter of the `stat`s.
+    Directories,
+}
+
+impl TreeCheck {
+    /// The check `root` warrants. A git checkout or worktree is where rules
+    /// are edited, in place, so it gets the full check. Any other tree is
+    /// one something unpacked whole (an installed feed, an exported
+    /// snapshot); replacing or patching it adds and removes entries, which
+    /// its directories show. `CLEAVE_TRAITS_FULL_CHECK=1` forces the full
+    /// check for a tree edited in place outside git.
+    pub(crate) fn for_tree(root: &Path) -> Self {
+        if crate::env::flag("CLEAVE_TRAITS_FULL_CHECK") || Self::in_git_checkout(root) {
+            Self::Full
+        } else {
+            Self::Directories
+        }
+    }
+
+    /// Whether `root` or a directory above it holds `.git`: a directory in a
+    /// checkout, a file in a worktree or submodule.
+    fn in_git_checkout(root: &Path) -> bool {
+        root.ancestors()
+            .any(|dir| dir.join(".git").symlink_metadata().is_ok())
+    }
 }
 
 impl TreeStamp {
     fn new<'a>(
         begun: SystemTime,
-        entries: impl Iterator<Item = (&'a Path, Option<Stamp>)>,
+        directories: impl Iterator<Item = (&'a Path, Option<Stamp>)>,
+        files: impl Iterator<Item = (&'a Path, Option<Stamp>)>,
     ) -> Option<Self> {
+        fn list<'a>(
+            begun: SystemTime,
+            entries: impl Iterator<Item = (&'a Path, Option<Stamp>)>,
+            listing: &mut Vec<u8>,
+            stamps: &mut Vec<Stamp>,
+        ) -> Option<()> {
+            for (path, stamp) in entries {
+                let stamp = stamp.filter(|s| !s.is_racy(begun))?;
+                listing.extend_from_slice(path.as_os_str().as_encoded_bytes());
+                listing.push(0);
+                stamps.push(stamp);
+            }
+            Some(())
+        }
         let mut listing = Vec::new();
         let mut stamps = Vec::new();
-        for (path, stamp) in entries {
-            let stamp = stamp.filter(|s| !s.is_racy(begun))?;
-            listing.extend_from_slice(path.as_os_str().as_encoded_bytes());
-            listing.push(0);
-            stamps.push(stamp);
-        }
+        list(begun, directories, &mut listing, &mut stamps)?;
+        let (directories_len, directory_count) = (listing.len(), stamps.len());
+        list(begun, files, &mut listing, &mut stamps)?;
         let digest = Self::digest_of(&listing, &stamps);
-        Some(Self { listing, digest })
+        let directories_digest =
+            Self::digest_of(&listing[..directories_len], &stamps[..directory_count]);
+        Some(Self {
+            listing,
+            digest,
+            directory_count: u32::try_from(directory_count).ok()?,
+            directories_digest,
+        })
     }
 
     fn digest_of(listing: &[u8], stamps: &[Stamp]) -> [u8; 32] {
@@ -169,14 +226,45 @@ impl TreeStamp {
     /// with. A file added or removed changes its directory's stamp, so the
     /// listing needs no readdir to stay complete.
     pub(crate) fn matches(&self, root: &Path) -> bool {
+        self.entries()
+            .is_some_and(|entries| Self::stamped(root, entries, &self.listing) == Some(self.digest))
+    }
+
+    /// Whether every directory under `root` still has the stamp it was
+    /// recorded with: no entry was added, removed or renamed anywhere in the
+    /// tree. A file rewritten in place does not show; see [`TreeCheck`].
+    pub(crate) fn matches_directories(&self, root: &Path) -> bool {
+        let Some(mut entries) = self.entries() else {
+            return false;
+        };
+        let count = self.directory_count as usize;
+        if count > entries.len() {
+            return false;
+        }
+        entries.truncate(count);
+        let listing_len: usize = entries
+            .iter()
+            .map(|e| e.as_os_str().as_encoded_bytes().len() + 1)
+            .sum();
+        Self::stamped(root, entries, &self.listing[..listing_len]) == Some(self.directories_digest)
+    }
+
+    /// [`Self::matches`] or [`Self::matches_directories`], as `check` asks.
+    pub(crate) fn matches_with(&self, root: &Path, check: TreeCheck) -> bool {
+        match check {
+            TreeCheck::Full => self.matches(root),
+            TreeCheck::Directories => self.matches_directories(root),
+        }
+    }
+
+    /// The digest of `entries` as they are under `root` now, `listing` being
+    /// their part of the stored listing; `None` if one cannot be stamped.
+    fn stamped(root: &Path, entries: Vec<&Path>, listing: &[u8]) -> Option<[u8; 32]> {
         let stat = |entry: &Path| {
             fs::metadata(root.join(entry))
                 .ok()
                 .as_ref()
                 .and_then(Stamp::of)
-        };
-        let Some(entries) = self.entries() else {
-            return false;
         };
         let stamps: Option<Vec<Stamp>> = if rayon::current_thread_index().is_some() {
             entries.into_iter().map(stat).collect()
@@ -188,20 +276,30 @@ impl TreeStamp {
                 .map(stat)
                 .collect()
         };
-        stamps.is_some_and(|stamps| Self::digest_of(&self.listing, &stamps) == self.digest)
+        stamps.map(|stamps| Self::digest_of(listing, &stamps))
     }
 
-    /// The digest followed by the listing.
+    /// Both digests and the directory count, followed by the listing.
     pub(crate) fn encode(&self) -> Vec<u8> {
-        [&self.digest[..], &self.listing].concat()
+        [
+            &self.digest[..],
+            &self.directories_digest[..],
+            &self.directory_count.to_le_bytes()[..],
+            &self.listing,
+        ]
+        .concat()
     }
 
     /// Reverse [`Self::encode`]; `None` for anything it could not have written.
     pub(crate) fn decode(bytes: &[u8]) -> Option<Self> {
-        let (digest, listing) = bytes.split_first_chunk::<32>()?;
+        let (digest, rest) = bytes.split_first_chunk::<32>()?;
+        let (directories_digest, rest) = rest.split_first_chunk::<32>()?;
+        let (directory_count, listing) = rest.split_first_chunk::<4>()?;
         listing.ends_with(&[0]).then(|| Self {
             listing: listing.to_vec(),
             digest: *digest,
+            directory_count: u32::from_le_bytes(*directory_count),
+            directories_digest: *directories_digest,
         })
     }
 }
@@ -349,7 +447,7 @@ impl RuleSources {
             let files = files
                 .iter()
                 .map(|(_, stored, stamp)| (stored.as_path(), *stamp));
-            TreeStamp::new(begun, directories.chain(files))
+            TreeStamp::new(begun, directories, files)
         } else {
             None
         };
@@ -610,6 +708,68 @@ mod tests {
             change(&root);
             assert!(!stamp.matches(&root), "{what} went unnoticed");
         }
+    }
+
+    /// The directories-only check sees every change that adds, removes or
+    /// renames an entry, and by design not a file rewritten in place.
+    #[cfg(unix)]
+    #[test]
+    fn directory_check_sees_entry_changes_but_not_in_place_edits() {
+        type Change = fn(&Path);
+        let seen: [(&str, Change); 4] = [
+            ("file added", |root| {
+                fs::write(root.join("objectives/new.yaml"), "n").unwrap()
+            }),
+            ("file removed", |root| {
+                fs::remove_file(root.join("objectives/a.yaml")).unwrap()
+            }),
+            ("file replaced by rename", |root| {
+                fs::write(root.join("tmp"), "a").unwrap();
+                fs::rename(root.join("tmp"), root.join("objectives/a.yaml")).unwrap();
+            }),
+            ("directory added", |root| {
+                fs::create_dir(root.join("objectives/sub")).unwrap()
+            }),
+        ];
+        let tree = || {
+            let dir = tempfile::tempdir().unwrap();
+            let root = fs::canonicalize(dir.path()).unwrap();
+            fs::create_dir(root.join("objectives")).unwrap();
+            fs::write(root.join("objectives/a.yaml"), "a").unwrap();
+            let stamp = settled(&root).tree_stamp().unwrap().clone();
+            (dir, root, stamp)
+        };
+        for (what, change) in seen {
+            let (_dir, root, stamp) = tree();
+            assert!(stamp.matches_directories(&root));
+            change(&root);
+            assert!(!stamp.matches_directories(&root), "{what} went unnoticed");
+        }
+        let (_dir, root, stamp) = tree();
+        fs::write(root.join("objectives/a.yaml"), "edited in place").unwrap();
+        assert!(stamp.matches_directories(&root), "directories are unchanged");
+        assert!(!stamp.matches(&root), "the full check sees the edit");
+        let decoded = TreeStamp::decode(&stamp.encode()).unwrap();
+        assert!(decoded.matches_directories(&root));
+        assert!(!decoded.matches(&root));
+    }
+
+    /// A git checkout or worktree is edited in place, so it is checked in
+    /// full; a tree unpacked anywhere else is checked by its directories.
+    #[test]
+    fn a_tree_is_checked_in_full_only_inside_git() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let traits = root.join("repo/traits");
+        fs::create_dir_all(&traits).unwrap();
+        assert_eq!(TreeCheck::for_tree(&traits), TreeCheck::Directories);
+        // A worktree or submodule has a `.git` file, a checkout a directory;
+        // either may sit above the rules.
+        fs::write(root.join("repo/.git"), "gitdir: elsewhere").unwrap();
+        assert_eq!(TreeCheck::for_tree(&traits), TreeCheck::Full);
+        fs::remove_file(root.join("repo/.git")).unwrap();
+        fs::create_dir(traits.join(".git")).unwrap();
+        assert_eq!(TreeCheck::for_tree(&traits), TreeCheck::Full);
     }
 
     #[test]

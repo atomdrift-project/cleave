@@ -888,6 +888,18 @@ impl CapabilityMapper {
         })
     }
 
+    /// [`Self::warm_indexes`] for a scan of a few named files: build what
+    /// every analysis needs, and leave the rest to its first use.
+    ///
+    /// A fan-out warms every file type's raw-content regex set (139 of them,
+    /// ~0.5 s of CPU) so its workers do not race to build the same ones. A
+    /// scan of one file meets one or two types, and builds just those. The
+    /// trait-reference index and path inputs serve archive member folds and
+    /// cache sharing, and are likewise built by whichever first needs them.
+    pub fn warm_indexes_for_few_files(&self) {
+        self.warm_for_analysis();
+    }
+
     /// Force the lazy match indexes to build now, on the calling thread.
     ///
     /// Callers about to fan a scan out across the rayon pool warm them here so the

@@ -151,7 +151,16 @@ impl TreeCheck {
     /// Whether `root` or a directory above it holds `.git`: a directory in a
     /// checkout, a file in a worktree or submodule.
     fn in_git_checkout(root: &Path) -> bool {
+        Self::git_marker_above(root, None)
+    }
+
+    /// [`Self::in_git_checkout`], looking no higher than just below
+    /// `ceiling`. Tests pass their temporary directory: where the system
+    /// puts those is not theirs to choose, and it may itself be inside a
+    /// checkout (a home directory kept in git, a `TMPDIR` under a repo).
+    fn git_marker_above(root: &Path, ceiling: Option<&Path>) -> bool {
         root.ancestors()
+            .take_while(|dir| Some(*dir) != ceiling)
             .any(|dir| dir.join(".git").symlink_metadata().is_ok())
     }
 }
@@ -762,13 +771,19 @@ mod tests {
         let root = fs::canonicalize(dir.path()).unwrap();
         let traits = root.join("repo/traits");
         fs::create_dir_all(&traits).unwrap();
-        assert_eq!(TreeCheck::for_tree(&traits), TreeCheck::Directories);
+        // Bounded by the temporary directory, which may itself sit inside a
+        // checkout on the machine running the test.
+        let inside_git = || TreeCheck::git_marker_above(&traits, Some(&root));
+        assert!(!inside_git());
         // A worktree or submodule has a `.git` file, a checkout a directory;
         // either may sit above the rules.
         fs::write(root.join("repo/.git"), "gitdir: elsewhere").unwrap();
+        assert!(inside_git());
         assert_eq!(TreeCheck::for_tree(&traits), TreeCheck::Full);
         fs::remove_file(root.join("repo/.git")).unwrap();
+        assert!(!inside_git());
         fs::create_dir(traits.join(".git")).unwrap();
+        assert!(inside_git());
         assert_eq!(TreeCheck::for_tree(&traits), TreeCheck::Full);
     }
 

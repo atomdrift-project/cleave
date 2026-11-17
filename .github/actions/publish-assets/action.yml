@@ -55,8 +55,8 @@ runs:
           # Keep in sync with build.yml's matrices. Windows x86-64 became a
           # required release target after its native build and smoke tests first
           # passed in run 30966163861. Windows ARM64 is native-built and smoked on
-          # GitHub's Windows 11 ARM runner. Solaris is release-bound now that
-          # its native build can complete the fat-LTO link with ZFS-backed swap.
+          # GitHub's Windows 11 ARM runner. NetBSD and Solaris are disabled
+          # until wasmtime 48 gains trap-handler arms for them.
           EXPECTED: ${{ inputs.expected }}
           REQUESTED_TARGET: ${{ inputs.requested-target }}
         shell: bash

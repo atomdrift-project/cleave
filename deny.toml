@@ -18,23 +18,15 @@ ignore = [
     # sevenz-rust2 together with filefacts.
     { id = "RUSTSEC-2026-0245", reason = "cleave never calls decompress_impl" },
     { id = "RUSTSEC-2026-0246", reason = "replace with sevenz-rust2 alongside filefacts" },
-    # zip 2.6 via filefacts: `ZipArchive::extract` is never called.
-    { id = "RUSTSEC-2026-0367", reason = "zip 2.6 via filefacts; extract() unused" },
-    { id = "RUSTSEC-2026-0368", reason = "zip 2.6 via filefacts; extract() unused" },
-    { id = "RUSTSEC-2026-0369", reason = "zip 2.6 via filefacts; extract() unused" },
-    # zstd 0.13 / zstd-safe 7 via filefacts and zip 2.6; cleave itself uses 0.14.
-    { id = "RUSTSEC-2026-0391", reason = "zstd 0.13 via filefacts" },
-    { id = "RUSTSEC-2026-0398", reason = "zstd-safe 7 via filefacts" },
-    { id = "RUSTSEC-2026-0403", reason = "zstd-safe 7 via filefacts" },
     # ruzstd 0.8 via rust-fs-squashfs.
     { id = "RUSTSEC-2026-0344", reason = "ruzstd via rust-fs-squashfs; no release with the fix" },
     # rsa (via filefacts and yara-x) only verifies signatures; there is no
     # private key to recover.
     { id = "RUSTSEC-2023-0071", reason = "signature verification only" },
     { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5 via p256 in filefacts; verification only" },
-    # quick-xml 0.37 via the dmgwiz fork.
-    { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.37 via dmgwiz; bump the fork" },
-    { id = "RUSTSEC-2026-0195", reason = "quick-xml 0.37 via dmgwiz; bump the fork" },
+    # chrono is unmaintained with no successor release; it is also pulled in by
+    # apple-xar and yara-x-proto, so dropping cleave's own use would not remove it.
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained; no drop-in replacement for apple-xar/yara-x" },
 ]
 
 [licenses]
@@ -66,9 +58,11 @@ allow-wildcard-paths = true
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-git = [
+    "https://github.com/atomdrift-project/binform.git",
     "https://github.com/atomdrift-project/dmgwiz.git",
     "https://github.com/atomdrift-project/filefacts.git",
     "https://github.com/atomdrift-project/stng.git",
+    "https://github.com/atomdrift-project/unpack.git",
     "https://github.com/copper-project/cu-bincode",
     "https://github.com/tstromberg/tree-sitter",
     "https://github.com/tstromberg/tree-sitter-bash",

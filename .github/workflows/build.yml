@@ -703,9 +703,14 @@ jobs:
 
   # NetBSD rounds out the BSDs. src/fetch.rs already knows the platform string,
   # and pkgsrc rust is the same deal as FreeBSD ports rust.
+  #
+  # DISABLED for 3.0.0: wasmtime 48 (via yara-x) has no NetBSD trap-handler arm
+  # (the old netbsd-solaris-45.0.3 patch cannot apply), and `pkg_add rust` finds
+  # no package on the current image. Re-enable once both are resolved, and add
+  # the target back to release.yml's `expected` list and target allowlist.
   netbsd:
     name: x86_64-unknown-netbsd
-    if: ${{ (inputs.wave == '' || inputs.wave == 'slow') && (inputs.target == '' || inputs.target == 'x86_64-unknown-netbsd') }}
+    if: ${{ false }}
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     permissions:
@@ -929,9 +934,14 @@ jobs:
   # Expected to be rocky: Oracle's IPS repo may carry no rust at all, in which
   # case this fails in `prepare` and the enumeration below is what tells us.
   # Same research shape the OmniOS job used to resolve its package names.
+  #
+  # DISABLED for 3.0.0: wasmtime 48 (via yara-x) has no Solaris trap-handler arm
+  # (compile_error!("unsupported platform") in vm/sys/unix/signals.rs; the old
+  # netbsd-solaris-45.0.3 patch cannot apply). Re-enable once that is ported,
+  # and add the target back to release.yml's `expected` list and allowlist.
   solaris:
     name: x86_64-pc-solaris
-    if: ${{ (inputs.wave == '' || inputs.wave == 'slow') && (inputs.target == '' || inputs.target == 'x86_64-pc-solaris') }}
+    if: ${{ false }}
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     permissions:

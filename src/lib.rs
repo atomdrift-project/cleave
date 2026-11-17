@@ -837,11 +837,21 @@ pub fn prefetch_shared_resources(enable_third_party: bool) {
 /// `CapabilityMapper::warm_indexes_for_few_files`). A directory scan, a large
 /// batch, or a long-lived worker wants [`prefetch_shared_resources`].
 pub fn prefetch_shared_resources_for_few_files(enable_third_party: bool) {
+    let started = std::time::Instant::now();
     prefetch_yara_engine(enable_third_party);
-    match shared_resources::capability_mapper() {
+    let yara_ms = started.elapsed().as_millis() as u64;
+    let mapper = shared_resources::capability_mapper();
+    let mapper_ms = started.elapsed().as_millis() as u64 - yara_ms;
+    match mapper {
         Ok(mapper) => mapper.warm_indexes_for_few_files(),
         Err(e) => tracing::warn!(error = %e, "capability mapper prefetch failed"),
     }
+    tracing::debug!(
+        yara_ms,
+        mapper_ms,
+        warm_ms = started.elapsed().as_millis() as u64 - yara_ms - mapper_ms,
+        "shared resources prefetched"
+    );
 }
 
 /// Log end-of-scan engine statistics at `info`: per-phase thread-time (and

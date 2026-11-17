@@ -1347,10 +1347,18 @@ impl super::CapabilityMapper {
         let cache_path = crate::cache::mapper_cache_path_for(dir_path).ok()?;
         if cache_path.exists() {
             tracing::trace!("Attempting to load mapper from cache: {:?}", cache_path);
+            let started = std::time::Instant::now();
             match fs::read(&cache_path) {
                 Ok(mut bytes) => {
+                    let read_ms = started.elapsed().as_millis() as u64;
                     match MapperCacheData::parse(&mut bytes) {
                         Ok(mut cache_data) => {
+                            tracing::debug!(
+                                read_ms,
+                                parse_ms = started.elapsed().as_millis() as u64 - read_ms,
+                                bytes = bytes.len(),
+                                "mapper cache read and parsed"
+                            );
                             crate::cache::mark_used(&cache_path);
                             tracing::info!(
                                 "Loaded mapper from cache ({} traits, {} composites)",
@@ -1390,11 +1398,18 @@ impl super::CapabilityMapper {
                             // No `drop_unreferenced_support_rules`: the
                             // snapshot was stored after it, and it runs to a
                             // fixpoint, so it would drop nothing more.
-                            return Some(Self::from_loaded_rules(
+                            let assembled = std::time::Instant::now();
+                            let mapper = Self::from_loaded_rules(
                                 cache_data.trait_definitions,
                                 cache_data.composite_rules,
                                 dir_path,
-                            ));
+                            );
+                            tracing::debug!(
+                                assemble_ms = assembled.elapsed().as_millis() as u64,
+                                total_ms = started.elapsed().as_millis() as u64,
+                                "mapper assembled from cache"
+                            );
+                            return Some(mapper);
                         }
                         Err(e) => {
                             eprintln!("⏳ Trait cache is out of date, regenerating...");

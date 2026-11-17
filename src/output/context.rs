@@ -1134,14 +1134,3 @@ pub(super) fn crit_rgb(crit: Criticality) -> (u8, u8, u8) {
         _ => crate::theme::COMPONENT_RGB,
     }
 }
-
-/// Paint `text` with the theme severity painter (hostile/suspicious bold).
-pub(super) fn paint_by_crit(crit: Criticality, text: &str) -> colored::ColoredString {
-    match crit {
-        Criticality::Hostile => crate::theme::paint_hostile(text),
-        Criticality::Suspicious => crate::theme::paint_suspicious(text),
-        Criticality::Notable => crate::theme::paint_notable(text),
-        Criticality::Baseline => crate::theme::paint_baseline(text),
-        _ => crate::theme::paint_component(text),
-    }
-}

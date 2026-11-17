@@ -130,6 +130,7 @@ pub fn run_with_options(
     // Hard problems (won't load / won't fire) fatal.
     validation_controls::set_disabled_validators_override(exclude)?;
     validation_controls::set_soft_validation_mode(soft);
+    crate::rule_sources::TreeCheck::require_full();
     let traits_dir = std::fs::canonicalize(cleave::traits_repo::try_resolve()?)?;
     // The two walks that decide a cache hit, side by side.
     let discovery_started = Instant::now();

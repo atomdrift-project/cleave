@@ -110,6 +110,17 @@ pub(super) fn render_no_anchor(
             (f.crit >= floor || owed.contains(id)) && sel.contains(id) && !windowed.contains(id)
         })
         .filter(|(index, f)| {
+            // The terminal view spends its height on evidence: a notable with
+            // no byte of its own (a file-level observation) is dropped unless
+            // it is a cross-file composite or owed. Suspicious and hostile
+            // findings always list.
+            !is_terminal_view(opts)
+                || f.crit >= Criticality::Suspicious
+                || owed.contains(f.id.as_str())
+                || file.composite_sources.contains_key(f.id.as_str())
+                || file.finding_has_local_offset(*index)
+        })
+        .filter(|(index, f)| {
             // Owed evidence is never "represented" by another trait's note:
             // the reader must see it named, so it lists here unless drawn.
             owed.contains(f.id.as_str())

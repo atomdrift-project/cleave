@@ -730,7 +730,7 @@ pub fn format_context_badged(
         // context (a file-level note) rather than floating, orphaned, after it.
         let mut body = String::new();
         if let Some(identity) = &file.identity {
-            render_identity(&mut body, identity, colorize);
+            render_identity(&mut body, identity, colorize, is_terminal_view(opts));
         }
         let findings_start = body.len();
         // Byte ranges of the source windows the plan draws: a text window
@@ -1028,20 +1028,14 @@ fn rich_header(
         s
     };
     let label = embedded.as_deref().unwrap_or(&display_path);
-    let counts = if badged {
-        String::new()
-    } else {
-        severity_legend(file)
-    };
     // A space follows the verdict stamp before the filename; single spaces
     // separate the rest.
     let lead = badge.badge.map_or_else(String::new, |b| format!("{b} "));
     let trail = badge.trailer.map(|t| format!(" {t}")).unwrap_or_default();
     let header_line = format!(
-        "{lead}{} {}{}{}",
+        "{lead}{} {}{}",
         label.bright_white().bold(),
         type_display,
-        counts,
         trail,
     );
 
@@ -1068,39 +1062,6 @@ fn rich_header(
         }
         let rule_w = rule_w.clamp(1, term_width);
         out.push_str(&format!("{}\n", file_rule(rule_w)));
-    }
-}
-
-/// A compact, colored severity tally for the header: `  3H 2S 4N`, counting each
-/// distinct shown finding once. Empty tiers are omitted.
-fn severity_legend(file: &FileAnalysis) -> String {
-    let (mut hostile, mut susp, mut notable) = (0u32, 0u32, 0u32);
-    let mut seen = HashSet::new();
-    for f in &file.findings {
-        if !tiny_should_show(f, file) || !seen.insert(f.id.as_str()) {
-            continue;
-        }
-        match f.crit {
-            Criticality::Hostile => hostile += 1,
-            Criticality::Suspicious => susp += 1,
-            Criticality::Notable => notable += 1,
-            _ => {}
-        }
-    }
-    let mut parts: Vec<String> = Vec::new();
-    if hostile > 0 {
-        parts.push(paint_by_crit(Criticality::Hostile, &format!("{hostile}H")).to_string());
-    }
-    if susp > 0 {
-        parts.push(paint_by_crit(Criticality::Suspicious, &format!("{susp}S")).to_string());
-    }
-    if notable > 0 {
-        parts.push(paint_by_crit(Criticality::Notable, &format!("{notable}N")).to_string());
-    }
-    if parts.is_empty() {
-        String::new()
-    } else {
-        format!("   {}", parts.join(" "))
     }
 }
 

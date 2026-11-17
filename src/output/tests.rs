@@ -10,7 +10,7 @@ fn identity(json: serde_json::Value) -> filefacts::Identity {
 
 fn identity_lines(id: &filefacts::Identity) -> String {
     let mut out = String::new();
-    render_identity(&mut out, id, false);
+    render_identity(&mut out, id, false, false);
     out
 }
 
@@ -257,6 +257,46 @@ fn tiny_view_carries_the_full_identity_block() {
     assert!(tiny.contains("Vanguard Tech Limited"), "{tiny}");
     assert!(tiny.contains(r#"product="Contoso Updater""#), "{tiny}");
     assert!(tiny.contains(r#"company="Contoso Ltd""#), "{tiny}");
+}
+
+/// The terminal view keeps the header to what a human scans: no severity
+/// tally, no `claims`/`ids` identity lines, and no file-level observation
+/// without a location unless it is suspicious or worse. The tiny view keeps
+/// all of them.
+#[test]
+fn terminal_view_trims_counts_claims_ids_and_locationless_notables() {
+    let mut file = src_file(
+        0,
+        "Installer",
+        5,
+        vec![
+            finding_with("t/notable-note", Criticality::Notable),
+            finding_with("t/suspicious-note", Criticality::Suspicious),
+        ],
+        vec![],
+    );
+    file.file_type = "macho".to_string();
+    file.identity = Some(identity(serde_json::json!({
+        "name": {"value": "authorization", "source": "macho.name"},
+        "project": {"value": "Contoso Updater", "source": "macho.product"},
+        "signer": {"organization": "Contoso Ltd", "source": "macho.signature"},
+        "unique_ids": {"cdhash": "39aa9a55c001d58cdeadbeef"},
+        "trust": "ad_hoc",
+    })));
+    let report = report_with_files(vec![file]);
+
+    let terminal = format_context(&report, &TinyOpts::terminal());
+    assert!(!terminal.contains("claims"), "{terminal}");
+    assert!(!terminal.contains("cdhash"), "{terminal}");
+    assert!(!terminal.contains("1S"), "{terminal}");
+    assert!(!terminal.contains("1N"), "{terminal}");
+    assert!(!terminal.contains("t/notable-note"), "{terminal}");
+    assert!(terminal.contains("t/suspicious-note"), "{terminal}");
+
+    let tiny = format_context(&report, &TinyOpts::tiny());
+    assert!(tiny.contains("claims"), "{tiny}");
+    assert!(tiny.contains("cdhash"), "{tiny}");
+    assert!(tiny.contains("t/notable-note"), "{tiny}");
 }
 
 #[test]

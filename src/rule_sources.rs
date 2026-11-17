@@ -11,6 +11,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 
 /// Concurrent readers for a snapshot. Reading 34k rule files on a 16-core Mac
@@ -133,15 +134,33 @@ pub(crate) enum TreeCheck {
     Directories,
 }
 
+/// Set by [`TreeCheck::require_full`]: every later check in this process is
+/// [`TreeCheck::Full`].
+static FULL_CHECK_REQUIRED: AtomicBool = AtomicBool::new(false);
+
 impl TreeCheck {
+    /// Make every later [`Self::for_tree`] in this process the full check.
+    /// `cleave validate` exists to judge rules just edited, wherever they
+    /// live: a rule file rewritten in place outside git must not load as the
+    /// mapper cached before the edit. Validation already `stat`s every rule
+    /// file for its own result cache, so the full check adds little.
+    #[cfg(feature = "lint")]
+    pub(crate) fn require_full() {
+        FULL_CHECK_REQUIRED.store(true, Ordering::Relaxed);
+    }
+
     /// The check `root` warrants. A git checkout or worktree is where rules
-    /// are edited, in place, so it gets the full check. Any other tree is
-    /// one something unpacked whole (an installed feed, an exported
-    /// snapshot); replacing or patching it adds and removes entries, which
-    /// its directories show. `CLEAVE_TRAITS_FULL_CHECK=1` forces the full
-    /// check for a tree edited in place outside git.
+    /// are edited, in place, so it gets the full check, as does every tree
+    /// once [`Self::require_full`] was called. Any other tree is one
+    /// something unpacked whole (an installed feed, an exported snapshot);
+    /// replacing or patching it adds and removes entries, which its
+    /// directories show. `CLEAVE_TRAITS_FULL_CHECK=1` forces the full check
+    /// for a tree edited in place outside git.
     pub(crate) fn for_tree(root: &Path) -> Self {
-        if crate::env::flag("CLEAVE_TRAITS_FULL_CHECK") || Self::in_git_checkout(root) {
+        if FULL_CHECK_REQUIRED.load(Ordering::Relaxed)
+            || crate::env::flag("CLEAVE_TRAITS_FULL_CHECK")
+            || Self::in_git_checkout(root)
+        {
             Self::Full
         } else {
             Self::Directories

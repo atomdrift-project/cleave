@@ -136,7 +136,7 @@ pub fn format_index(report: &AnalysisReport) -> String {
     // Room kept for evidence: descriptions truncate first, since they are often
     // paraphrasable from the trait id.
     const MIN_EVIDENCE_WIDTH: usize = 24;
-    // Beyond this, a multi-line value ends with a `…` line.
+    // Beyond this, the last line shown ends with a `…`.
     const MAX_EVIDENCE_LINES: usize = 4;
 
     let mut output = String::new();
@@ -224,8 +224,17 @@ pub fn format_index(report: &AnalysisReport) -> String {
                     continue;
                 }
                 let desc = truncate_with_ellipsis(&display_description(&finding.desc), desc_width);
-                for (j, line) in lines.iter().take(MAX_EVIDENCE_LINES).enumerate() {
-                    let value = paint(&truncate_with_ellipsis(line, evidence_width), finding.crit);
+                let shown = lines.len().min(MAX_EVIDENCE_LINES);
+                for (j, line) in lines.iter().take(shown).enumerate() {
+                    // Dropped lines are flagged on the last one shown, which
+                    // shares its ellipsis with a width truncation, rather than
+                    // on a row of their own.
+                    let cut = if j + 1 == shown && lines.len() > shown {
+                        format!("{line}…")
+                    } else {
+                        (*line).to_string()
+                    };
+                    let value = paint(&truncate_with_ellipsis(&cut, evidence_width), finding.crit);
                     if j == 0 {
                         output.push_str(&format!(
                             "{bullet} {trait_id:trait_width$}  {desc:desc_width$}  {value}\n"
@@ -233,9 +242,6 @@ pub fn format_index(report: &AnalysisReport) -> String {
                     } else {
                         output.push_str(&format!("{evidence_indent}{value}\n"));
                     }
-                }
-                if lines.len() > MAX_EVIDENCE_LINES {
-                    output.push_str(&format!("{evidence_indent}{}\n", paint("…", finding.crit)));
                 }
             }
         }
@@ -396,14 +402,18 @@ mod tests {
     }
 
     #[test]
-    fn long_multi_line_evidence_ends_with_an_ellipsis_row() {
+    fn long_multi_line_evidence_ends_with_an_ellipsis_on_its_last_line() {
         let output = strip_ansi(&format_index(&report(vec![finding(
             "objectives/x/y",
             Criticality::Notable,
             &["1\n2\n3\n4\n5"],
         )])));
-        assert!(output.contains("4\n"));
-        assert!(!output.contains("5\n"));
+        assert!(output.contains("4…\n"), "{output}");
+        assert!(!output.contains("5\n"), "{output}");
+        assert!(
+            !output.contains("\n…"),
+            "no ellipsis row of its own: {output}"
+        );
         assert!(output.trim_end().ends_with('…'), "{output}");
     }
 }

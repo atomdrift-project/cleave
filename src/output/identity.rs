@@ -101,8 +101,16 @@ pub(super) fn headline_claims(id: &filefacts::Identity) -> Vec<String> {
 /// both halves are on the page. The headline shows one of each pair by
 /// design; this shows the rest, and lets the reader notice.
 ///
-/// Emitted only when present, so most files render nothing here.
-pub(super) fn render_identity(out: &mut String, id: &filefacts::Identity, colorize: bool) {
+/// Emitted only when present, so most files render nothing here. `terse` (the
+/// terminal view, where a human reads the header) drops the `claims` and `ids`
+/// lines: the headline already names the artifact, and they are the bulk of
+/// the rest.
+pub(super) fn render_identity(
+    out: &mut String,
+    id: &filefacts::Identity,
+    colorize: bool,
+    terse: bool,
+) {
     let label = |s: &str| {
         if colorize {
             s.dimmed().to_string()
@@ -115,36 +123,38 @@ pub(super) fn render_identity(out: &mut String, id: &filefacts::Identity, colori
 
     // What it claims to be, beyond the one the headline picked.
     let mut claims: Vec<String> = Vec::new();
-    let mut push_claim = |key: &str, claim: &Option<filefacts::Claim>, max: usize| {
-        if let Some(c) = claim
-            && fresh(&c.value)
-        {
-            claims.push(format!("{key}=\"{}\"", truncate_end(&c.value, max)));
-        }
-    };
-    push_claim("product", &id.project, 48);
-    push_claim("company", &id.organization, 48);
-    push_claim("file", &id.name, 48);
-    push_claim("title", &id.title, 48);
-    push_claim("id", &id.identifier, 64);
-    push_claim("version", &id.version, 24);
-    push_claim("team", &id.team_id, 32);
-    push_claim("producer", &id.producer, 32);
-    // The rights holder, unless it only restates the company or the signer
-    // (`© Microsoft Corporation. All rights reserved.` beside a Microsoft
-    // signature says nothing new). A holder that differs from both is a
-    // disagreement worth a token.
-    if let Some(c) = &id.copyright {
-        let holder = copyright_holder(&c.value);
-        let restates = [
-            id.organization.as_ref().map(|o| o.value.as_str()),
-            id.signer.as_ref().and_then(|s| s.organization.as_deref()),
-        ]
-        .into_iter()
-        .flatten()
-        .any(|company| copyright_holder(company) == holder);
-        if !holder.is_empty() && !restates && fresh(&c.value) {
-            claims.push(format!("copyright=\"{}\"", truncate_end(&c.value, 48)));
+    if !terse {
+        let mut push_claim = |key: &str, claim: &Option<filefacts::Claim>, max: usize| {
+            if let Some(c) = claim
+                && fresh(&c.value)
+            {
+                claims.push(format!("{key}=\"{}\"", truncate_end(&c.value, max)));
+            }
+        };
+        push_claim("product", &id.project, 48);
+        push_claim("company", &id.organization, 48);
+        push_claim("file", &id.name, 48);
+        push_claim("title", &id.title, 48);
+        push_claim("id", &id.identifier, 64);
+        push_claim("version", &id.version, 24);
+        push_claim("team", &id.team_id, 32);
+        push_claim("producer", &id.producer, 32);
+        // The rights holder, unless it only restates the company or the signer
+        // (`© Microsoft Corporation. All rights reserved.` beside a Microsoft
+        // signature says nothing new). A holder that differs from both is a
+        // disagreement worth a token.
+        if let Some(c) = &id.copyright {
+            let holder = copyright_holder(&c.value);
+            let restates = [
+                id.organization.as_ref().map(|o| o.value.as_str()),
+                id.signer.as_ref().and_then(|s| s.organization.as_deref()),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|company| copyright_holder(company) == holder);
+            if !holder.is_empty() && !restates && fresh(&c.value) {
+                claims.push(format!("copyright=\"{}\"", truncate_end(&c.value, 48)));
+            }
         }
     }
     if !claims.is_empty() {
@@ -238,7 +248,7 @@ pub(super) fn render_identity(out: &mut String, id: &filefacts::Identity, colori
             id.emails.join(", ")
         ));
     }
-    if !id.unique_ids.is_empty() {
+    if !terse && !id.unique_ids.is_empty() {
         let ids: Vec<String> = id
             .unique_ids
             .iter()
@@ -434,7 +444,6 @@ pub(super) fn truncate_mid(s: &str, max: usize) -> String {
     format!("{h}…{t}")
 }
 
-/// Truncate keeping the head only (for long hashes): `b38a051e6c36…`.
 /// The rights holder a copyright notice names, folded for comparison: the
 /// letters left once the `©` / `(c)` / `Copyright` / `All rights reserved`
 /// boilerplate, years and punctuation are gone. Applied to a company name too,

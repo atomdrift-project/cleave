@@ -11,11 +11,19 @@ cleave is the closest thing a security-engineer has to X-Ray Vision: a static an
 
 Designed originally for supply-chain attack detection, cleave is suitable for interactive use, differential analysis, and as part of a machine-learning pipeline. See [Atomdrift Scan](https://github.com/atomdrift-project/scan) for ML-based malware detection based on cleave.
 
-Oh, and cleave is hella fast too - analyzing most programs in under 2 seconds.
+Oh, and cleave is hella fast too - analyzing most programs in under 2 seconds. Here's the default view of /bin/ls:
 
 <p align="center">
   <img src="media/toc.png" alt="cleave analyzing a sample (toc)" width="760">
+
+  The --annotate view, showing macho malware:
+
   <img src="media/annotate.png" alt="cleave annotate a sample" width="760">
+
+  And the diff subcommand, highlighting a supply-chain attack:
+
+<img src="media/diff.png" alt="cleave annotate a sample" width="760">
+  
 </p>
 
 The trait hierarchy is inspired by MITRE's [Malware Behavior Catalog](https://github.com/MBCProject/mbc-markdown), and [Systema Naturae](https://en.wikipedia.org/wiki/Systema_Naturae) by Carl Linneaus.

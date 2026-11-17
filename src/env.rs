@@ -219,6 +219,11 @@ pub const VARIABLES: &[Variable] = &[
         "Archive member bytes in flight per window.",
     ),
     var(
+        "CLEAVE_MEMGATE_BUDGET_MB",
+        Tuning,
+        "Ceiling on the memory the admission gate reserves across files in flight.",
+    ),
+    var(
         "CLEAVE_MEMGATE_EXPANSION",
         Tuning,
         "Memory reserved per archive byte by the admission gate.",

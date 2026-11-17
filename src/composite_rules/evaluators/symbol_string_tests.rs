@@ -4074,3 +4074,27 @@ fn byte_regex_with_negated_bracket_class_before_optional_space_matches() {
         );
     }
 }
+
+/// An escaped backslash before `P`, `p` or `u` is a path separator, not a
+/// Unicode escape: these patterns must stay on the byte engine, which never
+/// transcodes the file.
+#[test]
+fn unicode_escapes_are_read_in_pairs() {
+    for ascii in [
+        r"Microsoft\\Windows\\Start Menu\\Programs\\Startup\\[^\\\x00]{1,64}\.exe",
+        r"C:\\Users\\[a-z]+\\AppData",
+        r"\\\\\.\\pipe\\[a-z]+",
+        r"C:\\ProgramData\\.{1,160}\.bat",
+        r"plain\d+\s\w",
+    ] {
+        assert!(!has_unicode_escape(ascii), "{ascii}");
+    }
+    for unicode in [
+        r"\p{Hangul}{3,}",
+        r"A\P{ASCII}",
+        r"[\u2000-\u200A]{64}",
+        r"dir\\\p{Cyrillic}",
+    ] {
+        assert!(has_unicode_escape(unicode), "{unicode}");
+    }
+}

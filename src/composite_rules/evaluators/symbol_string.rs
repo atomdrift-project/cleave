@@ -1432,13 +1432,39 @@ pub(crate) fn eval_string_literal_with_options<'a, 'b>(
 
 /// Evaluate raw content condition - searches directly in file bytes as text.
 ///
-/// Determines if a pattern can be matched on raw bytes (ASCII-only, no Unicode features).
+/// Determines if a regex pattern can be matched on raw bytes (ASCII-only, no Unicode features).
 /// Returns true if the pattern contains only ASCII characters and doesn't use Unicode escapes.
 #[inline]
 fn can_use_byte_matching(pattern: &str) -> bool {
-    pattern.is_ascii()
-        && (!pattern.contains('\\')
-            || (!pattern.contains("\\u") && !pattern.contains("\\p") && !pattern.contains("\\P")))
+    pattern.is_ascii() && !has_unicode_escape(pattern)
+}
+
+/// Whether a regex pattern uses a Unicode escape: a backslash followed by
+/// `u`, `p` or `P`.
+///
+/// Escapes are read in pairs, so an escaped backslash is never mistaken for
+/// the start of one. A plain substring test also fires on the escaped
+/// separators of every Windows path: `Start Menu`, backslash, `Programs`
+/// reads as a `P` escape, and `Users` and `pipe` likewise. That sent those
+/// ASCII patterns to the Unicode engine, which first transcodes the whole
+/// file to a lossy UTF-8 string (up to three times its size, held until the
+/// file is done) and then scans all of it: one such rule applied to
+/// executables kept a transcoded copy of every binary in flight.
+pub(crate) fn has_unicode_escape(pattern: &str) -> bool {
+    let mut bytes = pattern.bytes();
+    while let Some(byte) = bytes.next() {
+        if byte == b'\\' && matches!(bytes.next(), Some(b'u' | b'p' | b'P')) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether a literal (`substr:`, `exact:`) can be compared byte-wise: any
+/// ASCII literal can, backslashes included, since nothing in it is an escape.
+#[inline]
+fn literal_is_byte_matchable(literal: &str) -> bool {
+    literal.is_ascii()
 }
 
 #[cfg(test)]

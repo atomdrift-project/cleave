@@ -625,7 +625,7 @@ impl RawScan<'_, '_> {
         evidence: &mut Vec<Evidence>,
     ) -> usize {
         let data = self.data;
-        let ascii_path = can_use_byte_matching(exact_str);
+        let ascii_path = literal_is_byte_matchable(exact_str);
         let pat_bytes = exact_str.as_bytes();
         let mut match_count = 0;
         let mut value: Option<String> = None;
@@ -696,7 +696,7 @@ impl RawScan<'_, '_> {
         case_insensitive: bool,
         evidence: &mut Vec<Evidence>,
     ) -> Option<usize> {
-        let (match_count, kept) = if can_use_byte_matching(substr_str) {
+        let (match_count, kept) = if literal_is_byte_matchable(substr_str) {
             self.substr_ascii(substr_str, case_insensitive)
         } else {
             self.substr_unicode(substr_str, case_insensitive)?

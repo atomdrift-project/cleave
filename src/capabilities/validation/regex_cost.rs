@@ -674,10 +674,7 @@ pub(crate) fn explosion(pattern: &str, case_insensitive: bool) -> Option<Explosi
 // ---------------------------------------------------------------- validator
 
 fn can_use_byte_matching(pattern: &str) -> bool {
-    pattern.is_ascii()
-        && !pattern.contains("\\u")
-        && !pattern.contains("\\p")
-        && !pattern.contains("\\P")
+    pattern.is_ascii() && !crate::composite_rules::evaluators::has_unicode_escape(pattern)
 }
 
 struct Candidate<'a> {

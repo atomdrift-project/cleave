@@ -113,6 +113,22 @@ impl ScanMemGate {
     fn with_available(available_fn: fn() -> Option<u64>) -> Self {
         let (budget_bytes, free_floor_bytes) =
             admission_limits(crate::memory_tracker::total_memory(), available_fn());
+        // `CLEAVE_MEMGATE_BUDGET_MB` lowers the ceiling for a host that
+        // wants a smaller peak than its memory would allow. Files waiting at
+        // the gate lend their threads to the files already in (see
+        // `acquire_hinted`), so on a corpus of large executables 9 GB on a
+        // 24-thread pool cost no wall time (505 s against 508 s) and took
+        // 1.5 GB off the peak. It is not the default: a mix of large
+        // archives ran 4% slower under the same ceiling with no memory to
+        // show for it, and at 7 GB the executables were slower and peaked
+        // higher (see `expansion`).
+        let budget_bytes = crate::env::parse::<usize>("CLEAVE_MEMGATE_BUDGET_MB")
+            .filter(|&mb| mb > 0)
+            .map_or(budget_bytes, |mb| {
+                budget_bytes
+                    .min(mb.saturating_mul(1024 * 1024))
+                    .max(MIN_ESTIMATE_BYTES)
+            });
         Self {
             budget_bytes,
             free_floor_bytes,
@@ -179,6 +195,14 @@ impl ScanMemGate {
             // deepens the stack nor holds a reservation while it waits.
             drop(reserved);
             if crate::rayon_nest::run_wait_work() {
+                continue;
+            }
+            // Nothing left to pull: lend this thread to the files already
+            // admitted. Their member and trait fan-out is queued on the pool,
+            // and a lane asleep here is a core they cannot use. Fewer files
+            // in flight with every core on them is the same throughput at a
+            // lower peak; fewer files with the waiters asleep is not.
+            if rayon::yield_now() == Some(rayon::Yield::Executed) {
                 continue;
             }
             let reserved = self

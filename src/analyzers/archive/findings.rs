@@ -26,7 +26,7 @@ pub(super) fn drain_extraction_notes(report: &mut AnalysisReport, guard: &Extrac
 /// `archive_guard` values (`path_traversals[]`, `symlink_escapes[]`,
 /// `large_files[]`, `long_entry_names[]`, `zip_bomb`) and the
 /// `archive.guard.*` metrics (`compression_ratio`, `total_size`,
-/// `longest_entry_name`, `member_limit_reached`).
+/// `longest_entry_name`, `member_limit_reached`, `blank_size_headers`).
 ///
 /// Only what defines the observation is decided here: an entry that names
 /// the extraction root is not a traversal, and an OS package's absolute
@@ -94,6 +94,9 @@ pub(super) fn push_archive_hostile_findings(
                 }
             }
             HostileArchiveReason::SymlinkEscape(path) => symlinks.push(Value::String(path)),
+            HostileArchiveReason::BlankSizeField(count) => {
+                metrics.push(("archive.guard.blank_size_headers", count as f64));
+            }
         }
     }
 

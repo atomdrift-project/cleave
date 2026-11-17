@@ -547,6 +547,7 @@ impl ArchiveAnalyzer {
         // temporary extraction tree, while scanning through nested package
         // layouts that the former ten-level cap silently omitted.
         let fake_root = Path::new("/__cleave_archive__");
+        let (reader, repairs) = super::super::tar_repair::BlankFieldRepair::new(reader);
         let mut archive = ::tar::Archive::new(reader);
 
         // Mirrors the temp-tree path's partial-extraction contract: a
@@ -739,6 +740,7 @@ impl ArchiveAnalyzer {
                     break;
                 }
             }
+            repairs.report(guard);
             if let Some(e) = stop_reason {
                 if pushed == 0 {
                     return Err(e);

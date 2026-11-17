@@ -101,6 +101,9 @@ pub(crate) enum HostileArchiveReason {
         /// Truncated preview of the name
         preview: String,
     },
+    /// Tar headers whose size field held no digits, read as 0 the way bsdtar
+    /// and npm read them (see `tar_repair`). Strict parsers stop at the first.
+    BlankSizeField(usize),
 }
 
 /// Bytes and files extracted so far by one top-level archive and every archive

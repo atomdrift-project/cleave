@@ -1150,6 +1150,67 @@ fn member_limit_is_recorded_beside_unsafe_entries() {
     assert_eq!(guard_recorded(&report, "path_traversals"), 1);
 }
 
+/// The shape of npm packages seen in production: a leading `package`
+/// directory header whose size field is all NULs. The `tar` crate alone stops
+/// at that header, so before `tar_repair` the analysis failed with
+/// "numeric field was not a number:  when getting size for package" and no
+/// member was analyzed.
+#[test]
+fn blank_tar_size_field_still_analyzes_every_member() {
+    let mut tar = Vec::new();
+    for (name, flag, body) in [
+        ("package", tar::EntryType::Directory, &b""[..]),
+        (
+            "package/package.json",
+            tar::EntryType::Regular,
+            &b"{\"name\":\"blank-size\"}\n"[..],
+        ),
+        (
+            "package/index.js",
+            tar::EntryType::Regular,
+            &b"module.exports = 1;\n"[..],
+        ),
+    ] {
+        let mut header = tar::Header::new_ustar();
+        header.set_path(name).unwrap();
+        header.set_entry_type(flag);
+        header.set_mode(0o644);
+        header.set_size(body.len() as u64);
+        if flag == tar::EntryType::Directory {
+            header.as_old_mut().size = [0; 12];
+        }
+        header.set_cksum();
+        tar.extend_from_slice(header.as_bytes());
+        tar.extend_from_slice(body);
+        tar.resize(tar.len().next_multiple_of(512), 0);
+    }
+    tar.extend_from_slice(&[0; 1024]);
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("blank-size-0.0.0.tgz");
+    let mut gz = flate2::write::GzEncoder::new(File::create(&path).unwrap(), Default::default());
+    gz.write_all(&tar).unwrap();
+    gz.finish().unwrap();
+
+    let report = ArchiveAnalyzer::new()
+        .with_capability_mapper(CapabilityMapper::empty())
+        .analyze(&path)
+        .unwrap();
+    let mut members: Vec<_> = report.files.iter().map(|f| f.path.as_str()).collect();
+    members.sort_unstable();
+    assert_eq!(members, ["package/index.js", "package/package.json"]);
+    assert_eq!(
+        guard_metric(&report, "archive.guard.blank_size_headers"),
+        Some(1.0)
+    );
+    assert!(
+        !report
+            .analysis_gaps
+            .contains(crate::types::AnalysisGap::ExtractionPartial),
+        "every member was read; the analysis is not partial"
+    );
+}
+
 #[test]
 fn test_extraction_guard_limits() {
     let guard = ExtractionGuard::new();

@@ -16,6 +16,7 @@ use super::guards::{
     ExtractedMemberMetadata, ExtractionGuard, HostileArchiveReason, LimitedReader, MAX_FILE_SIZE,
     MAX_PATH_COMPONENT_LEN, sanitize_entry_path, symlink_escapes,
 };
+use super::tar_repair::BlankFieldRepair;
 use anyhow::{Context, Result};
 use std::fs::{self, File};
 use std::io::{Read, Write};
@@ -27,8 +28,17 @@ pub(crate) fn extract_tar_entries_safe<R: Read>(
     dest_dir: &Path,
     guard: &ExtractionGuard,
 ) -> Result<()> {
-    let mut archive = tar::Archive::new(reader);
+    let (reader, repairs) = BlankFieldRepair::new(reader);
+    let result = extract_entries(tar::Archive::new(reader), dest_dir, guard);
+    repairs.report(guard);
+    result
+}
 
+fn extract_entries<R: Read>(
+    mut archive: tar::Archive<R>,
+    dest_dir: &Path,
+    guard: &ExtractionGuard,
+) -> Result<()> {
     for entry_result in archive.entries()? {
         if !guard.check_file_count() {
             anyhow::bail!("Exceeded maximum file count");

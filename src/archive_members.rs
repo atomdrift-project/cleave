@@ -11,6 +11,7 @@
 //! it, the file is not a supported archive, or the path names a member of a
 //! *nested* archive (a `!` in it), which would need recursive extraction.
 
+use crate::analyzers::archive::tar_repair::BlankFieldRepair;
 use anyhow::{Context as _, Result};
 use rustc_hash::FxHashMap;
 use std::io::{Cursor, Read, Seek};
@@ -185,6 +186,7 @@ fn read_capped(entry: impl Read) -> std::io::Result<Vec<u8>> {
 
 /// Stream `tar` up to `member`.
 fn scan(tar: impl Read, member: &str) -> Result<Option<Vec<u8>>> {
+    let (tar, _) = BlankFieldRepair::new(tar);
     let mut archive = ::tar::Archive::new(tar);
     let Ok(entries) = archive.entries() else {
         return Ok(None);
@@ -209,6 +211,7 @@ fn scan(tar: impl Read, member: &str) -> Result<Option<Vec<u8>>> {
 /// members ahead of it are still worth having.
 fn hold(tar: impl Read, limit: u64) -> Option<FxHashMap<String, Vec<u8>>> {
     let mut held = FxHashMap::default();
+    let (tar, _) = BlankFieldRepair::new(tar);
     let mut archive = ::tar::Archive::new(tar);
     let Ok(entries) = archive.entries() else {
         return Some(held);

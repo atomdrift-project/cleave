@@ -13,6 +13,7 @@ mod source_context;
 mod squashfs;
 mod system_packages;
 mod tar;
+pub(crate) mod tar_repair;
 pub(crate) mod utils;
 pub(crate) mod zip;
 

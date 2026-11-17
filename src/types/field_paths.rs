@@ -128,6 +128,7 @@ pub(crate) const CLEAVE_OWNED_METRIC_FIELDS: &[&str] = &[
     // What cleave's extraction guards observed while unpacking (see
     // `archive::findings::push_archive_hostile_findings`): outcomes of
     // extraction, which only the extractor can report.
+    "archive.guard.blank_size_headers",
     "archive.guard.compression_ratio",
     "archive.guard.longest_entry_name",
     "archive.guard.member_limit_reached",

@@ -558,7 +558,12 @@ fn drop_xor_hits_in_elf_metadata(report: &mut AnalysisReport) {
 
 /// Payloads encoded inside the file (hex, base64, XOR, packed executables,
 /// MIME attachments), found from its strings and bytes.
-fn encoded_payloads(
+///
+/// Archive members call this too. Members and standalone files share the
+/// analysis caches, so the two must decode the same payloads: a member that
+/// skipped a decode would cache a verdict missing the decoded child's
+/// findings, and serve it to a standalone copy of the same bytes.
+pub(crate) fn encoded_payloads(
     file_type: FileType,
     file_data: &[u8],
     stng_strings: &[stng::ExtractedString],

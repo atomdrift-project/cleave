@@ -4,82 +4,48 @@
 
 [![Latest release](https://img.shields.io/github/v/release/atomdrift-project/cleave)](https://github.com/atomdrift-project/cleave/releases/latest)
 [![License](https://img.shields.io/github/license/atomdrift-project/cleave)](LICENSE)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/16850/badge)](https://www.bestpractices.dev/projects/16850)
+[![Rust Report Card](https://rust-reportcard.xuri.me/badge/github.com/richbl/rust-lumina)](https://rust-reportcard.xuri.me/report/github.com/atomdrift-project/cleave)
 
-cleave is a static analysis engine that reveals what a programs capabilities are.
+cleave is the closest thing a security-engineer has to X-Ray Vision: a static analyzer that reports the security-sensitive capabilities of a program. With over [170,000+ heuristic rules](https://github.com/atomdrift-project/traits) covering [100+ file formats](FILE_FORMATS.md), cleave handles anything from AppleScript to ELF binaries to VSIX extensions.
 
-Using a database of [165,000+ heuristic rules](https://github.com/atomdrift-project/traits)), cleave rapidly (<250ms) determines
-all of the operations a program is capable of, and highlights the security sensitive
-operations. cleave was specifically designed for malware and differential supply-chain analysis, so
-all inputs are assumed to be hostile.
+Designed originally for supply-chain attack detection, cleave is suitable for interactive use, differential analysis, and as part of a machine-learning pipeline. See [Atomdrift Scan](https://github.com/atomdrift-project/scan) for ML-based malware detection based on cleave.
 
-There are three primary output modes: index (the default), annotate (`--annotate`, source context alongside each trait), and JSON (`--json`, for automation):
+Oh, and cleave is hella fast too - analyzing most programs in under 2 seconds.
 
 <p align="center">
   <img src="media/toc.png" alt="cleave analyzing a sample (toc)" width="760">
   <img src="media/annotate.png" alt="cleave annotate a sample" width="760">
 </p>
 
+The trait hierarchy is inspired by MITRE's [Malware Behavior Catalog](https://github.com/MBCProject/mbc-markdown), and [Systema Naturae](https://en.wikipedia.org/wiki/Systema_Naturae) by Carl Linneaus.
+
 ## Install
 
-To jam cleave into any macOS, Linux, FreeBSD, or whatever box:
+To install on macOS, Linux, FreeBSD, or whatever UNIX flavor:
 
 ```bash
 curl -fsSL https://install.atomdrift.org/cleave.sh | sh
 ```
 
-If you want to homebrew it yourself:
+For Windows:
 
 ```bash
-brew install atomdrift-project/tap/cleave
+irm https://install.atomdrift.org/cleave.ps1 | iex
 ```
 
-To build via source (Rust 1.97 required):
+To install from source instead (Rust 1.97 required):
 
 ```bash
-git clone https://github.com/atomdrift-project/cleave.git
-cd cleave
 make install
 ```
 
-## Rule feeds
+## Similar Tools
 
-cleave downloads its rules on first use. There are three feeds; they carry the
-same rules and differ only in how long a ruleset waits after it passes QA:
-
-| Feed | Delay | Needs |
-| --- | --- | --- |
-| `oss-delayed` | up to 8 days | nothing |
-| `supporter` | 72 hours | an isotope¹³ Early Supporter plan |
-| `zero-day` | none | an isotope¹³ Business or Critical plan |
-
-```bash
-cleave feed               # list the feeds and what's installed
-cleave feed supporter     # switch; connects this computer if needed
-cleave update-rules       # refresh the current feed
-```
-
-`--feed <name>` (or `ATOMDRIFT_FEED`) picks a feed for one run. CI can supply
-a token with `ISOTOPE13_TOKEN`.
-
-## What it analyzes
-
-Representative coverage includes:
-
-| Category | Examples |
-| --- | --- |
-| **Binaries and bytecode** | Mach-O, ELF, PE, NE, DOS COM, static libraries, shellcode, WebAssembly, Android DEX, Java `.class`, Python `.pyc`, BEAM, Ren'Py `.rpyc` |
-| **Source and scripts** | Python, JavaScript, TypeScript, Go, Rust, C/C++, Java, Kotlin, C#, Swift, Objective-C, Ruby, PHP, Perl, Lua, Shell, PowerShell, Batch, VBScript, Scala, Groovy, Zig, Elixir, Clojure, JSP, ASP, ColdFusion, AppleScript |
-| **Archives and packages** | ZIP, TAR, CPIO, 7-Zip, RAR, CAB, MSI, CHM, ASAR, JAR, APK, IPA, CRX, XPI, VSIX, npm, wheel, sdist, egg, conda, gem, crate, NuGet, Composer, Go modules, deb, rpm, Alpine, Arch, FreeBSD, Void, Gentoo, Snap, macOS `.pkg`, OCI images |
-| **Disk images** | ISO 9660/UDF, DMG, VHD, SquashFS |
-| **Documents and data** | PDF, RTF, Office/OLE2, OOXML, HTML/HTA, PostScript, TeX, LNK, plist, nib, XML, JSON, YAML, `.reg`, pickle, .NET BinaryFormatter |
-| **Images, media, and fonts** | PNG, JPEG, GIF, BMP, WebP, TIFF, AVIF, ICO/CUR/ANI, SVG, WAV, AIFF, MP3, MP4, TrueType/OpenType/WOFF |
-| **Build and deployment files** | package manifests and lockfiles, node-gyp, GitHub Actions, Dockerfile, Makefile, CMake, Xcode projects, systemd units, XDG desktop files |
-| **Signatures** | OpenPGP detached signatures, X.509 signature sidecars, Apple trust caches |
-
-See [FILE_FORMATS.md](FILE_FORMATS.md) for the maintained coverage reference.
-Parsing lives in [filefacts](https://github.com/atomdrift-project/filefacts);
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) explains which project owns what.
-
+* [malcontent](https://github.com/chainguard-dev/malcontent) - our previous attempt at creating a multi-platform static analyzer; but the pure-YARA strategy didn't scale.
+* [capa (Mandiant)](https://github.com/mandiant/capa/) - the original inspiration for malcontent and this project: slow and limited to PE/ELF/.NET binaries
+* [OSSGadget (Microsoft)](https://github.com/microsoft/OSSGadget) - quite similar; but for only source languages.
+* [maratus](https://github.com/0x4D31/maratus) - new! a static analyzer focused on macOS artifacts.
 ## License
 
 cleave is available under the [Apache License 2.0](LICENSE).

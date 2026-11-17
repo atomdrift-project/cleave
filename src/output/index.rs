@@ -190,15 +190,16 @@ pub fn format_index(report: &AnalysisReport) -> String {
         let evidence_indent = " ".repeat(OVERHEAD + trait_width + desc_width);
 
         let file_type = display_file_type(&file.file_type);
-        let type_formula = match crate::formula::of(&file.findings) {
-            Some(formula) if !formula.is_empty() => format!("{file_type} • {formula}"),
-            _ => file_type,
+        let type_hash = if file.sha256.is_empty() {
+            format!("• {file_type}")
+        } else {
+            format!("• {file_type} • {}", file.sha256)
         };
         let indent = "  ".repeat(file.depth as usize);
         output.push_str(&format!(
-            "{indent}{}  {}\n",
+            "{indent}{} {}\n",
             display_path(file).bright_white().bold(),
-            type_formula.bright_black()
+            type_hash.bright_black()
         ));
         output.push_str(&format!(
             "{indent}{}\n",
@@ -391,7 +392,7 @@ mod tests {
         assert!(!output.contains("third_party/Sekoia"));
         assert!(output.contains(" •• c2/http/beacon"));
         assert!(output.contains("GET /x"));
-        assert!(output.starts_with("/test/sample.bin  ELF"));
+        assert!(output.starts_with("/test/sample.bin • ELF"), "{output}");
     }
 
     #[test]

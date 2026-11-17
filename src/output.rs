@@ -201,7 +201,7 @@ pub(crate) fn filter_findings_for_formula(findings: &[Finding]) -> Vec<Finding> 
 /// The header drawn above each file's context block.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HeaderStyle {
-    /// `path  type • formula` plus a rule — cleave's terminal view, and the
+    /// `path • type • sha256` plus a rule — cleave's terminal view, and the
     /// base an embedding host extends with a verdict badge + subtitle.
     Rich,
     /// `path\ttype size score` — the compact machine/LLM line.
@@ -927,7 +927,7 @@ fn embedded_label(segment: &str, size: u64) -> Option<String> {
     Some(label)
 }
 
-/// Render the rich file header. Plain (cleave): `path  type • formula  legend`.
+/// Render the rich file header. Plain (cleave): `path • type • sha256  legend`.
 /// With a [`HeaderBadge`] (an embedding host): a single lean line `stamp path · type
 /// trailer`, plus the badge's subtitle beneath. Then a rule sized to the widest
 /// line of the header and the `body` it sits above (capped at the terminal).
@@ -983,7 +983,7 @@ fn rich_header(
     body: &str,
 ) {
     // A badge means a verdict-led view (an embedding host): keep the header lean — the file
-    // type after a `·`, no formula or legend. cleave's own header keeps both.
+    // type after a `·`, no hash or legend. cleave's own header keeps both.
     let badged = badge.badge.is_some();
     let file_type_display = display_file_type(&file.file_type);
     let display_path = display_path(file);
@@ -993,26 +993,24 @@ fn rich_header(
     let embedded = (file.depth > 0)
         .then(|| embedded_label(&display_path, file.size))
         .flatten();
-    let formula = || crate::formula::of(&file.findings).unwrap_or_default();
+    let sha256 = &file.sha256;
     let type_display = if badged {
-        // The badged verdict view stays lean: type only, no identity/formula.
+        // The badged verdict view stays lean: type only, no identity/hash.
         format!("\u{00b7} {file_type_display}")
             .bright_black()
             .to_string()
     } else if embedded.is_some() {
-        // The kind already leads the embedded headline, so show only the formula.
-        let formula = formula();
-        if formula.is_empty() {
+        // The kind already leads the embedded headline, so show only the hash.
+        if sha256.is_empty() {
             String::new()
         } else {
-            format!("{} {}", "•".bright_black(), formula.bright_black())
+            format!("{} {}", "•".bright_black(), sha256.bright_black())
         }
     } else {
-        let formula = formula();
-        // Header reads `TYPE · <identity headline> • <formula>`. The type and
-        // formula stay dim; the identity headline (what · who · trust) renders
+        // Header reads `• TYPE · <identity headline> • <sha256>`. The type and
+        // hash stay dim; the identity headline (what · who · trust) renders
         // brighter so "what is this / who signed it" pops at a glance.
-        let mut s = file_type_display.bright_black().to_string();
+        let mut s = format!("• {file_type_display}").bright_black().to_string();
         if let Some(headline) = file
             .identity
             .as_ref()
@@ -1020,11 +1018,11 @@ fn rich_header(
         {
             s.push_str(&format!(" {} {headline}", "·".bright_black()));
         }
-        if !formula.is_empty() {
+        if !sha256.is_empty() {
             s.push_str(&format!(
                 " {} {}",
                 "•".bright_black(),
-                formula.bright_black()
+                sha256.bright_black()
             ));
         }
         s
@@ -1035,13 +1033,12 @@ fn rich_header(
     } else {
         severity_legend(file)
     };
-    // A space follows the verdict stamp before the filename. Single spaces
-    // separate the rest; cleave's own (unbadged) header keeps its two-space layout.
+    // A space follows the verdict stamp before the filename; single spaces
+    // separate the rest.
     let lead = badge.badge.map_or_else(String::new, |b| format!("{b} "));
-    let sep = if badged { " " } else { "  " };
     let trail = badge.trailer.map(|t| format!(" {t}")).unwrap_or_default();
     let header_line = format!(
-        "{lead}{}{sep}{}{}{}",
+        "{lead}{} {}{}{}",
         label.bright_white().bold(),
         type_display,
         counts,

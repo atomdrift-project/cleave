@@ -854,6 +854,9 @@ fn run_ast_query<'a>(
         .filter(|_| super::ast_gate::anchors_enabled());
     let anchored = anchors.and_then(|anchors| anchors.roots(tree, source.as_bytes()));
     *anchored_used = anchored.as_ref().is_some_and(|roots| !roots.is_empty());
+    if anchored.is_none() {
+        crate::validation_performance::note_unanchored_run();
+    }
     let root_kinds = compiled.root_kinds.as_deref().filter(|_| per_root);
     if anchored.is_some() || root_kinds.is_some() {
         // One cursor run per candidate root, each confined to starting there

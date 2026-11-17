@@ -390,6 +390,49 @@ fn test_cleanup_old_caches_handles_nonexistent_dir() {
     let _ = cleanup_old_caches(&temp_path);
 }
 
+/// Processes scanning from different traits trees run side by side, each
+/// with a YARA cache directory of its own. A cold load in one tree must not
+/// delete another tree's cache, or each evicts the rest and every scan starts
+/// cold. Only other layouts and long-unused directories go.
+#[test]
+fn prune_yara_caches_spares_other_trees_in_use() {
+    let dir = tempfile::tempdir().unwrap();
+    let current = dir.path().join("yara-rules-v5-aaaaaaaa-with-3p");
+    let other = dir.path().join("yara-rules-v5-bbbbbbbb-with-3p");
+    let unused = dir.path().join("yara-rules-v5-cccccccc-with-3p");
+    let refreshed = dir.path().join("yara-rules-v5-dddddddd-with-3p");
+    let old_layout_dir = dir.path().join("yara-rules-v4-eeeeeeee-with-3p");
+    let old_layout_blob = dir.path().join("yara-rules-ffffffff.bin");
+    let unrelated = dir.path().join("capability-mapper-v14-3.0.0-aaaaaaaa-1-a.bin");
+    for d in [&current, &other, &unused, &refreshed, &old_layout_dir] {
+        std::fs::create_dir(d).unwrap();
+        std::fs::write(d.join("manifest.json"), b"{}").unwrap();
+    }
+    std::fs::write(&old_layout_blob, b"x").unwrap();
+    std::fs::write(&unrelated, b"x").unwrap();
+    let long_ago =
+        std::time::SystemTime::now() - UNUSED_YARA_CACHE_TTL - std::time::Duration::from_secs(60);
+    for d in [&unused, &refreshed] {
+        std::fs::File::options()
+            .write(true)
+            .open(d.join("manifest.json"))
+            .unwrap()
+            .set_modified(long_ago)
+            .unwrap();
+    }
+    mark_used(&refreshed.join("manifest.json"));
+
+    prune_yara_caches(dir.path(), &current);
+
+    assert!(current.exists(), "the current cache is kept");
+    assert!(other.exists(), "another tree's cache in use is kept");
+    assert!(refreshed.exists(), "a load refreshes a cache's age");
+    assert!(!unused.exists(), "a cache unused past the TTL is pruned");
+    assert!(!old_layout_dir.exists(), "a superseded layout is pruned");
+    assert!(!old_layout_blob.exists(), "a superseded blob is pruned");
+    assert!(unrelated.exists(), "other cache files are not touched");
+}
+
 #[test]
 fn mapper_family_strips_timestamp_and_fingerprint() {
     assert_eq!(

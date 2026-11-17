@@ -1168,6 +1168,11 @@ impl YaraEngine {
         // the first scan that needs it (see `build_tier`), so only the tiers a
         // run actually touches ever allocate.
         if let Some(manifest) = manifest {
+            // Age this tree's cache by last use, so pruning spares it while
+            // it is still being loaded (see `cache::cleanup_old_caches`).
+            if let Some(dir) = &cache_dir {
+                crate::cache::mark_used(&dir.join("manifest.json"));
+            }
             self.rule_counts = (manifest.builtin_count, manifest.third_party_count);
             self.rule_contexts = manifest.rule_contexts;
             self.compiled_inline_namespaces = manifest.inline_namespaces;
@@ -1233,6 +1238,8 @@ impl YaraEngine {
                     bucket_tags: bucket_tags.clone(),
                 },
             );
+            // An unchanged manifest is not rewritten; it was still used.
+            crate::cache::mark_used(&dir.join("manifest.json"));
             let _ = crate::cache::cleanup_old_caches(dir);
         }
 

@@ -214,7 +214,6 @@ chrono = { version = "0.4", features = ["serde"] }
 hex = "0.4"
 base64 = "0.22"
 tempfile = "3.27"
-filetime = "0.2"
 strsim = "0.11"
 dirs = "6.0"
 semver = "1"  # Version comparison for the update notifier

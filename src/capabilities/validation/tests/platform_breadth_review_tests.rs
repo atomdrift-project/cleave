@@ -98,7 +98,9 @@ fn browser_scope_review_inherits_within_directory_boundaries() {
             platforms: scope.clone(),
             ..Default::default()
         };
-        assert!(find_broad_platform_traits(&[atom.clone()], &HashMap::new()).is_empty());
+        assert!(
+            find_broad_platform_traits(std::slice::from_ref(&atom), &HashMap::new()).is_empty()
+        );
         let mut expanded = atom;
         expanded.platforms.push(Platform::Zos);
         assert_eq!(

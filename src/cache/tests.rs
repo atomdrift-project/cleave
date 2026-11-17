@@ -166,6 +166,15 @@ fn test_yara_cache_key_format() {
     assert!(key.ends_with("-with-3p"));
 }
 
+fn set_mtime(path: &Path, mtime: SystemTime) {
+    fs::File::options()
+        .write(true)
+        .open(path)
+        .expect("open for mtime")
+        .set_modified(mtime)
+        .expect("set mtime");
+}
+
 #[test]
 fn test_rule_files_revision_changes_for_same_second_edits() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -174,8 +183,7 @@ fn test_rule_files_revision_changes_for_same_second_edits() {
     fs::write(&rule, b"traits: []\n").expect("write rule");
 
     let fixed = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
-    filetime::set_file_mtime(&rule, filetime::FileTime::from_system_time(fixed))
-        .expect("set mtime");
+    set_mtime(&rule, fixed);
 
     // Walk the directory directly (not the memoized `traits_scan`) so both
     // reads reflect the file as it stands, exercising the same-second
@@ -189,8 +197,7 @@ fn test_rule_files_revision_changes_for_same_second_edits() {
         .open(&rule)
         .expect("open rule");
     file.write_all(b"# edit in same second\n").expect("append");
-    filetime::set_file_mtime(&rule, filetime::FileTime::from_system_time(fixed))
-        .expect("reset mtime");
+    set_mtime(&rule, fixed);
     let second = scan_traits_dir(traits_dir)
         .rule_revision
         .expect("second revision");

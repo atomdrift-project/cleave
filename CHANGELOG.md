@@ -2,6 +2,28 @@
 
 All notable changes to cleave. Versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.0.0 (2026-11-17)
+
+### Security
+
+- Tars with blank size fields hid every member from analysis while npm installed them happily; now repaired and scanned.
+
+### Features
+
+- Breaking: output now defaults to the index view; ask for annotate if you want the old one.
+- The scan memory budget can now be set with `CLEAVE_MEMGATE_BUDGET_MB`.
+
+### Fixes
+
+- Archive findings stayed at full severity after every member was downgraded; the rollup now follows its members.
+- Cache keys now cover missing extractors and member options, so reports from a different host are not reused.
+- Refreshing one traits tree no longer throws away the cache of every other tree.
+- Windows path regexes were mistaken for Unicode escapes, transcoding every binary to text; they now scan raw bytes.
+
+### Optimizations
+
+- Mapper cache validation is faster, which shortens startup on every warm run.
+
 ## 3.0.0-beta.3 (2026-11-13)
 
 ### Features

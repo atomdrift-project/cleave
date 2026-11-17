@@ -756,7 +756,10 @@ mod tests {
         }
         let (_dir, root, stamp) = tree();
         fs::write(root.join("objectives/a.yaml"), "edited in place").unwrap();
-        assert!(stamp.matches_directories(&root), "directories are unchanged");
+        assert!(
+            stamp.matches_directories(&root),
+            "directories are unchanged"
+        );
         assert!(!stamp.matches(&root), "the full check sees the edit");
         let decoded = TreeStamp::decode(&stamp.encode()).unwrap();
         assert!(decoded.matches_directories(&root));

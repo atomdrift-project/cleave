@@ -1169,7 +1169,10 @@ fn merged_payload_carries_its_incomplete_gaps_to_the_parent() {
     nested.files.push(member);
 
     carry_incomplete_gaps(&child, &parent.analysis_gaps);
-    assert!(!evaluation_incomplete(&parent), "a flow gap does not block caching");
+    assert!(
+        !evaluation_incomplete(&parent),
+        "a flow gap does not block caching"
+    );
     assert!(!parent.analysis_gaps.contains(FlowQueryIncomplete));
 
     carry_incomplete_gaps(&nested, &parent.analysis_gaps);

@@ -413,7 +413,9 @@ fn prune_yara_caches_spares_other_trees_in_use() {
     let refreshed = dir.path().join("yara-rules-v5-dddddddd-with-3p");
     let old_layout_dir = dir.path().join("yara-rules-v4-eeeeeeee-with-3p");
     let old_layout_blob = dir.path().join("yara-rules-ffffffff.bin");
-    let unrelated = dir.path().join("capability-mapper-v14-3.0.0-aaaaaaaa-1-a.bin");
+    let unrelated = dir
+        .path()
+        .join("capability-mapper-v14-3.0.0-aaaaaaaa-1-a.bin");
     for d in [&current, &other, &unused, &refreshed, &old_layout_dir] {
         std::fs::create_dir(d).unwrap();
         std::fs::write(d.join("manifest.json"), b"{}").unwrap();

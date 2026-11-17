@@ -489,3 +489,37 @@ fn prune_drops_mapper_families_unused_past_the_ttl() {
     prune_superseded_mappers(dir.path());
     assert!(fresh.exists(), "marking a mapper used keeps it");
 }
+
+/// One family per traits directory: a service that analyzes from a fresh
+/// worktree per job makes a family per job. Past the cap the least recently
+/// used families go, whatever their age.
+#[test]
+fn prune_caps_mapper_families_by_last_use() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    let families = MAX_MAPPER_FAMILIES + 6;
+    let paths: Vec<_> = (0..families)
+        .map(|i| {
+            let path = dir.path().join(format!(
+                "capability-mapper-v14-3.0.0-{i:08x}-0000000000000001-aaaaaaaaaaaaaaaa.bin"
+            ));
+            std::fs::write(&path, b"x").unwrap();
+            // Family i was last used i seconds after `base`: higher is newer.
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(base + std::time::Duration::from_secs(i as u64))
+                .unwrap();
+            path
+        })
+        .collect();
+    prune_superseded_mappers(dir.path());
+    for (i, path) in paths.iter().enumerate() {
+        assert_eq!(
+            path.exists(),
+            i >= families - MAX_MAPPER_FAMILIES,
+            "family {i}: only the {MAX_MAPPER_FAMILIES} most recently used survive"
+        );
+    }
+}

@@ -1026,6 +1026,11 @@ impl UnifiedSourceAnalyzer {
                     );
                     report.files.extend(entries);
                 }
+            } else if !crate::extractors::powershell_payloads(content.as_bytes()).is_empty() {
+                // Payloads left undecoded at the layer limit; see `NestingLimit`.
+                report
+                    .analysis_gaps
+                    .record(crate::types::AnalysisGap::NestingLimit);
             }
         }
 

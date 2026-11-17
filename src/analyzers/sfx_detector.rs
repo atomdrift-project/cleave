@@ -317,7 +317,7 @@ fn analyze_pyinstaller_in_memory(
     }
 }
 
-fn innoextract_cmd() -> Option<std::path::PathBuf> {
+pub(crate) fn innoextract_cmd() -> Option<std::path::PathBuf> {
     static CHOICE: OnceLock<std::path::PathBuf> = OnceLock::new();
     crate::subprocess::probed_tool(&CHOICE, &["innoextract"], &["--version"])
 }

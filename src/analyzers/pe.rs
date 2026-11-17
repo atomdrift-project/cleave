@@ -264,6 +264,7 @@ impl PEAnalyzer {
                 image.offset,
                 self.engine.clone(),
                 self.yara_engine.clone(),
+                &report.analysis_gaps,
             ) {
                 report.files.extend(files);
             }

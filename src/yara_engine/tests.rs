@@ -581,7 +581,11 @@ composite_rules:
     yara.compiled_inline_namespaces.push(ns.to_string());
     yara.rule_counts = (1, 0);
     let yara = Arc::new(yara);
-    let engine = crate::Engine::new(Arc::new(mapper), Some(yara.clone()), Default::default());
+    let rules = Arc::new(mapper);
+    let engine = crate::Engine::new(rules.clone(), Some(yara.clone()), Default::default());
+    // An archive analyzer takes its engine's YARA, so "no YARA" is an engine
+    // without it, as it is for the standalone pipeline.
+    let without_yara = crate::Engine::new(rules, None, Default::default());
 
     for (name, body, expected) in [
         ("positive.tar", b"ArchiveInlineMarker123".as_slice(), true),
@@ -597,12 +601,11 @@ composite_rules:
         let data = tar.into_inner().unwrap();
         std::fs::write(&path, &data).unwrap();
         for enabled in [false, true] {
-            let mut analyzer =
-                crate::analyzers::archive::ArchiveAnalyzer::new().with_engine(engine.clone());
-            if enabled {
-                analyzer = analyzer.with_yara_arc(yara.clone());
-            }
-            let report = analyzer.analyze(&path).unwrap();
+            let analyzer_engine = if enabled { &engine } else { &without_yara };
+            let report = crate::analyzers::archive::ArchiveAnalyzer::new()
+                .with_engine(analyzer_engine.clone())
+                .analyze(&path)
+                .unwrap();
             for id in ["test/archive::marker", "test/archive::combined"] {
                 assert_eq!(
                     report.findings.iter().any(|f| f.id.as_ref() == id),

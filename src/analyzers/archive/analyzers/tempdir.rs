@@ -108,16 +108,18 @@ impl ArchiveAnalyzer {
         // Phase 1: score every class and optionally run class-bucket YARA in
         // the same read, so salience ranking does not add a second archive walk.
         let yara_start = std::time::Instant::now();
-        let triage_results =
-            self.triage_jar_classes(self.yara_engine.as_deref(), &class_files, |entry| {
-                match std::fs::read(entry.path()) {
-                    Ok(data) => Some(std::borrow::Cow::Owned(data)),
-                    Err(e) => {
-                        debug!("Failed to read {}: {}", entry.path().display(), e);
-                        None
-                    }
+        let triage_results = self.triage_jar_classes(
+            self.yara_engine.as_deref(),
+            &report.analysis_gaps,
+            &class_files,
+            |entry| match std::fs::read(entry.path()) {
+                Ok(data) => Some(std::borrow::Cow::Owned(data)),
+                Err(e) => {
+                    debug!("Failed to read {}: {}", entry.path().display(), e);
+                    None
                 }
-            });
+            },
+        );
         debug!(
             "JAR class triage completed in {:.2}s",
             yara_start.elapsed().as_secs_f64()

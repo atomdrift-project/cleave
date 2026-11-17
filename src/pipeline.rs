@@ -257,6 +257,8 @@ pub(super) fn rebase_decoded_child_path(
 mod binary;
 #[cfg(test)]
 mod decoded_child_path_tests;
+#[cfg(test)]
+mod nesting_limit_tests;
 
 /// Process encoded payloads discovered during string extraction: emit the
 /// `metadata/encoded-payload/*` finding for each and recursively analyze the
@@ -401,6 +403,12 @@ pub(crate) fn process_encoded_payloads(
                 path = %path.display(),
                 "Encoded payload analysis depth limit reached ({MAX_ANALYSIS_DEPTH}), skipping deeper analysis"
             );
+            // The limit counts from where this analysis began: the same
+            // bytes analyzed directly decode further, so this report must
+            // not be cached under their content key.
+            report
+                .analysis_gaps
+                .record(types::AnalysisGap::NestingLimit);
             report.findings.push(types::Finding {
                 precomputed_spans: None,
                 src: None,
@@ -431,76 +439,87 @@ pub(crate) fn process_encoded_payloads(
             });
             break;
         }
-        if let Ok(mut temp_file) = tempfile::NamedTempFile::new() {
-            let _ = std::io::Write::write_all(&mut temp_file, &payload.data);
-            if let Ok(mut payload_report) = analyze_file_with_resources_at_depth(
+        let temp_file = tempfile::NamedTempFile::new().and_then(|mut temp_file| {
+            std::io::Write::write_all(&mut temp_file, &payload.data).map(|()| temp_file)
+        });
+        let temp_file = match temp_file {
+            Ok(temp_file) => Some(temp_file),
+            Err(error) => {
+                // The decoded child is missing for this run only.
+                tracing::warn!(%error, "decoded payload not analyzed: temp file failed");
+                report.analysis_gaps.record(types::AnalysisGap::IoFailure);
+                None
+            }
+        };
+        if let Some(temp_file) = temp_file
+            && let Ok(mut payload_report) = analyze_file_with_resources_at_depth(
                 temp_file.path(),
                 options,
                 engine,
                 None,
                 None,
                 analysis_depth + 1,
-            ) {
-                // MIME attachments and recovered media executables are real
-                // child files. Keep their attribution rather than claiming the
-                // enclosing mail or image directly implements PE behavior.
-                if payload.encoding_chain.as_slice() == ["mime-base64"]
-                    || payload.encoding_chain.as_slice() == ["media-base64-pe"]
-                    || payload.encoding_chain.as_slice() == ["media-xor-pe"]
-                {
-                    let virtual_path = types::encode_decoded_path(
-                        &path.display().to_string(),
-                        &payload.encoding_chain,
-                        payload.original_offset,
-                    );
-                    payload_report.target.path = virtual_path.clone();
-                    let (mut entry, mut children, _) = payload_report.into_file_analysis(0, engine);
-                    entry.path = virtual_path.clone();
-                    entry.depth = 1;
-                    entry.encoding = Some(payload.encoding_chain.clone());
-                    for child in &mut children {
-                        child.path =
-                            rebase_decoded_child_path(&child.path, temp_file.path(), &virtual_path);
-                        child.depth += 1;
-                        for finding in &mut child.findings {
-                            if let Some(source) = &mut finding.source_file {
-                                *source = rebase_decoded_child_path(
-                                    source,
-                                    temp_file.path(),
-                                    &virtual_path,
-                                );
-                            }
-                        }
-                    }
-                    for finding in &mut entry.findings {
+            )
+        {
+            // MIME attachments and recovered media executables are real
+            // child files. Keep their attribution rather than claiming the
+            // enclosing mail or image directly implements PE behavior.
+            if payload.encoding_chain.as_slice() == ["mime-base64"]
+                || payload.encoding_chain.as_slice() == ["media-base64-pe"]
+                || payload.encoding_chain.as_slice() == ["media-xor-pe"]
+            {
+                let virtual_path = types::encode_decoded_path(
+                    &path.display().to_string(),
+                    &payload.encoding_chain,
+                    payload.original_offset,
+                );
+                payload_report.target.path = virtual_path.clone();
+                let (mut entry, mut children, _) = payload_report.into_file_analysis(0, engine);
+                entry.path = virtual_path.clone();
+                entry.depth = 1;
+                entry.encoding = Some(payload.encoding_chain.clone());
+                for child in &mut children {
+                    child.path =
+                        rebase_decoded_child_path(&child.path, temp_file.path(), &virtual_path);
+                    child.depth += 1;
+                    for finding in &mut child.findings {
                         if let Some(source) = &mut finding.source_file {
                             *source =
                                 rebase_decoded_child_path(source, temp_file.path(), &virtual_path);
                         }
                     }
-                    report.files.push(entry);
-                    report.files.extend(children);
-                    continue;
                 }
-                // Merge traits from payload analysis
-                for mut trait_item in payload_report.traits {
-                    // Prefix trait offset with encoding chain
-                    if let Some(ref offset) = trait_item.offset {
-                        trait_item.offset =
-                            Some(format!("{}!{}", payload.encoding_chain.join("+"), offset));
-                    } else {
-                        trait_item.offset = Some(format!("{}!", payload.encoding_chain.join("+")));
+                for finding in &mut entry.findings {
+                    if let Some(source) = &mut finding.source_file {
+                        *source =
+                            rebase_decoded_child_path(source, temp_file.path(), &virtual_path);
                     }
-                    report.traits.push(trait_item);
                 }
+                report.files.push(entry);
+                report.files.extend(children);
+                continue;
+            }
+            // Merging drops the payload's file list, so carry over what
+            // keeps it out of the caches; see `carry_incomplete_gaps`.
+            analysis_cache::carry_incomplete_gaps(&payload_report, &report.analysis_gaps);
+            // Merge traits from payload analysis
+            for mut trait_item in payload_report.traits {
+                // Prefix trait offset with encoding chain
+                if let Some(ref offset) = trait_item.offset {
+                    trait_item.offset =
+                        Some(format!("{}!{}", payload.encoding_chain.join("+"), offset));
+                } else {
+                    trait_item.offset = Some(format!("{}!", payload.encoding_chain.join("+")));
+                }
+                report.traits.push(trait_item);
+            }
 
-                // Merge findings from payload analysis
-                let existing: std::collections::HashSet<crate::types::Istr> =
-                    report.findings.iter().map(|f| f.id.clone()).collect();
-                for finding in payload_report.findings {
-                    if !existing.contains(finding.id.as_str()) {
-                        report.findings.push(finding);
-                    }
+            // Merge findings from payload analysis
+            let existing: std::collections::HashSet<crate::types::Istr> =
+                report.findings.iter().map(|f| f.id.clone()).collect();
+            for finding in payload_report.findings {
+                if !existing.contains(finding.id.as_str()) {
+                    report.findings.push(finding);
                 }
             }
         }
@@ -1168,24 +1187,18 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     let handled_yara_internally =
         matches!(file_type, FileType::MachO | FileType::Elf | FileType::Pe)
             || file_type.is_archive();
-    // A YARA rule file lists the strings and hex patterns that YARA rules match
-    // on, so scanning one with the YARA engine self-detects: the rule's own
-    // subject is reported as a hostile hit on the corpus that documents it.
-    // Rule files are classified as PHP/Python/Kotlin/shell-like source, so they
-    // reach this arm as ordinary programs. Mirrors
-    // `archive_member_yara_skip_reason`, which does the same for members.
-    let is_yara_rule_source = file_type == FileType::Yara
-        || AsRef::<Path>::as_ref(&path)
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("yar") || e.eq_ignore_ascii_case("yara"));
+    // The YARA policy archive members follow too (rule sources, large source
+    // maps and licence files): see `engine::yara_skip_reason`.
+    let yara_skipped =
+        crate::engine::yara_skip_reason(&path.display().to_string(), file_type, file_data.len())
+            .is_some();
     if !handled_yara_internally
         && !report
             .metadata
             .tools_used
             .iter()
             .any(|tool| tool == "yara-x")
-        && !is_yara_rule_source
+        && !yara_skipped
         && yara_engine.is_some_and(|yara| yara.is_loaded())
         && file_type.is_analyzed()
     {
@@ -1322,16 +1335,27 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // Key on the mapper this analysis ran with, not on the process-global
     // traits scan: a reload (`/reload`, scan's renewal task) can have replaced
     // the latter while this file was being analyzed.
-    analysis_cache::report_cache_store(
-        &sha256_hex,
-        &report_type_key,
-        options,
-        engine.settings(),
-        &report,
-        capability_mapper.traits_revision(),
-    );
+    //
+    // A decoded payload (depth > 0) is analyzed from a temporary file whose
+    // random name is part of the report key, so its row could never be hit;
+    // the per-file store above, keyed without the name, is what it reuses.
+    if analysis_depth == 0 {
+        analysis_cache::report_cache_store(
+            &sha256_hex,
+            &report_type_key,
+            options,
+            engine.settings(),
+            &report,
+            capability_mapper.traits_revision(),
+        );
+    }
     if let Some(flight) = flight {
-        flight.complete(Some(&report));
+        // Shared only when the persistent cache would keep it too.
+        if analysis_cache::evaluation_incomplete(&report) {
+            flight.complete(None);
+        } else {
+            flight.complete(Some(&report));
+        }
     }
 
     Ok(report)

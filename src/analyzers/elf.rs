@@ -272,6 +272,7 @@ impl ElfAnalyzer {
                     image.offset,
                     self.engine.clone(),
                     None, // YARA handled by child
+                    &report.analysis_gaps,
                 ) {
                     report.files.extend(files);
                 }

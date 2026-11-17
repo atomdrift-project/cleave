@@ -555,7 +555,16 @@ fn scan_traits_dir_with_sources(
             if !entry.file_type().is_file() {
                 continue;
             }
-            let (is_yaml, is_yar) = match path.extension().and_then(|e| e.to_str()) {
+            // A packed rule file (`name.yaml.zst`) is the rule its inner
+            // extension names, as `RuleSources` presents it; its compressed
+            // bytes change whenever the rule does, which is all the digest
+            // needs.
+            let logical = if path.extension().is_some_and(|e| e == "zst") {
+                Path::new(path.file_stem().unwrap_or_default())
+            } else {
+                path
+            };
+            let (is_yaml, is_yar) = match logical.extension().and_then(|e| e.to_str()) {
                 Some("yaml" | "yml") => (true, false),
                 Some("yar" | "yara") => (false, true),
                 _ => continue,
@@ -1313,6 +1322,22 @@ pub fn cleanup_old_caches(current_cache: &Path) -> Result<()> {
 /// else would ever remove it. A family still in use costs one rebuild.
 const UNUSED_MAPPER_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
+/// Most mapper families kept, least recently used dropped first.
+///
+/// A family is per traits directory, and a service that checks traits out
+/// into a fresh worktree per job makes a new ~100 MB family for every job:
+/// one host held 4,339 of them, 487 GB, inside the TTL. Dropping a family
+/// still in use costs one rebuild.
+const MAX_MAPPER_FAMILIES: usize = 64;
+
+/// Prune the mapper cache after a mapper is written. The YARA cold path was
+/// the only other caller, so a host with a warm YARA cache never pruned.
+pub(crate) fn prune_mapper_caches() {
+    if let Ok(dir) = cache_dir() {
+        prune_superseded_mappers(&dir);
+    }
+}
+
 /// Record that a cache file was just used, so pruning ages it by last use
 /// rather than by when it was written. Best-effort.
 pub(crate) fn mark_used(path: &Path) {
@@ -1364,13 +1389,24 @@ fn prune_superseded_mappers(dir: &Path) {
             }
         }
     }
-    // A whole family whose newest member went unused for the TTL goes too.
+    // A whole family whose newest member went unused for the TTL goes too,
+    // and past the family cap the least recently used go.
     let now = SystemTime::now();
-    superseded.extend(newest.into_values().filter_map(|(path, mtime)| {
-        now.duration_since(mtime)
+    let mut kept: Vec<(PathBuf, SystemTime)> = Vec::with_capacity(newest.len());
+    for (path, mtime) in newest.into_values() {
+        if now
+            .duration_since(mtime)
             .is_ok_and(|age| age > UNUSED_MAPPER_TTL)
-            .then_some(path)
-    }));
+        {
+            superseded.push(path);
+        } else {
+            kept.push((path, mtime));
+        }
+    }
+    if kept.len() > MAX_MAPPER_FAMILIES {
+        kept.sort_unstable_by_key(|(_, mtime)| std::cmp::Reverse(*mtime));
+        superseded.extend(kept.drain(MAX_MAPPER_FAMILIES..).map(|(path, _)| path));
+    }
     for path in superseded {
         let _ = fs::remove_file(path);
     }

@@ -245,6 +245,13 @@ where
         Some(Err(e)) => {
             tracing::warn!(error = %e, "YARA scan failed, continuing without YARA results");
             report.metadata.errors.push(format!("yara: {e:#}"));
+            // Missing for this run only; see `AnalysisGap::YaraIncomplete`.
+            // No rules at all is the same for every run, not a failure.
+            if e.downcast_ref::<yara_engine::NoYaraRules>().is_none() {
+                report
+                    .analysis_gaps
+                    .record(types::AnalysisGap::YaraIncomplete);
+            }
             return HashMap::new();
         }
         None => return HashMap::new(),

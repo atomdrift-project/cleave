@@ -27,10 +27,21 @@ pub(crate) fn analyze_embedded_as_child(
     offset: usize,
     engine: crate::Engine,
     yara_engine: Option<Arc<YaraEngine>>,
+    gaps: &crate::types::AnalysisGaps,
 ) -> Option<Vec<crate::types::FileAnalysis>> {
     let suffix = if kind_str == "pe" { ".exe" } else { "" };
-    let temp = tempfile::Builder::new().suffix(suffix).tempfile().ok()?;
-    std::fs::write(temp.path(), bytes).ok()?;
+    let written = tempfile::Builder::new()
+        .suffix(suffix)
+        .tempfile()
+        .and_then(|temp| std::fs::write(temp.path(), bytes).map(|()| temp));
+    let temp = match written {
+        Ok(temp) => temp,
+        Err(error) => {
+            tracing::warn!(%error, "embedded binary not analyzed: temp file failed");
+            gaps.record(crate::types::AnalysisGap::IoFailure);
+            return None;
+        }
+    };
 
     let child_path = crate::types::file_analysis::encode_archive_path(
         host_path,

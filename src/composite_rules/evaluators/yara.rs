@@ -108,11 +108,13 @@ pub(crate) fn eval_yara_inline<'a>(
             Err(e) => {
                 // A timed-out scan leaves the condition undecided, not false;
                 // the gap says so and keeps the report out of the cache.
-                if matches!(e, yara_x::errors::ScanError::Timeout) {
-                    ctx.report
-                        .analysis_gaps
-                        .record(crate::types::AnalysisGap::EvaluationDeadline);
-                }
+                // Any other failure leaves it undecided for this run too.
+                let gap = if matches!(e, yara_x::errors::ScanError::Timeout) {
+                    crate::types::AnalysisGap::EvaluationDeadline
+                } else {
+                    crate::types::AnalysisGap::YaraIncomplete
+                };
+                ctx.report.analysis_gaps.record(gap);
                 tracing::warn!(
                     source_preview = source.lines().next().unwrap_or(""),
                     error = %e,

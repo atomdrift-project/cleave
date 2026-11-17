@@ -70,13 +70,8 @@ impl ArchiveAnalyzer {
         // FileAnalysis cache where safe, and single-flight the first analysis
         // when duplicate members arrive concurrently (within one archive or
         // from two archives in a diff).
-        let default_options;
-        let options = if let Some(options) = self.analysis_options.as_deref() {
-            options
-        } else {
-            default_options = crate::AnalysisOptions::default();
-            &default_options
-        };
+        let options = self.options_or_default();
+        let options = options.as_ref();
         // Unknown members are normally skipped, but a validated embedded PE or
         // ELF is executable content even when a wrapper obscures its file ID.
         let wrapped_binary = crate::analyzers::embedded_images::has_wrapped_binary(file_type, data);
@@ -380,6 +375,19 @@ impl ArchiveAnalyzer {
             Some(&flight),
         );
         match &result {
+            // Cancellation stops payload decoding, embedded-image carving and
+            // YARA wherever they are, and most of those exits return a report
+            // without a gap. The standalone pipeline refuses to store a
+            // cancelled analysis; a member must not either, nor hand its
+            // partial report to a waiter from another request. A report the
+            // persistent cache refuses (a gap another analysis of these bytes
+            // would not have) is not shared in-process either: the waiter
+            // may sit shallower, or run after the failure has passed.
+            Ok(Some(report))
+                if self.is_cancelled() || crate::analysis_cache::evaluation_incomplete(report) =>
+            {
+                flight.complete(None)
+            }
             Ok(Some(report)) => {
                 // Archive reports contain nested members whose paths depend on
                 // the containing archive, so retain only ordinary members in
@@ -748,12 +756,11 @@ impl ArchiveAnalyzer {
             // archive member (npm tarball, zip, jar) silently lost its
             // encoded-payload finding and every trait derived from the decoded
             // content — detection that the same file gets when scanned
-            // standalone. Guarded on the options the recursion needs.
+            // standalone. An archive built without explicit options decodes
+            // under the defaults it is cached under, never not at all.
             // `payloads` is moved — `input` (which borrowed it) is no longer
             // used after `analyze_input` above.
-            if !payloads.is_empty()
-                && let Some(opts) = self.analysis_options.as_ref()
-            {
+            if !payloads.is_empty() {
                 crate::process_encoded_payloads(
                     payloads,
                     &mut report,
@@ -761,7 +768,7 @@ impl ArchiveAnalyzer {
                     data,
                     *file_type,
                     (self.current_depth + 1) as u32,
-                    opts,
+                    &self.options_or_default(),
                     &self.engine,
                 );
             }

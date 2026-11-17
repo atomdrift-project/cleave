@@ -148,13 +148,10 @@ impl Engine {
         } else {
             use crate::analyzers::FileTypeExt;
             let file_type = crate::FileType::from_label(&report.target.file_type);
-            let is_rule_source = file_type == Some(crate::FileType::Yara)
-                || Path::new(&report.target.path)
-                    .extension()
-                    .is_some_and(|ext| {
-                        ext.eq_ignore_ascii_case("yar") || ext.eq_ignore_ascii_case("yara")
-                    });
-            if !is_rule_source && let Some(yara) = self.yara().filter(|yara| yara.is_loaded()) {
+            // A type the label does not name keeps the untyped scan below.
+            let skipped = file_type
+                .is_some_and(|ft| yara_skip_reason(&report.target.path, ft, data.len()).is_some());
+            if !skipped && let Some(yara) = self.yara().filter(|yara| yara.is_loaded()) {
                 let filters = file_type.map(|ft| ft.yara_filetypes()).unwrap_or_default();
                 let yara_started = std::time::Instant::now();
                 generated = crate::process_yara_result(
@@ -300,6 +297,71 @@ impl std::fmt::Debug for Engine {
             .field("settings", &self.0.settings)
             .finish()
     }
+}
+
+/// Why a file gets no YARA pass, or `None` when it is scanned.
+///
+/// One policy for a standalone file and an archive member alike: the analysis
+/// caches key on content, so the same bytes under the same name must get the
+/// same scan wherever they are found. Archive members once applied the size
+/// and name skips alone, and a member's YARA-less verdict for a large source
+/// map or licence file was served to the standalone copy. String, trait and
+/// encoded-payload analysis run either way; only the YARA pass is skipped.
+pub(crate) fn yara_skip_reason(
+    path: &str,
+    file_type: crate::FileType,
+    size_bytes: usize,
+) -> Option<&'static str> {
+    use crate::FileType;
+    use crate::analyzers::FileTypeExt;
+
+    // An unidentified file has no bucket; scanning it with no filter would
+    // hit every tier and materialize all per-filetype rule sets.
+    if file_type.yara_filetypes().is_empty() {
+        return Some("no targeted YARA tier for file type");
+    }
+
+    let lower_path = path.to_ascii_lowercase();
+    let file_name = Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(path)
+        .to_ascii_lowercase();
+
+    if lower_path.ends_with(".asar") {
+        return Some("archive-like asar container");
+    }
+
+    // A YARA rule file *is* a list of the strings and hex patterns YARA rules
+    // search for, so scanning it self-detects: a packaged rule corpus lights
+    // up the third-party tiers and reports the rule's own subject as hostile.
+    // Rule files classify as PHP/Python/Kotlin/shell-like source, so the
+    // extension is checked as well as the type. The traits side handles the
+    // first-party half via `metadata/file/extension/identity::yara-extension`.
+    if file_type == FileType::Yara || lower_path.ends_with(".yar") || lower_path.ends_with(".yara")
+    {
+        return Some("YARA rule source");
+    }
+
+    if size_bytes >= 512 * 1024 && lower_path.ends_with(".map") {
+        return Some("large source map");
+    }
+
+    let is_licenseish = file_name.starts_with("license")
+        || file_name.starts_with("licenses")
+        || file_name.starts_with("copying")
+        || file_name.starts_with("notice");
+    if size_bytes >= 128 * 1024
+        && is_licenseish
+        && matches!(
+            file_type,
+            FileType::Html | FileType::Markdown | FileType::Unknown
+        )
+    {
+        return Some("large license/notice document");
+    }
+
+    None
 }
 
 #[cfg(test)]

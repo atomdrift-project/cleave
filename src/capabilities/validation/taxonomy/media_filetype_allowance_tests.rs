@@ -1,5 +1,6 @@
 use super::{TraitDefinition, find_broad_filetype_traits};
 use std::collections::HashMap;
+use std::path::Path;
 
 #[test]
 fn gif_header_allowance_is_exact_file_and_hex_only() -> anyhow::Result<()> {
@@ -9,11 +10,13 @@ fn gif_header_allowance_is_exact_file_and_hex_only() -> anyhow::Result<()> {
     for (path, permitted) in [
         ("/traits/metadata/file/magic/identity/gif.yaml", true),
         ("/traits/metadata/file/magic/identity/gif.yaml-extra", false),
+        ("/traits/other/metadata/file/magic/identity/gif.yaml", false),
         ("/traits/metadata/file/magic/identity/traits.yaml", false),
     ] {
         let sources = HashMap::from([(hex.id.clone(), path.to_string())]);
         assert_eq!(
-            find_broad_filetype_traits(std::slice::from_ref(&hex), &sources).is_empty(),
+            find_broad_filetype_traits(std::slice::from_ref(&hex), &sources, Path::new("/traits"))
+                .is_empty(),
             permitted,
             "{path}"
         );
@@ -22,68 +25,24 @@ fn gif_header_allowance_is_exact_file_and_hex_only() -> anyhow::Result<()> {
 }
 
 #[test]
-fn embedded_php_allowance_is_exact_file_and_value_only() -> anyhow::Result<()> {
-    let value: TraitDefinition = crate::yaml::from_str(
-        "id: request-call\ndesc: Parsed request call\ncrit: suspicious\nconf: 0.99\nfor: [jpeg, png, gif, wav, aiff, mp3, mp4, ico, webp, font]\nif:\n  type: value\n  path: media.php.request_calls[*]\n  exact: system\n",
-    )?;
-    for (path, permitted) in [
-        (
-            "/traits/micro-behaviors/data/embedded/payload/media/php-command-input.yaml",
-            true,
-        ),
-        (
-            "/traits/micro-behaviors/data/embedded/payload/media/php.yaml",
-            false,
-        ),
-        (
-            "/traits/micro-behaviors/data/embedded/payload/media/php-command-input.yaml-extra",
-            false,
-        ),
-    ] {
-        let sources = HashMap::from([(value.id.clone(), path.to_string())]);
-        assert_eq!(
-            find_broad_filetype_traits(std::slice::from_ref(&value), &sources).is_empty(),
-            permitted,
-            "{path}"
-        );
-    }
-    let mut raw = value.clone();
-    raw.r#if = crate::yaml::from_str("type: raw\nsubstr: system\n")?;
-    let sources = HashMap::from([(
-        raw.id.clone(),
-        "/traits/micro-behaviors/data/embedded/payload/media/php-command-input.yaml".to_string(),
-    )]);
-    assert_eq!(find_broad_filetype_traits(&[raw], &sources).len(), 1);
-    Ok(())
-}
+fn media_fact_scope_follows_the_producer_and_rejects_other_carriers() -> anyhow::Result<()> {
+    use crate::composite_rules::FileType;
 
-#[test]
-fn relocated_media_allowance_stays_matcher_and_directory_scoped() -> anyhow::Result<()> {
-    let value: TraitDefinition = crate::yaml::from_str(
-        "id: carrier\ndesc: Container signature\ncrit: baseline\nconf: 0.9\nfor: [jpeg, png, svg, wav, aiff, mp3, mp4, ico, gif, bmp, webp, font]\nif:\n  type: value\n  path: media.container\n",
+    let mut rule: TraitDefinition = crate::yaml::from_str(
+        "id: carrier\ndesc: Container signature\ncrit: baseline\nconf: 0.9\nif: {type: value, path: media.container}\n",
     )?;
-    assert_eq!(value.r#for.len(), 12);
-    for (path, permitted) in [
-        ("/traits/metadata/file/format/media/container.yaml", true),
-        (
-            "/traits/metadata/file/format/media-extra/container.yaml",
-            false,
-        ),
-        ("/traits/metadata/file/format/structured/traits.yaml", false),
-    ] {
-        let sources = HashMap::from([(value.id.clone(), path.to_string())]);
-        assert_eq!(
-            find_broad_filetype_traits(std::slice::from_ref(&value), &sources).is_empty(),
-            permitted,
-            "{path}"
-        );
-    }
-    let mut raw = value.clone();
-    raw.r#if = crate::yaml::from_str("type: raw\nsubstr: RIFF\n")?;
-    let sources = HashMap::from([(
-        raw.id.clone(),
-        "/traits/metadata/file/format/media/container.yaml".to_string(),
-    )]);
-    assert_eq!(find_broad_filetype_traits(&[raw], &sources).len(), 1);
+    rule.r#for = FileType::MEDIA_FAMILY.to_vec();
+    let sources = HashMap::new();
+    let root = Path::new("/traits");
+    let violations = |rule: &TraitDefinition| {
+        find_broad_filetype_traits(std::slice::from_ref(rule), &sources, root)
+    };
+
+    assert!(violations(&rule).is_empty());
+    rule.r#for.push(FileType::Elf);
+    assert_eq!(violations(&rule).len(), 1);
+    rule.r#for.pop();
+    rule.r#if = crate::yaml::from_str("type: value\npath: arbitrary.key")?;
+    assert_eq!(violations(&rule).len(), 1);
     Ok(())
 }

@@ -8,7 +8,7 @@ use std::process::Command;
 fn shell_compound_predicates_are_checked_after_structure_in_scan_and_validation() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    let rules = root.join("metadata/test/query");
+    let rules = root.join("metadata/lang/source/shape");
     std::fs::create_dir_all(&rules).unwrap();
     let queries = [
         (
@@ -98,7 +98,11 @@ fn shell_compound_predicates_are_checked_after_structure_in_scan_and_validation(
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|t| t["id"].as_str()?.strip_prefix("metadata/test/query::"))
+            .filter_map(|t| {
+                t["id"]
+                    .as_str()?
+                    .strip_prefix("metadata/lang/source/shape::")
+            })
             .collect();
         assert_eq!(actual, expected.iter().copied().collect(), "{source}");
     }
@@ -125,7 +129,7 @@ fn shell_compound_predicates_are_checked_after_structure_in_scan_and_validation(
             "100",
             "validate",
             "--exclude",
-            "validation",
+            "stale-ft-cap",
         ])
         .env("CLEAVE_SKIP_CACHE", "1")
         .env("CLEAVE_NO_UPDATE_CHECK", "1")

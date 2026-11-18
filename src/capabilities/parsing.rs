@@ -621,22 +621,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 // video. One group, so a carrier rule is written once rather
                 // than a dozen times, and every file type belongs to exactly
                 // one group in the validator's table.
-                "media" | "carriers" => vec![
-                    RuleFileType::Font,
-                    RuleFileType::Png,
-                    RuleFileType::Tiff,
-                    RuleFileType::Avif,
-                    RuleFileType::Jpeg,
-                    RuleFileType::Svg,
-                    RuleFileType::Wav,
-                    RuleFileType::Aiff,
-                    RuleFileType::Mp3,
-                    RuleFileType::Mp4,
-                    RuleFileType::Ico,
-                    RuleFileType::Gif,
-                    RuleFileType::Bmp,
-                    RuleFileType::Webp,
-                ],
+                "media" | "carriers" => RuleFileType::MEDIA_FAMILY.to_vec(),
                 // Convenience subsets, not groups: a rule naming one of these
                 // is writing a short explicit list, which is what the
                 // group-expressibility check will treat it as.

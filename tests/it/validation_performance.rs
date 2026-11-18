@@ -64,7 +64,7 @@ fn unchanged_validation_is_ten_times_faster_after_a_yaml_addition() {
     }
     let measured = |threshold: &str| -> (Output, Duration) {
         let started = Instant::now();
-        let output = run(root, threshold, &["--exclude", "validation"]);
+        let output = run(root, threshold, &["--exclude", "stale-ft-cap"]);
         (output, started.elapsed())
     };
     let (initial, _) = measured("60000");
@@ -204,9 +204,8 @@ fn original_slow_query_is_a_soft_outlier_and_fixed_queries_pass() {
         &source,
     );
 
-    // A partial rule bundle cannot satisfy the repository-wide allowlist lint.
-    // Exclude only that legacy lint; rule-performance remains fully enabled.
-    let strict = run(root, "60000", &["--exclude", "validation"]);
+    // The miniature bundle omits the repository-wide allowlist's rules.
+    let strict = run(root, "60000", &["--exclude", "stale-ft-cap"]);
     let errors = String::from_utf8_lossy(&strict.stderr);
     assert!(!strict.status.success(), "{errors}");
     assert!(
@@ -223,14 +222,14 @@ fn original_slow_query_is_a_soft_outlier_and_fixed_queries_pass() {
     );
 
     // Confirmation samples cannot waive the original whole-rule deadline.
-    let absolute = run(root, "1", &["--exclude", "validation"]);
+    let absolute = run(root, "1", &["--exclude", "stale-ft-cap"]);
     let absolute_errors = String::from_utf8_lossy(&absolute.stderr);
     assert!(
         !absolute.status.success() && absolute_errors.contains("slow-rule threshold 1ms"),
         "{absolute_errors}"
     );
 
-    let soft = run(root, "60000", &["--exclude", "validation", "--soft"]);
+    let soft = run(root, "60000", &["--exclude", "stale-ft-cap", "--soft"]);
     let errors = String::from_utf8_lossy(&soft.stderr);
     assert!(soft.status.success(), "{errors}");
     assert!(
@@ -238,7 +237,11 @@ fn original_slow_query_is_a_soft_outlier_and_fixed_queries_pass() {
         "{errors}"
     );
 
-    let excluded = run(root, "60000", &["--exclude", "validation,rule-performance"]);
+    let excluded = run(
+        root,
+        "60000",
+        &["--exclude", "stale-ft-cap,rule-performance"],
+    );
     assert!(
         excluded.status.success(),
         "{}",
@@ -259,13 +262,13 @@ fn original_slow_query_is_a_soft_outlier_and_fixed_queries_pass() {
                 "var alias=String.fromCharCode; const table={{{wide}}}; for(var i=0;i<1;i++){{output+=String(bytes[i]^1);}}"
             ),
         );
-        let bounded = run(root, "60000", &["--exclude", "validation"]);
+        let bounded = run(root, "60000", &["--exclude", "stale-ft-cap"]);
         let errors = String::from_utf8_lossy(&bounded.stderr);
         assert!(
             !bounded.status.success() && errors.contains("AST query exhausted its"),
             "{errors}"
         );
-        let bounded_soft = run(root, "60000", &["--exclude", "validation", "--soft"]);
+        let bounded_soft = run(root, "60000", &["--exclude", "stale-ft-cap", "--soft"]);
         let errors = String::from_utf8_lossy(&bounded_soft.stderr);
         assert!(
             bounded_soft.status.success() && errors.contains("AST query exhausted its"),
@@ -284,19 +287,19 @@ fn original_slow_query_is_a_soft_outlier_and_fixed_queries_pass() {
         .unwrap()
         .retain(|t| !t["id"].as_str().unwrap().starts_with("old-"));
     std::fs::write(&rule_file, serde_json::to_vec(&bundle).unwrap()).unwrap();
-    let fixed = run(root, "60000", &["--exclude", "validation"]);
+    let fixed = run(root, "60000", &["--exclude", "stale-ft-cap"]);
     assert!(
         fixed.status.success(),
         "{}",
         String::from_utf8_lossy(&fixed.stderr)
     );
-    let tighter = run(root, "0", &["--exclude", "validation"]);
+    let tighter = run(root, "0", &["--exclude", "stale-ft-cap"]);
     let errors = String::from_utf8_lossy(&tighter.stderr);
     assert!(
         !tighter.status.success() && errors.contains("slow-rule threshold 0ms"),
         "{errors}"
     );
-    let tighter_soft = run(root, "0", &["--exclude", "validation", "--soft"]);
+    let tighter_soft = run(root, "0", &["--exclude", "stale-ft-cap", "--soft"]);
     let errors = String::from_utf8_lossy(&tighter_soft.stderr);
     assert!(
         tighter_soft.status.success() && errors.contains("slow-rule threshold 0ms"),
@@ -337,7 +340,7 @@ fn parallel_identical_queries_do_not_become_relative_cost_outliers() {
         .unwrap();
     }
     for _ in 0..3 {
-        let result = run(root, "4000", &["--exclude", "validation"]);
+        let result = run(root, "4000", &["--exclude", "stale-ft-cap"]);
         assert!(
             result.status.success(),
             "{}",

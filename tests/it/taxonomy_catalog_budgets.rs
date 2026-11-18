@@ -29,7 +29,7 @@ fn validate(root: &Path) -> (bool, String) {
             root.to_str().unwrap(),
             "validate",
             "--exclude",
-            "validation",
+            "stale-ft-cap",
         ])
         .env("CLEAVE_SKIP_CACHE", "1")
         .env_remove("CLEAVE_VALIDATE_SOFT")
@@ -114,9 +114,12 @@ fn artifact_subject_roots_are_admitted_with_narrow_platform_contracts() {
     for (namespace, portable, accepted) in [
         ("metadata/archive/member/filename", false, true),
         ("metadata/archive/layout", true, false),
-        ("metadata/filename", true, true),
-        ("metadata/path", true, true),
+        ("metadata/filename", false, true),
+        ("metadata/filename", true, false),
+        ("metadata/path", false, true),
+        ("metadata/path", true, false),
         ("metadata/arch", true, false),
+        ("metadata/registry", true, true),
         ("metadata/not-an-artifact-subject", false, false),
     ] {
         let temp = tempfile::tempdir().unwrap();
@@ -141,32 +144,31 @@ fn artifact_subject_roots_are_admitted_with_narrow_platform_contracts() {
                 "{stderr}"
             );
         }
-        if !accepted && namespace != "metadata/not-an-artifact-subject" {
+        if portable && !accepted {
+            assert!(stderr.contains("policy/plat-all"), "{stderr}");
             assert!(stderr.contains(namespace), "{stderr}");
         }
     }
 }
 
 #[test]
-fn mixed_credential_values_can_occupy_the_item_ancestor_without_a_larger_budget() {
+fn mixed_credential_values_must_occupy_a_leaf_with_the_same_budget() {
     let budget = directory_budget();
-    let temp = tempfile::tempdir().unwrap();
-    for (count, accepted) in [(budget, true), (budget + 1, false)] {
-        write_catalog(
-            temp.path(),
-            "objectives/exfiltration/stealer/credential/value",
-            count,
-        );
-        write_catalog(
-            temp.path(),
-            "objectives/exfiltration/stealer/credential/value/key",
-            1,
-        );
+    let parent = "objectives/exfiltration/stealer/credential/value";
+    let broad = format!("{parent}/environment");
+    let key = format!("{parent}/key");
+    for (directory, count, issue) in [
+        (parent, 1, Some("policy/leaf-yaml")),
+        (&broad, budget, None),
+        (&broad, budget + 1, Some("policy/oversized-dir")),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        write_catalog(temp.path(), directory, count);
+        write_catalog(temp.path(), &key, 1);
         let (ok, stderr) = validate(temp.path());
-        assert_eq!(ok, accepted, "{stderr}");
-        assert!(!stderr.contains("policy/leaf-yaml"), "{stderr}");
-        if !accepted {
-            assert!(stderr.contains("policy/oversized-dir"), "{stderr}");
+        assert_eq!(ok, issue.is_none(), "{directory}: {stderr}");
+        if let Some(issue) = issue {
+            assert!(stderr.contains(issue), "{stderr}");
         }
     }
 }

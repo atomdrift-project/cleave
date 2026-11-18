@@ -665,88 +665,154 @@ mod uncallable_symbol_matchers {
     }
 }
 
-/// `find_stale_filetype_allowlist_entries` — an allowlist entry whose
-/// directory prefix matches no trait.
+/// Obsolete file-type exemptions must match both a path and an over-cap matcher.
 mod stale_filetype_allowlist {
     use crate::capabilities::validation::find_stale_filetype_allowlist_entries;
-    use crate::capabilities::validation::taxonomy::BROAD_FILETYPE_ALLOWLIST;
+    use crate::composite_rules::{Condition, TraitDefinition};
     use std::collections::HashMap;
+    use std::path::Path;
 
-    /// Every shipped entry must match a real directory. When one does not, the
-    /// exemption it encodes is silently gone -- the usual cause is a directory
-    /// renamed without updating the entry, and the symptom is a pile of
-    /// file-type cap violations nowhere near the rename.
     #[test]
-    fn shipped_entries_all_match_a_real_directory() {
-        // Stand in for the loaded taxonomy: one source path per entry prefix.
-        let sources: HashMap<String, String> = BROAD_FILETYPE_ALLOWLIST
-            .iter()
-            .enumerate()
-            .filter_map(|(i, e)| {
-                e.split_once(':').map(|(_, p)| {
-                    (
-                        format!("t{i}"),
-                        if p.ends_with(".yaml") || p.ends_with(".yml") {
-                            format!("./{p}")
-                        } else {
-                            format!("./{p}traits.yaml")
-                        },
-                    )
-                })
-            })
-            .collect();
-        assert!(
-            find_stale_filetype_allowlist_entries(&sources).is_empty(),
-            "every entry should match when each prefix has a source file"
-        );
-    }
+    fn only_over_cap_matchers_in_the_reviewed_file_keep_its_exemption() -> anyhow::Result<()> {
+        let entry = "hex:metadata/file/magic/identity/gif.yaml";
+        let mut rule: TraitDefinition = crate::yaml::from_str(
+            "id: header\ndesc: GIF signature\ncrit: baseline\nconf: 0.99\nfor: [gif, php, asp, data]\nif: {type: hex, pattern: '47 49 46 38', offset: 0}\n",
+        )?;
+        let root = Path::new("/rules");
+        let mut sources = HashMap::from([(
+            rule.id.clone(),
+            "/rules/metadata/file/magic/identity/gif.yaml".into(),
+        )]);
+        let is_stale = |rule: &TraitDefinition, sources: &HashMap<String, String>| {
+            find_stale_filetype_allowlist_entries(std::slice::from_ref(rule), sources, root)
+                .contains(&entry)
+        };
 
-    /// With no traits at all, every entry is stale — the check is actually
-    /// looking at the sources rather than always passing.
-    #[test]
-    fn every_entry_is_stale_when_nothing_matches() {
-        let empty: HashMap<String, String> = HashMap::new();
-        assert_eq!(
-            find_stale_filetype_allowlist_entries(&empty).len(),
-            BROAD_FILETYPE_ALLOWLIST.len()
+        assert!(!is_stale(&rule, &sources));
+        sources.insert(
+            rule.id.clone(),
+            "/rules/other/metadata/file/magic/identity/gif.yaml".into(),
         );
+        assert!(is_stale(&rule, &sources));
+        sources.insert(
+            rule.id.clone(),
+            "/rules/metadata/file/magic/identity/gif.yaml".into(),
+        );
+        let hex = rule.r#if.clone();
+        rule.r#if = crate::yaml::from_str::<Condition>("type: raw\nsubstr: GIF8")?;
+        assert!(is_stale(&rule, &sources));
+        rule.r#if = hex;
+        rule.r#for.pop();
+        assert!(is_stale(&rule, &sources));
+        Ok(())
     }
+}
 
-    /// A prefix that no longer exists is reported while its neighbours are not.
-    /// Entries are type-qualified, so one path can appear under several
-    /// matcher types; dropping the path makes every one of them stale.
-    #[test]
-    fn only_the_unmatched_prefix_is_reported() {
-        let prefix_of = |e: &str| e.split_once(':').map(|(_, prefix)| prefix.to_owned());
-        let dropped = BROAD_FILETYPE_ALLOWLIST
-            .iter()
-            .find_map(|e| prefix_of(e))
-            .expect("at least one entry");
-        let mut sources: HashMap<String, String> = HashMap::new();
-        for (i, e) in BROAD_FILETYPE_ALLOWLIST.iter().enumerate() {
-            let Some(prefix) = prefix_of(e).filter(|p| *p != dropped) else {
-                continue;
-            };
-            sources.insert(
-                format!("t{i}"),
-                if prefix.ends_with(".yaml") || prefix.ends_with(".yml") {
-                    format!("./{prefix}")
-                } else {
-                    format!("./{prefix}traits.yaml")
-                },
-            );
-        }
-        let stale = find_stale_filetype_allowlist_entries(&sources);
-        let expected: Vec<&str> = BROAD_FILETYPE_ALLOWLIST
-            .iter()
-            .copied()
-            .filter(|e| prefix_of(e).as_deref() == Some(dropped.as_str()))
-            .collect();
-        assert_eq!(
-            stale, expected,
-            "only the dropped prefix {dropped} must be flagged"
-        );
+#[test]
+fn archive_guard_filetype_scope_follows_the_fact() -> anyhow::Result<()> {
+    use crate::capabilities::validation::find_broad_filetype_traits;
+    use crate::composite_rules::{FileType, TraitDefinition};
+    use std::collections::HashMap;
+    use std::path::Path;
+
+    for matcher in [
+        "type: value\npath: archive_guard.large_files\nexact: example",
+        "type: metrics\nfield: archive.guard.member_limit_reached\nmin: 1",
+    ] {
+        let mut rule = TraitDefinition {
+            r#if: crate::yaml::from_str(matcher)?,
+            r#for: FileType::archive_family_types().to_vec(),
+            ..Default::default()
+        };
+        let violations = |rule: &TraitDefinition| {
+            find_broad_filetype_traits(std::slice::from_ref(rule), &HashMap::new(), Path::new("."))
+        };
+        assert!(violations(&rule).is_empty());
+        rule.r#for.push(FileType::Elf);
+        assert_eq!(violations(&rule).len(), 1);
     }
+    Ok(())
+}
+
+#[test]
+fn structural_signature_observations_can_refine_an_absence_check() -> anyhow::Result<()> {
+    use crate::capabilities::validation::find_unverified_signature_suppressors;
+    use crate::composite_rules::{CompositeTrait, Condition, TraitDefinition};
+
+    let mut observation = TraitDefinition {
+        id: "metadata/signature/certificate/format::archive-signature-present".into(),
+        r#if: crate::yaml::from_str("type: value\npath: phar.signature.algorithm\nexists: true")?,
+        ..Default::default()
+    };
+    let consumer = CompositeTrait {
+        id: "metadata/signature/certificate/format::archive-signature-absent".into(),
+        unless: Some(vec![Condition::Trait {
+            id: observation.id.clone(),
+        }]),
+        ..Default::default()
+    };
+    let violations = |observation: &TraitDefinition| {
+        find_unverified_signature_suppressors(
+            std::slice::from_ref(observation),
+            std::slice::from_ref(&consumer),
+        )
+    };
+    assert!(violations(&observation).is_empty());
+    observation.r#if = crate::yaml::from_str(
+        r#"{type: value, path: 'office.streams[*]', exact: "/\u0005DigitalSignature"}"#,
+    )?;
+    assert!(violations(&observation).is_empty());
+    let objective = CompositeTrait {
+        id: "objectives/test::fingerprint".into(),
+        ..consumer.clone()
+    };
+    assert_eq!(
+        find_unverified_signature_suppressors(std::slice::from_ref(&observation), &[objective])
+            .len(),
+        1
+    );
+    observation.r#if =
+        crate::yaml::from_str("type: value\npath: pe.signatures[0].subject\nexact: Example")?;
+    assert_eq!(violations(&observation).len(), 1);
+    Ok(())
+}
+
+#[test]
+fn microsoft_ca_waiver_applies_to_one_unless_reference() {
+    use crate::capabilities::validation::find_unverified_signature_suppressors;
+    use crate::composite_rules::{CompositeTrait, Condition, DowngradeConditions};
+
+    let issuer = Condition::Trait {
+        id: "metadata/signature/certificate/issuer/microsoft/".into(),
+    };
+    let claim = Condition::Trait {
+        id: "metadata/signature/claim/issuer::microsoft".into(),
+    };
+    let rule = CompositeTrait {
+        id: "objectives/evasion/masquerade/cert::forged-microsoft-code-signing-ca".into(),
+        unless: Some(vec![issuer.clone(), claim]),
+        downgrade: Some(DowngradeConditions {
+            any: Some(vec![issuer]),
+            all: None,
+            needs: None,
+            scope: None,
+        }),
+        ..Default::default()
+    };
+    let violations = find_unverified_signature_suppressors(&[], &[rule]);
+    assert_eq!(
+        violations
+            .iter()
+            .map(|violation| (violation.clause, violation.reference.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            ("unless", "metadata/signature/claim/issuer::microsoft"),
+            (
+                "downgrade",
+                "metadata/signature/certificate/issuer/microsoft/"
+            ),
+        ]
+    );
 }
 
 #[cfg(test)]

@@ -1033,6 +1033,24 @@ impl From<filefacts::FileType> for FileType {
 }
 
 impl FileType {
+    /// Carrier formats produced by the shared media facts extractor.
+    pub(crate) const MEDIA_FAMILY: &'static [Self] = &[
+        Self::Font,
+        Self::Png,
+        Self::Tiff,
+        Self::Avif,
+        Self::Jpeg,
+        Self::Svg,
+        Self::Wav,
+        Self::Aiff,
+        Self::Mp3,
+        Self::Mp4,
+        Self::Ico,
+        Self::Gif,
+        Self::Bmp,
+        Self::Webp,
+    ];
+
     /// Whether the file's signal is its parsed document -- manifests, unit
     /// files, property lists, XML projects -- which `type: value` rules read
     /// from the values tree even when the file yields no strings.

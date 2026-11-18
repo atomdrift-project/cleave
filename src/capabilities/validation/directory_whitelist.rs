@@ -745,7 +745,6 @@ const ALLOWED_C2: &[&str] = &[
     "botnet",         // Bot network coordination                      B0030
     "channel",        // Communication channels (HTTP, IRC, Tor, etc.) B0030
     "dns",            // DNS-based C2 + DGA + tunneling                B0031
-    "dropper",        // Payload delivery & execution                  E1105
     "infrastructure", // C2 infrastructure (domains, IPs, cloud)       B0030
     "remote-command", // Command dispatch                              B0011
     "reverse-shell",  // Reverse shell patterns                        B0030
@@ -1048,12 +1047,6 @@ const ALLOWED_METADATA_BINARY: &[&str] = &[
     "layout",      // Whole-file structure: overlay, embedded payloads, bundles
     "bundle",      // Bundle-format structure (Info.plist, CFBundleIdentifier, XPC, launchd)
     "provenance",  // Build origin: toolchain/compiler markers, source-tree and VCS idents
-    // Identity is not a format property (see the metadata/ rules in TAXONOMY.md).
-    "installer", // TRANSITIONAL -> well-known/ (named products); "is self-extracting" -> layout/
-    "framework", // TRANSITIONAL -> well-known/lib/; keep only format-level consequences
-    "vendor",    // TRANSITIONAL -> metadata/vendor/ (the sanctioned home) or well-known/
-    "license",   // TRANSITIONAL -> provenance/
-    "toolchain", // TRANSITIONAL -> provenance/
 ];
 
 /// Allowed subdirectories in metadata/document/

@@ -12,21 +12,31 @@ pub(crate) fn find_platform_named_directories(trait_dirs: &[String]) -> Vec<(Str
     let mut violations = Vec::new();
 
     for dir_path in trait_dirs {
-        // Skip metadata/format/ paths - binary format names are legitimate there
-        if dir_path.starts_with("metadata/format/") {
-            continue;
-        }
-
-        // Skip interpreter/<language> paths - language names are expected there
-        // e.g., objectives/execution/interpreter/powershell, objectives/execution/interpreter/python
-        if dir_path.contains("/interpreter/") {
-            continue;
-        }
-
-        // Split the path and check each component
-        for component in dir_path.split('/') {
+        let mut components = dir_path.split('/');
+        let interpreter = matches!(
+            (components.next(), components.next(), components.next()),
+            (
+                Some("micro-behaviors"),
+                Some("process"),
+                Some("interpreter")
+            ) | (Some("objectives"), Some("execution"), Some("interpreter"))
+        );
+        // Interpreter directories can name the runtime being interpreted.
+        // The language slot is directly below interpreter, eval, or script.
+        let language_slot = if interpreter {
+            Some(if matches!(components.next(), Some("eval" | "script")) {
+                4
+            } else {
+                3
+            })
+        } else {
+            None
+        };
+        for (index, component) in dir_path.split('/').enumerate() {
             let lower = component.to_lowercase();
-            if PLATFORM_NAMES.contains(&lower.as_str()) {
+            if PLATFORM_NAMES.contains(&lower.as_str())
+                || (LANGUAGE_NAMES.contains(&lower.as_str()) && language_slot != Some(index))
+            {
                 violations.push((dir_path.clone(), component.to_string()));
                 break; // Only report first violation per path
             }
@@ -267,18 +277,17 @@ pub(crate) fn find_banned_directory_segments(trait_dirs: &[String]) -> Vec<(Stri
     let mut violations = Vec::new();
 
     for dir_path in trait_dirs {
+        let mut end = 0;
         for segment in dir_path.split('/') {
+            end += segment.len();
             let lower = segment.to_lowercase();
-            if BANNED_DIRECTORY_SEGMENTS.contains(&lower.as_str()) {
-                if BANNED_SEGMENT_EXCEPTIONS.iter().any(|(path, allowed)| {
-                    lower == *allowed
-                        && (dir_path == *path || dir_path.starts_with(&format!("{path}/")))
-                }) {
-                    continue;
-                }
+            if BANNED_DIRECTORY_SEGMENTS.contains(&lower.as_str())
+                && !BANNED_SEGMENT_EXCEPTIONS.contains(&&dir_path[..end])
+            {
                 violations.push((dir_path.clone(), segment.to_string()));
                 break; // Only report first violation per path
             }
+            end += 1; // Separator before the next segment
         }
     }
 
@@ -355,13 +364,7 @@ pub(crate) fn find_parent_duplicate_segments(trait_dirs: &[String]) -> Vec<(Stri
 
             // Exact duplicate
             if parent == child {
-                // Check if this path is in the exceptions list
-                if !PARENT_DUPLICATE_EXCEPTIONS
-                    .iter()
-                    .any(|exc| dir_path.starts_with(exc))
-                {
-                    violations.push((dir_path.clone(), window[1].to_string()));
-                }
+                violations.push((dir_path.clone(), window[1].to_string()));
                 break;
             }
 
@@ -371,13 +374,7 @@ pub(crate) fn find_parent_duplicate_segments(trait_dirs: &[String]) -> Vec<(Stri
                 let parent_stem = parent.trim_end_matches('s');
                 let child_stem = child.trim_end_matches('s');
                 if parent_stem == child_stem {
-                    // Check if this path is in the exceptions list
-                    if !PARENT_DUPLICATE_EXCEPTIONS
-                        .iter()
-                        .any(|exc| dir_path.starts_with(exc))
-                    {
-                        violations.push((dir_path.clone(), window[1].to_string()));
-                    }
+                    violations.push((dir_path.clone(), window[1].to_string()));
                     break;
                 }
 
@@ -410,13 +407,7 @@ pub(crate) fn find_parent_duplicate_segments(trait_dirs: &[String]) -> Vec<(Stri
                 // why the length-limited prefix rule below cannot see it.
                 let restates_parent = longer.starts_with(&format!("{shorter}-"));
                 if (restates_parent || shorter.len() <= 5) && longer.starts_with(shorter) {
-                    // Check if this path is in the exceptions list
-                    if !PARENT_DUPLICATE_EXCEPTIONS
-                        .iter()
-                        .any(|exc| dir_path.starts_with(exc))
-                    {
-                        violations.push((dir_path.clone(), window[1].to_string()));
-                    }
+                    violations.push((dir_path.clone(), window[1].to_string()));
                     break;
                 }
             }
@@ -464,7 +455,7 @@ pub(crate) fn find_sibling_name_restatement(
 
     let mut out = Vec::new();
     for (parent, mut names) in by_parent {
-        if parent.starts_with("well-known") {
+        if parent == "well-known" || parent.starts_with("well-known/") {
             continue;
         }
         names.sort_unstable();
@@ -483,34 +474,7 @@ pub(crate) fn find_sibling_name_restatement(
                     || long
                         .strip_prefix(short)
                         .is_some_and(|tail| WORD_FORMS.contains(&tail));
-                // Cross-cutting file profiles combine network and process evidence;
-                // the general network profile retains other network observations.
-                let distinct_cross_cutting_profile = parent == "metadata/file/profile"
-                    && short == "network"
-                    && long == "network-process";
-                // Request-driven execution and captured command output are
-                // distinct evidence groups; both need leaf YAML directories.
-                let distinct_webshell_output = parent
-                    == "objectives/command-and-control/backdoor/webshell/request"
-                    && short == "command"
-                    && long == "command-output";
-                // Hidden target files are a reviewed cross-cutting refinement;
-                // the broad fetch leaf retains chains without that requirement.
-                let distinct_hidden_fetch = parent
-                    == "objectives/execution/payload/file-exec/command"
-                    && short == "fetch"
-                    && long == "fetch-hidden";
-                // User-level systemd services have a distinct persistence scope;
-                // the general leaf holds system-wide or unscoped service evidence.
-                let distinct_systemd_user = parent == "objectives/persistence/system/service"
-                    && short == "systemd"
-                    && long == "systemd-user";
-                if restates
-                    && !distinct_systemd_user
-                    && !distinct_cross_cutting_profile
-                    && !distinct_webshell_output
-                    && !distinct_hidden_fetch
-                {
+                if restates {
                     out.push((parent.to_string(), short.to_string(), long.to_string()));
                 }
             }
@@ -522,74 +486,54 @@ pub(crate) fn find_sibling_name_restatement(
 
 #[cfg(test)]
 #[test]
-pub(super) fn hidden_fetch_sibling_exception_is_specific_to_the_reviewed_pair() {
+fn retired_sibling_exceptions_are_reported() {
     let dirs = [
+        "metadata/file/profile/network",
+        "metadata/file/profile/network-process",
+        "objectives/command-and-control/backdoor/webshell/request/command",
+        "objectives/command-and-control/backdoor/webshell/request/command-output",
         "objectives/execution/payload/file-exec/command/fetch",
         "objectives/execution/payload/file-exec/command/fetch-hidden",
-        "objectives/execution/payload/file-exec/command/fetch-other",
-        "other/command/fetch",
-        "other/command/fetch-hidden",
+        "well-known-extra/samples/profile",
+        "well-known-extra/samples/profile-detail",
     ]
     .map(str::to_string);
-    let findings = find_sibling_name_restatement(&dirs);
-    assert!(!findings.contains(&(
-        "objectives/execution/payload/file-exec/command".into(),
-        "fetch".into(),
-        "fetch-hidden".into(),
-    )));
-    assert!(findings.contains(&(
-        "objectives/execution/payload/file-exec/command".into(),
-        "fetch".into(),
-        "fetch-other".into(),
-    )));
-    assert!(findings.contains(&(
-        "other/command".into(),
-        "fetch".into(),
-        "fetch-hidden".into(),
-    )));
+    assert_eq!(find_sibling_name_restatement(&dirs).len(), 4);
 }
 
 #[cfg(test)]
 #[test]
-pub(super) fn network_process_profile_is_a_specific_sibling_exception() {
+fn taxonomy_names_are_allowed_only_at_their_semantic_position() {
     let dirs = [
-        "metadata/file/profile/network",
-        "metadata/file/profile/network-process",
-        "metadata/file/profile/network-other",
-        "other/profile/network",
-        "other/profile/network-process",
-        "objectives/command-and-control/backdoor/webshell/request/command",
-        "objectives/command-and-control/backdoor/webshell/request/command-output",
-        "other/request/command",
-        "other/request/command-output",
+        "micro-behaviors/data/encode/data",
+        "micro-behaviors/data/encode/stream",
+        "micro-behaviors/process/interpreter/eval/javascript",
+        "micro-behaviors/process/interpreter/eval/javascript/python",
+        "micro-behaviors/fs/interpreter/python",
+        "objectives/execution/interpreter/pe",
+        "metadata/format/container/elf",
+        "objectives/exfiltration/stealer/unspecified",
+        "micro-behaviors/data/encoding/xor/unspecified-key",
     ]
     .map(str::to_string);
-    let findings = find_sibling_name_restatement(&dirs);
-    assert!(!findings.contains(&(
-        "metadata/file/profile".into(),
-        "network".into(),
-        "network-process".into()
-    )));
-    assert!(findings.contains(&(
-        "metadata/file/profile".into(),
-        "network".into(),
-        "network-other".into()
-    )));
-    assert!(findings.contains(&(
-        "other/profile".into(),
-        "network".into(),
-        "network-process".into()
-    )));
-    assert!(!findings.contains(&(
-        "objectives/command-and-control/backdoor/webshell/request".into(),
-        "command".into(),
-        "command-output".into()
-    )));
-    assert!(findings.contains(&(
-        "other/request".into(),
-        "command".into(),
-        "command-output".into()
-    )));
+    let banned = find_banned_directory_segments(&dirs);
+    assert_eq!(
+        banned,
+        [
+            (dirs[0].clone(), "data".into()),
+            (dirs[7].clone(), "unspecified".into()),
+        ]
+    );
+    let platforms = find_platform_named_directories(&dirs);
+    assert_eq!(
+        platforms,
+        [
+            (dirs[3].clone(), "python".into()),
+            (dirs[4].clone(), "python".into()),
+            (dirs[5].clone(), "pe".into()),
+            (dirs[6].clone(), "elf".into()),
+        ]
+    );
 }
 
 /// Find directories with too many rules (suggests need for subdirectories).

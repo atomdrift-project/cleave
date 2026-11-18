@@ -137,8 +137,7 @@ pub(super) fn dead_downgrades<'a>(input: &'a ValidationInput<'a>) -> Report<'a> 
     })
 }
 
-/// Suppressions may cite only verified signatures: any other signature state
-/// is a claim whoever made the certificate chose.
+/// Suppressions that rely on signer identity require verified evidence.
 pub(super) fn unverified_signature_suppressors<'a>(input: &'a ValidationInput<'a>) -> Report<'a> {
     let found =
         find_unverified_signature_suppressors(input.trait_definitions, input.composite_rules);
@@ -703,11 +702,21 @@ pub(super) fn invalid_overrides<'a>(input: &'a ValidationInput<'a>) -> Report<'a
 /// References from composites and traits to ids that no trait or
 /// composite defines.
 pub(super) fn broken_references<'a>(input: &'a ValidationInput<'a>) -> Report<'a> {
+    const VALIDATOR: &str = "broken-reference";
+    if !super::enabled(VALIDATOR) {
+        return report(|_| {});
+    }
     let file_stem_hints = build_file_stem_reference_hints(
         input.dir_path,
         input.trait_definitions,
         input.composite_rules,
     );
+    // The runtime supports short references to canonical and legacy rule IDs.
+    let short_ids: HashSet<&str> = input
+        .valid_trait_ids
+        .iter()
+        .filter_map(|id| short_reference_target(id))
+        .collect();
     report(move |warnings| {
         let mut broken_refs = Vec::new();
         // Validate a single `(ref_id, owner_id)` pair. Returns `Some(..)` when the
@@ -718,9 +727,8 @@ pub(super) fn broken_references<'a>(input: &'a ValidationInput<'a>) -> Report<'a
         //
         // `bare_resolves_by_suffix` distinguishes the two ref sources: composite refs are
         // auto-prefixed at load, so a bare same-file ref has already become a full
-        // `dir::id` and must resolve exactly. Atomic-trait refs are NOT auto-prefixed, so a
-        // bare ref (no `::`, no `/`) resolves at runtime by suffix match across directories
-        // — that path is left to the runtime rather than flagged here.
+        // `dir::id` and must resolve exactly. Atomic-trait refs can also
+        // resolve by suffix across directories.
         let check_ref = |ref_id: String,
                          owner_id: &str,
                          bare_resolves_by_suffix: bool|
@@ -729,18 +737,16 @@ pub(super) fn broken_references<'a>(input: &'a ValidationInput<'a>) -> Report<'a
             // matches any trait in that directory; parent refs like "micro-behaviors/fs/write/"
             // match traits in subdirs.
             let ref_without_slash = ref_id.trim_end_matches('/');
-            let is_directory_ref = input.prefix_hierarchy.contains(ref_id.as_str())
-                || input.prefix_hierarchy.contains(ref_without_slash);
+            let is_short = !ref_without_slash.contains("::") && !ref_without_slash.contains('/');
+            let is_directory_ref = !is_short && input.prefix_hierarchy.contains(ref_without_slash);
 
             // Dynamically generated metadata/* references (imports, signatures,
             // entitlements, embedded-language detection) have no static trait
             // definition, so exempt them.
-            let is_dynamic_or_internal = is_dynamic_metadata_ref(&ref_id);
+            let is_dynamic_or_internal = is_dynamic_metadata_ref(ref_without_slash);
 
-            // Bare same-directory reference on an atomic trait — resolves at runtime by
-            // suffix match, not validated here.
             let is_bare_suffix_ref =
-                bare_resolves_by_suffix && !ref_id.contains("::") && !ref_id.contains('/');
+                bare_resolves_by_suffix && is_short && short_ids.contains(ref_without_slash);
 
             // Exact-match requirement: references like "micro-behaviors/foo/bar/filename"
             // where "filename" is a YAML file (not a directory) are invalid — filenames are
@@ -748,7 +754,7 @@ pub(super) fn broken_references<'a>(input: &'a ValidationInput<'a>) -> Report<'a
             if is_directory_ref
                 || is_dynamic_or_internal
                 || is_bare_suffix_ref
-                || input.valid_trait_ids.contains(&ref_id)
+                || input.valid_trait_ids.contains(ref_without_slash)
             {
                 return None;
             }
@@ -797,11 +803,7 @@ pub(super) fn broken_references<'a>(input: &'a ValidationInput<'a>) -> Report<'a
         );
 
         if !broken_refs.is_empty() {
-            eprintln!(
-                "\n❌ ERROR: {} broken trait references found in composite rules",
-                broken_refs.len()
-            );
-            eprintln!("   Composite rules reference trait IDs that don't exist:\n");
+            eprintln!("\n❌ ERROR: {} broken trait references", broken_refs.len());
             for broken_ref in &broken_refs {
                 if let Some(line) = broken_ref.line_hint {
                     eprintln!(
@@ -819,30 +821,27 @@ pub(super) fn broken_references<'a>(input: &'a ValidationInput<'a>) -> Report<'a
                 }
             }
             eprintln!();
-            warnings.push_id(
-                "broken-reference",
-                format!(
-                    "{} broken trait references in composite rules",
-                    broken_refs.len()
-                ),
-            );
             for broken_ref in &broken_refs {
-                let location = if let Some(line) = broken_ref.line_hint {
-                    format!("{}:{}", broken_ref.source_file, line)
-                } else {
-                    broken_ref.source_file.clone()
-                };
                 let mut detail = format!(
-                    "{location}: Rule '{}' references non-existent trait '{}'",
+                    "Rule '{}' references non-existent trait '{}'",
                     broken_ref.rule_id, broken_ref.ref_id
                 );
                 if let Some(suggestion) = &broken_ref.suggestion {
                     detail.push_str(&format!(" — {suggestion}"));
                 }
-                warnings.push(detail);
+                let mut issue = crate::validation_controls::ValidationIssue::new(VALIDATOR, detail)
+                    .with_location(&broken_ref.source_file, broken_ref.line_hint);
+                issue.rule_id = Some(broken_ref.rule_id.clone());
+                warnings.push_issue(issue);
             }
         }
     })
+}
+
+fn short_reference_target(id: &str) -> Option<&str> {
+    let (prefix, leaf) = id.rsplit_once(['/', ':'])?;
+    (!leaf.is_empty() && (prefix.ends_with(':') || id.as_bytes()[prefix.len()] == b'/'))
+        .then_some(leaf)
 }
 
 /// Validate metric field references

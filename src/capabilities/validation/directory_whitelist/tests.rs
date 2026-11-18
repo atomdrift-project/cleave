@@ -552,6 +552,25 @@ fn test_catches_invalid_metadata_level2_subdirectory() {
 }
 
 #[test]
+fn retired_binary_directories_cannot_be_recreated() {
+    let root = TempDir::new().unwrap();
+    let names = ["installer", "framework", "vendor", "license", "toolchain"];
+    for name in names {
+        std::fs::create_dir_all(root.path().join("metadata/binary").join(name)).unwrap();
+    }
+    let errors = validate_directory_structure(root.path()).unwrap_err();
+    assert_eq!(errors.len(), names.len(), "{errors:?}");
+    for name in names {
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.starts_with(&format!("Unknown metadata/binary/{name}"))),
+            "{errors:?}",
+        );
+    }
+}
+
+#[test]
 fn test_allows_image_measurements_but_not_file_identity() {
     let temp_dir = TempDir::new().unwrap();
     let traits_path = temp_dir.path();

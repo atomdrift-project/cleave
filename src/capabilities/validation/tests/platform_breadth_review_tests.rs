@@ -9,9 +9,10 @@ fn reviewed_platform_scope_requires_directory_and_platform_set() {
         Platform::MacOS,
         Platform::Linux,
         Platform::Windows,
+        Platform::Android,
     ];
     let mut traits = vec![TraitDefinition {
-        id: "micro-behaviors/fs/read/file/content/unspecified::swift-data-file-read".to_string(),
+        id: "micro-behaviors/hardware/wireless/network::wifi-ssid-identifier".to_string(),
         platforms: scope.clone(),
         ..Default::default()
     }];
@@ -24,7 +25,7 @@ fn reviewed_platform_scope_requires_directory_and_platform_set() {
         1
     );
     traits[0].platforms = scope;
-    traits[0].id = "micro-behaviors/fs/read/directory::other-api".to_string();
+    traits[0].id = "micro-behaviors/fs/read/file::other-api".to_string();
     assert_eq!(
         find_broad_platform_traits(&traits, &HashMap::new()).len(),
         1

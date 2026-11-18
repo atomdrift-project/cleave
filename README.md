@@ -56,4 +56,4 @@ make install
 * [maratus](https://github.com/0x4D31/maratus) - new! a static analyzer focused on macOS artifacts.
 ## License
 
-cleave is available under the [Apache License 2.0](LICENSE).
+[Apache License 2.0](LICENSE)

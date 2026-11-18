@@ -31,7 +31,10 @@ pub(super) fn unknown_subdirectories<'a>(input: &'a ValidationInput<'a>) -> Repo
             }
             eprintln!();
             for error in &errors {
-                warnings.push(format!("unknown subdirectory: {error}"));
+                warnings.push_id(
+                    "unknown-subdirectory",
+                    format!("unknown subdirectory: {error}"),
+                );
             }
         }
     })
@@ -455,29 +458,7 @@ fn find_non_leaf_yaml_files(yaml_files: &[std::path::PathBuf], root: &Path) -> V
 
     let mut violations: Vec<String> = yaml_files
         .iter()
-        .filter(|file| {
-            let Some(dir) = file.parent() else {
-                return false;
-            };
-            if !non_leaf.contains(dir) {
-                return false;
-            }
-            // These item classes have useful observations whose predicates do
-            // not identify a subtype. Keep them at the supported ancestor,
-            // rather than inventing a miscellaneous subtype or overclaiming.
-            // This is an exact taxonomy contract, not a namespace exemption.
-            !matches!(
-                dir.strip_prefix(root).ok().and_then(Path::to_str),
-                Some(
-                    "objectives/exfiltration/stealer"
-                        | "objectives/exfiltration/stealer/credential"
-                        | "objectives/exfiltration/stealer/credential/value"
-                        | "objectives/exfiltration/stealer/configuration"
-                        | "objectives/exfiltration/stealer/application-state"
-                        | "objectives/exfiltration/stealer/media"
-                )
-            )
-        })
+        .filter(|file| file.parent().is_some_and(|dir| non_leaf.contains(dir)))
         .map(|file| {
             file.strip_prefix(root)
                 .unwrap_or(file)
@@ -517,7 +498,7 @@ mod tests {
     }
 
     #[test]
-    fn reviewed_stolen_item_ancestors_allow_unspecialized_observations() {
+    fn stolen_item_ancestors_also_require_leaf_placement() {
         let root = Path::new("traits");
         let files: Vec<PathBuf> = [
             "objectives/exfiltration/stealer/broad.yaml",
@@ -541,6 +522,12 @@ mod tests {
             find_non_leaf_yaml_files(&files, root),
             [
                 "micro-behaviors/fs/path/broad.yaml",
+                "objectives/exfiltration/stealer/application-state/broad.yaml",
+                "objectives/exfiltration/stealer/broad.yaml",
+                "objectives/exfiltration/stealer/configuration/broad.yaml",
+                "objectives/exfiltration/stealer/credential/broad.yaml",
+                "objectives/exfiltration/stealer/credential/value/broad.yaml",
+                "objectives/exfiltration/stealer/media/broad.yaml",
                 "objectives/exfiltration/stealer/media/image/specific.yaml",
             ]
         );

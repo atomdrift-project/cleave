@@ -10,7 +10,7 @@ fn validate(root: &Path) -> Output {
             root.to_str().unwrap(),
             "validate",
             "--exclude",
-            "validation",
+            "stale-ft-cap",
         ])
         .env("XDG_CACHE_HOME", root.join("cache"))
         .env_remove("CLEAVE_SKIP_CACHE")

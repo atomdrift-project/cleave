@@ -256,36 +256,35 @@ pub(super) fn redundant_unix_platforms<'a>(input: &'a ValidationInput<'a>) -> Re
     })
 }
 
-/// An allowlist entry that matches no trait is a dead exemption --
-/// usually a directory that was renamed out from under it, which
-/// strips the exemption silently and surfaces as a pile of cap
-/// violations far from the rename.
+/// Report exemptions that no current trait needs.
 pub(super) fn stale_filetype_allowlist<'a>(input: &'a ValidationInput<'a>) -> Report<'a> {
     let stale_allow = if enabled("stale-filetype-allowlist") {
-        find_stale_filetype_allowlist_entries(input.rule_source_files)
+        find_stale_filetype_allowlist_entries(
+            input.trait_definitions,
+            input.trait_source_files,
+            input.dir_path,
+        )
     } else {
         Vec::new()
     };
     report(move |warnings| {
         if !stale_allow.is_empty() {
             eprintln!(
-                "\n❌ ERROR: {} file-type allowlist entries match no trait",
+                "\n❌ ERROR: {} file-type allowlist entries cover no over-cap trait",
                 stale_allow.len()
             );
             eprintln!(
-                "   These lift the file-type cap for a directory prefix that no longer\n   \
-     exists -- most often a directory renamed without updating the entry,\n   \
-     which drops the exemption for every trait under it. Point the entry at\n   \
-     the new path, or delete it if the directory is gone.\n"
+                "   Remove unused entries or update them after a reviewed matcher or path change.\n"
             );
             for entry in &stale_allow {
                 eprintln!("   {entry:?} in BROAD_FILETYPE_ALLOWLIST");
             }
             eprintln!();
-            warnings.push_id(
+            warnings.push_count(
                 "stale-filetype-allowlist",
+                stale_allow.len(),
                 format!(
-                    "{} file-type allowlist entries match no trait",
+                    "{} file-type allowlist entries cover no over-cap trait",
                     stale_allow.len()
                 ),
             );
@@ -622,10 +621,14 @@ pub(super) fn unbindable_package_scope<'a>(input: &'a ValidationInput<'a>) -> Re
     })
 }
 
-/// Validate: traits with too many file types (10+ multi-platform, 12+ single-platform)
+/// Validate file-type breadth against the cap for each matcher.
 pub(super) fn broad_filetype_traits<'a>(input: &'a ValidationInput<'a>) -> Report<'a> {
     let broad_ft = if enabled("broad-filetype-cap") {
-        find_broad_filetype_traits(input.trait_definitions, input.rule_source_files)
+        find_broad_filetype_traits(
+            input.trait_definitions,
+            input.trait_source_files,
+            input.dir_path,
+        )
     } else {
         Vec::new()
     };
@@ -667,15 +670,19 @@ pub(super) fn broad_filetype_traits<'a>(input: &'a ValidationInput<'a>) -> Repor
                 }
             }
             eprintln!();
-            warnings.push(format!(
-    "{} traits exceed the file-type cap for their matcher type (narrow for: or add a type-qualified allowlist entry)",
-    broad_ft.len()
-));
+            warnings.push_count(
+                "broad-filetype-cap",
+                broad_ft.len(),
+                format!(
+                    "{} traits exceed the file-type cap for their matcher type",
+                    broad_ft.len()
+                ),
+            );
         }
     })
 }
 
-/// well-known/ atomic traits without file size bounds.
+/// Well-known binary signatures without file-size bounds.
 pub(super) fn wellknown_missing_size_filter<'a>(input: &'a ValidationInput<'a>) -> Report<'a> {
     let wk_no_size =
         find_wellknown_missing_size_filter(input.trait_definitions, input.rule_source_files);
@@ -691,13 +698,13 @@ pub(super) fn wellknown_missing_size_filter<'a>(input: &'a ValidationInput<'a>) 
                 wk_no_size.len()
             );
             eprintln!(
-                "   well-known/ traits should include size_min/size_max to avoid false positives:\n"
+                "   Bound the size of high-criticality fingerprints and open-ended byte signatures:\n"
             );
             for (trait_id, source_file) in &wk_no_size {
                 eprintln!("   {}: Trait '{}'", source_file, trait_id);
             }
             eprintln!(
-                "\n   Add 'size_min:' and/or 'size_max:' bounds appropriate to the malware family."
+                "\n   Add 'size_min:' and/or 'size_max:' bounds appropriate to the binary signature."
             );
             warnings.push(format!(
                 "{} well-known/ traits lack file size filters (add size_min/size_max)",

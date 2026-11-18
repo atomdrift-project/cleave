@@ -1096,6 +1096,7 @@ pub(crate) fn find_string_content_collisions(
 pub(crate) fn find_for_only_duplicates(
     trait_definitions: &[TraitDefinition],
     rule_source_files: &HashMap<String, String>,
+    root: &std::path::Path,
 ) -> Vec<(Vec<String>, String)> {
     let mut duplicates = Vec::new();
 
@@ -1172,6 +1173,7 @@ pub(crate) fn find_for_only_duplicates(
                 super::taxonomy::find_broad_filetype_traits(
                     std::slice::from_ref(&merged),
                     rule_source_files,
+                    root,
                 )
                 .is_empty()
             });

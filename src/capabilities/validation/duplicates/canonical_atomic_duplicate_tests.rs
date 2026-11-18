@@ -71,10 +71,22 @@ fn scope_duplicates_respect_filetype_caps() {
     a.r#for = vec![RuleFileType::DosCom, RuleFileType::StaticLib];
     b.r#for = vec![RuleFileType::Data, RuleFileType::Shell];
     let sources = HashMap::new();
-    assert!(find_for_only_duplicates(&[a.clone(), b.clone()], &sources).is_empty());
+    assert!(
+        find_for_only_duplicates(
+            &[a.clone(), b.clone()],
+            &sources,
+            std::path::Path::new("/traits")
+        )
+        .is_empty()
+    );
     b.r#for.pop();
     assert_eq!(
-        find_for_only_duplicates(&[a.clone(), b.clone()], &sources).len(),
+        find_for_only_duplicates(
+            &[a.clone(), b.clone()],
+            &sources,
+            std::path::Path::new("/traits")
+        )
+        .len(),
         1
     );
     b.r#for = vec![
@@ -82,7 +94,10 @@ fn scope_duplicates_respect_filetype_caps() {
         RuleFileType::Data,
         RuleFileType::Shell,
     ];
-    assert_eq!(find_for_only_duplicates(&[a, b], &sources).len(), 1);
+    assert_eq!(
+        find_for_only_duplicates(&[a, b], &sources, std::path::Path::new("/traits")).len(),
+        1
+    );
 }
 
 #[test]
@@ -90,7 +105,14 @@ fn confidence_is_not_rounded_away() {
     let (a, mut b) = dos_pair();
     b.conf = 0.881;
     // Scope-only cannot assume these verdict confidences are identical.
-    assert!(find_for_only_duplicates(&[a.clone(), b.clone()], &HashMap::new()).is_empty());
+    assert!(
+        find_for_only_duplicates(
+            &[a.clone(), b.clone()],
+            &HashMap::new(),
+            std::path::Path::new("/traits")
+        )
+        .is_empty()
+    );
     assert_eq!(find_atomic_logic_duplicates(&[a, b]).len(), 1);
 }
 
@@ -111,7 +133,14 @@ fn disjoint_scopes_are_not_overlapping_logic_duplicates() {
     arm.arch = vec![Arch::Arm];
     assert!(find_atomic_logic_duplicates(&[x86.clone(), arm.clone()]).is_empty());
     arm.conf = x86.conf;
-    assert!(find_for_only_duplicates(&[x86.clone(), arm.clone()], &HashMap::new()).is_empty());
+    assert!(
+        find_for_only_duplicates(
+            &[x86.clone(), arm.clone()],
+            &HashMap::new(),
+            std::path::Path::new("/traits")
+        )
+        .is_empty()
+    );
     arm.r#for = x86.r#for.clone();
     let mut exact = Vec::new();
     find_duplicate_atomic_traits(&[x86, arm], &mut exact);
@@ -190,7 +219,14 @@ fn different_thresholds_keep_distinct_observations() {
     let mut exact = Vec::new();
     find_duplicate_atomic_traits(&[a.clone(), b.clone()], &mut exact);
     assert!(exact.is_empty());
-    assert!(find_for_only_duplicates(&[a.clone(), b.clone()], &HashMap::new()).is_empty());
+    assert!(
+        find_for_only_duplicates(
+            &[a.clone(), b.clone()],
+            &HashMap::new(),
+            std::path::Path::new("/traits")
+        )
+        .is_empty()
+    );
     assert!(find_atomic_logic_duplicates(&[a, b]).is_empty());
 }
 
@@ -208,7 +244,14 @@ fn conditional_verdicts_are_not_identical_predicates() {
     let mut exact = Vec::new();
     find_duplicate_atomic_traits(&[a.clone(), b.clone()], &mut exact);
     assert!(exact.is_empty());
-    assert!(find_for_only_duplicates(&[a.clone(), b.clone()], &HashMap::new()).is_empty());
+    assert!(
+        find_for_only_duplicates(
+            &[a.clone(), b.clone()],
+            &HashMap::new(),
+            std::path::Path::new("/traits")
+        )
+        .is_empty()
+    );
     let issues = find_atomic_logic_duplicates(&[a, b]);
     assert_eq!(issues.len(), 1);
     assert!(issues[0].2.contains("downgrade: differs"));

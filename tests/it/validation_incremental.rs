@@ -25,11 +25,11 @@ impl Tree {
     }
 
     fn run(&self) -> Run {
-        self.run_with(&[])
+        self.run_with("60000", &[])
     }
 
     /// A validation run with `extra` arguments after `validate`'s own.
-    fn run_with(&self, extra: &[&str]) -> Run {
+    fn run_with(&self, threshold: &str, extra: &[&str]) -> Run {
         static INVOCATION: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let invocation = INVOCATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let output = Command::new(env!("CARGO_BIN_EXE_cleave"))
@@ -47,12 +47,10 @@ impl Tree {
             .env("CLEAVE_VALIDATE_SOFT", "0")
             .env("RUST_LOG", "cleave=info")
             .env("CLEAVE_NO_UPDATE_CHECK", "1")
-            .args(["--slow-rule-ms", "60000", "--traits-dir"])
+            .args(["--slow-rule-ms", threshold, "--traits-dir"])
             .arg(self.rules())
-            // A partial rule bundle cannot satisfy the repository-wide
-            // allowlist lint, and a rule for every type trips the file-type
-            // cap; everything else stays enabled.
-            .args(["validate", "--exclude", "validation,ft-cap"])
+            // This partial bundle omits the repository-wide allowlist's rules.
+            .args(["validate", "--exclude", "stale-ft-cap"])
             .args(extra)
             .output()
             .unwrap();
@@ -174,7 +172,7 @@ fn edits_reanalyze_only_the_fixtures_their_scope_reaches() {
     tree.write(
         "metadata/lang/source/shape/sh.yaml",
         &format!(
-            "{}  - id: sh-other\n    desc: Another shell marker\n    if: {{type: text, substr: never_present}}\n",
+            "{}  - id: sh-other\n    desc: Another shell marker\n    if: {{type: text, substr: never_present_in_shell}}\n",
             trait_file("shell", "sh-marker", "notable", "sh_marker")
         ),
     );
@@ -193,7 +191,7 @@ fn edits_reanalyze_only_the_fixtures_their_scope_reaches() {
     tree.write(
         "metadata/lang/source/shape/py.yaml",
         &format!(
-            "{}  - id: py-other\n    desc: Another Python marker\n    if: {{type: text, substr: never_present}}\n",
+            "{}  - id: py-other\n    desc: Another Python marker\n    if: {{type: text, substr: never_present_in_python}}\n",
             trait_file("python", "py-marker", "notable", "py_marker")
         ),
     );
@@ -235,7 +233,8 @@ fn edits_reanalyze_only_the_fixtures_their_scope_reaches() {
 #[test]
 fn edits_that_change_a_verdict_are_seen() {
     let tree = tree();
-    assert!(tree.run().ok());
+    let first = tree.run();
+    assert!(first.ok(), "{}", first.stderr);
 
     // A trait added to an existing file fires on a fixture of its type.
     tree.write(
@@ -264,19 +263,18 @@ fn edits_that_change_a_verdict_are_seen() {
     let restored = tree.run();
     assert!(restored.ok() && restored.cache_hit(), "{}", restored.stderr);
 
-    // A severity change on an existing trait changes a verdict (a lone
-    // atomic trait is not let be hostile, but it is no longer baseline).
+    // A higher-criticality shell marker changes the fixture's verdict.
     tree.write(
         "metadata/lang/source/shape/sh.yaml",
-        &trait_file("shell", "sh-marker", "hostile", "sh_marker"),
+        &trait_file("shell", "sh-marker", "suspicious", "sh_marker"),
     );
     tree.write("testdata/baseline/sh/a.sh", "#!/bin/sh\necho sh_marker\n");
-    let hostile = tree.run();
-    assert!(!hostile.ok(), "{}", hostile.stderr);
+    let suspicious = tree.run();
+    assert!(!suspicious.ok(), "{}", suspicious.stderr);
     assert!(
-        hostile.stderr.contains("a.sh: expected B, found"),
+        suspicious.stderr.contains("a.sh: expected B, found S"),
         "{}",
-        hostile.stderr
+        suspicious.stderr
     );
 
     // A rule file that goes away takes its scope with it: the shell fixture
@@ -309,7 +307,8 @@ fn edits_that_change_a_verdict_are_seen() {
 #[test]
 fn a_different_engine_or_settings_analyzes_everything() {
     let tree = tree();
-    assert!(tree.run().ok());
+    let first = tree.run();
+    assert!(first.ok(), "{}", first.stderr);
     // The recorded state is keyed on the build and the run's settings; a
     // state written for other settings is not consulted.
     let state: Vec<PathBuf> = std::fs::read_dir(tree.root.join("cache"))
@@ -323,17 +322,7 @@ fn a_different_engine_or_settings_analyzes_everything() {
         })
         .collect();
     assert_eq!(state.len(), 1, "{state:?}");
-    let slow = Command::new(env!("CARGO_BIN_EXE_cleave"))
-        .env("CLEAVE_CACHE_DIR", tree.root.join("cache"))
-        .env("CLEAVE_RAYON_THREADS", "4")
-        .env("RUST_LOG", "cleave=info")
-        .env("CLEAVE_NO_UPDATE_CHECK", "1")
-        .args(["--slow-rule-ms", "30000", "--traits-dir"])
-        .arg(tree.rules())
-        .args(["validate", "--exclude", "validation,ft-cap"])
-        .output()
-        .unwrap();
-    let slow = Run::from(slow);
+    let slow = tree.run_with("30000", &[]);
     assert!(slow.ok(), "{}", slow.stderr);
     assert_eq!(slow.analyzed_and_reused(), (4, 0), "{}", slow.stderr);
 }
@@ -348,7 +337,7 @@ fn slow_rule_audit_measures_every_fixture_without_disturbing_the_cache() {
     let first = tree.run();
     assert!(first.ok(), "{}", first.stderr);
 
-    let audit = tree.run_with(&["--slow-rules", "50"]);
+    let audit = tree.run_with("60000", &["--slow-rules", "50"]);
     assert!(audit.ok(), "{}", audit.stderr);
     assert!(!audit.cache_hit(), "{}", audit.stderr);
     assert_eq!(audit.analyzed_and_reused(), (4, 0), "{}", audit.stderr);

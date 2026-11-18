@@ -266,11 +266,10 @@ pub enum Command {
     /// status code if any errors are found.
     /// Can also enable validation during scans via CLEAVE_VALIDATE=1.
     Validate {
-        /// Override excluded validators for this validation run.
+        /// Exclude validators for this run.
         ///
-        /// Comma-separated validator IDs or short display IDs. By default,
-        /// cleave uses the built-in temporary disabled set. Pass an empty
-        /// string (`--exclude ""`) to enable every validator.
+        /// Comma-separated validator IDs or short display IDs. All validators
+        /// run by default.
         #[arg(long, value_name = "IDS")]
         exclude: Option<String>,
 

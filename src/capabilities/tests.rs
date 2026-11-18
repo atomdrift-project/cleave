@@ -4147,6 +4147,12 @@ traits:
     if:
       type: text
       exact: probe-leg-marker
+  - id: probe-atomic-reference
+    desc: Probe short atomic references
+    crit: notable
+    conf: 0.8
+    if: {id: probe-leg}
+    unless: [{id: missing-short-target}]
 composite_rules:
   - id: probe-dead-pe-developer
     desc: Probe ref to a signer id the engine cannot emit
@@ -4185,14 +4191,17 @@ composite_rules:
         "{:#}",
         result.expect_err("validation must reject the probe traits")
     );
-    // Exactly the misspelled id, with the reason; the valid signer:: id is
-    // not counted.
-    assert!(err.contains("1 broken trait references"), "{err}");
+    assert_eq!(err.matches("broken-ref ").count(), 2, "{err}");
     assert!(
         err.contains("'metadata/signature/verified/developer::Acme Corporation'"),
         "{err}"
     );
     assert!(err.contains("leaves are normalized"), "{err}");
+    assert!(err.contains("'missing-short-target'"), "{err}");
+    assert!(
+        !err.contains("references non-existent trait 'probe-leg'"),
+        "{err}"
+    );
     assert!(
         !err.contains("'metadata/signature/verified/signer::acme-corporation'"),
         "{err}"
@@ -4221,9 +4230,7 @@ fn exempt_is_not_a_supported_rule_field() {
     }
 }
 
-/// A suppression may cite only a verified signature: any other state is a
-/// name whoever made the certificate chose. Detection legs may cite any
-/// state. The narrow reviewed exceptions live in validator code.
+/// A suppression that relies on a signer name requires a verified signature.
 #[test]
 fn suppressions_may_cite_only_verified_signatures() {
     let yaml = r#"

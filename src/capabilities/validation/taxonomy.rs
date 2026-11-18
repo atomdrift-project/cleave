@@ -22,10 +22,7 @@ use crate::composite_rules::{
 };
 use crate::types::Criticality;
 use std::collections::{HashMap, HashSet};
-
-mod reviewed;
-#[allow(clippy::wildcard_imports)]
-use reviewed::*;
+use std::path::Path;
 
 mod allowlists;
 #[allow(clippy::wildcard_imports)]
@@ -41,8 +38,7 @@ pub(crate) use tiers::*;
 
 /// Platform and language names that should not appear as directory segments.
 /// These names indicate implementation details rather than behavioral classifications.
-const PLATFORM_NAMES: &[&str] = &[
-    // Languages
+const LANGUAGE_NAMES: &[&str] = &[
     "python",
     "javascript",
     "typescript",
@@ -58,8 +54,6 @@ const PLATFORM_NAMES: &[&str] = &[
     "aur",
     "archlinux",
     "rpm",
-    "linux",
-    "unix",
     "gem",
     "gems",
     "c",
@@ -79,28 +73,19 @@ const PLATFORM_NAMES: &[&str] = &[
     // Note: "dylib", "so", "dll" excluded - they represent library operation categories
     "objectivec",
     "applescript",
-    // Binary formats (allowed in metadata/format/)
-    "elf",
-    "macho",
-    "pe",
     // Node.js variants
-    "node",
     "nodejs",
     // Common aliases
     "bash",
     "sh",
     "zsh",
     "dotnet",
-    // Operating systems / platforms
-    "linux",
-    "unix",
-    "windows",
-    "macos",
-    "darwin",
-    "android",
-    "ios",
-    "freebsd",
-    "openbsd",
+];
+
+const PLATFORM_NAMES: &[&str] = &[
+    // Binary formats
+    "elf", "macho", "pe", // Operating systems / platforms
+    "linux", "unix", "windows", "macos", "darwin", "android", "ios", "freebsd", "openbsd",
 ];
 
 /// Directory name segments that add no semantic meaning.
@@ -250,62 +235,22 @@ const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
     "things", // obviously bad
     "tools",
     "tool",
-    "type",    // too vague
-    "types",   // dumping ground
-    "utils",   // too vague
-    "various", // dumping ground
-    "windows", // generic platform
+    "type",        // too vague
+    "types",       // dumping ground
+    "unspecified", // file by the evidence the rule establishes
+    "utils",       // too vague
+    "various",     // dumping ground
+    "windows",     // generic platform
 ];
 
-/// Directories that are allowed to have segments that duplicate their parent.
-/// These are legitimate cases where the name duplication is intentional and meaningful.
-const PARENT_DUPLICATE_EXCEPTIONS: &[&str] = &[
-    "micro-behaviors/communications/tunnel/tun", // TUN is a specific tunnel device type
-    "micro-behaviors/os/firewall/firewalld",     // firewalld is a specific firewall daemon name
-    "objectives/persistence/system/systemd",     // systemd is a specific init system name
-];
-
-/// Directories where a normally-vague segment has precise local meaning.
-const BANNED_SEGMENT_EXCEPTIONS: &[(&str, &str)] = &[
-    (
-        // A peer of `crypto/`, `communications/`, `fs/`, `mem/`, `process/`:
-        // the domain of encoding, serialization, parsing and databases, not
-        // "whatever a rule happens to touch".
-        "micro-behaviors/data",
-        "data",
-    ),
-    (
-        // A peer of `ai/`, `finance/`, `media/`, `enterprise/`: database and
-        // data-platform applications (postgresql, mysql-router).
-        "well-known/app/data",
-        "data",
-    ),
-    (
-        // A peer of `crypto/`, `network/`, `format/`, `datetime/`: data-layer
-        // libraries (redis, mysqlclient, postgrest-js).
-        "well-known/lib/data",
-        "data",
-    ),
-    (
-        "metadata/package/fields/types",
-        "types", // package.json `types`/`typings` entry point field
-    ),
-    (
-        "metadata/binary/code",
-        // "code" is vague anywhere else, but under metadata/binary/ it names one
-        // of the format's parts -- the executable bytes themselves (basic blocks,
-        // functions, complexity, density) -- exactly as ALLOWED_METADATA_BINARY
-        // declares it and as the `metrics` migration notes point traits toward.
-        "code",
-    ),
-    (
-        "well-known/tool",
-        "tool", // `well-known/tool/` is an established tier category, not a vague segment
-    ),
-    (
-        "well-known/tool/detection",
-        "detection", // detection tools (cleave's stng, SAST scanners): "detection" is the category
-    ),
+/// Established category names that also occur on the banned segment list.
+const BANNED_SEGMENT_EXCEPTIONS: &[&str] = &[
+    "micro-behaviors/data", // Encoding, serialization, parsing, and databases
+    "well-known/app/data",  // Databases and data-platform applications
+    "well-known/lib/data",  // Data-layer libraries
+    "metadata/binary/code", // Executable bytes and code structure
+    "well-known/tool",      // Named tool catalog
+    "well-known/tool/detection",
 ];
 
 /// Maximum atomic traits and composite rules combined in any directory.
@@ -868,7 +813,6 @@ const BROAD_PLATFORM_THRESHOLD: usize = 4;
 /// `value` paths are format-bound; and an AST (`tree-sitter`) query is written
 /// for one grammar, or for a pair that shares a grammar shape. A type-qualified allowlist entry
 /// (`"text:<dir-prefix>"`) only lifts the cap for that one matcher type.
-const BROAD_FILETYPE_THRESHOLD_PATH: usize = 4; // full-path matchers — start tight; whitelist/narrow case-by-case
 // Content-scan caps (text/metrics/encoded) include the macOS-native types
 // (applescript/plist/swift/objectivec) that ride into a group expansion now
 // that the `unix` umbrella reaches macOS (see resolve_platform_filetype_conflicts).
@@ -876,7 +820,7 @@ const BROAD_FILETYPE_THRESHOLD_PATH: usize = 4; // full-path matchers — start 
 // mirc and ircii in the scripts group. These are the family widths, not arbitrary
 // exceptions for individual traits: adding a supported format must not make the
 // shipped taxonomy unloadable.
-const BROAD_FILETYPE_THRESHOLD_TEXT: usize = 33; // text / literal / comment
+const BROAD_FILETYPE_THRESHOLD_TEXT: usize = 45; // text / literal / comment
 const BROAD_FILETYPE_THRESHOLD_METRICS: usize = 25; // whole-file metrics
 // A basename matches the *filename*, which is artifact-specific — a filename
 // pattern that fires across many languages is almost always mis-scoped. Kept
@@ -902,34 +846,12 @@ fn filetype_cap_for_condition(cond: &Condition) -> usize {
         Condition::Text(TextQuery { .. })
         | Condition::Literal(LiteralQuery { .. })
         | Condition::Comment(CommentQuery { .. }) => BROAD_FILETYPE_THRESHOLD_TEXT,
-        // An alias/composite-leg reference (`if: { id: X }`) does no scanning of
-        // its own — it delegates to the referenced trait, which is capped per its
-        // own matcher. The wrapper's `for:` is only an evaluation gate, so it is
-        // exempt from the file-type cap.
-        Condition::Trait { .. } => usize::MAX,
         Condition::Metrics(MetricsQuery { .. }) => BROAD_FILETYPE_THRESHOLD_METRICS,
-        // Full-path matchers use the dedicated path cap; `basename`/`dirname`-
-        // scoped paths are filename-bounded and get the basename cap. A path
-        // condition with no string matcher (exact/substr/regex/is) does no
-        // scanning at all — it is a trivially-true type/size gate (e.g. the
-        // `is-binary` building block), so it is exempt from the file-type cap.
-        Condition::Path(PathQuery {
-            basename,
-            dirname,
-            exact,
-            substr,
-            regex,
-            is_check,
-            ..
-        }) => {
-            if exact.is_none() && substr.is_none() && regex.is_none() && is_check.is_none() {
-                usize::MAX
-            } else if *basename || *dirname {
-                BROAD_FILETYPE_THRESHOLD_BASENAME
-            } else {
-                BROAD_FILETYPE_THRESHOLD_PATH
-            }
-        }
+        Condition::Path(PathQuery { basename: true, .. })
+        | Condition::Path(PathQuery { dirname: true, .. }) => BROAD_FILETYPE_THRESHOLD_BASENAME,
+        // References inherit the underlying matcher's cap. Full paths are
+        // evaluated independently of the carrier format.
+        Condition::Trait { .. } | Condition::Path(_) => usize::MAX,
         Condition::Raw(RawQuery { .. }) => BROAD_FILETYPE_THRESHOLD_RAW,
         Condition::Encoded(EncodedQuery { .. }) => BROAD_FILETYPE_THRESHOLD_ENCODED,
         Condition::Section(SectionQuery { .. }) => BROAD_FILETYPE_THRESHOLD_SECTION,
@@ -938,6 +860,8 @@ fn filetype_cap_for_condition(cond: &Condition) -> usize {
         }
         Condition::Hex(HexQuery { .. }) => BROAD_FILETYPE_THRESHOLD_HEX,
         Condition::Yara { .. } => BROAD_FILETYPE_THRESHOLD_YARA,
+        // This value reads the file name directly, like the path matcher.
+        Condition::Kv(q) if q.path == "file.basename" => usize::MAX,
         Condition::Kv(KvQuery { .. }) => BROAD_FILETYPE_THRESHOLD_VALUE,
         Condition::TreeSitter(TreeSitterQuery { .. }) => BROAD_FILETYPE_THRESHOLD_AST,
     }
@@ -1102,16 +1026,33 @@ pub(crate) fn find_redundant_unix_platforms(
         .collect()
 }
 
-/// Match a broad-scope policy location. YAML file entries identify a complete
-/// source path; directory entries retain their existing subtree behavior.
-fn filetype_allowlist_source_matches(source: &str, prefix: &str) -> bool {
-    if prefix.ends_with(".yaml") || prefix.ends_with(".yml") {
-        source
-            .strip_suffix(prefix)
-            .is_some_and(|parent| parent.is_empty() || parent.ends_with('/'))
+/// Match an exact file or directory subtree, relative to the rules root.
+fn filetype_allowlist_source_matches(source: &Path, location: &str) -> bool {
+    if location.ends_with('/') {
+        source.starts_with(location)
     } else {
-        source.contains(prefix)
+        source == Path::new(location)
     }
+}
+
+fn exceeded_filetype_cap(t: &TraitDefinition) -> Option<(usize, usize)> {
+    let count = effective_filetype_count(t);
+    // Archive trees and extraction guards supply the same fields across formats.
+    let archive_fact = match &t.r#if {
+        Condition::Kv(q) => q.path.starts_with("archive.") || q.path.starts_with("archive_guard."),
+        Condition::Metrics(q) => q.field.starts_with("archive.guard."),
+        _ => false,
+    };
+    let cap = if archive_fact && t.r#for.iter().all(FileType::is_archive) {
+        FileType::archive_family_types().len()
+    } else if matches!(&t.r#if, Condition::Kv(q) if q.path.starts_with("media."))
+        && t.r#for.iter().all(|ft| FileType::MEDIA_FAMILY.contains(ft))
+    {
+        FileType::MEDIA_FAMILY.len()
+    } else {
+        filetype_cap_for_condition(&t.r#if)
+    };
+    (count > cap).then_some((count, cap))
 }
 
 /// Find atomic traits whose effective file-type count exceeds the cap for their
@@ -1127,36 +1068,22 @@ fn filetype_allowlist_source_matches(source: &str, prefix: &str) -> bool {
 pub(crate) fn find_broad_filetype_traits(
     trait_definitions: &[TraitDefinition],
     rule_source_files: &HashMap<String, String>,
+    root: &Path,
 ) -> Vec<(String, String, usize, Vec<FileType>, &'static str, usize)> {
     trait_definitions
         .iter()
         .filter_map(|t| {
-            let count = effective_filetype_count(t);
-            // One archive producer supplies the same structural member fields
-            // for every container format. Scope follows that input contract,
-            // not the directory where a rule happens to live. Non-archive types
-            // or unrelated fact paths retain the ordinary value-query cap.
-            let cap = if matches!(&t.r#if, Condition::Kv(q) if q.path.starts_with("archive."))
-                && !t.r#for.is_empty()
-                && t.r#for.iter().all(FileType::is_archive)
-            {
-                FileType::archive_family_types().len()
-            } else {
-                filetype_cap_for_condition(&t.r#if)
-            };
-            if count <= cap {
-                return None;
-            }
+            let (count, cap) = exceeded_filetype_cap(t)?;
             let category = t.r#if.type_name();
             let source = rule_source_files
                 .get(&t.id)
                 .map(String::as_str)
                 .unwrap_or("");
-            // A type-qualified allowlist entry ("text:<dir-prefix>") lifts the
-            // cap only for matchers of that one type in that directory subtree.
-            let allowlisted = BROAD_FILETYPE_ALLOWLIST.iter().any(|entry| {
-                entry.split_once(':').is_some_and(|(ty, prefix)| {
-                    ty == category && filetype_allowlist_source_matches(source, prefix)
+            let allowlisted = Path::new(source).strip_prefix(root).is_ok_and(|relative| {
+                BROAD_FILETYPE_ALLOWLIST.iter().any(|entry| {
+                    entry.split_once(':').is_some_and(|(ty, location)| {
+                        ty == category && filetype_allowlist_source_matches(relative, location)
+                    })
                 })
             });
             if allowlisted {
@@ -1179,31 +1106,37 @@ pub(crate) fn find_broad_filetype_traits(
         .collect()
 }
 
-/// Find [`BROAD_FILETYPE_ALLOWLIST`] entries that no longer match any trait.
-///
-/// Entries are matched by directory *prefix*, so renaming or retiring a
-/// directory silently strips its exemption: the entry stops matching, every
-/// trait it covered starts failing the cap, and nothing points at the entry as
-/// the cause. The failure surfaces far from the rename, as a pile of unrelated
-/// cap violations.
-///
-/// An entry matching nothing is either that mistake or a leftover from a
-/// directory that is gone. Either way it is dead text pretending to be a
-/// policy, so say so.
+/// Find entries that cover no over-cap atomic trait of the specified matcher type.
 #[must_use]
 pub(crate) fn find_stale_filetype_allowlist_entries(
+    trait_definitions: &[TraitDefinition],
     rule_source_files: &HashMap<String, String>,
+    root: &Path,
 ) -> Vec<&'static str> {
+    let mut over_cap: HashMap<&str, HashSet<&Path>> = HashMap::new();
+    for t in trait_definitions {
+        if exceeded_filetype_cap(t).is_some()
+            && let Some(source) = rule_source_files.get(&t.id)
+            && let Ok(relative) = Path::new(source).strip_prefix(root)
+        {
+            over_cap
+                .entry(t.r#if.type_name())
+                .or_default()
+                .insert(relative);
+        }
+    }
     BROAD_FILETYPE_ALLOWLIST
         .iter()
         .filter(|entry| {
-            let Some((_, prefix)) = entry.split_once(':') else {
+            let Some((category, location)) = entry.split_once(':') else {
                 // A malformed entry can never match; report it too.
                 return true;
             };
-            !rule_source_files
-                .values()
-                .any(|src| filetype_allowlist_source_matches(src, prefix))
+            !over_cap.get(category).is_some_and(|sources| {
+                sources
+                    .iter()
+                    .any(|source| filetype_allowlist_source_matches(source, location))
+            })
         })
         .copied()
         .collect()
@@ -1211,6 +1144,23 @@ pub(crate) fn find_stale_filetype_allowlist_entries(
 
 #[cfg(test)]
 mod media_filetype_allowance_tests;
+
+/// Size is identity evidence for high-criticality binary fingerprints and
+/// open-ended byte signatures. Names, parsed fields, and literal markers used
+/// as supporting evidence can occur in artifacts of any size.
+fn binary_identity_needs_size(t: &TraitDefinition) -> bool {
+    (is_high_criticality_binary_identity(t)
+        && !(is_basename_fact(t) && t.crit <= Criticality::Notable))
+        || match &t.r#if {
+            Condition::Raw(q) => q.regex.is_some(),
+            Condition::Hex(_) | Condition::Encoded(_) | Condition::Yara { .. } => true,
+            _ => false,
+        }
+}
+
+fn is_high_criticality_binary_identity(t: &TraitDefinition) -> bool {
+    t.crit > Criticality::Notable || t.id.starts_with("well-known/malware/")
+}
 
 pub(crate) fn find_wellknown_missing_size_filter(
     trait_definitions: &[TraitDefinition],
@@ -1221,60 +1171,7 @@ pub(crate) fn find_wellknown_missing_size_filter(
         .filter(|t| {
             extract_trait_tier(&t.id) == "well-known"
                 && trait_targets_binaries(t)
-                && !(is_basename_fact(t)
-                    && matches!(t.crit, Criticality::Component | Criticality::Notable))
-                && !is_low_tier_named_binary_fact(t)
-                && !reviewed_unbounded_reference(t, false)
-                && !is_reviewed_installer_tool_fact(t)
-                && !is_nvidia_nvml_reference(t)
-                && !is_poolpartybof_reference(t)
-                && !is_mixcloud_warning_reference(t)
-                && !is_minicap_path_reference(t)
-                && !is_sms_provider_endpoint_reference(t)
-                && !is_reviewed_dotnet_tool_name_reference(t)
-                && !is_reviewed_remote_tool_reference(t)
-                && !is_reviewed_nping_command_reference(t)
-                && !is_reviewed_product_registry_reference(t)
-                && !is_reviewed_linfeng_marker(t)
-                && !is_reviewed_redshell_injection_menu(t)
-                && !is_reviewed_stagecomp_marker(t)
-                && !is_go_socks5_library_reference(t)
-                && !is_gentee_runtime_reference(t)
-                && !is_named_crypter_label_reference(t)
-                && !is_ngrok_go_type_reference(t)
-                && !is_tunnel_client_reference(t)
-                && !is_yamux_library_reference(t)
-                && !is_openconnect_command_reference(t)
-                && !is_jwe_library_reference(t)
-                && !is_apple_cache_service_reference(t)
-                && !is_windows_product_name_reference(t)
-                && !is_legacy_product_name_reference(t)
-                && !is_trezor_name_reference(t)
-                && !is_windows_rpc_service_reference(t)
-                && !is_sumatrapdf_encryption_claim(t)
-                // A GitLab registry path is a service reference regardless of
-                // the size of a binary containing it, not a file identity.
-                && !(t.id == "well-known/app/development/code-forge/gitlab::gitlab-generic-package-upload"
-                    && t.crit == Criticality::Notable
-                    && matches!(&t.r#if, Condition::Text(q)
-                        if q.regex.as_deref() == Some(r"/api/v4/projects/.{0,160}/packages/generic/")
-                            && q.exact.is_none() && q.substr.is_none() && q.word.is_none()))
-                // The Tauri plugin string is a section-scoped product reference,
-                // not an identity or a size-bounded signature of the file.
-                && !(t.id == "well-known/lib/development/tauri::tauri-shell-open-plugin"
-                    && t.crit == Criticality::Notable
-                    && matches!(&t.r#if, Condition::Text(q)
-                        if q.substr.as_deref() == Some("plugin:shell|open")
-                            && q.section.as_deref() == Some(".rdata")))
-                // A Go import path is provenance evidence, not a size-bounded identity.
-                && t.id != "well-known/tool/detection/titus::titus-secret-scan-implementation"
-                // A tool banner is a reference regardless of file size.
-                && t.id != "well-known/tool/reverse-engineering/oep-finder::geta-oep-banner-marker"
-                // This path names a runtime DLL; file size does not change the path.
-                && !(t.id == "well-known/lib/runtime/compiled/msvc-runtime::bin64-msvcr120-path"
-                    && matches!(t.crit, Criticality::Component | Criticality::Notable)
-                    && matches!(&t.r#if, Condition::Path(q)
-                        if q.substr.as_deref() == Some("bin64/msvcr120.dll")))
+                && binary_identity_needs_size(t)
                 && t.size_min.is_none()
                 && t.size_max.is_none()
         })
@@ -1287,9 +1184,6 @@ pub(crate) fn find_wellknown_missing_size_filter(
         })
         .collect()
 }
-
-// Section-scoped NVIDIA library and product-name references describe what a
-// binary mentions, rather than asserting the identity or size of the binary.
 
 /// Find well-known/ traits that identify a family by registry metadata alone.
 ///
@@ -1359,9 +1253,6 @@ fn condition_keys_on_registry_identity(cond: &Condition, include_name: bool) -> 
     }
 }
 
-// These named-utility text references were reviewed with whole-file scope.
-// Limit each exception to the original ID, criticality and matcher.
-
 /// Find well-known/ atomic traits targeting binary file types whose condition lacks a section filter.
 ///
 /// For binary targets (PE, ELF, Mach-O, etc.), section-scoped matching significantly reduces
@@ -1378,138 +1269,11 @@ pub(crate) fn find_wellknown_missing_section_filter(
         .filter(|t| {
             extract_trait_tier(&t.id) == "well-known"
                 && trait_targets_only_binaries(t)
-                && !is_jwe_library_reference(t)
-                && !is_windows_product_name_reference(t)
-                && !reviewed_unbounded_reference(t, true)
-                && !is_poolpartybof_reference(t)
-                && !is_mixcloud_warning_reference(t)
-                && !is_sms_provider_endpoint_reference(t)
-                && !is_go_socks5_library_reference(t)
-                && !is_gentee_runtime_reference(t)
-                && !is_named_crypter_label_reference(t)
-                && !is_ngrok_go_type_reference(t)
-                && !is_tunnel_client_reference(t)
-                && !is_yamux_library_reference(t)
-                && !is_openconnect_command_reference(t)
-                && !(t.id == "well-known/lib/runtime/scripted/python-runtime::python-launcher-banner-marker"
-                    && is_reviewed_installer_tool_fact(t))
-                && !(matches!(t.id.as_str(),
-                    "well-known/app/system/sshtty::sshtty-server-crate-marker"
-                    | "well-known/app/system/sshtty::sshtty-terminal-banner")
-                    && is_reviewed_installer_tool_fact(t))
-                // This reviewed whole-file marker must retain its original scope.
-                && !(matches!(t.id.as_str(),
-                    "well-known/app/development/code-forge/github::github-web-raw-msi-url"
-                    | "well-known/app/development/code-forge/github::github-web-raw-url"
-                    | "well-known/app/development/code-forge/github::raw-githubusercontent-web-file"
-                    | "well-known/app/development/code-forge/github::raw-githubusercontent-script-file"
-                    | "well-known/app/development/code-forge/github::raw-githubusercontent-scripting-lang"
-                    | "well-known/app/development/code-forge/github::raw-githubusercontent-actions-url"
-                    | "well-known/app/development/code-forge/github::raw-githubusercontent-native-library"
-                    | "well-known/app/development/code-forge/github::raw-githubusercontent-msbuild-project"
-                    | "well-known/app/development/code-forge/github::raw-githubusercontent-image-suffix"
-                    | "well-known/app/development/code-forge/github::raw-githubusercontent-any"
-                    | "well-known/app/development/code-forge/github::raw-githubusercontent-refs"
-                    | "well-known/app/development/code-forge/github::raw-githubusercontent-host-string"
-                    | "well-known/app/development/code-forge/github::gist-githubusercontent-raw-binary-url") && is_reviewed_installer_tool_fact(t))
-                && !(t.id == "well-known/lib/ai/tesseract::tesseract-upstream-model-url"
-                    && is_reviewed_installer_tool_fact(t))
-                && !(t.id == "well-known/app/security/eset::eset-update-manifest-path"
-                    && is_reviewed_installer_tool_fact(t))
-                && !(matches!(t.id.as_str(),
-                    "well-known/app/storage/mediafire::mediafire-download-url"
-                    | "well-known/app/productivity/zoho::zoho-service-url"
-                    | "well-known/app/productivity/zoho::zoho-service-host-reference"
-                    | "well-known/app/productivity/zoho::zoho-oauth-token-url"
-                    | "well-known/app/productivity/zoho::workdrive-zoho-host-url"
-                    | "well-known/app/productivity/zoho::workdrive-zoho-api-url") && is_reviewed_installer_tool_fact(t))
-                && !(matches!(t.id.as_str(),
-                    "well-known/app/storage/dropbox::dropbox-direct-share-url"
-                    | "well-known/app/storage/dropbox::dropbox-web-share-url"
-                    | "well-known/app/storage/dropbox::dropboxusercontent-executable-url"
-                    | "well-known/app/storage/dropbox::dropbox-share-executable-url"
-                    | "well-known/app/storage/dropbox::dropbox-direct-executable-url"
-                    | "well-known/app/storage/dropbox::dropbox-share-url-bytecode"
-                    | "well-known/app/storage/google-drive::gdrive-export-download-url"
-                    | "well-known/app/storage/google-drive::gdrive-usercontent-download-reference"
-                    | "well-known/app/storage/google-drive::gdrive-usercontent-host"
-                    | "well-known/app/storage/google-drive::gdrive-pe-file-url"
-                    | "well-known/app/storage/google-drive::gdrive-script-file-url"
-                    | "well-known/app/storage/alibaba-oss::oss-service-host-reference"
-                    | "well-known/app/storage/alibaba-oss::oss-bucket-host-cn-ap"
-                    | "well-known/app/storage/alibaba-oss::oss-bucket-host-us-eu"
-                    | "well-known/app/storage/alibaba-oss::oss-bucket-host-me"
-                    | "well-known/app/storage/alibaba-oss::oss-executable-url-cn-ap"
-                    | "well-known/app/storage/alibaba-oss::oss-script-url-cn-ap"
-                    | "well-known/app/storage/alibaba-oss::oss-executable-url-us-eu"
-                    | "well-known/app/storage/alibaba-oss::oss-script-url-us-eu"
-                    | "well-known/app/storage/alibaba-oss::oss-executable-url-me"
-                    | "well-known/app/storage/tencent-cos::myqcloud-domain-reference"
-                    | "well-known/app/storage/tencent-cos::tencent-cos-url"
-                    | "well-known/app/storage/tencent-cos::cos-pe-url"
-                    | "well-known/app/storage/tencent-cos::cos-installer-batch-url"
-                    | "well-known/app/storage/tencent-cos::cos-powershell-url"
-                    | "well-known/app/storage/tencent-cos::tencent-cos-archive-url"
-                    | "well-known/app/storage/digitalocean-spaces::spaces-domain-reference"
-                    | "well-known/app/storage/filen::filen-domain-reference"
-                    | "well-known/app/storage/koofr::koofr-domain-reference") && is_reviewed_installer_tool_fact(t))
-                && !(matches!(t.id.as_str(),
-                    "well-known/app/storage/amazon-s3::aws-s3-url"
-                    | "well-known/app/storage/amazon-s3::s3-bucket-uri"
-                    | "well-known/app/storage/google-cloud-storage::gcs-url"
-                    | "well-known/app/storage/cloudflare-r2::r2-object-endpoint"
-                    | "well-known/app/storage/cloudflare-r2::cloudflare-r2-url"
-                    | "well-known/app/storage/cloudflare-r2::cloudflare-r2-pub-url"
-                    | "well-known/app/storage/digitalocean-spaces::do-spaces-url"
-                    | "well-known/app/storage/vultr-object-storage::vultr-object-storage-url"
-                    | "well-known/app/storage/backblaze-b2::backblaze-b2-url") && is_reviewed_installer_tool_fact(t))
-                && !(matches!(t.id.as_str(),
-                    "well-known/app/communication/discord::discord-cdn-shell-script-url"
-                    | "well-known/app/communication/discord::discord-cdn-download-url"
-                    | "well-known/app/communication/discord::discord-cdn-windows-executable-url"
-                    | "well-known/app/communication/discord::discord-cdn-archive-url"
-                    | "well-known/app/storage/mega::mega-file-share-url") && is_reviewed_installer_tool_fact(t))
-                && !(t.id == "well-known/app/infrastructure/content-delivery/jsdelivr::jsdelivr-npm-script-url"
-                    && is_reviewed_installer_tool_fact(t))
-                && !(t.id == "well-known/app/system/firmware/qualcomm-xbl::qcom-xbl-bootloader-marker"
-                    && is_reviewed_installer_tool_fact(t))
-                && !(t.id == "well-known/lib/platform/wine::wine-builtin-header-text"
-                    && is_reviewed_installer_tool_fact(t))
-                && t.id != "well-known/app/system/adobe-acrobat-updater::adobe-acrobat-updater-text"
-                // Go package paths can be emitted in different binary sections.
-                && t.id != "well-known/tool/detection/titus::titus-secret-scan-implementation"
-                // The GeTaOEP banner can appear in any section or overlay.
-                && t.id != "well-known/tool/reverse-engineering/oep-finder::geta-oep-banner-marker"
-                && !is_reviewed_linfeng_marker(t)
-                && !is_reviewed_redshell_injection_menu(t)
-                && !is_reviewed_shellobject_marker(t)
-                && !is_reviewed_utility_reference(t)
-                && !(t.id == "well-known/tool/packaging/iexpress::wextract-cleanup-string"
-                    && is_reviewed_installer_tool_fact(t))
-                && !(t.id == "well-known/tool/packaging/smart-install-maker::smart-install-maker-description"
-                    && is_reviewed_installer_tool_fact(t))
-                && !(matches!(t.id.as_str(),
-                    "well-known/tool/packaging/jsmooth::jsmooth-vm-search-order-string"
-                    | "well-known/tool/packaging/jsmooth::jsmooth-native-class-string")
-                    && is_reviewed_installer_tool_fact(t))
-                // The reviewed star format and config references can occur in
-                // different binary sections; preserve their whole-file scope.
-                && !is_reviewed_star_reference(t)
-                && !is_reviewed_product_registry_reference(t)
-                // The Edge product-name reference was reviewed as whole-file
-                // text; narrowing it to a PE section would lose its consumers.
-                && !(t.id == "well-known/app/browser/microsoft-edge::microsoft-edge-name"
-                    && t.crit == Criticality::Notable
-                    && matches!(&t.r#if, Condition::Text(q)
-                        if q.substr.as_deref() == Some("Microsoft Edge")
-                            && q.exact.is_none() && q.regex.is_none() && q.word.is_none()))
-                // A named DLL reference can occur outside a PE section, and its
-                // established consumer needs the original whole-file coverage.
-                && !(t.id == "well-known/lib/runtime/managed/dotnet-runtime::mscorsvc-dll-filename"
-                    && t.crit == Criticality::Notable
-                    && matches!(&t.r#if, Condition::Text(q)
-                        if q.substr.as_deref() == Some("mscorsvc.dll")
-                            && q.exact.is_none() && q.regex.is_none() && q.word.is_none()))
+                && (is_high_criticality_binary_identity(t)
+                    || matches!(
+                        t.r#if,
+                        Condition::Raw(_) | Condition::Hex(_) | Condition::Encoded(_)
+                    ))
                 && condition_supports_section_filter(&t.r#if)
                 && !condition_has_section_filter(&t.r#if)
         })
@@ -1608,33 +1372,12 @@ pub(crate) fn find_permuted_directory_paths(trait_dirs: &[String]) -> Vec<(Strin
 }
 
 #[cfg(test)]
-mod printenv_filetype_allowance_tests;
-
-#[cfg(test)]
 #[test]
-fn systemd_user_sibling_exception_is_scoped() {
+fn systemd_scope_names_can_be_siblings_under_the_shared_subject() {
     let dirs = [
-        "objectives/persistence/system/service/systemd",
-        "objectives/persistence/system/service/systemd-user",
-        "objectives/persistence/system/service/systemd-other",
-        "other/service/systemd",
-        "other/service/systemd-user",
+        "objectives/persistence/system/service/systemd/unit",
+        "objectives/persistence/system/service/systemd/user",
     ]
     .map(str::to_string);
-    let findings = find_sibling_name_restatement(&dirs);
-    assert!(!findings.contains(&(
-        "objectives/persistence/system/service".into(),
-        "systemd".into(),
-        "systemd-user".into(),
-    )));
-    assert!(findings.contains(&(
-        "objectives/persistence/system/service".into(),
-        "systemd".into(),
-        "systemd-other".into(),
-    )));
-    assert!(findings.contains(&(
-        "other/service".into(),
-        "systemd".into(),
-        "systemd-user".into(),
-    )));
+    assert!(find_sibling_name_restatement(&dirs).is_empty());
 }

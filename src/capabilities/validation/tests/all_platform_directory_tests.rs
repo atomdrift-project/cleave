@@ -12,7 +12,7 @@ fn all_scope_checks_atoms_and_composites_with_directory_boundaries() {
     let traits = vec![
         make_trait("metadata/registry::age", vec![Platform::All]),
         make_trait(
-            "metadata/package/documentation/source::readme",
+            "metadata/package/documentation/claims::readme",
             vec![Platform::All],
         ),
         make_trait(
@@ -20,8 +20,6 @@ fn all_scope_checks_atoms_and_composites_with_directory_boundaries() {
             vec![Platform::All],
         ),
         make_trait("metadata/filename::readme-basename", vec![Platform::All]),
-        make_trait("metadata/filename/subdir::shape", vec![Platform::All]),
-        make_trait("metadata/filename-impostor::shape", vec![Platform::All]),
         make_trait("metadata/registry-impostor::age", vec![Platform::All]),
         make_trait("well-known/lib/crypto/ece::api", vec![Platform::All]),
         make_trait(
@@ -33,11 +31,6 @@ fn all_scope_checks_atoms_and_composites_with_directory_boundaries() {
     let rules = vec![
         CompositeTrait {
             id: "metadata/file/profile/source-indications::alternatives".to_string(),
-            platforms: vec![Platform::All],
-            ..Default::default()
-        },
-        CompositeTrait {
-            id: "metadata/file/profile/source-indications-impostor::alternatives".to_string(),
             platforms: vec![Platform::All],
             ..Default::default()
         },
@@ -73,8 +66,8 @@ fn all_scope_checks_atoms_and_composites_with_directory_boundaries() {
         ids,
         vec![
             "age",
-            "metadata/file/profile/source-indications-impostor::alternatives",
-            "metadata/filename-impostor::shape",
+            "metadata/file/profile/source-indications::alternatives",
+            "metadata/filename::readme-basename",
             "metadata/registry-impostor::age",
             "objectives/persistence/login::entry",
             "objectives/supply-chain/security-hold-impostor::entry",

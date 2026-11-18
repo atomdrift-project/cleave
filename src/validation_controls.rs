@@ -180,6 +180,11 @@ impl ValidationIssues {
     }
 
     #[cfg(feature = "lint")]
+    pub(crate) fn push_issue(&mut self, issue: ValidationIssue) {
+        self.issues.push(issue);
+    }
+
+    #[cfg(feature = "lint")]
     pub(crate) fn push_count(
         &mut self,
         validator_id: &'static str,
@@ -853,6 +858,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Narrow `for:`, or add a type-qualified allowlist entry (\"<type>:<dir-prefix>\").",
     },
     ValidatorSpec {
+        id: "stale-filetype-allowlist",
+        category: ValidatorCategory::Policy,
+        display_id: "stale-ft-cap",
+        description: "A file-type exemption covers no trait that exceeds its matcher cap.",
+        fix: "Remove the exemption or update its matcher type and path after a reviewed move.",
+    },
+    ValidatorSpec {
         id: "all-platforms-directory",
         category: ValidatorCategory::Policy,
         display_id: "plat-all",
@@ -1159,7 +1171,7 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         id: "unverified-signature-suppressor",
         category: ValidatorCategory::Policy,
         display_id: "unverified-signature-suppressor",
-        description: "unless:/downgrade: cites a signature outside metadata/signature/verified/, which proves nothing about the signer.",
+        description: "unless:/downgrade: relies on unverified signature evidence.",
         fix: "Cite a metadata/signature/verified/ finding, or move the reference into a detection leg.",
     },
     ValidatorSpec {
@@ -1201,8 +1213,8 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         id: "broken-reference",
         category: ValidatorCategory::Quality,
         display_id: "broken-ref",
-        description: "Composite references a trait id that does not exist.",
-        fix: "Fix the id, or add the missing trait; references resolve by directory::id.",
+        description: "An atomic trait or composite references a rule id that does not exist.",
+        fix: "Use a known rule id or add the missing definition.",
     },
     ValidatorSpec {
         id: "impossible-constraint",

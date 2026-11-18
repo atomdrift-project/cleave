@@ -528,6 +528,56 @@ fn archives_preserve_native_inline_yara_and_composites() {
 }
 
 #[test]
+fn office_variant_uses_canonical_yara_bucket() {
+    use crate::analyzers::Analyzer;
+    use std::io::{Cursor, Write};
+
+    let mut compiler = yara_x::Compiler::new();
+    compiler
+        .add_source(r#"rule office_marker { strings: $a = "OfficeYaraFixture" condition: $a }"#)
+        .unwrap();
+    let mut yara = YaraEngine::new_for_test();
+    let bucket = crate::FileType::Ooxml.label().to_string();
+    yara.tiers
+        .entry(bucket.clone())
+        .or_default()
+        .set(Some(Arc::new(compiler.build())))
+        .unwrap();
+    yara.populated_tiers.insert(bucket);
+    yara.rule_counts = (1, 0);
+    let engine = crate::Engine::new(
+        Arc::new(CapabilityMapper::empty()),
+        Some(Arc::new(yara)),
+        Default::default(),
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("fixture.xlsx");
+    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    zip.start_file("[Content_Types].xml", options).unwrap();
+    zip.write_all(br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>"#)
+        .unwrap();
+    zip.start_file("xl/workbook.xml", options).unwrap();
+    zip.write_all(b"<workbook><!-- OfficeYaraFixture --></workbook>")
+        .unwrap();
+    std::fs::write(&path, zip.finish().unwrap().into_inner()).unwrap();
+
+    let report = crate::analyzers::office::OfficeAnalyzer::new()
+        .with_engine(engine)
+        .analyze(&path)
+        .unwrap();
+    assert_eq!(report.target.file_type, "xlsx");
+    assert!(
+        report
+            .yara_matches
+            .iter()
+            .any(|m| m.rule == "office_marker")
+    );
+}
+
+#[test]
 fn archive_container_evaluates_inline_yara_on_original_bytes() {
     use crate::analyzers::Analyzer;
     use std::io::Write;

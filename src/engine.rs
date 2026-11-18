@@ -147,8 +147,13 @@ impl Engine {
             Some(prefetched)
         } else {
             use crate::analyzers::FileTypeExt;
-            let file_type = crate::FileType::from_label(&report.target.file_type);
-            // A type the label does not name keeps the untyped scan below.
+            // Office reports use variant labels such as xlsx, while YARA
+            // routes those files through the canonical ooxml bucket.
+            let file_type = crate::FileType::from_label(&report.target.file_type).or_else(|| {
+                analysis
+                    .filefacts
+                    .map(|ctx| ctx.parsed.fileid().file_type())
+            });
             let skipped = file_type
                 .is_some_and(|ft| yara_skip_reason(&report.target.path, ft, data.len()).is_some());
             if !skipped && let Some(yara) = self.yara().filter(|yara| yara.is_loaded()) {

@@ -16,8 +16,6 @@ use super::*;
 /// `text` matcher in an allowlisted `text:` directory passes; the same directory
 /// does **not** license a broad `value`/`symbol`/etc. matcher.
 pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
-    // ProcessBuilder source can be embedded in JVM wrappers and opaque data.
-    "text:metadata/lang/source/syntax/call/construction/call-review-subprocess-review-java-builder.yaml",
     // Shared XOR AST productions are portable across the explicitly scoped
     // grammars. Lua exponentiation and other grammars are excluded; Swift has
     // its own production. One canonical predicate avoids per-language copies.

@@ -701,6 +701,26 @@ fn test_detect_base64_zip_is_metadata_and_still_analyzes_members() {
 }
 
 #[test]
+fn test_detect_base64_rar_is_archive_metadata() {
+    use base64::Engine;
+
+    // This tests the magic-only carrier finding. Member analysis is covered
+    // separately by the ZIP test above.
+    let mut bytes = [0; 192];
+    bytes[..7].copy_from_slice(b"Rar!\x1a\x07\x00");
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    let info = make_string_info(&encoded);
+    let entries = detect_base64_binary("recipe.yaml", &info, 0, &test_mapper());
+    let carrier = &entries[0].findings[0];
+    assert_eq!(
+        carrier.id.as_ref(),
+        "metadata/file/encoding::base64-decoded-rar"
+    );
+    assert_eq!(carrier.crit, Criticality::Notable);
+    assert!(carrier.attack.is_none());
+}
+
+#[test]
 fn test_detect_base64_binary_rejects_tiny_elf_fixture() {
     let encoded = "f0VMRgIBAQAAAAAAAAAAAAIAPgABAAAAeABAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAEAAOAAB\
 AAAAAAAAAAEAAAAFAAAAAAAAAAAAAAAAAEAAAAAAAAAAQAAAAAAAfQAAAAAAAAB9AAAAAAAAAAAA\

@@ -121,10 +121,11 @@ pub(super) fn detect_base64_binary(
     let virtual_path = format!("{}##base64@{:#x}", parent_path, offset);
     let sha256 = crate::analyzers::utils::calculate_sha256(&decoded);
 
-    // ZIP is also the container for documents and ordinary application assets.
     // Encoding plus archive magic establishes a format property, not evasion.
-    // The dispatcher below still analyzes every decoded member for behavior.
-    let is_archive = matches!(inner_type, "zip" | "gz" | "xz" | "lzma" | "bz2");
+    // Use the same archive classification as payload_magic so formats such as
+    // RAR and 7z receive the same treatment as ZIP. The dispatcher still
+    // analyzes the decoded content for behavior.
+    let is_archive = filefacts::archive_magic(&decoded).is_some();
     let finding = Finding {
         precomputed_spans: None,
         src: None,

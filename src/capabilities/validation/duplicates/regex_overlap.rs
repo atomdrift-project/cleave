@@ -1140,6 +1140,7 @@ pub(crate) fn check_regex_alternative_subsets(
         file_path: String,
         for_types: HashSet<String>,
         case_insensitive: bool,
+        argument_key: String,
     }
 
     let relaxed_data_text_superset = |pattern: &RegexWithAlternatives| -> bool {
@@ -1163,6 +1164,12 @@ pub(crate) fn check_regex_alternative_subsets(
             .map(|ft| format!("{:?}", ft).to_lowercase())
             .collect();
         let file_path = trait_def.defined_in.to_string_lossy().to_string();
+        let argument_key = match &trait_def.r#if {
+            Condition::Symbol(query) => {
+                symbol_argument_discriminator(query.arg.as_deref(), query.args.as_deref())
+            }
+            _ => String::new(),
+        };
 
         let mut add_regex = |condition_type: &str, pattern: String, case_insensitive: bool| {
             // Check if pattern has top-level alternation
@@ -1185,6 +1192,7 @@ pub(crate) fn check_regex_alternative_subsets(
                     file_path: file_path.clone(),
                     for_types: for_types.clone(),
                     case_insensitive,
+                    argument_key: argument_key.clone(),
                 });
             } else if let Some((prefix, alts, suffix)) = extract_single_group_alternation(&pattern)
             {
@@ -1197,6 +1205,7 @@ pub(crate) fn check_regex_alternative_subsets(
                     file_path: file_path.clone(),
                     for_types: for_types.clone(),
                     case_insensitive,
+                    argument_key: argument_key.clone(),
                 });
             }
         };
@@ -1294,6 +1303,11 @@ pub(crate) fn check_regex_alternative_subsets(
 
                 // Check file type overlap
                 if !has_filetype_overlap_case(&p1.for_types, &p2.for_types) {
+                    continue;
+                }
+                // A subset of callee names does not imply a subset of calls
+                // when the argument predicates select different values.
+                if p1.argument_key != p2.argument_key {
                     continue;
                 }
 

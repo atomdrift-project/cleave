@@ -222,7 +222,7 @@ pub(super) fn dispatch_decompressed_file(
             persist_decoded_leaf(tmp, dest_dir, stem)
         }
         FileType::Gz => decompress_to_file_at_depth(
-            flate2::read::GzDecoder::new(reopen_decoded(&tmp, stem)?),
+            flate2::read::MultiGzDecoder::new(reopen_decoded(&tmp, stem)?),
             logical_path,
             dest_dir,
             decoded_len,

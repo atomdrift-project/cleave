@@ -604,6 +604,7 @@ pub(crate) fn shared(root: &Path) -> Result<Arc<RuleSources>> {
 }
 
 /// Release the source text once validation has built its mapper and YARA engine.
+#[cfg(feature = "lint")]
 pub(crate) fn release_unused(root: &Path) {
     if let Ok(root) = fs::canonicalize(root) {
         SOURCES

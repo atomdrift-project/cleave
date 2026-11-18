@@ -349,24 +349,22 @@ fn create_symbol_exact_with_arg(
         id,
         Condition::Symbol(SymbolQuery {
             exact: Some(pattern.to_string()),
-            substr: None,
-            regex: None,
-            platforms: None,
-            is_check: None,
-            kind: Some(SymbolKind::Call),
-            arg: Some(Box::new(ArgFilter {
-                exact: Some(arg.to_string()),
-                ..Default::default()
-            })),
-            args: None,
-            alias: None,
-            not: None,
-            module_level: false,
-            receiver: None,
+            ..symbol_call_with_arg(arg)
         }),
         for_types,
         file_path,
     )
+}
+
+fn symbol_call_with_arg(arg: &str) -> SymbolQuery {
+    SymbolQuery {
+        kind: Some(SymbolKind::Call),
+        arg: Some(Box::new(ArgFilter {
+            exact: Some(arg.to_string()),
+            ..Default::default()
+        })),
+        ..Default::default()
+    }
 }
 
 fn create_text_regex_trait(
@@ -1694,6 +1692,28 @@ fn test_regex_alternative_subset() {
 
     assert_eq!(warnings.len(), 1);
     assert!(warnings[0].contains("REGEX ALTERNATIVE SUBSET"));
+}
+
+#[test]
+fn test_symbol_alternative_subsets_respect_argument_predicates() {
+    let symbol_regex = |id: &str, pattern: &str, arg: &str, path: &str| {
+        create_test_trait(
+            id,
+            Condition::Symbol(SymbolQuery {
+                regex: Some(pattern.to_string()),
+                ..symbol_call_with_arg(arg)
+            }),
+            vec![FileType::Python],
+            path,
+        )
+    };
+    let smaller = symbol_regex("test::subset", "^(read|write)$", "staging", "one.yaml");
+    let larger = |arg| symbol_regex("test::superset", "^(read|write|execute)$", arg, "two.yaml");
+    let mut warnings = Vec::new();
+    check_regex_alternative_subsets(&[smaller.clone(), larger("localhost")], &mut warnings);
+    assert!(warnings.is_empty());
+    check_regex_alternative_subsets(&[smaller, larger("staging")], &mut warnings);
+    assert_eq!(warnings.len(), 1);
 }
 
 #[test]

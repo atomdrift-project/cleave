@@ -599,6 +599,7 @@ impl ArchiveAnalyzer {
         let mut report = AnalysisReport::new(target);
         let filefacts_archive_entries: Vec<ArchiveEntry>;
         let crx_archive_offset: Option<usize>;
+        let retained_format_facts: bool;
 
         // Open filefacts once on the host archive bytes and merge its
         // typed values/metrics into the report. The capability
@@ -615,6 +616,14 @@ impl ArchiveAnalyzer {
                 archive_path,
                 data,
             );
+            // Compact reports omit the serialized values, but successful
+            // parsing still allows a container-only report after unpack errors.
+            retained_format_facts = match file_type {
+                FileType::Iso => ctx.parsed.values().get("iso").is_some(),
+                FileType::Rpm => ctx.parsed.values().get("rpm").is_some(),
+                FileType::Rpa => ctx.parsed.values().get("rpa").is_some(),
+                _ => false,
+            };
             report.filefacts = Some(crate::types::FilefactsView::of(
                 &ctx,
                 self.engine.compact_members(),
@@ -913,11 +922,7 @@ impl ArchiveAnalyzer {
             // nothing at all for the image cleave was least able to read —
             // which is exactly the image worth describing. Degrade to a
             // container-only report instead.
-            let preserved_iso_facts = matches!(file_type, FileType::Iso)
-                && report
-                    .filefacts
-                    .as_ref()
-                    .is_some_and(|ff| ff.values.get("iso").is_some());
+            let preserved_iso_facts = matches!(file_type, FileType::Iso) && retained_format_facts;
             if preserved_iso_facts {
                 report
                     .metadata
@@ -927,19 +932,11 @@ impl ArchiveAnalyzer {
             // RPM headers remain useful when an unsupported or damaged CPIO
             // payload cannot be opened. Keep those parsed facts and explicitly
             // report the missing traversal instead of losing the whole result.
-            let preserved_rpm_facts = matches!(file_type, FileType::Rpm)
-                && report
-                    .filefacts
-                    .as_ref()
-                    .is_some_and(|ff| ff.values.get("rpm").is_some());
+            let preserved_rpm_facts = matches!(file_type, FileType::Rpm) && retained_format_facts;
             if preserved_rpm_facts {
                 guard.add_extraction_note(format!("RPM payload extraction incomplete: {e}"));
             }
-            let preserved_rpa_facts = matches!(file_type, FileType::Rpa)
-                && report
-                    .filefacts
-                    .as_ref()
-                    .is_some_and(|ff| ff.values.get("rpa").is_some());
+            let preserved_rpa_facts = matches!(file_type, FileType::Rpa) && retained_format_facts;
             if preserved_rpa_facts {
                 merge_filefacts_archive_listing(&mut report, &filefacts_archive_entries);
                 guard.add_extraction_note(format!("RPA member extraction incomplete: {e}"));
@@ -1451,7 +1448,7 @@ impl ArchiveAnalyzer {
                 )
             }
             FileType::Gz => decompress_to_file(
-                flate2::read::GzDecoder::new(Cursor::new(data)),
+                flate2::read::MultiGzDecoder::new(Cursor::new(data)),
                 archive_path,
                 dest_dir,
                 data.len() as u64,
@@ -1532,7 +1529,13 @@ impl ArchiveAnalyzer {
                 guard,
             ),
             FileType::Cab => {
-                system_packages::extract_cab_from_reader(Cursor::new(data), dest_dir, guard)
+                // FileFacts recognizes a CAB with this misleading preamble.
+                // CAB offsets are relative to MSCF, so give the reader that slice.
+                let body = data
+                    .strip_prefix(b"PNG")
+                    .filter(|body| body.starts_with(b"MSCF"))
+                    .unwrap_or(data);
+                system_packages::extract_cab_from_reader(Cursor::new(body), dest_dir, guard)
             }
             // Apple disk image: 7-Zip unpacks HFS+ to a file tree and recovers
             // the embedded Mach-O from APFS images. The host-level `dmg.*`

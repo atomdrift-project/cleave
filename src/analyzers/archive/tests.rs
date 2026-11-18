@@ -2848,7 +2848,7 @@ fn truncated_gzip_analyzes_decoded_prefix() {
     #[allow(clippy::expect_used)]
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     // No extension, exactly like a content-addressed blob on disk: the type
-    // comes from the magic bytes, which routes to the single-stream gzip
+    // comes from the magic bytes, which routes to the standalone gzip
     // path rather than the tar.gz one.
     let blob_path = temp_dir.path().join("deadbeefcafe");
     let truncated = truncated_tar_gz(
@@ -2951,6 +2951,27 @@ fn gzip_yielding_nothing_is_still_an_error() {
         analyzer.analyze(&blob_path).is_err(),
         "a gzip stream that decodes to nothing should stay an error"
     );
+}
+
+#[test]
+fn concatenated_gzip_is_analyzed_as_one_payload() {
+    use flate2::{Compression, write::GzEncoder};
+    use std::io::Write;
+
+    let parts: [&[u8]; 2] = [b"#!/bin/sh\n", b"printf 'hello\\n'\n"];
+    let mut gzip = Vec::new();
+    for part in parts {
+        let mut encoder = GzEncoder::new(&mut gzip, Compression::default());
+        encoder.write_all(part).unwrap();
+        encoder.finish().unwrap();
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let blob = directory.path().join("message.sh.gz");
+    std::fs::write(&blob, gzip).unwrap();
+
+    let report = ArchiveAnalyzer::new().analyze(&blob).unwrap();
+    let expected = calculate_sha256(&parts.concat());
+    assert!(report.files.iter().any(|file| file.sha256 == expected));
 }
 
 /// Same shape one level down: a `.tar.gz` truncated mid-member routes

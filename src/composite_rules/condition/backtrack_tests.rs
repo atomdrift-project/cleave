@@ -757,6 +757,24 @@ fn word_match_empty_needle_never_matches() {
     assert_eq!(super::word_match_start("anything", "", false), None);
 }
 
+#[test]
+fn byte_engines_share_only_compatible_line_anchor_modes() {
+    use super::shared_byte_engine;
+    use std::sync::Arc;
+
+    let build = |pattern, multiline| shared_byte_engine(pattern, false, multiline).unwrap();
+    for pattern in [r"[^x]+\$", r"(?-m:^inside$)", r"\A[^z]+\z"] {
+        assert!(Arc::ptr_eq(&build(pattern, false), &build(pattern, true)));
+    }
+    for pattern in [r"^inside$", r"(?R:^inside$)"] {
+        let single = build(pattern, false);
+        let multi = build(pattern, true);
+        assert!(!Arc::ptr_eq(&single, &multi));
+        assert!(!single.re.is_match(b"before\ninside\nafter"));
+        assert!(multi.re.is_match(b"before\ninside\nafter"));
+    }
+}
+
 /// One byte-searching engine per pattern, selected at compile time.
 ///
 /// Pins the deliberate semantic change: pure-ASCII patterns get

@@ -679,68 +679,73 @@ impl ArchiveAnalyzer {
             // parsed a single time, regardless of member type. The analyzer
             // reuses this parse (`with_parsed_ctx`) rather than opening the
             // member again.
-            let member_ctx = crate::analysis_context::AnalysisContext::open_with(
-                crate::engine::filefacts_options(self.engine.settings()),
-                logical_path,
-                data,
-            );
-            let stng_strings = member_ctx.text_rows();
-            crate::memory_tracker::clear_current_phase();
-            // The standalone extractor, not a member variant: payload
-            // decoding is independent of which analyzer handles the member
-            // (`process_encoded_payloads` below runs for every type), and a
-            // gate here once left base64 in a text member undecoded.
-            let payloads =
-                crate::encoded_payloads(*file_type, data, stng_strings, Some(&member_ctx));
-            let mut input = AnalysisInput::with_payloads(
-                logical_path,
-                data,
-                stng_strings,
-                &payloads,
-                *file_type,
-            )
-            .with_backing_path(file_path)
-            .with_sha256(sha256.to_string())
-            .at_depth((self.current_depth + 1) as u32)
-            .with_parsed_ctx(&member_ctx);
-            input.cancellation = self.cancelled.clone();
+            let _nested_parallel;
+            let (mut report, payloads) = {
+                let member_ctx = crate::analysis_context::AnalysisContext::open_with(
+                    crate::engine::filefacts_options(self.engine.settings()),
+                    logical_path,
+                    data,
+                );
+                let stng_strings = member_ctx.text_rows();
+                crate::memory_tracker::clear_current_phase();
+                // The standalone extractor, not a member variant: payload
+                // decoding is independent of which analyzer handles the member
+                // (`process_encoded_payloads` below runs for every type), and a
+                // gate here once left base64 in a text member undecoded.
+                let payloads =
+                    crate::encoded_payloads(*file_type, data, stng_strings, Some(&member_ctx));
+                let mut input = AnalysisInput::with_payloads(
+                    logical_path,
+                    data,
+                    stng_strings,
+                    &payloads,
+                    *file_type,
+                )
+                .with_backing_path(file_path)
+                .with_sha256(sha256.to_string())
+                .at_depth((self.current_depth + 1) as u32)
+                .with_parsed_ctx(&member_ctx);
+                input.cancellation = self.cancelled.clone();
 
-            tracing::debug!(
-                relative_path,
-                file_type = %file_type.report_file_type(),
-                string_count = stng_strings.len(),
-                payload_count = payloads.len(),
-                "Analyzing archive member via unified AnalysisInput path"
-            );
+                tracing::debug!(
+                    relative_path,
+                    file_type = %file_type.report_file_type(),
+                    string_count = stng_strings.len(),
+                    payload_count = payloads.len(),
+                    "Analyzing archive member via unified AnalysisInput path"
+                );
 
-            // A top-level archive fans members onto Rayon, but binary members
-            // can each spend many minutes in serial trait evaluation after
-            // that fan-out. On uruk-hai a 4.53 MiB Go ELF member took 996,725
-            // ms while 110/128 Rayon workers were idle. Admit only a bounded
-            // number of members to one additional parallel level; the guard
-            // is thread-local, so their Rayon children cannot recursively fan
-            // out again.
-            let _nested_parallel = crate::rayon_nest::try_enter_nested_member_parallelism();
-            let mut report = analyzer.analyze_input(&input)?;
+                // A top-level archive fans members onto Rayon, but binary members
+                // can each spend many minutes in serial trait evaluation after
+                // that fan-out. On uruk-hai a 4.53 MiB Go ELF member took 996,725
+                // ms while 110/128 Rayon workers were idle. Admit only a bounded
+                // number of members to one additional parallel level; the guard
+                // is thread-local, so their Rayon children cannot recursively fan
+                // out again.
+                _nested_parallel = crate::rayon_nest::try_enter_nested_member_parallelism();
+                let mut report = analyzer.analyze_input(&input)?;
 
-            // Attach identity and the filefacts view for member analyzers that didn't,
-            // reusing the member context opened above (no re-parse) — so a
-            // member's declared references (e.g. a package.json's dependencies)
-            // are never lost to an analyzer that forgets. Mirrors the standalone
-            // safety net in `analyze`. Gated on `is_none` so analyzers that
-            // already attach keep theirs.
-            if let Some(ctx) = input.parsed_ctx {
-                if report.identity.is_none() {
-                    report.identity = ctx.identity();
-                }
-                if report.filefacts.is_none() {
-                    let view = crate::types::FilefactsView::of(ctx, self.engine.compact_members());
-                    if !view.is_empty() {
-                        report.filefacts = Some(view);
+                // Attach identity and the filefacts view for member analyzers that didn't,
+                // reusing the member context opened above (no re-parse) — so a
+                // member's declared references (e.g. a package.json's dependencies)
+                // are never lost to an analyzer that forgets. Mirrors the standalone
+                // safety net in `analyze`. Gated on `is_none` so analyzers that
+                // already attach keep theirs.
+                if let Some(ctx) = input.parsed_ctx {
+                    if report.identity.is_none() {
+                        report.identity = ctx.identity();
+                    }
+                    if report.filefacts.is_none() {
+                        let view =
+                            crate::types::FilefactsView::of(ctx, self.engine.compact_members());
+                        if !view.is_empty() {
+                            report.filefacts = Some(view);
+                        }
                     }
                 }
-            }
 
+                (report, payloads)
+            };
             // Run the SAME encoded-payload analysis the standalone path runs
             // (`process_encoded_payloads` in lib.rs): emit the
             // `metadata/encoded-payload/*` finding for each payload and
@@ -751,8 +756,6 @@ impl ArchiveAnalyzer {
             // content — detection that the same file gets when scanned
             // standalone. An archive built without explicit options decodes
             // under the defaults it is cached under, never not at all.
-            // `payloads` is moved — `input` (which borrowed it) is no longer
-            // used after `analyze_input` above.
             if !payloads.is_empty() {
                 crate::process_encoded_payloads(
                     payloads,

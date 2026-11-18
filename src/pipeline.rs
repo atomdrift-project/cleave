@@ -964,77 +964,94 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         let _ = ctx.text_rows();
         (Some(ctx), t.elapsed().as_millis() as u64)
     };
-    let (file_ctx, stage_stng_ms, prefetched_yara) = if file_type.is_archive() {
-        (None, 0u64, None)
-    } else if let Some(ftypes) = binary_yara_ftypes {
-        // A lone binary benefits from overlapping filefacts with YARA. In a
-        // worker, however, every top-level analysis already runs on its own
-        // blocking thread. Letting all of them enter `rayon::join` adds two
-        // runnable trees per file on top of those coordinators (48 analyses on
-        // uruk-hai drove 111/128 cores while completing fewer files than 24).
-        // Keep the overlap only on the single-analysis fast path.
-        if crate::rayon_nest::inner_work_parallel() {
-            let ((ctx, ms), yara) = rayon::join(open_ctx_strings, || yara_prefetch(ftypes));
-            (ctx, ms, yara)
+    // Release the parsed file before analyzing decoded children. The report now
+    // owns the identity and filefacts projections used by later stages.
+    let (mut report, encoded_payloads, stage_stng_ms, stage_structural_ms) = {
+        let (file_ctx, stage_stng_ms, prefetched_yara) = if file_type.is_archive() {
+            (None, 0u64, None)
+        } else if let Some(ftypes) = binary_yara_ftypes {
+            // A lone binary benefits from overlapping filefacts with YARA. In a
+            // worker, however, every top-level analysis already runs on its own
+            // blocking thread. Letting all of them enter `rayon::join` adds two
+            // runnable trees per file on top of those coordinators (48 analyses on
+            // uruk-hai drove 111/128 cores while completing fewer files than 24).
+            // Keep the overlap only on the single-analysis fast path.
+            if crate::rayon_nest::inner_work_parallel() {
+                let ((ctx, ms), yara) = rayon::join(open_ctx_strings, || yara_prefetch(ftypes));
+                (ctx, ms, yara)
+            } else {
+                let (ctx, ms) = open_ctx_strings();
+                let yara = yara_prefetch(ftypes);
+                (ctx, ms, yara)
+            }
         } else {
+            // Every other type sources strings from the same filefacts view.
+            // Source + image types additionally thread the context into their
+            // analyzer (below) so the file is parsed a single time.
             let (ctx, ms) = open_ctx_strings();
-            let yara = yara_prefetch(ftypes);
-            (ctx, ms, yara)
+            (ctx, ms, None)
+        };
+        let stng_strings = file_ctx
+            .as_ref()
+            .map_or(&[][..], crate::analysis_context::AnalysisContext::text_rows);
+
+        let encoded_payloads =
+            encoded_payloads(file_type, file_data, stng_strings, file_ctx.as_ref());
+
+        // Create unified analysis input - all analyzers receive the same pre-extracted data
+        let mut input = analyzers::AnalysisInput::with_payloads(
+            path,
+            file_data,
+            stng_strings,
+            &encoded_payloads,
+            file_type,
+        )
+        .with_sha256(sha256_hex.clone());
+        input.cancellation = options.cancellation.clone();
+
+        // Hand the source/image analyzer the context we already opened so it
+        // reuses the filefacts parse instead of opening its own. Binary arms use
+        // `file_ctx` directly (below), so only the threaded path lends it to the
+        // input.
+        if threads_ctx && let Some(ctx) = file_ctx.as_ref() {
+            input = input.with_parsed_ctx(ctx);
         }
-    } else {
-        // Every other type sources strings from the same filefacts view.
-        // Source + image types additionally thread the context into their
-        // analyzer (below) so the file is parsed a single time.
-        let (ctx, ms) = open_ctx_strings();
-        (ctx, ms, None)
-    };
-    let stng_strings = file_ctx
-        .as_ref()
-        .map_or(&[][..], crate::analysis_context::AnalysisContext::text_rows);
 
-    let encoded_payloads = encoded_payloads(file_type, file_data, stng_strings, file_ctx.as_ref());
+        // Bail early if already cancelled before starting expensive structural analysis
+        if options
+            .cancellation
+            .as_ref()
+            .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+        {
+            anyhow::bail!("Analysis cancelled before structural phase");
+        }
 
-    // Create unified analysis input - all analyzers receive the same pre-extracted data
-    let mut input = analyzers::AnalysisInput::with_payloads(
-        path,
-        file_data,
-        stng_strings,
-        &encoded_payloads,
-        file_type,
-    )
-    .with_sha256(sha256_hex.clone());
-    input.cancellation = options.cancellation.clone();
-
-    // Hand the source/image analyzer the context we already opened so it
-    // reuses the filefacts parse instead of opening its own. Binary arms use
-    // `file_ctx` directly (below), so only the threaded path lends it to the
-    // input.
-    if threads_ctx && let Some(ctx) = file_ctx.as_ref() {
-        input = input.with_parsed_ctx(ctx);
-    }
-
-    // Bail early if already cancelled before starting expensive structural analysis
-    if options
-        .cancellation
-        .as_ref()
-        .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
-    {
-        anyhow::bail!("Analysis cancelled before structural phase");
-    }
-
-    // Route to appropriate analyzer.
-    // Binary analyzers (MachO, Elf, Pe) use parallel YARA for performance.
-    // All other analyzers use analyze_input() for unified data flow.
-    let structural_start = std::time::Instant::now();
-    // Default structural phase for every file type. The specialized arms below
-    // (binary struct+yara, archive) refine it; the office and factory arms set
-    // no phase of their own, so without this they would
-    // report the prior `cleave:stng` phase for their entire structural pass.
-    set_phase(&format!("analyze:{}", file_type.report_file_type()));
-    let compact_nested_values = engine.compact_members();
-    let mut report = match file_type {
-        FileType::MachO => Ok(binary::analyze_macho(
-            binary::BinaryInput {
+        // Route to appropriate analyzer.
+        // Binary analyzers (MachO, Elf, Pe) use parallel YARA for performance.
+        // All other analyzers use analyze_input() for unified data flow.
+        let structural_start = std::time::Instant::now();
+        // Default structural phase for every file type. The specialized arms below
+        // (binary struct+yara, archive) refine it; the office and factory arms set
+        // no phase of their own, so without this they would
+        // report the prior `cleave:stng` phase for their entire structural pass.
+        set_phase(&format!("analyze:{}", file_type.report_file_type()));
+        let compact_nested_values = engine.compact_members();
+        let mut report = match file_type {
+            FileType::MachO => Ok(binary::analyze_macho(
+                binary::BinaryInput {
+                    path,
+                    data: file_data,
+                    sha256: &sha256_hex,
+                    ctx: file_ctx.as_ref(),
+                    options,
+                    engine,
+                    prefetched_yara,
+                },
+                stng_strings,
+                &facts_options,
+                analysis_depth,
+            )),
+            FileType::Elf => Ok(binary::analyze_elf(binary::BinaryInput {
                 path,
                 data: file_data,
                 sha256: &sha256_hex,
@@ -1042,118 +1059,107 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 options,
                 engine,
                 prefetched_yara,
-            },
-            stng_strings,
-            &facts_options,
-            analysis_depth,
-        )),
-        FileType::Elf => Ok(binary::analyze_elf(binary::BinaryInput {
-            path,
-            data: file_data,
-            sha256: &sha256_hex,
-            ctx: file_ctx.as_ref(),
-            options,
-            engine,
-            prefetched_yara,
-        })),
-        FileType::Pe => binary::analyze_pe(binary::BinaryInput {
-            path,
-            data: file_data,
-            sha256: &sha256_hex,
-            ctx: file_ctx.as_ref(),
-            options,
-            engine,
-            prefetched_yara,
-        }),
-        FileType::OleDoc | FileType::Msi | FileType::Ooxml => {
-            analyzers::office::OfficeAnalyzer::new()
-                .with_engine(engine.clone())
-                .with_cancellation(options.cancellation.clone())
-                .analyze_input(&input)
-        }
-        ref ft if ft.is_archive() => {
-            set_phase(&format!("archive:{}", ft.report_file_type()));
-            let mut analyzer = analyzers::archive::ArchiveAnalyzer::new()
-                .with_engine(engine.clone())
-                .with_zip_passwords(options.zip_passwords.clone())
-                .with_max_memory_file_size(options.max_memory_file_size)
-                .with_analysis_options(Arc::new(options.clone()));
-            if let Some(engine) = yara_engine {
-                analyzer = analyzer.with_yara_arc(engine.clone());
-            }
-            if let Some(ref flag) = options.cancellation {
-                analyzer = analyzer.with_cancellation(flag.clone());
-            }
-            analyzer.analyze_input(&input)
-        }
-        // All source code languages use the unified analyzer (or generic fallback)
-        _ => {
-            if let Some(analyzer) = analyzers::analyzer_for_file_type_arc(&file_type, engine) {
-                analyzer.analyze_input(&input)
-            } else if analyzers::embedded_images::has_wrapped_binary(&file_type, file_data) {
-                // An unidentified carrier (filesystem image, firmware blob)
-                // holding a whole executable: carve it exactly as an archive
-                // member of the same bytes would be.
-                analyzers::generic::GenericAnalyzer::new(file_type)
-                    .with_engine(engine.clone())
-                    .analyze_input(&input)
-            } else {
-                // No dedicated analyzer — return a minimal report with basic metadata.
-                // This allows callers (analyze_file, scan_directory with all_files=true)
-                // to handle files of any type without erroring.
-                let target = types::TargetInfo {
-                    path: path.display().to_string(),
-                    file_type: file_type.report_file_type(),
-                    size_bytes: file_data.len() as u64,
-                    sha256: sha256_hex.clone(),
-                    architectures: None,
-                };
-                Ok(types::AnalysisReport::new(target))
-            }
-        }
-    }?;
-
-    // Identity and the filefacts view are normalized the same way for every
-    // file. Most analyzers attach them from the context they already opened;
-    // for the rest (documents, images, the no-dedicated-analyzer path) attach
-    // them here so no analyzer can silently drop them — losing, e.g., a
-    // manifest's declared dependencies. Gated on `is_none` so a path that
-    // already attached pays nothing, and the single open serves both.
-    if report.identity.is_none() || report.filefacts.is_none() {
-        // Reuse the context already opened for this file (binary/source/generic
-        // paths all opened one above). Its extraction — recovery included — is
-        // cached on the `ParsedFile`, so deriving identity here is free.
-        // Re-`open`ing instead, as this used to, re-ran the *entire*
-        // extraction pipeline (a second recovery per binary) just to recompute
-        // an identity that is empty for stripped/unsigned files. Only open a
-        // fresh context only for paths that never opened one (archives).
-        let fresh = if file_ctx.is_none() && input.parsed_ctx.is_none() {
-            Some(crate::analysis_context::AnalysisContext::open_with(
-                facts_options.clone(),
+            })),
+            FileType::Pe => binary::analyze_pe(binary::BinaryInput {
                 path,
-                file_data,
-            ))
-        } else {
-            None
-        };
-        let ctx = file_ctx.as_ref().or(input.parsed_ctx).or(fresh.as_ref());
-        if let Some(ctx) = ctx {
-            if report.identity.is_none() {
-                report.identity = ctx.identity();
+                data: file_data,
+                sha256: &sha256_hex,
+                ctx: file_ctx.as_ref(),
+                options,
+                engine,
+                prefetched_yara,
+            }),
+            FileType::OleDoc | FileType::Msi | FileType::Ooxml => {
+                analyzers::office::OfficeAnalyzer::new()
+                    .with_engine(engine.clone())
+                    .with_cancellation(options.cancellation.clone())
+                    .analyze_input(&input)
             }
-            if report.filefacts.is_none() {
-                let view = crate::types::FilefactsView::of(ctx, compact_nested_values);
-                if !view.is_empty() {
-                    report.filefacts = Some(view);
+            ref ft if ft.is_archive() => {
+                set_phase(&format!("archive:{}", ft.report_file_type()));
+                let mut analyzer = analyzers::archive::ArchiveAnalyzer::new()
+                    .with_engine(engine.clone())
+                    .with_zip_passwords(options.zip_passwords.clone())
+                    .with_max_memory_file_size(options.max_memory_file_size)
+                    .with_analysis_options(Arc::new(options.clone()));
+                if let Some(engine) = yara_engine {
+                    analyzer = analyzer.with_yara_arc(engine.clone());
+                }
+                if let Some(ref flag) = options.cancellation {
+                    analyzer = analyzer.with_cancellation(flag.clone());
+                }
+                analyzer.analyze_input(&input)
+            }
+            // All source code languages use the unified analyzer (or generic fallback)
+            _ => {
+                if let Some(analyzer) = analyzers::analyzer_for_file_type_arc(&file_type, engine) {
+                    analyzer.analyze_input(&input)
+                } else if analyzers::embedded_images::has_wrapped_binary(&file_type, file_data) {
+                    // An unidentified carrier (filesystem image, firmware blob)
+                    // holding a whole executable: carve it exactly as an archive
+                    // member of the same bytes would be.
+                    analyzers::generic::GenericAnalyzer::new(file_type)
+                        .with_engine(engine.clone())
+                        .analyze_input(&input)
+                } else {
+                    // No dedicated analyzer — return a minimal report with basic metadata.
+                    // This allows callers (analyze_file, scan_directory with all_files=true)
+                    // to handle files of any type without erroring.
+                    let target = types::TargetInfo {
+                        path: path.display().to_string(),
+                        file_type: file_type.report_file_type(),
+                        size_bytes: file_data.len() as u64,
+                        sha256: sha256_hex.clone(),
+                        architectures: None,
+                    };
+                    Ok(types::AnalysisReport::new(target))
+                }
+            }
+        }?;
+
+        // Identity and the filefacts view are normalized the same way for every
+        // file. Most analyzers attach them from the context they already opened;
+        // for the rest (documents, images, the no-dedicated-analyzer path) attach
+        // them here so no analyzer can silently drop them — losing, e.g., a
+        // manifest's declared dependencies. Gated on `is_none` so a path that
+        // already attached pays nothing, and the single open serves both.
+        if report.identity.is_none() || report.filefacts.is_none() {
+            // Reuse the context already opened for this file (binary/source/generic
+            // paths all opened one above). Its extraction — recovery included — is
+            // cached on the `ParsedFile`, so deriving identity here is free.
+            // Re-`open`ing instead, as this used to, re-ran the *entire*
+            // extraction pipeline (a second recovery per binary) just to recompute
+            // an identity that is empty for stripped/unsigned files. Only open a
+            // fresh context only for paths that never opened one (archives).
+            let fresh = if file_ctx.is_none() && input.parsed_ctx.is_none() {
+                Some(crate::analysis_context::AnalysisContext::open_with(
+                    facts_options.clone(),
+                    path,
+                    file_data,
+                ))
+            } else {
+                None
+            };
+            let ctx = file_ctx.as_ref().or(input.parsed_ctx).or(fresh.as_ref());
+            if let Some(ctx) = ctx {
+                if report.identity.is_none() {
+                    report.identity = ctx.identity();
+                }
+                if report.filefacts.is_none() {
+                    let view = crate::types::FilefactsView::of(ctx, compact_nested_values);
+                    if !view.is_empty() {
+                        report.filefacts = Some(view);
+                    }
                 }
             }
         }
-    }
-    // `AnalysisInput` borrows the decoded payload list. Structural analysis is
-    // complete, so end that borrow before the payloads are consumed below.
-    drop(input);
-    let stage_structural_ms = structural_start.elapsed().as_millis() as u64;
-
+        (
+            report,
+            encoded_payloads,
+            stage_stng_ms,
+            structural_start.elapsed().as_millis() as u64,
+        )
+    };
     // Process encoded payloads and analyze them
     let payloads_start = std::time::Instant::now();
     if !encoded_payloads.is_empty() {

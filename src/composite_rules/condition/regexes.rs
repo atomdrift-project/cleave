@@ -259,21 +259,32 @@ pub(crate) fn shared_byte_engine(
         std::sync::LazyLock::new(|| {
             parking_lot::Mutex::new(Engines::with_hasher(REGEX_CACHE_CAP, Default::default()))
         });
-    let key = (Box::from(pattern), insensitive, multiline);
+    let mut key = (Box::from(pattern), insensitive, multiline);
     let existing = ENGINES.lock().peek(&key).and_then(std::sync::Weak::upgrade);
     if let Some(existing) = existing {
         return Some(existing);
     }
+    let hir = regex_syntax::ParserBuilder::new()
+        .unicode(false)
+        .utf8(false)
+        .case_insensitive(insensitive)
+        .multi_line(multiline)
+        .build()
+        .parse(pattern)
+        .ok()?;
+    // A caret in a negated character class and a literal dollar do not
+    // change meaning in multiline mode. Share the byte matcher across both
+    // modes whenever the translated expression has no line anchors.
+    if multiline && !hir.properties().look_set().contains_anchor_line() {
+        key.2 = false;
+        let existing = ENGINES.lock().peek(&key).and_then(std::sync::Weak::upgrade);
+        if let Some(existing) = existing {
+            return Some(existing);
+        }
+    }
     let re = regex_automata::meta::Regex::builder()
         .configure(engine_config().utf8_empty(false))
-        .syntax(
-            regex_automata::util::syntax::Config::new()
-                .unicode(false)
-                .utf8(false)
-                .case_insensitive(insensitive)
-                .multi_line(multiline),
-        )
-        .build(pattern)
+        .build_from_hir(&hir)
         .ok()?;
     let engine = Arc::new(Engine::new(re));
     let mut engines = ENGINES.lock();

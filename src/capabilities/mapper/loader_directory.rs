@@ -920,6 +920,7 @@ fn prepare_trait_file(
             enable_precision_scoring,
         );
 
+        compact_condition_lists([&mut trait_def.unless], trait_def.downgrade.as_mut());
         // Auto-prefix trait ID if it doesn't already have the path prefix
         // Uses :: as delimiter between directory path and trait name
         trait_def.id = crate::traits_repo::qualify_trait_id(&trait_def.id, trait_prefix.as_deref());
@@ -978,10 +979,26 @@ fn prepare_trait_file(
             autoprefix_trait_refs(&mut rule, prefix);
         }
 
+        compact_condition_lists(
+            [&mut rule.all, &mut rule.any, &mut rule.unless],
+            rule.downgrade.as_mut(),
+        );
         let precompiled = rule.precompile_regexes();
         file.rules.push(PreparedRule { rule, precompiled });
     }
     file
+}
+
+/// YAML sequences grow as they are read. These lists are now final, and each
+/// spare slot costs a full condition for the lifetime of the mapper.
+fn compact_condition_lists<const N: usize>(
+    lists: [&mut Option<Vec<crate::composite_rules::Condition>>; N],
+    downgrade: Option<&mut crate::composite_rules::DowngradeConditions>,
+) {
+    let downgrade = downgrade.into_iter().flat_map(|d| [&mut d.all, &mut d.any]);
+    for conditions in lists.into_iter().chain(downgrade).flatten() {
+        conditions.shrink_to_fit();
+    }
 }
 
 /// The per-trait checks the merge reports for one trait, in report order.

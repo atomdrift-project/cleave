@@ -999,12 +999,24 @@ pub(crate) fn eval_encoded<'a>(
         }
 
         // Check regex or word match
-        if !matches
-            && let Some(ref re) = regex_matcher
-            && let Some(m) = re.find(&string_info.value)
-        {
-            matches = true;
-            matched_span = Some(m.as_str());
+        if !matches && let Some(ref re) = regex_matcher {
+            let value = string_info.value.as_str();
+            let mut found = re.find(value);
+            if found.is_some()
+                && string_info.encoding_chain == ["unicode-escape"]
+                && let Some(offset) = string_info.offset.and_then(|n| usize::try_from(n).ok())
+                && let Some(raw) = ctx.binary_data.get(offset..)
+                && let Some(escapes) = unicode_escape_offsets(raw, value)
+            {
+                found = re.find_iter(value).find(|m| {
+                    let next = escapes.partition_point(|offset| *offset < m.start());
+                    escapes.get(next).is_some_and(|offset| *offset < m.end())
+                });
+            }
+            if let Some(m) = found {
+                matches = true;
+                matched_span = Some(m.as_str());
+            }
         }
 
         if matches {
@@ -1079,4 +1091,41 @@ pub(crate) fn eval_encoded<'a>(
         precision,
         matched_trait_ids: Vec::new(),
     }
+}
+
+/// Replay the Unicode escape layer against its source. Some extracted layers
+/// contain long stretches of verbatim text. Only a match that overlaps a
+/// decoded character is evidence of encoding. An unreplayable extraction
+/// keeps its original match behavior.
+fn unicode_escape_offsets(mut raw: &[u8], decoded: &str) -> Option<Vec<usize>> {
+    let mut offsets = Vec::new();
+    for (offset, character) in decoded.char_indices() {
+        if let Some((recovered, consumed)) = unicode_escape_prefix(raw) {
+            if recovered != character {
+                return None;
+            }
+            offsets.push(offset);
+            raw = raw.get(consumed..)?;
+        } else {
+            raw = raw.strip_prefix(character.encode_utf8(&mut [0; 4]).as_bytes())?;
+        }
+    }
+    (!offsets.is_empty()).then_some(offsets)
+}
+
+fn unicode_escape_prefix(raw: &[u8]) -> Option<(char, usize)> {
+    let rest = raw.strip_prefix(b"\\")?;
+    let escape = rest.strip_prefix(b"\\").unwrap_or(rest);
+    let width = match escape.first()? {
+        b'x' => 2,
+        b'u' => 4,
+        b'U' => 8,
+        _ => return None,
+    };
+    let digits = std::str::from_utf8(escape.get(1..=width)?).ok()?;
+    if !digits.bytes().all(|digit| digit.is_ascii_hexdigit()) {
+        return None;
+    }
+    let recovered = char::from_u32(u32::from_str_radix(digits, 16).ok()?)?;
+    Some((recovered, raw.len() - escape.len() + 1 + width))
 }

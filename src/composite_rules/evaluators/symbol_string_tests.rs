@@ -101,6 +101,48 @@ fn create_test_context<'a>(report: &'a AnalysisReport, data: &'a [u8]) -> Evalua
 }
 
 #[test]
+fn encoded_regex_requires_overlap_with_a_unicode_escape() {
+    let pattern = r#"require\("vm"\)"#.to_string();
+    for (source, decoded, expected) in [
+        (
+            r#"const value = "\u0061"; require("vm")"#,
+            r#"const value = "a"; require("vm")"#,
+            false,
+        ),
+        (
+            r#"const value = "\u0061"; require("vm"); require("\u0076m")"#,
+            r#"const value = "a"; require("vm"); require("vm")"#,
+            true,
+        ),
+        ("unreplayable", r#"require("vm")"#, true),
+    ] {
+        let mut report = create_test_report();
+        report.strings.push(StringInfo {
+            value: decoded.to_string().into(),
+            offset: Some(0),
+            encoding: "utf-8".into(),
+            string_type: None,
+            section: None,
+            encoding_chain: vec!["unicode-escape".into()],
+            fragments: None,
+        });
+        let ctx = create_test_context(&report, source.as_bytes());
+        let result = eval_encoded(
+            None,
+            TextPattern {
+                regex: Some(&pattern),
+                ..TextPattern::default()
+            },
+            &ContentLocationParams::default(),
+            false,
+            None,
+            &ctx,
+        );
+        assert_eq!(result.matched, expected, "{source}");
+    }
+}
+
+#[test]
 fn raw_regex_retains_later_offsets_for_proximity() {
     let report = create_test_report();
     let data = b"task.run(); unrelated code; task.run();";

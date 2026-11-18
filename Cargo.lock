@@ -539,9 +539,9 @@ dependencies = [
 
 [[package]]
 name = "bstr"
-version = "1.13.1"
+version = "1.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6bb31b46c14244e20ee9984b11bf5c992b91fb6939fea616e3512c8baecdbe5f"
+checksum = "a680398c10c7bc0488067c4612226ea905a85f607134b69f3068d505d58c4214"
 dependencies = [
  "memchr",
  "regex-automata",
@@ -1889,7 +1889,7 @@ checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 [[package]]
 name = "filefacts"
 version = "3.0.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#b474a4d19c2bd46456fa99adb98e06f3db75a26d"
+source = "git+https://github.com/atomdrift-project/filefacts.git#64db8981b389b303f5ccfa4a627e384543bdcdbc"
 dependencies = [
  "aes 0.9.4",
  "aho-corasick",
@@ -5565,7 +5565,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#b474a4d19c2bd46456fa99adb98e06f3db75a26d"
+source = "git+https://github.com/atomdrift-project/filefacts.git#64db8981b389b303f5ccfa4a627e384543bdcdbc"
 dependencies = [
  "cc",
  "tree-sitter-language",

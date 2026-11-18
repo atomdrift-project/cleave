@@ -661,6 +661,34 @@ fn make_text_word_trait(id: &str, word: &str, ci: bool) -> TraitDefinition {
     t
 }
 
+#[test]
+fn container_atom_gate_covers_raw_and_decoded_inputs() {
+    let mut masked = make_text_word_trait("comment-free", "missing", false);
+    if let Condition::Text(q) = &mut masked.r#if {
+        q.exclude_comments = true;
+    }
+    let index = StringMatchIndex::build(&[
+        make_text_word_trait("raw", "marker", false),
+        make_text_word_trait("decoded", "needle", true),
+        make_text_word_trait("extracted", "other", false),
+        make_text_word_trait("unseen", "missing", false),
+        masked,
+    ]);
+    let mut decoded = make_string("NEEDLE");
+    decoded.encoding_chain.push("base64".into());
+    let strings = [decoded, make_string("other")];
+    let absent = index.absent_container_atoms(Some(b"marker"), &strings);
+    assert_eq!(
+        (0..5).filter(|&i| absent.contains(i)).collect::<Vec<_>>(),
+        [2, 3]
+    );
+    let absent = index.absent_container_atoms(None, &strings);
+    assert_eq!(
+        (0..5).filter(|&i| absent.contains(i)).collect::<Vec<_>>(),
+        [0, 3]
+    );
+}
+
 /// Per-trait candidate string lists hold exactly the (native) string
 /// indices containing one of the trait's atoms, ascending and
 /// deduplicated; atom-less traits get no list; pseudo-entry-only hits

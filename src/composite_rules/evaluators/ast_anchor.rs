@@ -48,19 +48,9 @@ pub(crate) fn enabled() -> bool {
 #[derive(Debug)]
 struct Anchor {
     kind: u16,
+    exact: bool,
     depths: Box<[u32]>,
     literals: AnyOf,
-}
-
-/// One pattern's anchors, and how to confirm a match belongs to a root.
-#[derive(Debug)]
-struct PatternAnchors {
-    /// Every capture that can anchor the pattern.
-    anchors: Vec<Anchor>,
-    /// A capture every match binds at exactly this many levels below the
-    /// pattern's root: walking that far down from a candidate root must reach
-    /// it when the match is rooted there.
-    witness: Option<(Box<str>, u32)>,
 }
 
 /// Per pattern, every capture that can anchor it.
@@ -74,7 +64,10 @@ struct PatternAnchors {
 /// (`rooted_at`).
 #[derive(Debug)]
 pub(crate) struct Anchors {
-    patterns: Vec<PatternAnchors>,
+    /// Patterns requiring the same literals share one search. Their possible
+    /// distances from the capture to the root are merged per anchor.
+    placements: Vec<Vec<Anchor>>,
+    witnesses: Vec<Option<(Box<str>, u32)>>,
     child_starts: bool,
 }
 
@@ -130,6 +123,7 @@ impl Anchors {
                         };
                         Some(Anchor {
                             kind: id,
+                            exact: op == Op::Eq,
                             depths: shape.depths.get(capture)?.clone()?,
                             literals,
                         })
@@ -144,14 +138,39 @@ impl Anchors {
                         _ => None,
                     })
                     .min();
-                (!anchors.is_empty()).then_some(PatternAnchors { anchors, witness })
+                (!anchors.is_empty()).then_some((anchors, witness))
             })
             .collect::<Option<Vec<_>>>()?;
-        if child_starts && patterns.iter().any(|p| p.witness.is_none()) {
-            return None;
+        let mut placements: Vec<Vec<Anchor>> = Vec::new();
+        let mut witnesses = Vec::with_capacity(patterns.len());
+        for (anchors, witness) in patterns {
+            if child_starts && witness.is_none() {
+                return None;
+            }
+            witnesses.push(witness);
+            let existing = placements.iter_mut().find(|group| {
+                group.len() == anchors.len()
+                    && group.iter().zip(&anchors).all(|(a, b)| {
+                        a.kind == b.kind && a.exact == b.exact && a.literals == b.literals
+                    })
+            });
+            if let Some(group) = existing {
+                for (a, b) in group.iter_mut().zip(anchors) {
+                    if a.depths != b.depths {
+                        let mut depths = std::mem::take(&mut a.depths).into_vec();
+                        depths.extend_from_slice(&b.depths);
+                        depths.sort_unstable();
+                        depths.dedup();
+                        a.depths = depths.into_boxed_slice();
+                    }
+                }
+            } else {
+                placements.push(anchors);
+            }
         }
         Some(Self {
-            patterns,
+            placements,
+            witnesses,
             child_starts,
         })
     }
@@ -176,8 +195,7 @@ impl Anchors {
         if !self.child_starts {
             return true;
         }
-        let Some((name, depth)) = self.patterns.get(pattern).and_then(|p| p.witness.as_ref())
-        else {
+        let Some((name, depth)) = self.witnesses.get(pattern).and_then(Option::as_ref) else {
             return false;
         };
         let Some(index) = capture_index(name) else {
@@ -204,13 +222,15 @@ impl Anchors {
     pub(crate) fn roots<'t>(&self, tree: &'t Tree, source: &[u8]) -> Option<Vec<Node<'t>>> {
         let mut roots: FxHashMap<usize, Node<'t>> = FxHashMap::default();
         let mut descent = Descent::new(tree.root_node());
-        for pattern in &self.patterns {
-            let (anchor, mut spans) = rarest(&pattern.anchors, source)?;
+        for anchors in &self.placements {
+            let (anchor, mut spans) = rarest(anchors, source)?;
             spans.sort_unstable();
             for (start, end) in spans {
                 let path = descent.to(start, end)?;
                 for (at, node) in path.iter().enumerate() {
-                    if node.kind_id() != anchor.kind {
+                    if node.kind_id() != anchor.kind
+                        || (anchor.exact && (start != node.start_byte() || end != node.end_byte()))
+                    {
                         continue;
                     }
                     for &depth in &anchor.depths {

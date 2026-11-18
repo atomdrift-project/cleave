@@ -283,9 +283,28 @@ fn rarest_anchor_wins() {
     let query = Query::new(&lang, source).unwrap();
     let anchors = Anchors::of(&lang, &query, source).unwrap();
     let text = b"log('a'); log('b'); log('rare'); log('c');";
-    let (anchor, spans) = rarest(&anchors.patterns[0].anchors, text).unwrap();
+    let (anchor, spans) = rarest(&anchors.placements[0], text).unwrap();
     assert_eq!(spans, vec![(25, 29)]);
     assert_eq!(&*anchor.literals[0].0, b"rare");
+}
+
+#[test]
+fn shared_anchor_search_keeps_each_patterns_capture_depth() {
+    let source = r#"((identifier) @name (#eq? @name "hit"))
+                    ((call_expression function: (identifier) @name) (#eq? @name "hit"))"#;
+    let lang = language();
+    let query = Query::new(&lang, source).unwrap();
+    let anchors = Anchors::of(&lang, &query, source).unwrap();
+    assert_eq!(anchors.placements.len(), 1);
+    let fixture = "hit(); other_hit();";
+    let parsed = parsed(fixture);
+    let roots = anchors
+        .roots(parsed.source_ast().unwrap().tree, fixture.as_bytes())
+        .unwrap();
+    assert_eq!(
+        roots.iter().map(Node::kind).collect::<Vec<_>>(),
+        ["call_expression", "identifier"]
+    );
 }
 
 /// The cursor descent yields, for every occurrence in ascending order, the

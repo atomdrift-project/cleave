@@ -41,6 +41,43 @@
     ))
 ))]
 mod jemalloc {
+    /// Use the Rust heap for parser nodes too. With libc on Linux, worker
+    /// arenas retain the largest trees alongside the regex and rules heap.
+    pub(super) fn configure_tree_sitter() {
+        use std::ffi::c_void;
+        fn checked(ptr: *mut c_void, nonempty: bool) -> *mut c_void {
+            if ptr.is_null() && nonempty {
+                std::process::abort();
+            }
+            ptr
+        }
+        unsafe extern "C" fn malloc(size: usize) -> *mut c_void {
+            // SAFETY: malloc takes a byte count and has no pointer preconditions.
+            let ptr = unsafe { tikv_jemalloc_sys::malloc(size) };
+            checked(ptr, size != 0)
+        }
+        unsafe extern "C" fn calloc(count: usize, size: usize) -> *mut c_void {
+            // SAFETY: calloc takes two sizes and checks their product for overflow.
+            let ptr = unsafe { tikv_jemalloc_sys::calloc(count, size) };
+            checked(ptr, count != 0 && size != 0)
+        }
+        unsafe extern "C" fn realloc(ptr: *mut c_void, size: usize) -> *mut c_void {
+            // SAFETY: tree-sitter passes null or a live allocation from these jemalloc callbacks.
+            let ptr = unsafe { tikv_jemalloc_sys::realloc(ptr, size) };
+            checked(ptr, size != 0)
+        }
+        // SAFETY: called at process startup before any tree-sitter object or
+        // worker exists. All callbacks use jemalloc's aligned C allocator.
+        unsafe {
+            tree_sitter::set_allocator(Some(tree_sitter::Allocator {
+                malloc,
+                calloc,
+                realloc,
+                free: tikv_jemalloc_sys::free,
+            }));
+        }
+    }
+
     #[global_allocator]
     static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
@@ -92,6 +129,21 @@ const MAX_MEMORY_FILE_SIZE: u64 = 100 * 1024 * 1024;
 const MAX_SCAN_FILE_SIZE: u64 = 20480 * 1024 * 1024;
 
 fn main() -> std::process::ExitCode {
+    #[cfg(all(
+        unix,
+        feature = "jemalloc",
+        not(feature = "memprofile-win"),
+        not(any(
+            target_os = "freebsd",
+            target_os = "dragonfly",
+            target_os = "netbsd",
+            target_os = "openbsd",
+            target_os = "illumos",
+            target_os = "solaris",
+            target_arch = "arm"
+        ))
+    ))]
+    jemalloc::configure_tree_sitter();
     let result = run();
     cleave::flush_analysis_cache();
     match result {

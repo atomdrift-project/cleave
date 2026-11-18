@@ -11,9 +11,11 @@
 //!    referenced composites (not yet evaluated in Steps 1-2) are re-checked and
 //!    removed if their conditions are now satisfied.
 
+use crate::composite_rules::context::AstKindCache;
+
 use crate::composite_rules::{Arch, Condition, FileType as RuleFileType, SectionMap};
 use crate::types::{AnalysisReport, Criticality, Evidence, Finding};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 use std::collections::HashMap;
 /// Borrowed analysis products shared with the rule engine.
 #[derive(Clone, Copy, Debug, Default)]
@@ -27,7 +29,7 @@ pub(crate) struct AnalysisBorrow<'a, 'b> {
     pub(crate) filefacts: Option<&'a crate::analysis_context::AnalysisContext<'b>>,
     /// Kind-cache filled during the source analyzer's AST fact walk so
     /// evaluation does not walk the same tree again.
-    pub(crate) ast_kind_cache: Option<&'a FxHashMap<String, Vec<Evidence>>>,
+    pub(crate) ast_kind_cache: Option<&'a AstKindCache>,
     pub(crate) ast_node_text: Option<&'a crate::composite_rules::evaluators::NodeTextIndex>,
 }
 
@@ -61,10 +63,7 @@ impl<'a, 'b> AnalysisBorrow<'a, 'b> {
         self
     }
 
-    pub(crate) fn with_ast_kind_cache(
-        mut self,
-        ast_kind_cache: Option<&'a FxHashMap<String, Vec<Evidence>>>,
-    ) -> Self {
+    pub(crate) fn with_ast_kind_cache(mut self, ast_kind_cache: Option<&'a AstKindCache>) -> Self {
         self.ast_kind_cache = ast_kind_cache;
         self
     }
@@ -439,27 +438,18 @@ impl super::CapabilityMapper {
         let raw_regex_matches_ref = raw_regex_hits.as_ref().map(|h| &h.traits);
         let raw_atom_offsets_ref = raw_regex_hits.as_ref().map(|h| &h.atom_offsets);
 
-        // Use trait index to only evaluate applicable traits
-        let applicable_indices: Vec<usize> = self
-            .match_indexes()
-            .trait_index
-            .applicable(&file_type)
-            .into_indices_static()
-            .collect();
-
         // Idea 9: Batch AST node collection. Unified source already filled
         // this during `extract_ast_facts`; do not walk the tree a second time.
         let owned_kind_cache = if analysis.ast_kind_cache.is_some() {
             None
         } else {
-            self.build_ast_kind_cache(cached_ast, binary_data, &applicable_indices, file_type)
+            self.build_ast_kind_cache(cached_ast, binary_data, file_type)
         };
         let ast_kind_cache = analysis.ast_kind_cache.or(owned_kind_cache.as_ref());
         let ast_query_cache = self.build_ast_query_batch(
             cached_ast,
             binary_data,
             file_type,
-            &applicable_indices,
             cancellation,
             analysis.ast_node_text,
         );

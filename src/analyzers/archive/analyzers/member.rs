@@ -408,19 +408,12 @@ impl ArchiveAnalyzer {
                             traits_revision,
                         );
                     }
-                    let mut fa = report.to_file_analysis(0, &self.engine);
-                    // Negative path matches are path-dependent too. Keep the
-                    // origin so the cache can check equivalence on every hit.
-                    fa.path = relative_path.to_string();
-                    fa.id = 0;
-                    fa.parent_id = None;
-                    fa.depth = 0;
                     crate::analysis_cache::file_analysis_cache_store(
                         sha256,
                         file_type_key,
                         options,
-                        &member_settings,
-                        &fa,
+                        &self.engine,
+                        std::path::Path::new(relative_path),
                         report,
                         traits_revision,
                     );

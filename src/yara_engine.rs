@@ -1610,6 +1610,18 @@ impl YaraEngine {
         // (which borrows the Scanner) is consumed before the RefCell is released.
         ENGINE_SCANNER_CACHE.with(|cache| {
             let mut cache = cache.borrow_mut();
+            // Fixture lanes cover the entire type catalog. Keep the common
+            // tiers hot without retaining 64 Wasm instances on every worker.
+            let limit = if crate::validation_performance::running_fixtures() {
+                4
+            } else {
+                ENGINE_SCANNER_CACHE_SIZE
+            };
+            if let Some(cap) = std::num::NonZeroUsize::new(limit)
+                && cache.cap() != cap
+            {
+                cache.resize(cap);
+            }
             if cache.get(&key).is_none() {
                 let mut entry = cached_scanner::CachedScanner::new(Arc::clone(rules));
                 entry.with(|s| {

@@ -736,7 +736,7 @@ impl AnalysisReport {
             metadata: _,
             diff: _,
         } = self;
-        let mut file = FileAnalysis::from_report_parts(
+        Self::project_file(
             id,
             ReportFileParts {
                 target: target.clone(),
@@ -757,18 +757,28 @@ impl AnalysisReport {
                 yara_matches: yara_matches.clone(),
                 syscalls: syscalls.clone(),
             },
-        );
+            values_tree.as_deref(),
+            engine,
+        )
+    }
 
+    fn project_file(
+        id: u32,
+        parts: ReportFileParts,
+        values_tree: Option<&serde_json::Value>,
+        engine: &crate::Engine,
+    ) -> FileAnalysis {
+        let mut file = FileAnalysis::from_report_parts(id, parts);
         // Flatten the values tree into `kv` (the serialized form). The nested
         // tree itself is NOT retained on the file: `kv` is the single output
         // representation, and the only structural reader (`type: value` sibling
         // lookups, diff) now reads `kv`. In compact-member mode the flatten is
         // skipped entirely for files no rule can reach — see `retain_folded_kv`.
-        if let Some(tree) = values_tree.as_deref()
+        if let Some(tree) = values_tree
             && retain_folded_kv(&file.path, engine)
         {
             flatten_kv_for_output(tree, &mut file.kv);
-        } else if let Some(tree) = values_tree.as_deref() {
+        } else if let Some(tree) = values_tree {
             retain_cargo_context_values(&file.path, tree, &mut file.kv);
         }
         drop_unread_folded_fields(&mut file, engine);

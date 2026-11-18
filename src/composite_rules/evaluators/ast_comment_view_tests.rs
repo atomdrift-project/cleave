@@ -184,3 +184,56 @@ fn missing_required_literal_skips_comment_view_and_its_budget() {
             .is_some_and(Option::is_some)
     );
 }
+
+#[test]
+fn incremental_comment_view_matches_a_fresh_parse_across_distant_edits() {
+    let gap = "use('α');\n".repeat(900);
+    let source = format!("/* head */\n{gap}function f() {{ return /*λ\n*/ 3 }}\n// tail\nend();");
+    let masked = source
+        .replace("/* head */", "          ")
+        .replace("/*λ\n*/", "    \n  ")
+        .replace("// tail", "       ");
+    for (path, kind) in [
+        ("view.js", FileType::JavaScript),
+        ("view.ts", FileType::TypeScript),
+    ] {
+        let parsed = filefacts::OpenOptions::new()
+            .path(std::path::Path::new(path))
+            .open(source.as_bytes());
+        let tree = parsed.source_ast().unwrap().tree;
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&tree.language()).unwrap();
+        let expected = parser.parse(masked.as_bytes(), None).unwrap();
+        let nodes = |tree: &tree_sitter::Tree| {
+            let mut values = Vec::new();
+            let mut cursor = tree.walk();
+            crate::analyzers::ast_walker::walk_tree_with_stats(&mut cursor, None, |node, _| {
+                values.push((
+                    node.kind_id(),
+                    node.byte_range(),
+                    node.start_position(),
+                    node.end_position(),
+                ));
+                true
+            });
+            values
+        };
+        let index = super::NodeTextIndex::new(tree, &source);
+        for comments in [None, index.comment_ranges()] {
+            let actual = super::ast_comment_view::build(
+                tree,
+                &source,
+                kind,
+                comments,
+                usize::MAX,
+                Duration::from_secs(10),
+                None,
+                None,
+            )
+            .ok()
+            .flatten()
+            .unwrap();
+            assert_eq!(nodes(&actual), nodes(&expected), "{path}");
+        }
+    }
+}

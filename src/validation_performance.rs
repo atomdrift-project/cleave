@@ -398,6 +398,12 @@ fn outlier_fence<C: MeasuredCost>(costs: &BTreeMap<String, C>) -> Option<(Durati
     Some((duration(median), duration(fence)))
 }
 
+static FIXTURE_SESSION: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn running_fixtures() -> bool {
+    FIXTURE_SESSION.load(Ordering::Relaxed)
+}
+
 pub(crate) fn active() -> bool {
     ACTIVE.0.load(Ordering::Relaxed)
 }
@@ -419,6 +425,7 @@ pub(crate) struct Session;
 #[cfg(feature = "lint")]
 impl Session {
     pub(crate) fn begin() -> Self {
+        FIXTURE_SESSION.store(true, Ordering::Relaxed);
         ISSUES.lock().clear();
         QUERY_COSTS.lock().clear();
         ACTIVE.0.store(
@@ -473,6 +480,7 @@ fn outlier_issues(
 #[cfg(feature = "lint")]
 impl Drop for Session {
     fn drop(&mut self) {
+        FIXTURE_SESSION.store(false, Ordering::Relaxed);
         ACTIVE.0.store(false, Ordering::Relaxed);
         ISSUES.lock().clear();
         QUERY_COSTS.lock().clear();

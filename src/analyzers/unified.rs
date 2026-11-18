@@ -11,10 +11,12 @@
 //! 3. Rely on the trait/YAML system for capability detection
 //! 4. Keep binary analyzers (ELF, PE, Mach-O) and manifest analyzers separate
 
+use crate::composite_rules::context::AstKindCache;
+
 use crate::analyzers::symbol_extraction;
 use crate::analyzers::{AnalysisInput, Analyzer, FileType, FileTypeExt};
 use crate::capabilities::record_ast_kind_node;
-use crate::types::{AnalysisReport, Evidence, Function, StringInfo, TargetInfo};
+use crate::types::{AnalysisReport, Function, StringInfo, TargetInfo};
 use anyhow::Result;
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use std::hash::Hasher;
@@ -85,8 +87,6 @@ pub(crate) struct LanguageConfig {
     pub name: &'static str,
     /// File type for reports
     pub file_type: &'static str,
-    /// Node types for symbol/call extraction
-    pub call_node_types: &'static [&'static str],
     /// Node types for function declarations
     pub function_node_types: &'static [&'static str],
     /// Field name for function names (usually "name")
@@ -106,7 +106,6 @@ pub(crate) fn config_for_file_type(
         FileType::Python => Some(LanguageConfig {
             name: "python",
             file_type: "python",
-            call_node_types: &["call"],
             function_node_types: &["function_definition", "async_function_definition"],
             function_name_field: "name",
             string_node_types: &["string", "string_content"],
@@ -114,11 +113,6 @@ pub(crate) fn config_for_file_type(
         FileType::JavaScript => Some(LanguageConfig {
             name: "javascript",
             file_type: "javascript",
-            call_node_types: &[
-                "call_expression",
-                "assignment_expression",
-                "variable_declarator",
-            ],
             function_node_types: &[
                 "function_declaration",
                 "function_expression",
@@ -131,7 +125,6 @@ pub(crate) fn config_for_file_type(
         FileType::TypeScript => Some(LanguageConfig {
             name: "typescript",
             file_type: "javascript",
-            call_node_types: &["call_expression"],
             function_node_types: &[
                 "function_declaration",
                 "function_expression",
@@ -144,7 +137,6 @@ pub(crate) fn config_for_file_type(
         FileType::Go => Some(LanguageConfig {
             name: "go",
             file_type: "go",
-            call_node_types: &["call_expression"],
             function_node_types: &["function_declaration", "method_declaration"],
             function_name_field: "name",
             string_node_types: &["raw_string_literal", "interpreted_string_literal"],
@@ -152,7 +144,6 @@ pub(crate) fn config_for_file_type(
         FileType::Rust => Some(LanguageConfig {
             name: "rust",
             file_type: "rust",
-            call_node_types: &["call_expression", "macro_invocation"],
             function_node_types: &["function_item"],
             function_name_field: "name",
             string_node_types: &["string_literal", "raw_string_literal"],
@@ -160,7 +151,6 @@ pub(crate) fn config_for_file_type(
         FileType::Ruby => Some(LanguageConfig {
             name: "ruby",
             file_type: "ruby",
-            call_node_types: &["call", "method_call"],
             function_node_types: &["method", "singleton_method"],
             function_name_field: "name",
             string_node_types: &[
@@ -175,7 +165,6 @@ pub(crate) fn config_for_file_type(
         FileType::Php => Some(LanguageConfig {
             name: "php",
             file_type: "php",
-            call_node_types: &["function_call_expression"],
             function_node_types: &["function_definition", "method_declaration"],
             function_name_field: "name",
             string_node_types: &["string", "encapsed_string"],
@@ -183,7 +172,6 @@ pub(crate) fn config_for_file_type(
         FileType::Shell => Some(LanguageConfig {
             name: "shell",
             file_type: "shell",
-            call_node_types: &["command", "command_name"],
             function_node_types: &["function_definition"],
             function_name_field: "name",
             string_node_types: &["string", "raw_string"],
@@ -191,7 +179,6 @@ pub(crate) fn config_for_file_type(
         FileType::Lua => Some(LanguageConfig {
             name: "lua",
             file_type: "lua",
-            call_node_types: &["function_call"],
             function_node_types: &["function_declaration", "local_function"],
             function_name_field: "name",
             string_node_types: &["string"],
@@ -199,7 +186,6 @@ pub(crate) fn config_for_file_type(
         FileType::Perl => Some(LanguageConfig {
             name: "perl",
             file_type: "perl",
-            call_node_types: &["function_call", "method_call"],
             function_node_types: &["subroutine_declaration", "method_declaration"],
             function_name_field: "name",
             string_node_types: &["string_literal", "interpolated_string"],
@@ -207,7 +193,6 @@ pub(crate) fn config_for_file_type(
         FileType::PowerShell => Some(LanguageConfig {
             name: "powershell",
             file_type: "powershell",
-            call_node_types: &["command_expression", "invocation_expression"],
             function_node_types: &["function_statement"],
             function_name_field: "name",
             string_node_types: &["string_literal", "expandable_string_literal"],
@@ -215,7 +200,6 @@ pub(crate) fn config_for_file_type(
         FileType::Java => Some(LanguageConfig {
             name: "java",
             file_type: "java",
-            call_node_types: &["method_invocation"],
             function_node_types: &["method_declaration", "constructor_declaration"],
             function_name_field: "name",
             string_node_types: &["string_literal"],
@@ -223,7 +207,6 @@ pub(crate) fn config_for_file_type(
         FileType::CSharp => Some(LanguageConfig {
             name: "csharp",
             file_type: "csharp",
-            call_node_types: &["invocation_expression"],
             function_node_types: &["method_declaration", "constructor_declaration"],
             function_name_field: "name",
             string_node_types: &["string_literal", "verbatim_string_literal"],
@@ -231,7 +214,6 @@ pub(crate) fn config_for_file_type(
         FileType::C => Some(LanguageConfig {
             name: "c",
             file_type: "c",
-            call_node_types: &["call_expression"],
             function_node_types: &["function_definition"],
             function_name_field: "declarator",
             string_node_types: &["string_literal"],
@@ -239,7 +221,6 @@ pub(crate) fn config_for_file_type(
         FileType::Swift => Some(LanguageConfig {
             name: "swift",
             file_type: "swift",
-            call_node_types: &["call_expression"],
             function_node_types: &["function_declaration"],
             function_name_field: "name",
             string_node_types: &["line_string_literal", "multi_line_string_literal"],
@@ -247,7 +228,6 @@ pub(crate) fn config_for_file_type(
         FileType::ObjectiveC => Some(LanguageConfig {
             name: "objective_c",
             file_type: "objective_c",
-            call_node_types: &["message_expression", "call_expression"],
             function_node_types: &["function_definition", "method_definition"],
             function_name_field: "declarator",
             string_node_types: &["string_literal"],
@@ -255,7 +235,6 @@ pub(crate) fn config_for_file_type(
         FileType::Groovy => Some(LanguageConfig {
             name: "groovy",
             file_type: "groovy",
-            call_node_types: &["method_call", "function_call"],
             function_node_types: &["method_declaration", "function_declaration"],
             function_name_field: "name",
             // The grammar uses Java's character_literal node name for Groovy
@@ -265,7 +244,6 @@ pub(crate) fn config_for_file_type(
         FileType::Scala => Some(LanguageConfig {
             name: "scala",
             file_type: "scala",
-            call_node_types: &["call_expression", "apply_expression"],
             function_node_types: &["function_definition"],
             function_name_field: "name",
             string_node_types: &["string", "interpolated_string"],
@@ -273,7 +251,6 @@ pub(crate) fn config_for_file_type(
         FileType::Kotlin => Some(LanguageConfig {
             name: "kotlin",
             file_type: "kotlin",
-            call_node_types: &["call_expression"],
             function_node_types: &["fun_declaration", "function_declaration"],
             function_name_field: "name",
             string_node_types: &["line_string_literal", "multi_line_string_literal"],
@@ -281,7 +258,6 @@ pub(crate) fn config_for_file_type(
         FileType::Zig => Some(LanguageConfig {
             name: "zig",
             file_type: "zig",
-            call_node_types: &["call_expression"],
             function_node_types: &["fn_decl"],
             function_name_field: "name",
             string_node_types: &["string_literal"],
@@ -289,7 +265,6 @@ pub(crate) fn config_for_file_type(
         FileType::Elixir => Some(LanguageConfig {
             name: "elixir",
             file_type: "elixir",
-            call_node_types: &["call"],
             function_node_types: &["call"], // def/defp are calls in Elixir's AST
             function_name_field: "target",
             string_node_types: &["string", "charlist"],
@@ -297,7 +272,6 @@ pub(crate) fn config_for_file_type(
         FileType::Makefile => Some(LanguageConfig {
             name: "makefile",
             file_type: "makefile",
-            call_node_types: &["recipe"],
             function_node_types: &["rule"],
             function_name_field: "target",
             string_node_types: &["string"],
@@ -533,19 +507,19 @@ impl UnifiedSourceAnalyzer {
             // string at all.
             let mapper = Arc::clone(self.engine.rules());
             let rule_ft = mapper.detect_file_type(self.config.file_type);
-            let (required, call_types) = mapper.ast_kind_cache_plan(rule_ft);
+            let plan = mapper.ast_kind_cache_plan(rule_ft);
             let mut cache = FxHashMap::default();
             self.extract_ast_facts(
                 tree,
                 content,
                 &mut report,
-                &required,
-                &call_types,
+                &plan.required,
+                &plan.call_types,
                 &mut cache,
                 &mut ast_node_text,
                 &mut seen_strings,
             );
-            if !required.is_empty() {
+            if !plan.required.is_empty() {
                 ast_kind_cache = Some(cache);
             }
         }
@@ -623,7 +597,7 @@ impl UnifiedSourceAnalyzer {
 
         // Extract and analyze base64/zlib encoded payloads (same treatment as archives)
         // Use pre-extracted payloads if available to avoid redundant expensive I/O
-        let owned_payload_stng;
+        drop(seen_strings);
         let mut owned_extracted_payloads;
         let extracted_payloads: &[crate::types::ExtractedPayload] = if self.skip_embedded_detection
         {
@@ -631,22 +605,8 @@ impl UnifiedSourceAnalyzer {
         } else if !preextracted_payloads.is_empty() {
             preextracted_payloads
         } else {
-            // Payload extraction needs min_length=16 strings.  We already have
-            // a min_length=4 extraction in `stng_strings` above (from the
-            // caller or the filefacts context).  Filtering that existing vec by length is
-            // equivalent to a second full extraction at min_length=16 for
-            // every extractor stng runs — raw scan uses `min_length` as a
-            // hard threshold, decoders use their own MIN_*_LENGTH constants,
-            // and XOR uses `xor_min_length` independently.  One extraction
-            // saves 5-50 ms per file on scripts.
-            let payload_stng: Vec<stng::ExtractedString> = stng_strings
-                .iter()
-                .filter(|s| s.value.len() >= 16)
-                .cloned()
-                .collect();
-            owned_payload_stng = payload_stng;
-            owned_extracted_payloads =
-                crate::extractors::extract_encoded_payloads(&owned_payload_stng);
+            // The extractor selects decoded rows above its own payload threshold.
+            owned_extracted_payloads = crate::extractors::extract_encoded_payloads(stng_strings);
             owned_extracted_payloads.extend(
                 crate::extractors::encoded_payload::extract_nibble_table_payloads(
                     content.as_bytes(),
@@ -1107,22 +1067,18 @@ impl UnifiedSourceAnalyzer {
         tree: &tree_sitter::Tree,
         content: &str,
         report: &mut AnalysisReport,
-        required_node_types: &FxHashSet<&str>,
+        required_node_types: &FxHashSet<String>,
         call_node_types: &FxHashSet<&'static str>,
-        kind_cache: &mut FxHashMap<String, Vec<Evidence>>,
+        kind_cache: &mut AstKindCache,
         node_text: &mut crate::composite_rules::evaluators::NodeTextIndex,
         seen_strings: &mut SeenStrings,
     ) {
         let source = content.as_bytes();
         let mut cursor = tree.walk();
-        // Collected by the walk so call-kind nodes get an `Evidence.alt_value`;
-        // the imports themselves are ingested from filefacts.
-        let mut call_sites: Vec<(String, u64)> = Vec::new();
         self.walk_ast_facts(
             &mut cursor,
             source,
             report,
-            &mut call_sites,
             required_node_types,
             call_node_types,
             kind_cache,
@@ -1130,8 +1086,6 @@ impl UnifiedSourceAnalyzer {
             seen_strings,
         );
         node_text.finish();
-        // `call_sites` is collected by the walk for `Evidence.alt_value` on
-        // call-kind nodes; the imports themselves come from filefacts.
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1140,10 +1094,9 @@ impl UnifiedSourceAnalyzer {
         cursor: &mut tree_sitter::TreeCursor<'a>,
         source: &[u8],
         report: &mut AnalysisReport,
-        call_sites: &mut Vec<(String, u64)>,
-        required_node_types: &FxHashSet<&str>,
+        required_node_types: &FxHashSet<String>,
         call_node_types: &FxHashSet<&'static str>,
-        kind_cache: &mut FxHashMap<String, Vec<Evidence>>,
+        kind_cache: &mut AstKindCache,
         node_text: &mut crate::composite_rules::evaluators::NodeTextIndex,
         seen_strings: &mut SeenStrings,
     ) {
@@ -1179,19 +1132,6 @@ impl UnifiedSourceAnalyzer {
                     nesting: None,
                     call_patterns: None,
                 });
-            }
-
-            if call_sites.len() < symbol_extraction::MAX_TOTAL_CALL_SITES
-                && self.config.call_node_types.contains(&kind)
-                && let Some(func_name) = symbol_extraction::extract_function_name(&node, source)
-            {
-                let clean_name = func_name
-                    .trim()
-                    .trim_start_matches('_')
-                    .trim_start_matches('$');
-                if !clean_name.is_empty() && clean_name.len() < 100 {
-                    call_sites.push((clean_name.to_string(), node.start_byte() as u64));
-                }
             }
 
             if self.config.string_node_types.contains(&kind) || kind.contains("string") {

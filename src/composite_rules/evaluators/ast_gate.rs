@@ -372,14 +372,14 @@ enum NodePredicateValue {
 /// Display evidence is truncated and decoded literals lose source spelling;
 /// neither can prove that a Tree-sitter capture is absent.
 #[derive(Debug, Default)]
-pub(crate) struct NodeTextIndex(
-    rustc_hash::FxHashMap<String, rustc_hash::FxHashSet<Box<str>>>,
-    rustc_hash::FxHashSet<Box<str>>,
-    Vec<std::ops::Range<usize>>,
-    bool,
-    /// Deepest nesting the walk that filled this index saw (root = 0).
-    u32,
-);
+pub(crate) struct NodeTextIndex {
+    texts: rustc_hash::FxHashMap<String, rustc_hash::FxHashSet<Box<str>>>,
+    kinds: rustc_hash::FxHashSet<Box<str>>,
+    for_statements: Vec<std::ops::Range<usize>>,
+    complete: bool,
+    max_depth: u32,
+    comments: Vec<tree_sitter::Range>,
+}
 
 fn indexed_kind(kind: &str) -> bool {
     matches!(
@@ -402,26 +402,38 @@ fn indexed_kind(kind: &str) -> bool {
 
 impl NodeTextIndex {
     pub(crate) fn finish(&mut self) {
-        self.3 = true;
+        self.complete = true;
     }
     /// Note a node at `depth` below the root; the deepest is kept.
     pub(crate) fn note_depth(&mut self, depth: u32) {
-        self.4 = self.4.max(depth);
+        self.max_depth = self.max_depth.max(depth);
     }
     /// Deepest nesting of the tree this index was built from (root = 0).
     pub(crate) fn max_depth(&self) -> u32 {
-        self.4
+        self.max_depth
     }
     pub(super) fn for_statement_ranges(&self) -> Option<&[std::ops::Range<usize>]> {
-        self.3.then_some(&self.2)
+        self.complete.then_some(&self.for_statements)
+    }
+
+    pub(super) fn comment_ranges(&self) -> Option<&[tree_sitter::Range]> {
+        self.complete.then_some(&self.comments)
     }
 
     pub(crate) fn record_node(&mut self, node: &tree_sitter::Node<'_>, source: &[u8]) {
-        if node.kind() == "for_statement" {
-            self.2.push(node.byte_range());
+        if super::ast_comment_view::is_comment(node)
+            && self
+                .comments
+                .last()
+                .is_none_or(|last| last.end_byte <= node.start_byte())
+        {
+            self.comments.push(node.range());
         }
-        if !self.1.contains(node.kind()) {
-            self.1.insert(node.kind().into());
+        if node.kind() == "for_statement" {
+            self.for_statements.push(node.byte_range());
+        }
+        if !self.kinds.contains(node.kind()) {
+            self.kinds.insert(node.kind().into());
         }
         // A wildcard object-key capture can be any node kind, including a
         // quoted or computed key. Index the entire field, never a decoded or
@@ -443,12 +455,12 @@ impl NodeTextIndex {
         if !indexed_kind(kind) {
             return;
         }
-        if let Some(values) = self.0.get_mut(kind) {
+        if let Some(values) = self.texts.get_mut(kind) {
             if !values.contains(text) {
                 values.insert(text.into());
             }
         } else {
-            self.0
+            self.texts
                 .entry(kind.to_owned())
                 .or_default()
                 .insert(text.into());
@@ -577,9 +589,9 @@ impl RequiredNodes {
         self.0.get(pattern).is_none_or(|pattern| {
             pattern.iter().all(|p| {
                 if matches!(p.predicate, NodePredicateValue::Present) {
-                    return index.1.contains(p.kind.as_str());
+                    return index.kinds.contains(p.kind.as_str());
                 }
-                let Some(values) = index.0.get(p.kind.as_str()) else {
+                let Some(values) = index.texts.get(p.kind.as_str()) else {
                     return false;
                 };
                 match &p.predicate {

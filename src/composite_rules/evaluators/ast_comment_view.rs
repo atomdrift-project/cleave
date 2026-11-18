@@ -23,9 +23,12 @@ pub(super) enum ViewError {
 /// Mask only real, extra comment nodes found by the cached grammar. Delimiters
 /// in strings are never searched or rewritten. CR/LF and all byte positions
 /// survive; queries continue to read evidence and predicates from original text.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn build(
     original: &tree_sitter::Tree,
     source: &str,
+    file_type: crate::composite_rules::FileType,
+    indexed_comments: Option<&[tree_sitter::Range]>,
     byte_limit: usize,
     cpu_budget: Duration,
     deadline: Option<Instant>,
@@ -47,8 +50,97 @@ pub(super) fn build(
         }
     };
     stopped()?;
+    let collected;
+    let ranges = match indexed_comments {
+        Some(ranges) => ranges,
+        None => {
+            collected = find_comments(original, stopped)?;
+            &collected
+        }
+    };
+    if ranges.is_empty() {
+        return Ok(None);
+    }
+    use crate::composite_rules::FileType;
+    let incremental = matches!(file_type, FileType::JavaScript | FileType::TypeScript);
+    let mut masked = source.as_bytes().to_vec();
+    let mut edits: Vec<tree_sitter::InputEdit> = Vec::new();
+    for range in ranges {
+        stopped()?;
+        let span = masked
+            .get_mut(range.start_byte..range.end_byte)
+            .ok_or(ViewError::ParseChanged)?;
+        for byte in span {
+            if !matches!(*byte, b'\r' | b'\n') {
+                *byte = b' ';
+            }
+        }
+        if incremental {
+            // Nearby comments can share one same-width edit. Distant runs of
+            // unchanged syntax remain available to the incremental parser.
+            if let Some(last) = edits.last_mut()
+                && range.start_byte.saturating_sub(last.old_end_byte) < 4096
+            {
+                last.old_end_byte = range.end_byte;
+                last.new_end_byte = range.end_byte;
+                last.old_end_position = range.end_point;
+                last.new_end_position = range.end_point;
+            } else {
+                edits.push(tree_sitter::InputEdit {
+                    start_byte: range.start_byte,
+                    start_position: range.start_point,
+                    old_end_byte: range.end_byte,
+                    new_end_byte: range.end_byte,
+                    old_end_position: range.end_point,
+                    new_end_position: range.end_point,
+                });
+            }
+        }
+    }
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&original.language())
+        .map_err(|_language_error| ViewError::ParseChanged)?;
+    let mut interrupted = None;
+    let mut progress = |_state: &tree_sitter::ParseState| {
+        if let Err(reason) = stopped() {
+            interrupted = Some(reason);
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    };
+    let options = tree_sitter::ParseOptions::default().progress_callback(&mut progress);
+    let mut read = |offset: usize, _point| masked.get(offset..).unwrap_or(&[]);
+    let mut previous = incremental.then(|| original.clone());
+    if let Some(tree) = &mut previous {
+        for edit in edits {
+            stopped()?;
+            tree.edit(&edit);
+        }
+    }
+    let parsed = parser.parse_with_options(&mut read, previous.as_ref(), Some(options));
+    if let Some(reason) = interrupted {
+        return Err(reason);
+    }
+    stopped()?;
+    let parsed = parsed.ok_or(ViewError::ParseChanged)?;
+    if parsed.root_node().has_error() && !original.root_node().has_error() {
+        return Err(ViewError::ParseChanged);
+    }
+    Ok(Some(parsed))
+}
+
+pub(super) fn is_comment(node: &tree_sitter::Node<'_>) -> bool {
+    matches!(node.kind(), "comment" | "line_comment" | "block_comment") && node.is_extra()
+}
+
+fn find_comments(
+    original: &tree_sitter::Tree,
+    stopped: impl Fn() -> Result<(), ViewError>,
+) -> Result<Vec<tree_sitter::Range>, ViewError> {
+    let mut ranges = Vec::new();
     let mut cursor = original.walk();
-    let mut masked: Option<Vec<u8>> = None;
     let mut visited = 0usize;
     loop {
         visited += 1;
@@ -56,18 +148,8 @@ pub(super) fn build(
             stopped()?;
         }
         let node = cursor.node();
-        let comment =
-            node.is_extra() && matches!(node.kind(), "comment" | "line_comment" | "block_comment");
-        if comment {
-            let bytes = masked.get_or_insert_with(|| source.as_bytes().to_vec());
-            let Some(span) = bytes.get_mut(node.byte_range()) else {
-                return Err(ViewError::ParseChanged);
-            };
-            for byte in span {
-                if !matches!(*byte, b'\r' | b'\n') {
-                    *byte = b' ';
-                }
-            }
+        if is_comment(&node) {
+            ranges.push(node.range());
         } else if cursor.goto_first_child() {
             continue;
         }
@@ -77,34 +159,7 @@ pub(super) fn build(
             }
             if !cursor.goto_parent() {
                 stopped()?;
-                let Some(masked) = masked else {
-                    return Ok(None);
-                };
-                let mut parser = tree_sitter::Parser::new();
-                parser
-                    .set_language(&original.language())
-                    .map_err(|_language_error| ViewError::ParseChanged)?;
-                let mut interrupted = None;
-                let mut progress = |_state: &tree_sitter::ParseState| {
-                    if let Err(reason) = stopped() {
-                        interrupted = Some(reason);
-                        ControlFlow::Break(())
-                    } else {
-                        ControlFlow::Continue(())
-                    }
-                };
-                let options = tree_sitter::ParseOptions::default().progress_callback(&mut progress);
-                let mut read = |offset: usize, _point| masked.get(offset..).unwrap_or(&[]);
-                let parsed = parser.parse_with_options(&mut read, None, Some(options));
-                if let Some(reason) = interrupted {
-                    return Err(reason);
-                }
-                stopped()?;
-                let parsed = parsed.ok_or(ViewError::ParseChanged)?;
-                if parsed.root_node().has_error() && !original.root_node().has_error() {
-                    return Err(ViewError::ParseChanged);
-                }
-                return Ok(Some(parsed));
+                return Ok(ranges);
             }
         }
     }

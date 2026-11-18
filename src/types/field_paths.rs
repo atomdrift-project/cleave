@@ -115,6 +115,7 @@ pub(crate) const CLEAVE_OWNED_METRIC_FIELDS: &[&str] = &[
     "references.declared_count",
     "references.undeclared_import_count",
     "references.unresolved_count",
+    "references.unavailable_browser_script_count",
     "references.unavailable_command_count",
     "references.unavailable_vsix_url_count",
     "references.unresolved_extension_count",

@@ -13,6 +13,54 @@ use std::time::Instant;
 
 use crate::hash_str;
 
+/// Only matching nodes need report-form evidence. Store the fields the AST
+/// matcher reads and defer formatting locations and allocating offset lists.
+#[derive(Debug)]
+pub(crate) struct AstKindNode {
+    pub alt_value: Option<Box<str>>,
+    // Tree-sitter reports offsets, rows, and byte columns as uint32_t.
+    pub start: u32,
+    pub row: u32,
+    pub column: u32,
+    pub prefix_bytes: u16,
+    pub truncated: bool,
+}
+
+impl AstKindNode {
+    /// Borrow the same bounded prefix the walker indexed. Long nodes reuse a
+    /// per-query buffer for the ellipsis, which is part of the matched value.
+    pub(crate) fn value<'a>(&self, source: &'a str, scratch: &'a mut String) -> &'a str {
+        let start = self.start as usize;
+        let prefix = &source[start..start + usize::from(self.prefix_bytes)];
+        if self.truncated {
+            scratch.clear();
+            scratch.push_str(prefix);
+            scratch.push_str("...");
+            scratch
+        } else {
+            prefix
+        }
+    }
+
+    pub(crate) fn evidence(&self, value: &str) -> Evidence {
+        Evidence {
+            method: "ast".into(),
+            source: "tree-sitter".into(),
+            value: value.to_owned(),
+            alt_value: self.alt_value.as_deref().map(str::to_owned),
+            location: Some(format!(
+                "{}:{}",
+                u64::from(self.row) + 1,
+                u64::from(self.column) + 1
+            )),
+            offsets: vec![u64::from(self.start)],
+            ..Default::default()
+        }
+    }
+}
+
+pub(crate) type AstKindCache = FxHashMap<String, Vec<AstKindNode>>;
+
 /// Every finding an evaluation may match against, as one value.
 ///
 /// Two sources feed it: the report's own findings, and findings that are not on
@@ -238,7 +286,7 @@ pub(crate) struct FileEvalCaches {
     flow_targets: Arc<OnceLock<Vec<String>>>,
     html_comment_free_source: Arc<OnceLock<Option<Vec<u8>>>>,
     comment_free_source: Arc<OnceLock<Option<Vec<u8>>>>,
-    commentless_ast: Arc<OnceLock<Option<tree_sitter::Tree>>>,
+    commentless_ast: Arc<once_cell::sync::OnceCell<Option<tree_sitter::Tree>>>,
 }
 
 /// Context for evaluating composite rules
@@ -281,7 +329,7 @@ pub(crate) struct EvaluationContext<'a> {
     /// content per match. Empty for formats without an offset indexer.
     pub cached_kv_offsets: Arc<OnceLock<FxHashMap<String, u64>>>,
     /// Cached AST nodes by kind (for batch evaluation)
-    pub ast_kind_cache: Option<&'a FxHashMap<String, Vec<Evidence>>>,
+    pub ast_kind_cache: Option<&'a AstKindCache>,
     /// Precomputed `query:` results for this file (one combined QueryCursor).
     /// Keyed by the original query string. Missing key → `eval_ast_query`
     /// runs that pattern itself (compile fail, or the batch was declined).
@@ -323,7 +371,7 @@ pub(crate) struct EvaluationContext<'a> {
     pub cached_comment_free_source: Arc<OnceLock<Option<Vec<u8>>>>,
     /// Offset-preserving AST view for queries that explicitly ignore comments.
     /// Only successful views (including no comments) are cached per input.
-    pub cached_commentless_ast: Arc<OnceLock<Option<tree_sitter::Tree>>>,
+    pub cached_commentless_ast: Arc<once_cell::sync::OnceCell<Option<tree_sitter::Tree>>>,
     /// Hard deadline for rule evaluation.
     pub deadline: Option<Instant>,
     /// Cooperative cancellation flag, set by the caller (e.g. on a timeout).
@@ -468,7 +516,7 @@ impl<'a> EvaluationContext<'a> {
             flow_targets: Arc::new(OnceLock::new()),
             cached_html_comment_free_source: Arc::new(OnceLock::new()),
             cached_comment_free_source: Arc::new(OnceLock::new()),
-            cached_commentless_ast: Arc::new(OnceLock::new()),
+            cached_commentless_ast: Arc::new(once_cell::sync::OnceCell::new()),
             deadline: None,
             cancellation: None,
             arch_ranges: None,
@@ -553,10 +601,7 @@ impl<'a> EvaluationContext<'a> {
     }
 
     /// Set the AST kind cache
-    pub(crate) fn with_ast_kind_cache(
-        mut self,
-        cache: &'a FxHashMap<String, Vec<Evidence>>,
-    ) -> Self {
+    pub(crate) fn with_ast_kind_cache(mut self, cache: &'a AstKindCache) -> Self {
         self.ast_kind_cache = Some(cache);
         self
     }
@@ -879,7 +924,7 @@ impl<'a> EvaluationContext<'a> {
             flow_targets: Arc::new(OnceLock::new()),
             cached_html_comment_free_source: Arc::new(OnceLock::new()),
             cached_comment_free_source: Arc::new(OnceLock::new()),
-            cached_commentless_ast: Arc::new(OnceLock::new()),
+            cached_commentless_ast: Arc::new(once_cell::sync::OnceCell::new()),
             deadline: None,
             cancellation: None,
             arch_ranges: None,

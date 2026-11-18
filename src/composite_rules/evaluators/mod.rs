@@ -16,7 +16,7 @@
 use parking_lot::RwLock;
 use regex::Regex;
 use std::num::NonZeroUsize;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 // Re-export all evaluator modules
 pub(crate) mod ast;
@@ -107,49 +107,20 @@ fn regex_cache() -> &'static RwLock<lru::LruCache<(String, bool), Regex, rustc_h
     })
 }
 
-/// A compiled ASCII byte-regex — the `regex` crate meta-engine (SIMD literal
-/// prefilter + lazy DFA), matched directly against raw file bytes with no UTF-8
-/// validation. Multi-line is enabled so `^`/`$` anchor per-line in raw-text mode
-/// (trait authors writing `regex: '^namespace '` expect line, not whole-file,
-/// anchoring). Wrapped in a newtype so the cache value type is stable and all
-/// raw-content matching funnels through one entry point.
-///
-/// (A lean `PikeVM`-plus-atom-window engine was prototyped here to cut the ~12 GB
-/// cache to ~0.3 GB; it was parity-exact but ~1.85× slower per pattern — the meta
-/// engine is already a near-optimal prefilter+DFA — so wall-clock priority kept
-/// the meta engine. See `RESOURCE_ROADMAP.md`.)
-pub(crate) struct LeanRegex {
-    /// The meta engine, held directly rather than through `regex::bytes::Regex`
-    /// so scratch lives in the byte-budgeted per-thread pool
-    /// ([`crate::composite_rules::regex_scratch`]) instead of a per-regex ×
-    /// per-thread pool retained for the process lifetime, and so the eagerly
-    /// compiled onepass DFA (capture extraction only — never used here) is
-    /// disabled. Match semantics are identical to the facade by construction:
-    /// the `regex` crate is a thin wrapper over this same engine.
-    meta: regex_automata::meta::Regex,
-    /// Scratch-pool identity (see [`crate::composite_rules::regex_scratch`]).
-    id: u64,
-}
-
-impl Drop for LeanRegex {
-    fn drop(&mut self) {
-        // Eviction and racing compilers can retire an engine while its
-        // scratch remains parked. This ID will never be searched again.
-        crate::composite_rules::regex_scratch::forget(self.id);
-    }
-}
+/// Raw and extracted-string matchers share the compiled engine and scratch pool.
+pub(crate) use super::condition::Engine as LeanRegex;
 
 impl LeanRegex {
     /// Iterate non-overlapping leftmost-first matches over `haystack`, invoking
     /// `f(start, end)` (byte offsets); `f` returns `false` to stop early.
     pub(crate) fn for_each_match(&self, haystack: &[u8], mut f: impl FnMut(usize, usize) -> bool) {
-        crate::composite_rules::regex_scratch::with_cache(self.id, &self.meta, |cache| {
+        crate::composite_rules::regex_scratch::with_cache(self.id, &self.re, |cache| {
             // `Searcher` reproduces `find_iter`'s exact iteration protocol,
             // including the empty-match advancement rules.
             let mut it =
                 regex_automata::util::iter::Searcher::new(regex_automata::Input::new(haystack));
             loop {
-                let m = it.advance(|input| Ok(self.meta.search_with(cache, input)));
+                let m = it.advance(|input| Ok(self.re.search_with(cache, input)));
                 let Some(m) = m else { return };
                 if !f(m.start(), m.end()) {
                     return;
@@ -167,7 +138,7 @@ impl LeanRegex {
         spans: &[(usize, usize)],
         mut f: impl FnMut(usize, usize) -> bool,
     ) {
-        crate::composite_rules::regex_scratch::with_cache(self.id, &self.meta, |cache| {
+        crate::composite_rules::regex_scratch::with_cache(self.id, &self.re, |cache| {
             for &(lo, hi) in spans {
                 if lo >= hi || hi > haystack.len() {
                     continue;
@@ -175,7 +146,7 @@ impl LeanRegex {
                 let input = regex_automata::Input::new(haystack).span(lo..hi);
                 let mut it = regex_automata::util::iter::Searcher::new(input);
                 loop {
-                    let m = it.advance(|input| Ok(self.meta.search_with(cache, input)));
+                    let m = it.advance(|input| Ok(self.re.search_with(cache, input)));
                     let Some(m) = m else { break };
                     if !f(m.start(), m.end()) {
                         return;
@@ -187,7 +158,7 @@ impl LeanRegex {
 
     /// Heap footprint of the compiled engine, for the byte-budgeted store.
     pub(crate) fn heap_bytes(&self) -> usize {
-        self.meta.memory_usage() + std::mem::size_of::<Self>()
+        self.re.memory_usage() + std::mem::size_of::<Self>()
     }
 
     /// Whether the pattern matches anywhere in `haystack`. Test-only primitive.
@@ -291,58 +262,23 @@ pub(crate) fn bytes_regex_tls_put(
     });
 }
 
-pub(crate) fn compile_bytes_regex(pattern: &str, case_insensitive: bool) -> Option<LeanRegex> {
-    // Meta-engine for everyone: it is a near-optimal SIMD-prefilter + lazy DFA,
-    // faster per-pattern than a hand-rolled PikeVM window. The per-pattern lean
-    // engine was measured ~1.85x slower on wall; wall is the priority. The
-    // separate `type: text` atom-gating (index side) is what reduces how *often*
-    // this runs — the real wall lever — and is engine-independent.
-    // ASCII class semantics (`unicode(false)`): callers gate on
-    // `can_use_byte_matching`, so every pattern here is pure ASCII with no
-    // `\u`/`\p` — but in Unicode mode its `\w`/`\s`/`\d`/`(?i)` classes still
-    // compile into UTF-8 byte sub-automata (hundreds of NFA states apiece,
-    // multiplied inside `{m,n}` repetitions). Those NFAs measured 5.6× larger,
-    // forced the meta engine off the lazy DFA onto the PikeVM (whose scratch is
-    // O(NFA states) per regex per thread — ~2.3 GB live on one 24 MB Go binary),
-    // and searched ~3× slower. On raw bytes, ASCII classes are also the honest
-    // semantic: Unicode mode's `.`/`\w` presume UTF-8-encoded text, which raw
-    // binary content is not. The Unicode fallback is defensive only.
-    let build = |unicode: bool| {
-        // Mirrors `regex::bytes::RegexBuilder` defaults exactly (utf8(false)
-        // syntax, utf8_empty(false), 10 MB nfa size limit), plus the two
-        // bounds-only levers the facade doesn't expose: no onepass DFA and
-        // implicit-only capture states.
-        regex_automata::meta::Regex::builder()
-            .configure(
-                regex_automata::meta::Regex::config()
-                    .utf8_empty(false)
-                    .onepass(false)
-                    // No fully compiled DFA: regex-automata 0.4.18 pairs it
-                    // with the auto prefilter in a way that misses matches in
-                    // byte mode (`\w\[[^\[\]]*\]\s?\(` finds nothing in
-                    // `o[0](`; see `byte_regex_with_negated_bracket_class_
-                    // before_optional_space_matches`). The lazy DFA covers the
-                    // same patterns at the same speed.
-                    .dfa(false)
-                    .which_captures(regex_automata::nfa::thompson::WhichCaptures::Implicit)
-                    .nfa_size_limit(Some(REGEX_SIZE_LIMIT))
-                    .hybrid_cache_capacity(REGEX_DFA_CACHE_BYTES),
-            )
-            .syntax(
-                regex_automata::util::syntax::Config::new()
-                    .case_insensitive(case_insensitive)
-                    .multi_line(true)
-                    .unicode(unicode)
-                    .utf8(false),
-            )
-            .build(pattern)
-            .ok()
-    };
-    let meta = build(false).or_else(|| build(true))?;
-    Some(LeanRegex {
-        meta,
-        id: crate::composite_rules::regex_scratch::next_regex_id(),
-    })
+pub(crate) fn compile_bytes_regex(pattern: &str, case_insensitive: bool) -> Option<Arc<LeanRegex>> {
+    if let Some(engine) = super::condition::shared_byte_engine(pattern, case_insensitive, true) {
+        return Some(engine);
+    }
+    // Preserve the raw matcher's Unicode fallback, which permits invalid UTF-8
+    // in its haystack and treats line anchors as multiline.
+    let re = regex_automata::meta::Regex::builder()
+        .configure(super::condition::engine_config().utf8_empty(false))
+        .syntax(
+            regex_automata::util::syntax::Config::new()
+                .case_insensitive(case_insensitive)
+                .multi_line(true)
+                .utf8(false),
+        )
+        .build(pattern)
+        .ok()?;
+    Some(Arc::new(LeanRegex::new(re)))
 }
 
 /// Smallest atom length worth using as a prefilter. Shorter literals occur too

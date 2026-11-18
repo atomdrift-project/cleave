@@ -7,6 +7,8 @@
 //! - Parallel evaluation of applicable traits
 //! - Early termination for empty files
 
+use crate::composite_rules::context::AstKindCache;
+
 use crate::composite_rules::TreeSitterQuery;
 use crate::composite_rules::ast_kinds::map_kind_to_node_types;
 use crate::composite_rules::{Arch, Condition, EvaluationContext, SectionMap};
@@ -15,6 +17,12 @@ use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::HashMap;
 use std::sync::OnceLock;
+
+#[derive(Debug, Default)]
+pub(crate) struct AstKindPlan {
+    pub(crate) required: FxHashSet<String>,
+    pub(crate) call_types: FxHashSet<&'static str>,
+}
 
 /// Pre-computed caches passed to trait evaluation to avoid redundant work.
 pub(crate) struct TraitEvalCache<'a> {
@@ -32,7 +40,7 @@ pub(crate) struct TraitEvalCache<'a> {
     pub regex_candidate_strings: Option<&'a super::RegexCandidateStrings>,
     pub arch_ranges: Option<&'a [(Arch, std::ops::Range<usize>)]>,
     pub ast_node_text: Option<&'a crate::composite_rules::evaluators::NodeTextIndex>,
-    pub ast_kind_cache: Option<&'a FxHashMap<String, Vec<Evidence>>>,
+    pub ast_kind_cache: Option<&'a AstKindCache>,
     /// Raw-file string-index scan ran for this source member. Enables
     /// skip-if-absent for exact/substr/regex-prefix `type: text` without
     /// taking the extracted-string evidence fast path.
@@ -196,9 +204,9 @@ pub(crate) fn record_ast_kind_node(
     kind: &str,
     node: &tree_sitter::Node<'_>,
     source: &[u8],
-    required_node_types: &FxHashSet<&str>,
+    required_node_types: &FxHashSet<String>,
     call_node_types: &FxHashSet<&'static str>,
-    cache: &mut FxHashMap<String, Vec<Evidence>>,
+    cache: &mut AstKindCache,
 ) {
     if !required_node_types.contains(kind) {
         return;
@@ -227,19 +235,21 @@ pub(crate) fn record_ast_kind_node(
     } else {
         None
     };
-    cache.entry(kind.to_string()).or_default().push(Evidence {
-        method: "ast".to_string(),
-        source: "tree-sitter".to_string(),
-        value: crate::composite_rules::evaluators::truncate_evidence(text, EVIDENCE_CHARS),
-        location: Some(format!(
-            "{}:{}",
-            node.start_position().row + 1,
-            node.start_position().column + 1
-        )),
-        offsets: vec![node.start_byte() as u64],
-        alt_value,
-        ..Default::default()
-    });
+    let truncation = text.char_indices().nth(EVIDENCE_CHARS);
+    let position = node.start_position();
+    let record = crate::composite_rules::context::AstKindNode {
+        prefix_bytes: truncation.map_or(text.len(), |(end, _)| end) as u16,
+        truncated: truncation.is_some(),
+        alt_value: alt_value.map(String::into_boxed_str),
+        start: node.start_byte() as u32,
+        row: position.row as u32,
+        column: position.column as u32,
+    };
+    if let Some(nodes) = cache.get_mut(kind) {
+        nodes.push(record);
+    } else {
+        cache.insert(kind.to_owned(), vec![record]);
+    }
 }
 
 impl super::CapabilityMapper {
@@ -249,39 +259,43 @@ impl super::CapabilityMapper {
     pub(crate) fn ast_kind_cache_plan(
         &self,
         file_type: crate::composite_rules::FileType,
-    ) -> (FxHashSet<&str>, FxHashSet<&'static str>) {
-        let applicable_indices: Vec<usize> = self
-            .match_indexes()
+    ) -> std::sync::Arc<AstKindPlan> {
+        let indexes = self.match_indexes();
+        if let Some(plan) = indexes.ast_kind_plans.read().get(&file_type) {
+            return std::sync::Arc::clone(plan);
+        }
+        let applicable_indices = indexes
             .trait_index
             .applicable(&file_type)
-            .into_indices_static()
-            .collect();
-        self.ast_kind_cache_plan_for(&applicable_indices, file_type)
-    }
-
-    fn ast_kind_cache_plan_for<'a>(
-        &'a self,
-        applicable_indices: &[usize],
-        file_type: crate::composite_rules::FileType,
-    ) -> (FxHashSet<&'a str>, FxHashSet<&'static str>) {
+            .into_indices_static();
         let mut required_node_types = FxHashSet::default();
-        for &idx in applicable_indices {
+        for idx in applicable_indices {
             if let Condition::TreeSitter(TreeSitterQuery { kind, node, .. }) =
                 &self.trait_definitions[idx].r#if
             {
                 if let Some(k) = kind {
                     for nt in map_kind_to_node_types(k, file_type) {
-                        required_node_types.insert(nt);
+                        required_node_types.insert(nt.to_owned());
                     }
                 } else if let Some(n) = node {
-                    required_node_types.insert(n.as_str());
+                    required_node_types.insert(n.clone());
                 }
             }
         }
         let call_node_types = map_kind_to_node_types("call", file_type)
             .into_iter()
             .collect();
-        (required_node_types, call_node_types)
+        let plan = std::sync::Arc::new(AstKindPlan {
+            required: required_node_types,
+            call_types: call_node_types,
+        });
+        std::sync::Arc::clone(
+            indexes
+                .ast_kind_plans
+                .write()
+                .entry(file_type)
+                .or_insert(plan),
+        )
     }
 
     /// Pre-walk the cached AST once, collecting every node whose kind some
@@ -298,26 +312,24 @@ impl super::CapabilityMapper {
         &self,
         cached_ast: Option<&tree_sitter::Tree>,
         binary_data: &[u8],
-        applicable_indices: &[usize],
         file_type: crate::composite_rules::FileType,
-    ) -> Option<FxHashMap<String, Vec<Evidence>>> {
+    ) -> Option<AstKindCache> {
         let tree = cached_ast?;
         let source = filefacts::source_text_for_ast(binary_data);
-        let (required_node_types, call_node_types) =
-            self.ast_kind_cache_plan_for(applicable_indices, file_type);
-        if required_node_types.is_empty() {
+        let plan = self.ast_kind_cache_plan(file_type);
+        if plan.required.is_empty() {
             return None;
         }
 
-        let mut cache: FxHashMap<String, Vec<Evidence>> = FxHashMap::default();
+        let mut cache: AstKindCache = FxHashMap::default();
         let mut cursor = tree.walk();
         crate::analyzers::ast_walker::walk_tree_with_stats(&mut cursor, None, |node, _| {
             record_ast_kind_node(
                 node.kind(),
                 &node,
                 source.as_bytes(),
-                &required_node_types,
-                &call_node_types,
+                &plan.required,
+                &plan.call_types,
                 &mut cache,
             );
             true
@@ -569,7 +581,6 @@ impl super::CapabilityMapper {
         cached_ast: Option<&tree_sitter::Tree>,
         binary_data: &[u8],
         file_type: crate::composite_rules::FileType,
-        indices: &[usize],
         cancellation: Option<&std::sync::atomic::AtomicBool>,
         node_text: Option<&crate::composite_rules::evaluators::NodeTextIndex>,
     ) -> Option<FxHashMap<String, crate::composite_rules::context::ConditionResult>> {
@@ -594,7 +605,13 @@ impl super::CapabilityMapper {
             return None;
         }
         let source = filefacts::source_text_for_ast(binary_data);
-        let mut queries = self.collect_ast_query_strings(indices);
+        let indices: Vec<_> = self
+            .match_indexes()
+            .trait_index
+            .applicable(&file_type)
+            .into_indices_static()
+            .collect();
+        let mut queries = self.collect_ast_query_strings(&indices);
         if let Some(measured) = measured {
             queries.retain(|q| !measured.contains(*q));
         }
@@ -681,25 +698,10 @@ impl super::CapabilityMapper {
             SectionMap::empty(binary_data.len() as u64)
         };
 
-        // Use trait index to only evaluate applicable traits
-        let applicable_indices: Vec<usize> = self
-            .match_indexes()
-            .trait_index
-            .applicable(&file_type)
-            .into_indices_static()
-            .collect();
-
         // Idea 9: Batch AST node collection
-        let ast_kind_cache =
-            self.build_ast_kind_cache(cached_ast, binary_data, &applicable_indices, file_type);
-        let ast_query_cache = self.build_ast_query_batch(
-            cached_ast,
-            binary_data,
-            file_type,
-            &applicable_indices,
-            None,
-            None,
-        );
+        let ast_kind_cache = self.build_ast_kind_cache(cached_ast, binary_data, file_type);
+        let ast_query_cache =
+            self.build_ast_query_batch(cached_ast, binary_data, file_type, None, None);
 
         // Pre-filter using batched Aho-Corasick string matching WITH evidence
         // caching. Source files scan the raw bytes; PE still uses extracted

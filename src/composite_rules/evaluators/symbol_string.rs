@@ -806,6 +806,9 @@ pub(crate) fn eval_comment<'a, 'b>(
     trait_not: Option<&Vec<NotException>>,
     ctx: &EvaluationContext<'b>,
 ) -> ConditionResult {
+    if ctx.report.comments.is_empty() {
+        return ConditionResult::no_match();
+    }
     let regex = params
         .regex
         .and_then(|r| build_regex(r, params.case_insensitive).ok());
@@ -1070,10 +1073,6 @@ pub(crate) fn eval_text<'a, 'b>(
         };
     }
 
-    // Resolve the shared matcher once, then match every string with no further
-    // cache lookups or locks in the hot loop.
-    let matcher = StringMatcher::resolve(params);
-
     let mut evidence = Vec::new();
     let mut match_count = 0usize;
     let needs_count = match_count_needed();
@@ -1099,6 +1098,13 @@ pub(crate) fn eval_text<'a, 'b>(
         _ => None,
     };
 
+    if candidate_strings.map_or(ctx.report.strings.len(), <[u32]>::len) == 0 {
+        return ConditionResult {
+            precision: string_match_precision(params),
+            ..ConditionResult::no_match()
+        };
+    }
+    let matcher = StringMatcher::resolve(params);
     matcher.with_batch(ctx.report.strings.len(), |matcher| {
         let mut visit = |string_info: &crate::types::StringInfo| -> bool {
             if skip_decoded && !string_info.encoding_chain.is_empty() {
@@ -1346,6 +1352,13 @@ pub(crate) fn eval_string_literal_with_options<'a, 'b>(
     ctx: &EvaluationContext<'b>,
     exclude_docstrings: bool,
 ) -> ConditionResult {
+    let literals = ctx.literal_strings();
+    if literals.is_empty() {
+        return ConditionResult {
+            precision: string_match_precision(params),
+            ..ConditionResult::no_match()
+        };
+    }
     let effective_range = resolve_string_effective_range(params, ctx);
     let matcher = StringMatcher::resolve(params);
 
@@ -1356,7 +1369,6 @@ pub(crate) fn eval_string_literal_with_options<'a, 'b>(
     // byte span, regardless of how many parser projections reported it.
     let mut seen_match_spans: FxHashSet<(u64, usize)> = FxHashSet::default();
 
-    let literals = ctx.literal_strings();
     matcher.with_batch(literals.len(), |matcher| {
         for &index in literals {
             let string_info = &ctx.report.strings[index as usize];
@@ -1435,7 +1447,7 @@ pub(crate) fn eval_string_literal_with_options<'a, 'b>(
 /// Determines if a regex pattern can be matched on raw bytes (ASCII-only, no Unicode features).
 /// Returns true if the pattern contains only ASCII characters and doesn't use Unicode escapes.
 #[inline]
-fn can_use_byte_matching(pattern: &str) -> bool {
+pub(crate) fn can_use_byte_matching(pattern: &str) -> bool {
     pattern.is_ascii() && !has_unicode_escape(pattern)
 }
 

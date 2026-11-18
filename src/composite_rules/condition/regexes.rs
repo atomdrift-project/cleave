@@ -5,7 +5,7 @@
 use super::*;
 
 impl Engine {
-    pub(super) fn new(re: regex_automata::meta::Regex) -> Engine {
+    pub(crate) fn new(re: regex_automata::meta::Regex) -> Engine {
         Engine {
             re,
             id: super::super::regex_scratch::next_regex_id(),
@@ -37,7 +37,7 @@ impl Drop for Engine {
 #[derive(Debug)]
 pub(crate) struct TraitRegex {
     /// The one compiled engine, byte-searching in either syntax mode.
-    pub(super) engine: Engine,
+    pub(super) engine: Arc<Engine>,
     /// The source pattern, kept for diagnostics (`as_str` parity).
     pub(super) pattern: Box<str>,
     /// Minimum haystack length that can possibly match — shorter inputs
@@ -52,11 +52,12 @@ pub(crate) struct TraitRegex {
 /// Shared meta-engine options: no onepass DFA (capture extraction only —
 /// trait evaluation is bounds-only), implicit-only capture states (smaller
 /// NFAs), the shared `REGEX_SIZE_LIMIT`, and the tunable lazy-DFA budget.
-pub(super) fn engine_config() -> regex_automata::meta::Config {
+pub(crate) fn engine_config() -> regex_automata::meta::Config {
     regex_automata::meta::Regex::config()
         .onepass(false)
-        // No fully compiled DFA: see `compile_bytes_regex` for the
-        // regex-automata 0.4.18 missed-match bug it triggers.
+        // The full DFA with the automatic prefilter misses byte-mode matches
+        // in regex-automata 0.4.18 (for example, a negated bracket class
+        // followed by optional whitespace). Use the lazy DFA instead.
         .dfa(false)
         .which_captures(regex_automata::nfa::thompson::WhichCaptures::Implicit)
         .nfa_size_limit(Some(super::super::evaluators::REGEX_SIZE_LIMIT))
@@ -88,15 +89,15 @@ impl TraitRegex {
         // The `\p{..}`-and-ranges patterns are ASCII *source* but cannot parse
         // in byte mode at all, so they take the same fallback via `or_else`.
         let engine = if !pattern.is_ascii() {
-            compile_codepoint(pattern)?
+            Arc::new(Engine::new(compile_codepoint(pattern)?))
         } else {
-            match compile_bytes(pattern) {
+            match shared_byte_engine(pattern, false, false) {
                 Some(re) => re,
-                None => compile_codepoint(pattern)?,
+                None => Arc::new(Engine::new(compile_codepoint(pattern)?)),
             }
         };
         Some(TraitRegex {
-            engine: Engine::new(engine),
+            engine,
             pattern: pattern.into(),
             min_len,
         })
@@ -228,16 +229,59 @@ impl TraitRegex {
 /// the semantics YARA itself uses. `None` means the pattern cannot be expressed
 /// in byte mode (`\p{..}` classes, non-ASCII ranges) — the signal for
 /// [`TraitRegex::compile`] to fall back to [`compile_codepoint`].
-pub(super) fn compile_bytes(pattern: &str) -> Option<regex_automata::meta::Regex> {
-    regex_automata::meta::Regex::builder()
+pub(crate) fn shared_byte_engine(
+    mut pattern: &str,
+    mut insensitive: bool,
+    mut multiline: bool,
+) -> Option<Arc<Engine>> {
+    // Both matchers add leading flags. Normalize those flags in the cache
+    // key, preserving all scoped flags and the order of subsequent overrides.
+    loop {
+        if let Some(rest) = pattern.strip_prefix("(?i)") {
+            insensitive = true;
+            pattern = rest;
+        } else if let Some(rest) = pattern.strip_prefix("(?m)") {
+            multiline = true;
+            pattern = rest;
+        } else if let Some(rest) = pattern.strip_prefix("(?im)") {
+            multiline = true;
+            insensitive = true;
+            pattern = rest;
+        } else {
+            break;
+        }
+    }
+    multiline &= memchr::memchr2(b'^', b'$', pattern.as_bytes()).is_some();
+    type Key = (Box<str>, bool, bool);
+    type Engines = lru::LruCache<Key, std::sync::Weak<Engine>, rustc_hash::FxBuildHasher>;
+    static ENGINES: std::sync::LazyLock<parking_lot::Mutex<Engines>> =
+        std::sync::LazyLock::new(|| {
+            parking_lot::Mutex::new(Engines::with_hasher(REGEX_CACHE_CAP, Default::default()))
+        });
+    let key = (Box::from(pattern), insensitive, multiline);
+    let cached = ENGINES.lock().peek(&key).and_then(std::sync::Weak::upgrade);
+    if let Some(existing) = cached {
+        return Some(existing);
+    }
+    let re = regex_automata::meta::Regex::builder()
         .configure(engine_config().utf8_empty(false))
         .syntax(
             regex_automata::util::syntax::Config::new()
                 .unicode(false)
-                .utf8(false),
+                .utf8(false)
+                .case_insensitive(insensitive)
+                .multi_line(multiline),
         )
         .build(pattern)
-        .ok()
+        .ok()?;
+    let engine = Arc::new(Engine::new(re));
+    let mut engines = ENGINES.lock();
+    if let Some(existing) = engines.peek(&key).and_then(std::sync::Weak::upgrade) {
+        return Some(existing);
+    }
+    engines.put(key, Arc::downgrade(&engine));
+    drop(engines);
+    Some(engine)
 }
 
 /// Codepoint-mode compile: exact `regex::Regex::new` semantics. Still searches

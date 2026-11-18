@@ -20,7 +20,7 @@ use cleave::{AnalysisReport, CapabilityMapper, Criticality, FileAnalysis, valida
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
@@ -134,9 +134,14 @@ pub fn run_with_options(
     let traits_dir = std::fs::canonicalize(cleave::traits_repo::try_resolve()?)?;
     // The two walks that decide a cache hit, side by side.
     let discovery_started = Instant::now();
-    let (targets, rule_tree) = rayon::join(collect_targets, || {
-        result_cache::stamp_rule_tree(&traits_dir)
-    });
+    let (targets, rule_tree) =
+        if slow_rules.is_none() && result_cache::ResultCache::enabled(soft, verbose) {
+            rayon::join(collect_targets, || {
+                result_cache::stamp_rule_tree(&traits_dir)
+            })
+        } else {
+            (collect_targets(), None)
+        };
     let targets = targets?;
     tracing::info!(
         fixtures = targets.len(),
@@ -145,19 +150,15 @@ pub fn run_with_options(
     );
     // The audit measures every rule on every fixture: no cached verdict, no
     // per-fixture reuse (both hang off the result cache).
-    let result_cache = if slow_rules.is_some() {
-        None
-    } else {
+    let result_cache = rule_tree.and_then(|stamp| {
         result_cache::ResultCache::new(
             &traits_dir,
-            rule_tree,
+            stamp,
             &targets,
             "severity-directories-v1",
-            soft,
-            verbose,
             slow_rule_ms,
         )
-    };
+    });
     // Everything before this point must get by without reading a rule file:
     // a cache hit on an unchanged tree is decided from the directory walk
     // alone, and the first source read costs more than the whole hit.
@@ -260,22 +261,20 @@ pub fn run_with_options(
         .as_ref()
         .map(|cache| cache.settings().to_vec())
         .unwrap_or_default();
-    let digests = fixture_state::fixture_digests(&targets);
-    let incremental = match (&state_path, crate::rule_sources::shared(&traits_dir)) {
-        (Some(path), Ok(sources)) => {
-            let previous = fixture_state::FixtureState::load(path, engine, &settings, EXPECTATIONS);
-            let scopes = mapper.rule_file_scopes();
-            let current = fixture_state::CurrentRules::of(&sources);
-            Some((previous, scopes, current))
-        }
-        _ => None,
-    };
+    let incremental = state_path.as_ref().and_then(|path| {
+        let sources = crate::rule_sources::shared(&traits_dir).ok()?;
+        let previous = fixture_state::FixtureState::load(path, engine, &settings, EXPECTATIONS);
+        let scopes = mapper.rule_file_scopes();
+        let current = fixture_state::CurrentRules::of(&sources);
+        let digests = fixture_state::fixture_digests(&targets);
+        Some((previous, scopes, current, digests))
+    });
     let plan = match &incremental {
-        Some((previous, scopes, current)) => fixture_state::FixtureState::plan(
+        Some((previous, scopes, current, digests)) => fixture_state::FixtureState::plan(
             previous.as_ref(),
             &traits_dir,
             &targets,
-            &digests,
+            digests,
             current,
             scopes,
         ),
@@ -315,7 +314,7 @@ pub fn run_with_options(
         })
         .collect();
     whales.sort_by_key(|&i| std::cmp::Reverse(plan.previous_elapsed_ms(i)));
-    let mut reports: Vec<OnceLock<Result<AnalysisReport>>> =
+    let mut reports: Vec<OnceLock<Result<FixtureResult>>> =
         targets.iter().map(|_| OnceLock::new()).collect();
     let elapsed: Vec<std::sync::atomic::AtomicU64> = targets
         .iter()
@@ -336,7 +335,9 @@ pub fn run_with_options(
             tracing::info!(path = %t.path().display(), elapsed_ms, "slow validation fixture");
         }
         elapsed[i].store(elapsed_ms as u64, Ordering::Relaxed);
-        let _ = reports[i].set(report);
+        let result =
+            report.and_then(|report| FixtureResult::from_report(report, t.expected, verbose));
+        let _ = reports[i].set(result);
     };
     for &i in &whales {
         tracing::info!(path = %targets[i].path().display(),
@@ -356,26 +357,68 @@ pub fn run_with_options(
     // Start large fixtures early so a bundled source file does not begin near
     // the end of the queue and leave every other lane idle. Keep report slots
     // in original order so diagnostics and expectation checks stay stable.
-    let mut work: Vec<_> = selected
-        .iter()
-        .filter(|i| !whales.contains(i))
-        .map(|&i| {
-            (
-                i,
-                targets[i]
-                    .metadata
-                    .as_ref()
-                    .map_or(0, std::fs::Metadata::len),
-            )
-        })
-        .collect();
-    work.sort_unstable_by_key(|&(i, size)| (std::cmp::Reverse(size), i));
-    let next = AtomicUsize::new(0);
+    const SOURCE: usize = 0;
+    const ARCHIVE: usize = 1;
+    const OTHER: usize = 2;
+    let mut queues = [Vec::new(), Vec::new(), Vec::new()];
+    for &i in selected.iter().filter(|i| !whales.contains(i)) {
+        let target = &targets[i];
+        let size = target.metadata.as_ref().map_or(0, std::fs::Metadata::len);
+        let path = target.path();
+        let logical = if path.extension().is_some_and(|ext| ext == "xz") {
+            path.file_stem().map(Path::new).unwrap_or(path)
+        } else {
+            path
+        };
+        let kind = (size >= 16 * 1024)
+            .then(|| filefacts::fileid::detect_path(logical))
+            .flatten();
+        let queue = match kind {
+            Some(d) if d.file_type.is_source_code() => SOURCE,
+            Some(d) if d.file_type.is_archive() => ARCHIVE,
+            _ => OTHER,
+        };
+        queues[queue].push((i, size));
+    }
+    let pending = crate::rayon_nest::PendingPaths::new(queues.iter().map(Vec::len).sum());
+    let queues = queues.map(|mut queue| {
+        queue.sort_unstable_by_key(|&(i, size)| (std::cmp::Reverse(size), i));
+        parking_lot::Mutex::new(queue.into_iter())
+    });
     rayon::broadcast(|lane| {
+        // Leave spare pool threads for work within large archives. Each active
+        // lane prefers one queue so the biggest parses do not start together.
+        let lanes = lane.num_threads() - lane.num_threads() / 4;
+        let small_only = lane.index() >= lanes;
+        if lane.index() >= lanes + (lane.num_threads() - lanes) / 2 {
+            return;
+        }
+        let order = if lane.index() < lanes.div_ceil(10) {
+            [SOURCE, OTHER, ARCHIVE]
+        } else if lane.index() < lanes.div_ceil(3) {
+            [ARCHIVE, OTHER, SOURCE]
+        } else {
+            [OTHER, SOURCE, ARCHIVE]
+        };
         let mut analyzed = 0usize;
         loop {
-            let job = next.fetch_add(1, Ordering::Relaxed);
-            let Some(&(i, _)) = work.get(job) else {
+            let job = if small_only {
+                // Use spare workers for the cheapest remaining fixtures while
+                // the primary lanes carry the large parses and archives.
+                let mut other = queues[OTHER].lock();
+                if other
+                    .as_slice()
+                    .last()
+                    .is_some_and(|&(_, size)| size < 16 * 1024)
+                {
+                    other.next_back()
+                } else {
+                    None
+                }
+            } else {
+                order.iter().find_map(|&i| queues[i].lock().next())
+            };
+            let Some((i, _)) = job else {
                 // When each lane ran dry says how long the pool idled behind
                 // the last fixtures: the tail no fixture ordering can hide.
                 tracing::info!(
@@ -386,6 +429,7 @@ pub fn run_with_options(
                 );
                 break;
             };
+            pending.admit();
             analyzed += 1;
             analyze_one(i);
         }
@@ -409,7 +453,7 @@ pub fn run_with_options(
     if let Some(n) = slow_rules {
         print_slow_rules(&slow_rules::audit(&mapper, n), format);
     }
-    let results: Vec<(usize, Result<AnalysisReport>)> = selected
+    let results: Vec<(usize, Result<FixtureResult>)> = selected
         .iter()
         .map(|&i| {
             let report = reports[i]
@@ -422,16 +466,19 @@ pub fn run_with_options(
     // Check for overlapping traits in the analyzed findings. This is a
     // diagnostic, not a pass/fail signal, so only compute it when verbose.
     let overlap_findings = if verbose {
-        collect_overlap_findings(&targets, &results)
+        collect_overlap_findings(
+            results
+                .iter()
+                .filter_map(|(_, r)| r.as_ref().ok()?.report.as_deref()),
+        )
     } else {
         Vec::new()
     };
 
-    let cacheable = results.iter().all(|(_, result)| {
-        result
-            .as_ref()
-            .is_ok_and(|report| !crate::analysis_cache::evaluation_incomplete(report))
-    }) && crate::yara_engine::yara_degradation().is_none();
+    let cacheable = results
+        .iter()
+        .all(|(_, result)| result.as_ref().is_ok_and(|fixture| fixture.complete))
+        && crate::yara_engine::yara_degradation().is_none();
     let mut performance_issues = performance.issues();
     stage.relabel_issues(&mut performance_issues);
     print_performance_issues(&performance_issues, format);
@@ -439,7 +486,7 @@ pub fn run_with_options(
 
     // Record what this run learned about each fixture before judging the
     // run: a failing edit loop still narrows the next run to what changed.
-    if let (Some(path), Some((_, scopes, current))) = (&state_path, incremental)
+    if let (Some(path), Some((_, scopes, current, digests))) = (&state_path, incremental)
         && performance_issues.is_empty()
         && crate::yara_engine::yara_degradation().is_none()
     {
@@ -448,9 +495,8 @@ pub fn run_with_options(
         for (i, result) in &results {
             if let Ok(report) = result {
                 outcomes[*i] = Some(fixture_state::FixtureOutcome {
-                    types: fixture_state::report_types(report),
-                    passed: judged.passed[*i]
-                        && !crate::analysis_cache::evaluation_incomplete(report),
+                    types: report.types,
+                    passed: judged.passed[*i] && report.complete,
                     elapsed_ms: elapsed[*i].load(Ordering::Relaxed),
                 });
             }
@@ -789,6 +835,26 @@ fn report_severity(report: &AnalysisReport) -> Result<Criticality> {
         .max(Criticality::Baseline))
 }
 
+/// Retain the full report only while its evidence is still needed for output.
+struct FixtureResult {
+    severity: Criticality,
+    complete: bool,
+    types: crate::composite_rules::TypeMask,
+    report: Option<Box<AnalysisReport>>,
+}
+
+impl FixtureResult {
+    fn from_report(report: AnalysisReport, expected: Criticality, verbose: bool) -> Result<Self> {
+        let severity = report_severity(&report)?;
+        Ok(Self {
+            severity,
+            complete: !crate::analysis_cache::evaluation_incomplete(&report),
+            types: fixture_state::report_types(&report),
+            report: (verbose || severity != expected).then(|| Box::new(report)),
+        })
+    }
+}
+
 /// Every fixture's verdict against its expectation.
 struct Judged {
     summary: FixtureSummary,
@@ -803,7 +869,7 @@ struct Judged {
 /// stop.
 fn judge(
     targets: &[Target],
-    results: &[(usize, Result<AnalysisReport>)],
+    results: &[(usize, Result<FixtureResult>)],
     plan: &fixture_state::Plan,
 ) -> Judged {
     let mut summary = FixtureSummary::default();
@@ -821,26 +887,24 @@ fn judge(
         let target = &targets[*i];
         let count = summary.count_mut(target.expected);
         count.total += 1;
-        match result
-            .as_ref()
-            .map_err(|e| anyhow::anyhow!("{e:#}"))
-            .and_then(|report| report_severity(report).map(|severity| (report, severity)))
-        {
-            Ok((_, actual)) if actual == target.expected => {
+        match result {
+            Ok(fixture) if fixture.severity == target.expected => {
                 count.passed += 1;
                 passed[*i] = true;
             }
-            Ok((report, actual)) => {
+            Ok(fixture) => {
                 eprintln!(
                     "❌ {}: expected {}, found {}",
                     safe_path(target.path()),
                     target.expected.letter(),
-                    actual.letter()
+                    fixture.severity.letter()
                 );
-                for file in &report.files {
-                    if file.findings.iter().any(|f| f.crit >= Criticality::Notable) {
-                        eprintln!("  {}", safe_path(Path::new(&file.path)));
-                        print_contributing_findings(file, "     ");
+                if let Some(report) = &fixture.report {
+                    for file in &report.files {
+                        if file.findings.iter().any(|f| f.crit >= Criticality::Notable) {
+                            eprintln!("  {}", safe_path(Path::new(&file.path)));
+                            print_contributing_findings(file, "     ");
+                        }
                     }
                 }
                 failures += 1;
@@ -865,7 +929,16 @@ fn judge(
 fn evaluate(results: Vec<(Target, Result<AnalysisReport>)>) -> Result<FixtureSummary> {
     let (targets, reports): (Vec<Target>, Vec<Result<AnalysisReport>>) =
         results.into_iter().unzip();
-    let results: Vec<(usize, Result<AnalysisReport>)> = reports.into_iter().enumerate().collect();
+    let results = reports
+        .into_iter()
+        .enumerate()
+        .map(|(i, r)| {
+            (
+                i,
+                r.and_then(|r| FixtureResult::from_report(r, targets[i].expected, false)),
+            )
+        })
+        .collect::<Vec<_>>();
     let judged = judge(
         &targets,
         &results,
@@ -1192,9 +1265,8 @@ fn relabel_paths(report: &mut AnalysisReport, neutral: &str, original: &str) {
 }
 
 /// Collect findings from all analyzed test files and check for overlapping traits
-fn collect_overlap_findings(
-    _targets: &[Target],
-    results: &[(usize, Result<AnalysisReport>)],
+fn collect_overlap_findings<'a>(
+    reports: impl Iterator<Item = &'a AnalysisReport>,
 ) -> Vec<validate_testdata::OverlapFinding> {
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -1208,35 +1280,33 @@ fn collect_overlap_findings(
     // Collect all trait ranges from all analysis results
     let mut all_ranges: BTreeMap<String, Vec<TraitRange>> = BTreeMap::new();
 
-    for (_, report_result) in results {
-        if let Ok(report) = report_result {
-            for file_analysis in &report.files {
-                let file_key = report
-                    .target
-                    .path
-                    .strip_prefix("testdata/")
-                    .unwrap_or(&report.target.path)
-                    .to_string();
+    for report in reports {
+        for file_analysis in &report.files {
+            let file_key = report
+                .target
+                .path
+                .strip_prefix("testdata/")
+                .unwrap_or(&report.target.path)
+                .to_string();
 
-                for finding in &file_analysis.findings {
-                    // Skip composite rules — we want atomic trait overlaps
-                    if finding.id.matches("::").count() > 2 {
-                        continue;
-                    }
+            for finding in &file_analysis.findings {
+                // Skip composite rules — we want atomic trait overlaps
+                if finding.id.matches("::").count() > 2 {
+                    continue;
+                }
 
-                    // Collect all ranges where this trait fired
-                    for evidence in &finding.evidence {
-                        let length = evidence.value.len() as u64;
-                        for &offset in &evidence.offsets {
-                            all_ranges
-                                .entry(file_key.to_string())
-                                .or_default()
-                                .push(TraitRange {
-                                    offset,
-                                    length,
-                                    trait_id: finding.id.clone().to_string(),
-                                });
-                        }
+                // Collect all ranges where this trait fired
+                for evidence in &finding.evidence {
+                    let length = evidence.value.len() as u64;
+                    for &offset in &evidence.offsets {
+                        all_ranges
+                            .entry(file_key.to_string())
+                            .or_default()
+                            .push(TraitRange {
+                                offset,
+                                length,
+                                trait_id: finding.id.clone().to_string(),
+                            });
                     }
                 }
             }

@@ -136,6 +136,11 @@ traits:
         linux.match_indexes().string_match_index.total_patterns,
         full_patterns
     );
+    let all = linux.with_platforms(vec![Platform::All]);
+    assert_eq!(
+        all.match_indexes().string_match_index.total_patterns,
+        full_patterns
+    );
 }
 
 #[test]

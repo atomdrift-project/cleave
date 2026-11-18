@@ -62,6 +62,8 @@ pub(crate) struct StringMatchIndex {
     pub(super) atom_ci_to_traits: Vec<Vec<usize>>,
     /// Regex traits with no atom set: always candidates, full sweep.
     pub(super) regex_traits_without_atoms: Vec<usize>,
+    /// Text atomics whose literal is mandatory on both source and extracted strings.
+    container_atom_traits: TraitBitSet,
     /// Total number of traits with exact string patterns
     pub(crate) total_patterns: usize,
 }
@@ -407,6 +409,22 @@ impl StringMatchIndex {
             .filter(|idx| !atom_traits.contains(idx))
             .collect();
 
+        let mut container_atom_traits = TraitBitSet::with_capacity(traits.len());
+        for idx in atom_traits {
+            if let Condition::Text(query) = &traits[idx].r#if
+                && !query.exclude_comments
+                && !query.exclude_html_comments
+                && query.exact.is_none()
+                && query.substr.is_none()
+                && query.word.as_ref().is_none_or(|w| w.is_ascii())
+                && query.regex.as_ref().is_none_or(|r| {
+                    crate::composite_rules::evaluators::symbol_string::can_use_byte_matching(r)
+                })
+            {
+                container_atom_traits.insert(idx);
+            }
+        }
+
         let index = Self {
             exact_patterns,
             ci_exact_patterns,
@@ -428,6 +446,7 @@ impl StringMatchIndex {
             atom_ci_automaton,
             atom_ci_to_traits,
             regex_traits_without_atoms,
+            container_atom_traits,
             total_patterns,
         };
         tracing::debug!(
@@ -687,6 +706,42 @@ impl StringMatchIndex {
             .collect();
 
         (final_traits, final_evidence)
+    }
+
+    /// A pooled parent evaluates text against its own bytes and decoded layers
+    /// (source), or its extracted strings (binary). Scan exactly those inputs
+    /// for mandatory literals before compiling a regex for a missing atom.
+    pub(crate) fn absent_container_atoms(
+        &self,
+        source: Option<&[u8]>,
+        strings: &[StringInfo],
+    ) -> TraitBitSet {
+        let mut absent = self.container_atom_traits.clone();
+        let inputs = source.into_iter().chain(
+            strings
+                .iter()
+                .filter(|s| source.is_none() || !s.encoding_chain.is_empty())
+                .map(|s| s.value.as_bytes()),
+        );
+        for (ac, mapping) in [
+            (self.atom_cs_automaton.as_ref(), &self.atom_cs_to_traits),
+            (self.atom_ci_automaton.as_ref(), &self.atom_ci_to_traits),
+        ] {
+            let Some(ac) = ac else { continue };
+            let mut seen = vec![false; mapping.len()];
+            for bytes in inputs.clone() {
+                for hit in ac.find_overlapping_iter(bytes) {
+                    let idx = hit.pattern().as_usize();
+                    if !seen[idx] {
+                        seen[idx] = true;
+                        for &rule in &mapping[idx] {
+                            absent.remove(rule);
+                        }
+                    }
+                }
+            }
+        }
+        absent
     }
 
     /// Regex-trait candidates over extracted strings, plus per-trait

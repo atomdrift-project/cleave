@@ -154,6 +154,116 @@ fn lower_pooled_rollups(report: &mut AnalysisReport, touched: &rustc_hash::FxHas
     }
 }
 
+/// A composite with a required trait reference can only match after some
+/// finding supplies that reference. Index one mandatory all-leg, or every
+/// alternative when an any-clause consists entirely of references.
+#[derive(Debug)]
+pub(super) struct CompositeRefGate {
+    by_reference: rustc_hash::FxHashMap<String, Vec<usize>>,
+    unconditional: TraitBitSet,
+}
+
+impl CompositeRefGate {
+    fn build(rules: &[crate::composite_rules::CompositeTrait]) -> Self {
+        use crate::composite_rules::Condition;
+        let mut gate = Self {
+            by_reference: Default::default(),
+            unconditional: TraitBitSet::with_capacity(rules.len()),
+        };
+        for (idx, rule) in rules.iter().enumerate() {
+            let mut register = |id: &str| {
+                gate.by_reference
+                    .entry(id.trim_end_matches('/').to_owned())
+                    .or_default()
+                    .push(idx);
+            };
+            if let Some(id) = rule.all.iter().flatten().find_map(|c| match c {
+                Condition::Trait { id } => Some(id),
+                _ => None,
+            }) {
+                register(id);
+            } else if let Some(any) = &rule.any
+                && !any.is_empty()
+                && rule.needs.unwrap_or(1) > 0
+                && any.iter().all(|c| matches!(c, Condition::Trait { .. }))
+            {
+                for c in any {
+                    if let Condition::Trait { id } = c {
+                        register(id);
+                    }
+                }
+            } else {
+                gate.unconditional.insert(idx);
+            }
+        }
+        gate
+    }
+
+    fn add(&self, id: &str, candidates: &mut TraitBitSet) {
+        let mut nominate = |reference: &str| {
+            if let Some(rules) = self.by_reference.get(reference) {
+                for &idx in rules {
+                    candidates.insert(idx);
+                }
+            }
+        };
+        nominate(id);
+        // eval_trait also accepts directory prefixes and bare leaf names.
+        let mut leaf = 0;
+        for i in memchr::memchr2_iter(b'/', b':', id.as_bytes()) {
+            if id.as_bytes()[i] == b'/' {
+                nominate(&id[..i]);
+                leaf = i + 1;
+            } else if id.as_bytes().get(i + 1) == Some(&b':') {
+                nominate(&id[..i]);
+                leaf = i + 2;
+            }
+        }
+        if leaf != 0 {
+            nominate(&id[leaf..]);
+        }
+    }
+}
+
+#[cfg(test)]
+mod ref_gate_tests {
+    use super::*;
+    use crate::composite_rules::{CompositeTrait, Condition};
+
+    #[test]
+    fn nominates_exact_directory_and_leaf_references_and_ungated_rules() {
+        let reference = |id: &str| Condition::Trait { id: id.to_owned() };
+        let all = |id: &str| CompositeTrait {
+            all: Some(vec![reference(id)]),
+            ..Default::default()
+        };
+        let any = |needs| CompositeTrait {
+            any: Some(vec![reference("a/b::other"), reference("secondary")]),
+            needs: Some(needs),
+            ..Default::default()
+        };
+        let gate = CompositeRefGate::build(&[
+            all("a/b::leaf"),
+            all("a/b/"),
+            all("leaf"),
+            all("a/b::missing"),
+            any(1),
+            any(0),
+            CompositeTrait::default(),
+        ]);
+        let mut candidates = gate.unconditional.clone();
+        gate.add("a/b::leaf", &mut candidates);
+        assert_eq!(
+            (0..7)
+                .filter(|&i| candidates.contains(i))
+                .collect::<Vec<_>>(),
+            [0, 1, 2, 5, 6]
+        );
+        gate.add("other/path/secondary", &mut candidates);
+        assert!(candidates.contains(4));
+    }
+}
+
 /// Which part of an archive entry name a path trait matches.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum PathScope {
@@ -622,26 +732,28 @@ impl super::CapabilityMapper {
         // composite's finding carries its own id, so the flag is exactly the
         // former string-set membership without hashing a rule id per rule per
         // fixed-point round (a measured leaf on many-member archives).
-        let eval_rules = |rules: &[(usize, &crate::composite_rules::CompositeTrait)],
+        let eval_rules = |rules: &[u32],
                           seen_rules: &[bool],
+                          candidates: &TraitBitSet,
                           matched_bits: &TraitBitSet,
                           ctx: &EvaluationContext<'_>|
          -> Vec<(usize, Finding)> {
             use rayon::prelude::*;
+            let evaluate = |&i: &u32| {
+                let pos = i as usize;
+                let rule = &self.composite_rules[pos];
+                if !candidates.contains(pos)
+                    || seen_rules[pos]
+                    || !matched_bits.contains_all(&rule.required_trait_indices)
+                {
+                    return None;
+                }
+                rule.evaluate_pregated(ctx).map(|finding| (pos, finding))
+            };
             if parallel_rules && crate::rayon_nest::inner_work_parallel() {
-                rules
-                    .par_iter()
-                    .filter(|(_, rule)| matched_bits.contains_all(&rule.required_trait_indices))
-                    .filter(|(pos, _)| !seen_rules[*pos])
-                    .filter_map(|(pos, rule)| rule.evaluate_pregated(ctx).map(|f| (*pos, f)))
-                    .collect()
+                rules.par_iter().filter_map(evaluate).collect()
             } else {
-                rules
-                    .iter()
-                    .filter(|(_, rule)| matched_bits.contains_all(&rule.required_trait_indices))
-                    .filter(|(pos, _)| !seen_rules[*pos])
-                    .filter_map(|(pos, rule)| rule.evaluate_pregated(ctx).map(|f| (*pos, f)))
-                    .collect()
+                rules.iter().filter_map(evaluate).collect()
             }
         };
 
@@ -654,6 +766,10 @@ impl super::CapabilityMapper {
         all_findings.extend_from_slice(view_findings);
 
         // Track which composite IDs have already matched (including original findings)
+        let gate = self
+            .composite_ref_gate
+            .get_or_init(|| CompositeRefGate::build(&self.composite_rules));
+        let mut candidates = gate.unconditional.clone();
         let mut matched_bits = TraitBitSet::with_capacity(self.trait_definitions.len());
         // Seeded from the findings already present (one probe per finding,
         // never a pass over the rule set: that pass, per archive member, cost
@@ -664,12 +780,14 @@ impl super::CapabilityMapper {
             if let Some(&pos) = composite_by_id.get(finding.id.as_str()) {
                 seen_rules[pos] = true;
             }
+            gate.add(finding.id.as_str(), &mut candidates);
             if let Some(&idx) = self.trait_id_map.get(finding.id.as_str()) {
                 matched_bits.insert(idx);
             }
         }
         // A view's findings gate rules in, but do not mark them produced.
         for finding in view_findings {
+            gate.add(finding.id.as_str(), &mut candidates);
             if let Some(&idx) = self.trait_id_map.get(finding.id.as_str()) {
                 matched_bits.insert(idx);
             }
@@ -686,17 +804,6 @@ impl super::CapabilityMapper {
         // to pass. Skip-reason debug info is unaffected: contexts built here
         // never carry a debug collector.
         let worklists = self.composite_worklists(file_type);
-        let positive_rules: Vec<(usize, &crate::composite_rules::CompositeTrait)> = worklists
-            .positive
-            .iter()
-            .map(|&i| (i as usize, &self.composite_rules[i as usize]))
-            .collect();
-        let negative_rules: Vec<(usize, &crate::composite_rules::CompositeTrait)> = worklists
-            .negative
-            .iter()
-            .map(|&i| (i as usize, &self.composite_rules[i as usize]))
-            .collect();
-
         // Pass 1: Iterative evaluation of positive rules to reach a stable fixed-point
         const MAX_ITERATIONS: usize = 10;
         for _ in 0..MAX_ITERATIONS {
@@ -723,8 +830,13 @@ impl super::CapabilityMapper {
             }
 
             // Evaluate positive rules (parallel only for container-scale reports)
-            let new_findings: Vec<(usize, Finding)> =
-                eval_rules(&positive_rules, &seen_rules, &matched_bits, &ctx);
+            let new_findings: Vec<(usize, Finding)> = eval_rules(
+                &worklists.positive,
+                &seen_rules,
+                &candidates,
+                &matched_bits,
+                &ctx,
+            );
 
             if new_findings.is_empty() {
                 break;
@@ -733,6 +845,7 @@ impl super::CapabilityMapper {
             // Add new findings to the accumulated set
             for (pos, finding) in new_findings {
                 seen_rules[pos] = true;
+                gate.add(finding.id.as_str(), &mut candidates);
                 if let Some(&idx) = self.trait_id_map.get(finding.id.as_str()) {
                     matched_bits.insert(idx);
                 }
@@ -769,8 +882,13 @@ impl super::CapabilityMapper {
                 ctx = ctx.with_arch_ranges(ranges);
             }
 
-            let negative_findings: Vec<(usize, Finding)> =
-                eval_rules(&negative_rules, &seen_rules, &matched_bits, &ctx);
+            let negative_findings: Vec<(usize, Finding)> = eval_rules(
+                &worklists.negative,
+                &seen_rules,
+                &candidates,
+                &matched_bits,
+                &ctx,
+            );
 
             if negative_findings.is_empty() {
                 break;
@@ -778,6 +896,7 @@ impl super::CapabilityMapper {
             drop(ctx);
             for (pos, finding) in negative_findings {
                 seen_rules[pos] = true;
+                gate.add(finding.id.as_str(), &mut candidates);
                 if let Some(&idx) = self.trait_id_map.get(finding.id.as_str()) {
                     matched_bits.insert(idx);
                 }
@@ -804,8 +923,13 @@ impl super::CapabilityMapper {
                     ctx = ctx.with_arch_ranges(ranges);
                 }
 
-                let new_findings: Vec<(usize, Finding)> =
-                    eval_rules(&positive_rules, &seen_rules, &matched_bits, &ctx);
+                let new_findings: Vec<(usize, Finding)> = eval_rules(
+                    &worklists.positive,
+                    &seen_rules,
+                    &candidates,
+                    &matched_bits,
+                    &ctx,
+                );
 
                 if new_findings.is_empty() {
                     break;
@@ -813,6 +937,7 @@ impl super::CapabilityMapper {
                 drop(ctx);
                 for (pos, finding) in new_findings {
                     seen_rules[pos] = true;
+                    gate.add(finding.id.as_str(), &mut candidates);
                     if let Some(&idx) = self.trait_id_map.get(finding.id.as_str()) {
                         matched_bits.insert(idx);
                     }
@@ -1339,24 +1464,12 @@ impl super::CapabilityMapper {
 
         // Track which composite IDs have already matched
         let mut seen_ids: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
-        let mut matched_bits = TraitBitSet::with_capacity(self.trait_definitions.len());
-        // Per-position mirror of `seen_ids` for the composite rules (see
-        // `evaluate_composite_rules`): seeded here, then kept in step with
-        // every composite finding this call records.
         let composite_by_id = self.composite_id_index();
-        let mut seen_rules: Vec<bool> = vec![false; self.composite_rules.len()];
+        let mut seen_rules = vec![false; self.composite_rules.len()];
         for finding in &container_report.findings {
-            seen_ids.insert(finding.id.clone().to_string());
+            seen_ids.insert(finding.id.to_string());
             if let Some(&pos) = composite_by_id.get(finding.id.as_str()) {
                 seen_rules[pos] = true;
-            }
-            if let Some(&idx) = self.trait_id_map.get(finding.id.as_str()) {
-                matched_bits.insert(idx);
-            }
-        }
-        for finding in &nested_findings {
-            if let Some(&idx) = self.trait_id_map.get(finding.id.as_str()) {
-                matched_bits.insert(idx);
             }
         }
 
@@ -1380,20 +1493,28 @@ impl super::CapabilityMapper {
         // The index already encodes the same file-type and platform gates as
         // evaluate(). Reuse its cached bitset instead of walking every loaded
         // trait for each archive; retain index order and the dynamic gates.
-        let mut container_findings: Vec<Finding> = self
-            .match_indexes()
+        let indexes = self.match_indexes();
+        let raw_text = rule_file_type.uses_raw_text_search_in(container_report);
+        let absent = indexes.string_match_index.absent_container_atoms(
+            raw_text.then_some(container_bytes),
+            &container_report.strings,
+        );
+        let mut container_findings: Vec<Finding> = indexes
             .trait_index
             .applicable(&rule_file_type)
             .into_indices_static()
-            .filter_map(|idx| self.trait_definitions[idx].evaluate(&parent_trait_ctx))
-            .filter(|f| !seen_ids.contains(f.id.as_str()))
+            .filter(|&idx| !absent.contains(idx))
+            .filter_map(|idx| {
+                let rule = &self.trait_definitions[idx];
+                if seen_ids.contains(rule.id.as_str()) {
+                    return None;
+                }
+                rule.evaluate_pregated(&parent_trait_ctx)
+            })
             .collect();
 
         for finding in &container_findings {
-            seen_ids.insert(finding.id.clone().to_string());
-            if let Some(&idx) = self.trait_id_map.get(finding.id.as_str()) {
-                matched_bits.insert(idx);
-            }
+            seen_ids.insert(finding.id.to_string());
         }
 
         // The container's own `scope: file` composites (see
@@ -1440,6 +1561,19 @@ impl super::CapabilityMapper {
         // dependencies, starving every rule with `unless:`. Each productive
         // round inserts at least one previously unseen composite ID, so the
         // rule count bounds productive rounds; one final round proves stability.
+        let worklists = self.composite_worklists(rule_file_type);
+        let gate = self
+            .composite_ref_gate
+            .get_or_init(|| CompositeRefGate::build(&self.composite_rules));
+        let mut candidates = gate.unconditional.clone();
+        for finding in container_report
+            .findings
+            .iter()
+            .chain(nested_findings.iter().copied())
+            .chain(&container_findings)
+        {
+            gate.add(&finding.id, &mut candidates);
+        }
         for _ in 0..=self.composite_rules.len() {
             let mut ctx = EvaluationContext::new(
                 container_report,
@@ -1461,61 +1595,15 @@ impl super::CapabilityMapper {
             // evaluators need, and threading it through every evaluator
             // signature would touch dozens of call sites to say one thing.
             // Same shape as `current_trait_idx` in the atomic pass.
-            let candidates: Vec<(usize, &crate::composite_rules::CompositeTrait)> = self
-                .composite_rules
-                .iter()
-                .enumerate()
-                .filter(|(pos, _)| !seen_rules[*pos])
-                // Only cross-file scopes may pool here. Nested findings arrive
-                // without per-member evidence locations, so `Scope::key` maps
-                // them all to the empty key: a `scope: file` (the default) or
-                // `scope: leaf` composite would then treat two legs found in
-                // two unrelated archive members as same-file evidence and fire.
-                // That is the same hazard `evaluate_package_composites` below
-                // already documents and excludes for.
-                //
-                // Nothing is lost by skipping them: file/leaf composites are
-                // evaluated per member in the ordinary per-file pass, and
-                // against the container itself when the archive is analyzed as
-                // a file. Worked example: a source tarball carrying an HTML doc
-                // with a `function foo(` and, in a different member, a `.js`
-                // that calls `String.fromCharCode` satisfied
-                // `noncode-container-selfdecoding-script` -- a hostile verdict
-                // on OpenSSH, Caddy and llama_index, despite the rule declaring
-                // `for: [chm, oledoc, ooxml, rtf, pdf]` and `scope: file`.
-                .filter(|(_, rule)| {
-                    // `scope:` omitted resolves to `Scope::File`: it is the
-                    // enum's `#[default]`, and `apply_scope_filter` reads it
-                    // through `unwrap_or_default`. Matching the raw `Option`
-                    // here exempted only *explicit* `scope: file`, so the ~98%
-                    // of composites that omit `scope:` pooled across unrelated
-                    // archive members — the hazard described above, reached via
-                    // the default instead of an explicit scope. Worked example:
-                    // `perl-packed-hex-command-loader` (`for: [perl]`, hostile)
-                    // fired on a Fedora source RPM with its four legs coming
-                    // from four unrelated vendored files. Resolve the default
-                    // via `effective_scope` (which also picks up the new
-                    // archive/package `for:`-based defaults), so only rules
-                    // that opt in to cross-file pooling are evaluated here.
-                    !matches!(
-                        rule.effective_scope(),
-                        crate::composite_rules::Scope::File | crate::composite_rules::Scope::Leaf
-                    )
-                })
-                .collect();
-            let positive_candidates: Vec<_> = candidates
-                .iter()
-                .copied()
-                .filter(|(_, rule)| !rule.has_negative_conditions())
-                .collect();
-            let negative_candidates: Vec<_> = candidates
-                .into_iter()
-                .filter(|(_, rule)| rule.has_negative_conditions())
-                .collect();
             let mut new_findings: Vec<(usize, Finding)> = Vec::new();
-            for (pos, rule) in positive_candidates {
+            for &i in &worklists.pooled_positive {
+                let pos = i as usize;
+                if seen_rules[pos] || !candidates.contains(pos) {
+                    continue;
+                }
+                let rule = &self.composite_rules[pos];
                 ctx.for_mask = rule.for_mask();
-                if let Some(finding) = rule.evaluate(&ctx)
+                if let Some(finding) = rule.evaluate_pregated(&ctx)
                     && !seen_ids.contains(finding.id.as_str())
                 {
                     new_findings.push((pos, finding));
@@ -1526,6 +1614,7 @@ impl super::CapabilityMapper {
             if !new_findings.is_empty() {
                 drop(ctx);
                 for (pos, finding) in new_findings {
+                    gate.add(&finding.id, &mut candidates);
                     stamp(&mut origins, finding.id.as_str());
                     seen_ids.insert(finding.id.clone().to_string());
                     seen_rules[pos] = true;
@@ -1541,6 +1630,7 @@ impl super::CapabilityMapper {
                     &mut seen_rules,
                 );
                 for finding in &container_findings[self_new] {
+                    gate.add(&finding.id, &mut candidates);
                     stamp(&mut origins, finding.id.as_str());
                 }
                 continue;
@@ -1551,9 +1641,14 @@ impl super::CapabilityMapper {
             // findings. Keep them in their own pass just as the ordinary
             // per-file evaluator does.
             let mut negative_findings: Vec<(usize, Finding)> = Vec::new();
-            for (pos, rule) in negative_candidates {
+            for &i in &worklists.pooled_negative {
+                let pos = i as usize;
+                if seen_rules[pos] || !candidates.contains(pos) {
+                    continue;
+                }
+                let rule = &self.composite_rules[pos];
                 ctx.for_mask = rule.for_mask();
-                if let Some(finding) = rule.evaluate(&ctx)
+                if let Some(finding) = rule.evaluate_pregated(&ctx)
                     && !seen_ids.contains(finding.id.as_str())
                 {
                     negative_findings.push((pos, finding));
@@ -1567,6 +1662,7 @@ impl super::CapabilityMapper {
             }
 
             for (pos, finding) in negative_findings {
+                gate.add(&finding.id, &mut candidates);
                 stamp(&mut origins, finding.id.as_str());
                 seen_ids.insert(finding.id.clone().to_string());
                 seen_rules[pos] = true;
@@ -1648,18 +1744,20 @@ impl super::CapabilityMapper {
         seen_ids: &mut rustc_hash::FxHashSet<String>,
         seen_rules: &mut [bool],
     ) -> std::ops::Range<usize> {
-        let self_rules: Vec<(usize, &crate::composite_rules::CompositeTrait)> = self
-            .composite_rules
-            .iter()
-            .enumerate()
-            .filter(|(_, rule)| {
-                matches!(
-                    rule.effective_scope(),
-                    crate::composite_rules::Scope::File | crate::composite_rules::Scope::Leaf
-                )
-            })
-            .collect();
+        let worklists = self.composite_worklists(rule_file_type);
+        let self_rules = &worklists.local;
         let start = container_findings.len();
+        let gate = self
+            .composite_ref_gate
+            .get_or_init(|| CompositeRefGate::build(&self.composite_rules));
+        let mut candidates = gate.unconditional.clone();
+        for finding in container_report
+            .findings
+            .iter()
+            .chain(container_findings.iter())
+        {
+            gate.add(&finding.id, &mut candidates);
+        }
         // Each productive round adds at least one unseen rule id, so the rule
         // count bounds the rounds; the last round proves stability.
         for _ in 0..=self_rules.len() {
@@ -1680,13 +1778,19 @@ impl super::CapabilityMapper {
                 .with_mid_findings(&container_report.findings);
             let round: Vec<(usize, Finding)> = self_rules
                 .iter()
-                .filter(|(pos, _)| !seen_rules[*pos])
-                .filter_map(|(pos, rule)| rule.evaluate(&self_ctx).map(|f| (*pos, f)))
+                .map(|&idx| idx as usize)
+                .filter(|&pos| !seen_rules[pos] && candidates.contains(pos))
+                .filter_map(|pos| {
+                    self.composite_rules[pos]
+                        .evaluate_pregated(&self_ctx)
+                        .map(|f| (pos, f))
+                })
                 .collect();
             if round.is_empty() {
                 break;
             }
             for (pos, finding) in round {
+                gate.add(&finding.id, &mut candidates);
                 seen_ids.insert(finding.id.clone().to_string());
                 seen_rules[pos] = true;
                 container_findings.push(finding);

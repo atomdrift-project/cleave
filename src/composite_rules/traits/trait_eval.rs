@@ -656,13 +656,14 @@ impl TraitDefinition {
     }
 
     /// Evaluate this trait definition against the analysis context
+    #[cfg(any(test, feature = "lint"))]
     pub(crate) fn evaluate<'a>(&self, ctx: &EvaluationContext<'a>) -> Option<Finding> {
         self.evaluate_with_gates(ctx, false)
     }
 
-    /// [`Self::evaluate`] for callers whose work list already applied the
-    /// static platform and file-type gates (`CapabilityMapper::trait_worklist`);
-    /// dynamic gates (arch, size, entropy) still run.
+    /// Evaluate a trait whose work list already applied the static platform and
+    /// file-type gates (`CapabilityMapper::trait_worklist`). Dynamic gates
+    /// (arch, size, entropy) still run.
     pub(crate) fn evaluate_pregated<'a>(&self, ctx: &EvaluationContext<'a>) -> Option<Finding> {
         self.evaluate_with_gates(ctx, true)
     }

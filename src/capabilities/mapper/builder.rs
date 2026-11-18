@@ -60,6 +60,7 @@ impl super::CapabilityMapper {
             path_inputs: std::sync::Arc::default(),
             container_ref_index: std::sync::Arc::default(),
             doomed_skip: std::sync::Arc::default(),
+            composite_ref_gate: Default::default(),
             composite_worklists: std::sync::Arc::default(),
             path_trait_index: std::sync::Arc::default(),
             trait_worklists: std::sync::Arc::default(),
@@ -119,22 +120,24 @@ impl super::CapabilityMapper {
     /// platform gate in evaluation stays correct.
     #[must_use]
     pub fn with_platforms(mut self, platforms: Vec<Platform>) -> Self {
-        self.platforms = if platforms.is_empty() {
+        let platforms = if platforms.is_empty() {
             vec![Platform::All]
         } else {
             platforms
         };
 
-        // `All` intersects every rule, so there is nothing to prune — the lazy
-        // indexes will build the full set on first use.
+        if self.platforms == platforms {
+            return self;
+        }
+        self.platforms = platforms;
+        // These lists and their match indexes were filtered for the old
+        // platforms. Other clones still own their original selections.
+        self.indexes = Default::default();
+        self.trait_worklists = Default::default();
+        self.composite_worklists = Default::default();
         if self.platforms.contains(&Platform::All) {
             return self;
         }
-
-        // Discard any indexes already built for a different platform set; the
-        // next `match_indexes()` rebuilds them filtered to `self.platforms`. The
-        // reduction the filter buys is logged when that build runs.
-        self.indexes = std::sync::Arc::new(std::sync::OnceLock::new());
 
         let traits_total = self.trait_definitions.len();
         let traits_kept = self

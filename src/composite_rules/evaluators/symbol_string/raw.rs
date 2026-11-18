@@ -382,11 +382,9 @@ fn cached_bytes_regex(
     static CLAIMS: crate::composite_rules::compile_claim::ClaimSet =
         crate::composite_rules::compile_claim::ClaimSet::new();
     let compile_and_put = |key: (String, bool)| {
-        super::super::compile_bytes_regex(pattern_str, case_insensitive).map(|re| {
-            let arc = std::sync::Arc::new(re);
+        super::super::compile_bytes_regex(pattern_str, case_insensitive).inspect(|arc| {
             let size = arc.heap_bytes();
-            cache.write().put(key, std::sync::Arc::clone(&arc), size);
-            arc
+            cache.write().put(key, std::sync::Arc::clone(arc), size);
         })
     };
     let cached = cache.read().peek(&key).cloned();
@@ -899,23 +897,6 @@ pub(crate) fn eval_encoded<'a>(
     let mut evidence = Vec::new();
     let mut match_count = 0;
 
-    // Build regex if needed
-    let regex_matcher = if let Some(pattern) = regex {
-        match super::super::build_regex(pattern, case_insensitive) {
-            Ok(re) => Some(re),
-            Err(_) => return ConditionResult::no_match(),
-        }
-    } else if let Some(word_pattern) = word {
-        // Build word boundary regex from word parameter
-        let pattern = format!(r"\b{}\b", regex::escape(word_pattern));
-        match super::super::build_regex(&pattern, case_insensitive) {
-            Ok(re) => Some(re),
-            Err(_) => return ConditionResult::no_match(),
-        }
-    } else {
-        None
-    };
-
     // Determine encoding filter function
     //
     // A spec containing `+` names a *chain* rather than one encoding:
@@ -951,18 +932,33 @@ pub(crate) fn eval_encoded<'a>(
         }
     };
 
-    // Filter and match strings
-    for string_info in &ctx.report.strings {
-        // Apply encoding filter
-        if !matches_encoding(&string_info.encoding_chain) {
-            continue;
+    let mut candidates = ctx
+        .encoded_strings()
+        .iter()
+        .map(|&i| &ctx.report.strings[i as usize])
+        .filter(|s| {
+            matches_encoding(&s.encoding_chain) && offset_in_range(s.offset, effective_range)
+        })
+        .peekable();
+    let regex_matcher = if candidates.peek().is_none() {
+        None
+    } else if let Some(pattern) = regex {
+        match super::super::build_regex(pattern, case_insensitive) {
+            Ok(re) => Some(re),
+            Err(_) => return ConditionResult::no_match(),
         }
-
-        // Skip strings outside the effective range (if location constraints specified)
-        if !offset_in_range(string_info.offset, effective_range) {
-            continue;
+    } else if let Some(word_pattern) = word {
+        // Build word boundary regex from word parameter
+        let pattern = format!(r"\b{}\b", regex::escape(word_pattern));
+        match super::super::build_regex(&pattern, case_insensitive) {
+            Ok(re) => Some(re),
+            Err(_) => return ConditionResult::no_match(),
         }
+    } else {
+        None
+    };
 
+    for string_info in candidates {
         let mut matches = false;
         // The span a `regex:`/`word:` matcher actually hit. `is:` validates
         // this rather than the whole decoded string, matching how the `text`

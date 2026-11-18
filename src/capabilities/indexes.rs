@@ -194,6 +194,12 @@ impl TraitBitSet {
         }
     }
 
+    fn remove(&mut self, idx: usize) {
+        if let Some(word) = self.bits.get_mut(idx / 64) {
+            *word &= !(1 << (idx % 64));
+        }
+    }
+
     /// Union another bitset into this one.
     pub(crate) fn union(&mut self, other: &Self) {
         for (i, &other_bits) in other.bits.iter().enumerate() {

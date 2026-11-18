@@ -53,9 +53,9 @@ static REGEX_CACHE: std::sync::LazyLock<
 /// caches measured ~1.5 GB live on the typescript-package reference scan.
 /// One compiled meta engine plus its scratch-pool identity.
 #[derive(Debug)]
-struct Engine {
-    re: regex_automata::meta::Regex,
-    id: u64,
+pub(crate) struct Engine {
+    pub(crate) re: regex_automata::meta::Regex,
+    pub(crate) id: u64,
 }
 
 /// Custom serde for offset ranges that accepts/produces ergonomic formats:

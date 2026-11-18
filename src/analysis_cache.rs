@@ -1494,23 +1494,27 @@ pub(crate) fn file_analysis_cache_store(
     sha256: &str,
     file_type: &str,
     options: &AnalysisOptions,
-    settings: &Settings,
-    fa: &FileAnalysis,
+    engine: &crate::Engine,
+    origin: &Path,
     report: &AnalysisReport,
     traits_revision: i64,
 ) {
-    if archive_file_type(file_type)
+    if crate::validation_performance::active()
+        || archive_file_type(file_type)
         || !complete_leaf_report(report)
         || yara_degraded()
         || evaluation_incomplete(report)
-        || crate::validation_performance::active()
     {
         return;
     }
-    let Ok(json) = serde_json::to_vec(fa) else {
+    // Materialize the projection only for a report the store will accept.
+    let mut fa = report.to_file_analysis(0, engine);
+    // Negative path matches depend on the origin too.
+    fa.path = origin.display().to_string();
+    let Ok(json) = serde_json::to_vec(&fa) else {
         return;
     };
-    let opts_hash = typed_options_hash(options, settings, file_type);
+    let opts_hash = typed_options_hash(options, engine.settings(), file_type);
     if let Some(path) = db_path() {
         writer::store(
             path,

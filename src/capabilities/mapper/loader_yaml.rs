@@ -186,6 +186,7 @@ impl super::CapabilityMapper {
             path_inputs: std::sync::Arc::default(),
             container_ref_index: std::sync::Arc::default(),
             doomed_skip: std::sync::Arc::default(),
+            composite_ref_gate: Default::default(),
             composite_worklists: std::sync::Arc::default(),
             path_trait_index: std::sync::Arc::default(),
             trait_worklists: std::sync::Arc::default(),

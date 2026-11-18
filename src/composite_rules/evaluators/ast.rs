@@ -281,7 +281,11 @@ pub(crate) fn eval_ast<'a>(
         return ConditionResult::no_match();
     };
 
-    if node_types.is_empty() {
+    if node_types.is_empty()
+        || ctx
+            .ast_kind_cache
+            .is_some_and(|cache| node_types.iter().all(|kind| !cache.contains_key(*kind)))
+    {
         return ConditionResult::no_match();
     }
 
@@ -293,7 +297,10 @@ pub(crate) fn eval_ast<'a>(
     }
 
     // Idea 9: Use batch AST cache if available
-    if let Some(cache) = ctx.ast_kind_cache {
+    if let Some(cache) = ctx.ast_kind_cache
+        && let Some(source) = ctx.ast_source()
+    {
+        let mut scratch = String::new();
         let mut evidence = Vec::new();
         let mut match_count = 0;
 
@@ -334,13 +341,14 @@ pub(crate) fn eval_ast<'a>(
                     // alt path while `substr:`/`regex:` still resolve
                     // against the full call-expression text via `value`.
                     // Each node counts at most once.
-                    let matched = test_match(&node_ev.value)
-                        || node_ev.alt_value.as_deref().is_some_and(test_match);
+                    let value = node_ev.value(source, &mut scratch);
+                    let matched =
+                        test_match(value) || node_ev.alt_value.as_deref().is_some_and(test_match);
 
                     if matched {
                         match_count += 1;
                         if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
-                            evidence.push(node_ev.clone());
+                            evidence.push(node_ev.evidence(value));
                         }
                     }
                 }
@@ -683,37 +691,36 @@ fn run_ast_query<'a>(
     }
     let normalization_start = thread_cpu_time();
     if compiled.ignore_comments && ctx.cached_commentless_ast.get().is_none() {
-        let _timer = crate::validation_performance::ast_execution_started();
-        let view = super::ast_comment_view::build(
-            tree,
-            source,
-            AST_QUERY_BYTE_LIMIT,
-            cpu_budget,
-            ctx.deadline,
-            ctx.cancellation,
-        );
-        match view {
-            Ok(view) => {
-                let _ = ctx.cached_commentless_ast.set(view);
-            }
-            Err(reason) => {
-                let warnings = match reason {
-                    super::ast_comment_view::ViewError::Limited => {
-                        vec![AnalysisWarning::AstTooDeep { max_depth: 0 }]
-                    }
-                    super::ast_comment_view::ViewError::ParseChanged => {
-                        vec![AnalysisWarning::AstParseError]
-                    }
-                    super::ast_comment_view::ViewError::Cancelled => vec![],
-                };
-                return ConditionResult {
-                    matched: false,
-                    evidence: vec![],
-                    warnings,
-                    match_count: 0,
-                    ..ConditionResult::no_match()
-                };
-            }
+        let view = ctx.cached_commentless_ast.get_or_try_init(|| {
+            let _timer = crate::validation_performance::ast_execution_started();
+            super::ast_comment_view::build(
+                tree,
+                source,
+                ctx.file_type,
+                ctx.ast_node_text.and_then(NodeTextIndex::comment_ranges),
+                AST_QUERY_BYTE_LIMIT,
+                cpu_budget,
+                ctx.deadline,
+                ctx.cancellation,
+            )
+        });
+        if let Err(reason) = view {
+            let warnings = match reason {
+                super::ast_comment_view::ViewError::Limited => {
+                    vec![AnalysisWarning::AstTooDeep { max_depth: 0 }]
+                }
+                super::ast_comment_view::ViewError::ParseChanged => {
+                    vec![AnalysisWarning::AstParseError]
+                }
+                super::ast_comment_view::ViewError::Cancelled => vec![],
+            };
+            return ConditionResult {
+                matched: false,
+                evidence: vec![],
+                warnings,
+                match_count: 0,
+                ..ConditionResult::no_match()
+            };
         }
     }
     let cpu_budget = if compiled.ignore_comments {
@@ -904,7 +911,10 @@ fn run_ast_query<'a>(
         if let Some(roots) = anchored {
             for node in roots {
                 // Nodes starting past the byte limit cannot intersect it.
-                if node.start_byte() < byte_limit && run_at(node) {
+                if node.start_byte() < byte_limit
+                    && root_kinds.is_none_or(|kinds| kinds.binary_search(&node.kind_id()).is_ok())
+                    && run_at(node)
+                {
                     break;
                 }
             }
@@ -1221,6 +1231,8 @@ pub(crate) fn batch_ast_queries_with_index(
             && let Ok(view) = super::ast_comment_view::build(
                 tree,
                 source,
+                file_type,
+                node_text.and_then(NodeTextIndex::comment_ranges),
                 AST_QUERY_BYTE_LIMIT,
                 AST_QUERY_CPU_BUDGET,
                 deadline,

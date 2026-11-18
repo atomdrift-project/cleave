@@ -1312,24 +1312,15 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     crate::context::capture(&mut report, file_data, file_type, &Default::default());
 
     // Store result in per-file cache (cross-context: shared with archive member analysis)
-    {
-        let mut fa = report.to_file_analysis(0, engine);
-        // Keep the origin even when no path-dependent rule matched: negative
-        // matches must also be checked before sharing with another path.
-        fa.path = path.display().to_string();
-        fa.id = 0;
-        fa.parent_id = None;
-        fa.depth = 0;
-        analysis_cache::file_analysis_cache_store(
-            &sha256_hex,
-            file_type_key,
-            options,
-            engine.settings(),
-            &fa,
-            &report,
-            capability_mapper.traits_revision(),
-        );
-    }
+    analysis_cache::file_analysis_cache_store(
+        &sha256_hex,
+        file_type_key,
+        options,
+        engine,
+        path,
+        &report,
+        capability_mapper.traits_revision(),
+    );
 
     // Store result in analysis cache for future lookups
     // Key on the mapper this analysis ran with, not on the process-global

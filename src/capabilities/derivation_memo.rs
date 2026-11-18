@@ -78,6 +78,9 @@ fn memo() -> &'static Memo {
 }
 
 fn memo_path() -> Option<std::path::PathBuf> {
+    if crate::cache::skip_mapper_cache() {
+        return None;
+    }
     crate::cache::cache_dir().ok().map(|d| d.join(FILE_NAME))
 }
 

@@ -83,17 +83,9 @@ impl PerformanceIssue {
 }
 
 impl ResultCache {
-    pub(super) fn new(
-        traits_dir: &Path,
-        rule_tree: Option<[u8; 32]>,
-        targets: &[Target],
-        expectations: &'static str,
-        soft: bool,
-        verbose: bool,
-        slow_rule_ms: u64,
-    ) -> Option<Self> {
-        // These modes ask for work/diagnostics beyond a previously passed gate.
-        if soft
+    pub(super) fn enabled(soft: bool, verbose: bool) -> bool {
+        // These modes require fresh work or diagnostics beyond a cached verdict.
+        !(soft
             || verbose
             || crate::cache::skip_cache()
             || crate::cache::skip_mapper_cache()
@@ -103,10 +95,16 @@ impl ResultCache {
                 "CLEAVE_PHASE_STATS",
             ]
             .iter()
-            .any(|k| crate::env::flag(k))
-        {
-            return None;
-        }
+            .any(|k| crate::env::flag(k)))
+    }
+
+    pub(super) fn new(
+        traits_dir: &Path,
+        rule_tree: [u8; 32],
+        targets: &[Target],
+        expectations: &'static str,
+        slow_rule_ms: u64,
+    ) -> Option<Self> {
         let traits_dir = std::fs::canonicalize(traits_dir).ok()?;
         // Every variable that can change a result: cleave's and filefacts' own
         // knobs, and PATH, which decides which external tools (7-Zip, UPX)
@@ -143,7 +141,7 @@ impl ResultCache {
         );
         let settings = settings.finalize().to_vec();
         let fixtures: Vec<_> = targets.iter().map(|t| t.path().to_path_buf()).collect();
-        let stamp = walk_stamp(&traits_dir, expectations, &settings, rule_tree?, targets)?;
+        let stamp = walk_stamp(&traits_dir, expectations, &settings, rule_tree, targets)?;
         let tag = hex::encode(Sha256::digest(traits_dir.as_os_str().as_encoded_bytes()));
         let path = crate::cache::cache_dir()
             .ok()?

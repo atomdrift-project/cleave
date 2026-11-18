@@ -52,8 +52,8 @@ use rustc_hash::FxHashMap;
 /// eviction and relearning inflated the rest of the heap. The 4 GiB clamp prevents wider hosts from
 /// turning that throughput allowance into unbounded retention.
 fn global_budget_bytes() -> usize {
-    static BYTES: OnceLock<usize> = OnceLock::new();
-    *BYTES.get_or_init(|| {
+    static BYTES: OnceLock<(usize, usize)> = OnceLock::new();
+    let &(normal, fixtures) = BYTES.get_or_init(|| {
         const MIB: usize = 1024 * 1024;
         const FOUR_GIB: usize = 4usize.saturating_mul(1024 * MIB);
         let threads = std::thread::available_parallelism().map_or(8, std::num::NonZero::get);
@@ -63,10 +63,20 @@ fn global_budget_bytes() -> usize {
             64 * MIB
         };
         match crate::env::parse::<usize>("CLEAVE_REGEX_SCRATCH_MB") {
-            Some(mb) => mb.saturating_mul(MIB).saturating_mul(threads),
-            None => default,
+            Some(mb) => {
+                let bytes = mb.saturating_mul(MIB).saturating_mul(threads);
+                (bytes, bytes)
+            }
+            // Fixtures exercise thousands of different regexes on short
+            // inputs. Retaining GiBs of scratch competes with active parsers.
+            None => (default, default.min(128 * MIB)),
         }
-    })
+    });
+    if crate::validation_performance::running_fixtures() {
+        fixtures
+    } else {
+        normal
+    }
 }
 
 /// Allocate a process-unique identity for one compiled regex, used as the

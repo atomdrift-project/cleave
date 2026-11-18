@@ -44,6 +44,8 @@ use crate::composite_rules::{CompositeTrait, FileType as RuleFileType, Platform,
 #[derive(Debug)]
 pub(super) struct MatchIndexes {
     pub(super) trait_index: TraitIndex,
+    ast_kind_plans:
+        parking_lot::RwLock<rustc_hash::FxHashMap<RuleFileType, Arc<evaluate_traits::AstKindPlan>>>,
     pub(super) string_match_index: StringMatchIndex,
     pub(super) symbol_match_index: SymbolMatchIndex,
     pub(super) raw_content_regex_index: RawContentRegexIndex,
@@ -91,6 +93,7 @@ impl MatchIndexes {
         // new ones so the next process starts warm.
         super::derivation_memo::persist();
         Self {
+            ast_kind_plans: Default::default(),
             trait_index,
             string_match_index,
             symbol_match_index,
@@ -134,6 +137,10 @@ impl UnlessIndex {
 pub(super) struct CompositeTypeLists {
     pub(super) positive: Vec<u32>,
     pub(super) negative: Vec<u32>,
+    // Container passes must keep file-local legs separate from pooled member legs.
+    local: Vec<u32>,
+    pooled_positive: Vec<u32>,
+    pooled_negative: Vec<u32>,
 }
 
 /// Maps symbols (function names, library calls) to capability IDs
@@ -201,11 +208,13 @@ pub struct CapabilityMapper {
     /// (mapper, file type); testing them per (rule x member) was a measured
     /// leaf on many-member archives. Memoized here and shared across the
     /// per-file mapper clones, like the other lazy indexes.
+    pub(super) composite_worklists:
+        Arc<parking_lot::RwLock<rustc_hash::FxHashMap<RuleFileType, Arc<CompositeTypeLists>>>>,
     /// Path/basename traits with resolved needles and an any-of atom gate for
     /// their regexes (see `evaluate_basename_traits_for_entries`), built once.
     pub(super) path_trait_index: Arc<OnceLock<evaluate_composites::PathTraitIndex>>,
-    pub(super) composite_worklists:
-        Arc<parking_lot::RwLock<rustc_hash::FxHashMap<RuleFileType, Arc<CompositeTypeLists>>>>,
+    /// Required trait references that can nominate a composite for evaluation.
+    composite_ref_gate: Arc<OnceLock<evaluate_composites::CompositeRefGate>>,
     /// Maps trait ID -> index in trait_definitions
     #[allow(dead_code)]
     pub(super) trait_id_map: TraitIdMap,
@@ -689,10 +698,21 @@ impl CapabilityMapper {
             }
             #[allow(clippy::cast_possible_truncation)]
             let idx = i as u32;
-            if rule.has_negative_conditions() {
+            let negative = rule.has_negative_conditions();
+            if negative {
                 lists.negative.push(idx);
             } else {
                 lists.positive.push(idx);
+            }
+            if matches!(
+                rule.effective_scope(),
+                crate::composite_rules::Scope::File | crate::composite_rules::Scope::Leaf
+            ) {
+                lists.local.push(idx);
+            } else if negative {
+                lists.pooled_negative.push(idx);
+            } else {
+                lists.pooled_positive.push(idx);
             }
         }
         let arc = Arc::new(lists);

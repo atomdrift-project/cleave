@@ -682,11 +682,28 @@ impl AnalysisReport {
             .engine
             .clone()
             .unwrap_or_else(crate::shared_resources::fallback_engine);
-        // Create the root file entry
-        let mut root_file = self.to_file_analysis(0, &engine);
-        root_file.path = self.target.path.clone();
-        root_file.depth = 0;
-        root_file.parent_id = None;
+        // Move the root's analysis vectors into files[0]. The report retains
+        // its separate context and filefacts views for existing callers.
+        let parts = super::ReportFileParts {
+            target: self.target.clone(),
+            traits: std::mem::take(&mut self.traits),
+            findings: std::mem::take(&mut self.findings),
+            suppressions: std::mem::take(&mut self.suppressions),
+            analysis_gaps: std::mem::take(&mut self.analysis_gaps),
+            context: self.context.clone(),
+            filefacts: self.filefacts.clone(),
+            identity: self.identity.clone(),
+            filefacts_metrics: self.filefacts_metrics.clone(),
+            structure: std::mem::take(&mut self.structure),
+            functions: std::mem::take(&mut self.functions),
+            strings: std::mem::take(&mut self.strings),
+            imports: std::mem::take(&mut self.imports),
+            exports: std::mem::take(&mut self.exports),
+            sections: std::mem::take(&mut self.sections),
+            yara_matches: std::mem::take(&mut self.yara_matches),
+            syscalls: std::mem::take(&mut self.syscalls),
+        };
+        let mut root_file = Self::project_file(0, parts, self.values_tree.as_deref(), &engine);
         root_file.compute_summary();
 
         if self.files.is_empty() {
@@ -843,20 +860,6 @@ impl AnalysisReport {
         summary.errors = std::mem::take(&mut self.metadata.errors);
         self.summary = Some(summary);
 
-        // Clear top-level arrays — data now lives exclusively in files[]
-        // Existing skip_serializing_if = "Vec::is_empty" prevents these from appearing in output
-        let _ = std::mem::take(&mut self.traits);
-        let _ = std::mem::take(&mut self.findings);
-        let _ = std::mem::take(&mut self.suppressions);
-        let _ = std::mem::take(&mut self.analysis_gaps);
-        let _ = std::mem::take(&mut self.structure);
-        let _ = std::mem::take(&mut self.functions);
-        let _ = std::mem::take(&mut self.strings);
-        let _ = std::mem::take(&mut self.sections);
-        let _ = std::mem::take(&mut self.imports);
-        let _ = std::mem::take(&mut self.exports);
-        let _ = std::mem::take(&mut self.yara_matches);
-        let _ = std::mem::take(&mut self.syscalls);
         let _ = std::mem::take(&mut self.archive_contents);
 
         // Clear fields that are redundant with files[0] / summary

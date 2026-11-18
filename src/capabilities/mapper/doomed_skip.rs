@@ -46,7 +46,15 @@ impl DoomedSkipIndex {
         trait_id_map: &super::TraitIdMap,
     ) -> Self {
         let n = traits.len();
-        let mut never_skip = vec![false; n];
+        let mut never_skip: Vec<_> = traits
+            .iter()
+            .map(|def| {
+                !matches!(
+                    def.crit,
+                    crate::types::Criticality::Component | crate::types::Criticality::Baseline
+                )
+            })
+            .collect();
         let mut consumers = vec![Vec::new(); n];
 
         let mut leaf_hits: FxHashMap<&str, Vec<usize>> = FxHashMap::default();
@@ -191,43 +199,35 @@ impl DoomedSkipIndex {
         if trait_idx >= self.never_skip.len() || self.never_skip[trait_idx] {
             return false;
         }
-        let Some(def) = traits.get(trait_idx) else {
-            return false;
-        };
-        if !matches!(
-            def.crit,
-            crate::types::Criticality::Component | crate::types::Criticality::Baseline
-        ) {
-            return false;
-        }
         let list = &self.consumers[trait_idx];
         if list.is_empty() {
             return false;
         }
-        let applicable: Vec<&AllConsumer> = list
-            .iter()
-            .filter(|c| {
-                composites
-                    .get(c.composite_idx)
-                    .is_some_and(|rule| composite_applies(rule, mapper_platforms, file_type))
-            })
-            .collect();
-        if applicable.is_empty() {
-            return false;
-        }
-        applicable.iter().all(|c| {
-            c.other_partners.iter().any(|&p| {
+        let raw_text = file_type.uses_raw_text_search_in(ctx.report);
+        let mut applies = false;
+        for consumer in list {
+            if !composites
+                .get(consumer.composite_idx)
+                .is_some_and(|rule| composite_applies(rule, mapper_platforms, file_type))
+            {
+                continue;
+            }
+            applies = true;
+            if !consumer.other_partners.iter().any(|&p| {
                 partner_cannot_match(
                     p,
                     traits,
                     mapper_platforms,
                     file_type,
-                    file_type.uses_raw_text_search_in(ctx.report),
+                    raw_text,
                     indexes,
                     cache,
                 )
-            })
-        })
+            }) {
+                return false;
+            }
+        }
+        applies
     }
 }
 

@@ -97,8 +97,8 @@ impl Config {
             .map(|e| format!("{}: {e}", path.display()))
     }
 
-    /// Read the config at `config_path`, falling back to the defaults (with a
-    /// warning) when it is missing or does not parse.
+    /// Read the optional config at `config_path`, falling back to defaults when
+    /// it is absent or unusable.
     fn load_from(config_path: &std::path::Path) -> Self {
         match std::fs::read_to_string(config_path) {
             Ok(yaml) => match Self::from_yaml(&yaml) {
@@ -114,10 +114,12 @@ impl Config {
                     Self::default()
                 }
             },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
             Err(e) => {
                 tracing::warn!(
-                    "Failed to read third_party/config.yaml: {}, using defaults",
-                    e
+                    path = %config_path.display(),
+                    error = %e,
+                    "Failed to read third-party YARA config, using defaults"
                 );
                 Self::default()
             }

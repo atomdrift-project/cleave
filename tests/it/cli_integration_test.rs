@@ -42,11 +42,7 @@ fn test_version_command() {
         .stdout(predicate::str::contains("cleave"));
 }
 
-/// A minimal but *complete* traits directory: one YAML trait and one YARA rule.
-///
-/// Both halves are required for silence — a traits dir with no `.yar` under it
-/// makes the engine warn "No YARA rules loaded", which is exactly the kind of
-/// operational complaint [`test_rust_binary_analysis_is_silent`] exists to catch.
+/// A minimal traits directory with one YAML trait and one YARA rule.
 fn write_minimal_traits(dir: &std::path::Path) {
     const TRAIT_YAML: &str = r#"
 defaults:

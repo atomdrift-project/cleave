@@ -119,7 +119,7 @@ impl fmt::Display for Feed {
         f.write_str(match self {
             Feed::ZeroDay => "zero-day feed",
             Feed::Supporter => "supporter feed",
-            Feed::OssDelayed => "opensource delayed feed",
+            Feed::OssDelayed => "opensource feed",
         })
     }
 }
@@ -901,7 +901,7 @@ mod tests {
         assert_eq!(Feed::from_slug("Zero-Day"), None);
         assert_eq!(Feed::from_slug("enriched"), None);
         assert_eq!(Feed::ZeroDay.to_string(), "zero-day feed");
-        assert_eq!(Feed::OssDelayed.to_string(), "opensource delayed feed");
+        assert_eq!(Feed::OssDelayed.to_string(), "opensource feed");
         assert!(Feed::ZeroDay.needs_token() && Feed::Supporter.needs_token());
         assert!(!Feed::OssDelayed.needs_token());
     }

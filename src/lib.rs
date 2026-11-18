@@ -755,12 +755,10 @@ pub fn clear_all_thread_caches() {
 pub fn prefetch_yara_engine(enable_third_party: bool) {
     // Bootstrap the traits archive before compiling rules. On a fresh install the
     // data directory is empty, and without this the prefetch would find zero rules
-    // and print a spurious "No YARA rules loaded" warning before the analysis path
-    // gets a chance to download the archive. `resolve_and_ensure` is idempotent and
-    // returns immediately (a cheap directory check, no network) once traits exist,
-    // so warm runs pay nothing. Because this blocks until traits are present, it
-    // also serializes the install ahead of the analysis path's own
-    // `resolve_and_ensure`, avoiding a concurrent double-download race.
+    // before the analysis path downloads the archive. `resolve_and_ensure` is
+    // idempotent and returns immediately once traits exist, using a directory
+    // check without network access. This serializes the install ahead of the
+    // analysis path's own `resolve_and_ensure`, avoiding a double download.
     if let Err(e) = traits_repo::resolve_and_ensure() {
         tracing::debug!(
             error = %e,

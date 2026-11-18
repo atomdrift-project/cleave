@@ -1201,7 +1201,6 @@ impl YaraEngine {
             Self::collect_all_sources(&traits_dir, &third_party_dir, enable_third_party);
 
         if builtin_count + third_party_count + inline_namespaces.len() == 0 {
-            eprintln!("\n⚠️  No YARA rules loaded");
             return (0, 0);
         }
 

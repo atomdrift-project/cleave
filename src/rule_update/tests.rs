@@ -125,7 +125,7 @@ fn a_refusal_says_what_was_wrong_and_what_to_do() {
         community.message.contains("Community plan")
             && community
                 .message
-                .contains("includes only the opensource delayed feed"),
+                .contains("includes only the opensource feed"),
         "{}",
         community.message
     );

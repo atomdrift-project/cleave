@@ -300,7 +300,7 @@ fn rules_label_names_the_feed_and_a_seven_char_revision() {
     );
     assert_eq!(
         rules_label_for(&Edition::Feed(Feed::OssDelayed), Some("9f00e12ab")),
-        "opensource delayed feed: 9f00e12"
+        "opensource feed: 9f00e12"
     );
     assert_eq!(
         rules_label_for(&Edition::Feed(Feed::Supporter), None),

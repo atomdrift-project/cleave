@@ -1887,7 +1887,7 @@ checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 [[package]]
 name = "filefacts"
 version = "3.0.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#8d3306ca849d439635a70db6d06708dc7323c442"
+source = "git+https://github.com/atomdrift-project/filefacts.git#c7fa0ebb3024583fc66044a4594d21dee9d11d0f"
 dependencies = [
  "aes 0.9.4",
  "aho-corasick",
@@ -5000,8 +5000,8 @@ dependencies = [
 
 [[package]]
 name = "stng"
-version = "3.0.0-beta.3"
-source = "git+https://github.com/atomdrift-project/stng.git#57560c6c40b3cfc84892e9941ca926bbf7f3b1c4"
+version = "3.0.0"
+source = "git+https://github.com/atomdrift-project/stng.git#f469ac67feb94c62f83e323122dd18b37dfb199c"
 dependencies = [
  "aho-corasick",
  "base64 0.22.1",
@@ -5563,7 +5563,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#8d3306ca849d439635a70db6d06708dc7323c442"
+source = "git+https://github.com/atomdrift-project/filefacts.git#c7fa0ebb3024583fc66044a4594d21dee9d11d0f"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -5823,7 +5823,7 @@ dependencies = [
 [[package]]
 name = "unpack"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/unpack.git#4903247faecbb75eeeff699df4af252e3c6c93f3"
+source = "git+https://github.com/atomdrift-project/unpack.git#e2b4ba35813a1489493845dc458c840307ab7e58"
 dependencies = [
  "aes 0.9.4",
  "aes-gcm",

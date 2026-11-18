@@ -12,11 +12,7 @@ fn ast_cache_hit_does_not_wait_for_compiler() {
     let tree = parsed.source_ast().unwrap().tree.clone();
     let language = tree.language();
     let pattern = "(identifier) @cache_lock_hit";
-    let key = (
-        ast_query_language_key(&language, FileType::JavaScript),
-        pattern.to_string(),
-    );
-    let compiler = query_compiler(&key).lock();
+    let compiler = query_compiler(&language, pattern).lock();
     let query = tree_sitter::Query::new(&language, pattern).unwrap();
     let compiled = Arc::new(CompiledAstQuery {
         literals: RequiredLiterals::of(&query, pattern),
@@ -28,7 +24,11 @@ fn ast_cache_hit_does_not_wait_for_compiler() {
         anchors: None,
         query,
     });
-    QUERY_CACHE.write().insert(key, Some(compiled.clone()));
+    QUERY_CACHE
+        .write()
+        .entry((*language).clone())
+        .or_default()
+        .insert(pattern.into(), Some(compiled.clone()));
     let (send, receive) = std::sync::mpsc::channel();
     let thread = std::thread::spawn(move || {
         let hit = cached_ast_query(&tree.language(), FileType::JavaScript, pattern);

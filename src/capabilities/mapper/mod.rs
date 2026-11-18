@@ -26,6 +26,7 @@ use std::sync::{Arc, OnceLock};
 
 #[cfg(test)]
 mod compiled_text_tests;
+mod content_signature;
 #[cfg(test)]
 mod tiny_text_tests;
 
@@ -43,6 +44,7 @@ use crate::composite_rules::{CompositeTrait, FileType as RuleFileType, Platform,
 /// analyses all hit the report cache — never pays for them.
 #[derive(Debug)]
 pub(super) struct MatchIndexes {
+    signatures: Vec<content_signature::Requirement>,
     pub(super) trait_index: TraitIndex,
     ast_kind_plans:
         parking_lot::RwLock<rustc_hash::FxHashMap<RuleFileType, Arc<evaluate_traits::AstKindPlan>>>,
@@ -63,6 +65,7 @@ impl MatchIndexes {
             let built = build();
             (built, started.elapsed().as_millis() as u64)
         }
+        use rayon::prelude::*;
         let started = std::time::Instant::now();
         let (
             ((raw_content_regex_index, raw_regex_ms), (trait_index, trait_ms)),
@@ -93,6 +96,10 @@ impl MatchIndexes {
         // new ones so the next process starts warm.
         super::derivation_memo::persist();
         Self {
+            signatures: traits
+                .par_iter()
+                .map(content_signature::Requirement::of)
+                .collect(),
             ast_kind_plans: Default::default(),
             trait_index,
             string_match_index,
@@ -491,7 +498,10 @@ impl CapabilityMapper {
                         bits |= flags::CONTENT_RAW;
                     }
                     Condition::Text(TextQuery { regex: Some(_), .. })
-                    | Condition::Text(TextQuery { word: Some(_), .. }) => {
+                    | Condition::Text(TextQuery { word: Some(_), .. })
+                    | Condition::Text(TextQuery {
+                        substr: Some(_), ..
+                    }) => {
                         bits |= flags::CONTENT_TEXT;
                     }
                     _ => {}

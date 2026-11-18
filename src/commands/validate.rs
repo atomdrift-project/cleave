@@ -205,6 +205,7 @@ pub fn run_with_options(
         yara: true,
         upx: false,
         all_files: true,
+        compact_members: true,
         slow_rule_ms,
         ..Default::default()
     };
@@ -223,30 +224,27 @@ pub fn run_with_options(
         .with_slow_rule_ms(slow_rule_ms),
     );
     let mapper_and_lint_ms = mapper_started.elapsed().as_millis();
-    let index_started = Instant::now();
-
-    // When the cache holds nothing for these traits, as after an edit, every
-    // fixture is about to miss: build the match indexes once, here, before
-    // fanning out. Left lazy, every worker that reaches trait matching before
-    // the first build finishes builds its own copy and all but one are thrown
-    // away, which held the whole pool for ~7 s and doubled peak memory. When
-    // the cache does hold them, fixtures hit and never need the indexes. This
-    // is a performance heuristic only: if it skips the warm-up and a fixture
-    // misses anyway, the lazy build still runs and the output is identical.
-    if cleave::analysis_cache::has_reports_for_current_traits() {
-        tracing::debug!("analysis cache holds these traits; match indexes stay lazy");
-    } else {
-        mapper.warm_indexes();
-    }
-
-    let index_ms = index_started.elapsed().as_millis();
-    // A cold YARA singleton reached on a fixture worker must collect sources
-    // serially to avoid nested-pool deadlocks. Initialize it off the pool first
-    // so rule collection can use the whole pool, before any fixture waits on it.
-    // The full-validation cache hit above still avoids engine loading entirely.
-    let yara_started = Instant::now();
-    cleave::prefetch_yara_engine(options.third_party_yara);
-    let yara_ms = yara_started.elapsed().as_millis();
+    // Both preparations reuse the loaded rule sources. Build the match indexes
+    // while YARA initializes. Keep the caller off Rayon while it waits for YARA,
+    // whose own loader can need the entire pool, including on one-thread runs.
+    let (index_ms, yara_ms) = std::thread::scope(|scope| {
+        let index = scope.spawn(|| {
+            let start = Instant::now();
+            if !cleave::analysis_cache::has_reports_for_current_traits() {
+                mapper.warm_indexes();
+            }
+            start.elapsed().as_millis()
+        });
+        let start = Instant::now();
+        cleave::prefetch_yara_engine(options.third_party_yara);
+        let yara_ms = start.elapsed().as_millis();
+        (
+            index
+                .join()
+                .unwrap_or_else(|e| std::panic::resume_unwind(e)),
+            yara_ms,
+        )
+    });
 
     // Which fixtures this edit can have changed. The last run's per-fixture
     // state is kept under the same gate as the result cache; without it,
@@ -282,6 +280,7 @@ pub fn run_with_options(
     };
     let plan_ms = plan_started.elapsed().as_millis();
 
+    crate::rule_sources::release_unused(&traits_dir);
     let performance = crate::validation_performance::Session::begin();
     let analysis_started = Instant::now();
     let selected: Vec<usize> = (0..targets.len()).filter(|&i| plan.run[i]).collect();
@@ -378,11 +377,18 @@ pub fn run_with_options(
             Some(d) if d.file_type.is_archive() => ARCHIVE,
             _ => OTHER,
         };
-        queues[queue].push((i, size));
+        queues[queue].push((i, size, logical.extension()));
     }
     let pending = crate::rayon_nest::PendingPaths::new(queues.iter().map(Vec::len).sum());
     let queues = queues.map(|mut queue| {
-        queue.sort_unstable_by_key(|&(i, size)| (std::cmp::Reverse(size), i));
+        // Group small fixtures by language so workers reuse their matchers.
+        queue.sort_unstable_by_key(|&(i, size, ext)| {
+            (
+                std::cmp::Reverse(if size >= 16 * 1024 { size } else { 0 }),
+                ext,
+                i,
+            )
+        });
         parking_lot::Mutex::new(queue.into_iter())
     });
     rayon::broadcast(|lane| {
@@ -409,7 +415,7 @@ pub fn run_with_options(
                 if other
                     .as_slice()
                     .last()
-                    .is_some_and(|&(_, size)| size < 16 * 1024)
+                    .is_some_and(|&(_, size, _)| size < 16 * 1024)
                 {
                     other.next_back()
                 } else {
@@ -418,7 +424,7 @@ pub fn run_with_options(
             } else {
                 order.iter().find_map(|&i| queues[i].lock().next())
             };
-            let Some((i, _)) = job else {
+            let Some((i, _, _)) = job else {
                 // When each lane ran dry says how long the pool idled behind
                 // the last fixtures: the tail no fixture ordering can hide.
                 tracing::info!(
@@ -978,7 +984,7 @@ struct NeutralStage {
     /// Per staged content directory, the analyses using it. The last one out
     /// removes it, so the stage empties during the run instead of in one
     /// serial removal of every fixture after the verdict is known.
-    users: parking_lot::Mutex<std::collections::HashMap<PathBuf, usize>>,
+    users: [parking_lot::Mutex<std::collections::HashMap<PathBuf, usize>>; 64],
 }
 
 impl NeutralStage {
@@ -1017,7 +1023,7 @@ impl NeutralStage {
             dir,
             forbidden,
             paths: parking_lot::Mutex::default(),
-            users: parking_lot::Mutex::default(),
+            users: std::array::from_fn(|_| Default::default()),
         })
     }
 
@@ -1064,7 +1070,11 @@ impl NeutralStage {
         };
         // Claimed before it is created, so the last user of the directory
         // never removes it under a lane that is about to place a file there.
-        *self.users.lock().entry(parent.to_path_buf()).or_insert(0) += 1;
+        *self
+            .users_for(parent)
+            .lock()
+            .entry(parent.to_path_buf())
+            .or_insert(0) += 1;
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
         let placed = if compressed {
@@ -1128,13 +1138,23 @@ impl NeutralStage {
         Ok(report)
     }
 
+    fn users_for(
+        &self,
+        directory: &Path,
+    ) -> &parking_lot::Mutex<std::collections::HashMap<PathBuf, usize>> {
+        use std::hash::{Hash, Hasher};
+        let mut hash = rustc_hash::FxHasher::default();
+        directory.hash(&mut hash);
+        &self.users[hash.finish() as usize % self.users.len()]
+    }
+
     /// Done with `neutral`: the last analysis using its content directory
     /// removes it. A directory left behind goes with the stage.
     fn release(&self, neutral: &Path) {
         let Some(parent) = neutral.parent() else {
             return;
         };
-        let mut users = self.users.lock();
+        let mut users = self.users_for(parent).lock();
         let Some(count) = users.get_mut(parent) else {
             return;
         };

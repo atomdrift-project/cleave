@@ -721,7 +721,7 @@ pub(crate) fn find_regex_literal_overlap_issues(
         let file_path = trait_def.defined_in.to_string_lossy().to_string();
         let argument_key = match &trait_def.r#if {
             Condition::Symbol(query) => {
-                symbol_argument_discriminator(query.arg.as_ref(), query.args.as_deref())
+                symbol_argument_discriminator(query.arg.as_deref(), query.args.as_deref())
             }
             _ => String::new(),
         };
@@ -773,7 +773,7 @@ pub(crate) fn find_regex_literal_overlap_issues(
         let file_path = trait_def.defined_in.to_string_lossy().to_string();
         let argument_key = match &trait_def.r#if {
             Condition::Symbol(query) => {
-                symbol_argument_discriminator(query.arg.as_ref(), query.args.as_deref())
+                symbol_argument_discriminator(query.arg.as_deref(), query.args.as_deref())
             }
             _ => String::new(),
         };

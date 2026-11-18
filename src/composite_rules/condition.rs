@@ -1309,7 +1309,7 @@ pub(crate) struct SymbolQuery {
     #[serde(default)]
     pub kind: Option<SymbolKind>,
     #[serde(default)]
-    pub arg: Option<ArgFilter>,
+    pub arg: Option<Box<ArgFilter>>,
     #[serde(default)]
     pub args: Option<Vec<ArgFilter>>,
     #[serde(default)]
@@ -1325,7 +1325,7 @@ pub(crate) struct SymbolQuery {
     /// `kind: call` only: where the receiver comes from — the `cp` in
     /// `cp.execSync()` — traced like `arg.from`.
     #[serde(default)]
-    pub receiver: Option<ReceiverFilter>,
+    pub receiver: Option<Box<ReceiverFilter>>,
 }
 
 /// Provenance of a call's receiver, the value a method is called on.

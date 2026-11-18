@@ -142,7 +142,12 @@ impl Condition {
                         );
                     }
                 }
-                for arg in query.arg.iter().chain(query.args.iter().flatten()) {
+                for arg in query
+                    .arg
+                    .as_deref()
+                    .into_iter()
+                    .chain(query.args.iter().flatten())
+                {
                     if let Some(pattern) = &arg.name_regex {
                         if !matches!(query.kind, Some(SymbolKind::Call)) {
                             anyhow::bail!("identifier-name argument regex requires kind: call");

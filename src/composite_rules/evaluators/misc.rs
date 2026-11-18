@@ -284,7 +284,8 @@ pub(crate) fn eval_path(
 
     // `basename` already collapses to the last component, which is identical
     // for both spellings, so only the full/dirname scopes need the second try.
-    let mut candidates: Vec<&str> = vec![scope_of(full, basename, dirname)];
+    let mut candidates = smallvec::SmallVec::<[&str; 4]>::new();
+    candidates.push(scope_of(full, basename, dirname));
     if let Some(base) = fragment_host_path(full) {
         let scoped = scope_of(base, basename, dirname);
         if !candidates.contains(&scoped) {
@@ -308,20 +309,20 @@ pub(crate) fn eval_path(
         if target.is_empty() {
             return false;
         }
-        let (cmp_target, cmp_exact, cmp_substr) = if case_insensitive {
-            (
-                target.to_lowercase(),
-                exact.map(|s| s.to_lowercase()),
-                substr.map(|s| s.to_lowercase()),
-            )
-        } else {
-            (target.to_string(), exact.cloned(), substr.cloned())
-        };
-
-        let matched = if let Some(e) = &cmp_exact {
-            cmp_target == *e
-        } else if let Some(s) = &cmp_substr {
-            cmp_target.contains(s.as_str())
+        let matched = if let Some(e) = exact {
+            if !case_insensitive {
+                target == e
+            } else if target.is_ascii() && e.is_ascii() {
+                target.eq_ignore_ascii_case(e)
+            } else {
+                target.to_lowercase() == e.to_lowercase()
+            }
+        } else if let Some(s) = substr {
+            if case_insensitive {
+                target.to_lowercase().contains(&s.to_lowercase())
+            } else {
+                target.contains(s.as_str())
+            }
         } else if let Some(r) = regex {
             crate::composite_rules::condition::lazy_regex(Some(r.as_str()), case_insensitive)
                 .map(|re| re.is_match(target))

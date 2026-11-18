@@ -1432,6 +1432,12 @@ pub(crate) fn apply_composite_defaults(
         *w = format!("{} (in {})", w, path.display());
     }
 
+    // YAML sequences grow geometrically. Most composite legs are short and
+    // the unused slots would each reserve space for a full Condition.
+    let compact = |legs: Option<Vec<crate::composite_rules::Condition>>| {
+        legs.map(|v| v.into_boxed_slice().into_vec())
+    };
+
     CompositeTrait {
         for_mask_cache: std::sync::OnceLock::new(),
         default_scope_cache: std::sync::OnceLock::new(),
@@ -1450,13 +1456,13 @@ pub(crate) fn apply_composite_defaults(
         for_from_groups: from_groups,
         size_min: raw.size_min.or(defaults.size_min),
         size_max: raw.size_max.or(defaults.size_max),
-        all: requires_all,
-        any: raw.any,
+        all: compact(requires_all),
+        any: compact(raw.any),
         needs: raw.needs,
         near_lines: raw.near_lines,
         near_bytes: raw.near_bytes,
         scope: raw.scope,
-        unless: raw.unless,
+        unless: compact(raw.unless),
         not: raw.not,
         downgrade: raw.downgrade,
         defined_in: path.to_path_buf(),

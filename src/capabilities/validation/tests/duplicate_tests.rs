@@ -354,10 +354,10 @@ fn create_symbol_exact_with_arg(
             platforms: None,
             is_check: None,
             kind: Some(SymbolKind::Call),
-            arg: Some(ArgFilter {
+            arg: Some(Box::new(ArgFilter {
                 exact: Some(arg.to_string()),
                 ..Default::default()
-            }),
+            })),
             args: None,
             alias: None,
             not: None,

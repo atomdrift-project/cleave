@@ -22,7 +22,7 @@ impl<'a> RuleDebugger<'a> {
                 query.exact.as_ref(),
                 query.substr.as_ref(),
                 query.regex.as_ref(),
-                query.arg.as_ref(),
+                query.arg.as_deref(),
                 query.args.as_deref(),
                 CallSite {
                     module_level: query.module_level,
@@ -36,7 +36,7 @@ impl<'a> RuleDebugger<'a> {
                     query.exact.as_ref(),
                     query.substr.as_ref(),
                     query.regex.as_ref(),
-                    query.arg.as_ref(),
+                    query.arg.as_deref(),
                     ctx,
                 )
             }

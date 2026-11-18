@@ -75,7 +75,9 @@ fn capture_satisfies_early_predicates(
 /// those recompiled (serially, under the write lock) on every archive member —
 /// ~150 s CPU and a lock convoy on a 54k-member zip. Compilation is
 /// deterministic, so a cached failure is exactly as correct as retrying it.
-static QUERY_CACHE: LazyLock<RwLock<FxHashMap<(String, String), Option<Arc<CompiledAstQuery>>>>> =
+type QueriesByGrammar =
+    FxHashMap<tree_sitter::Language, FxHashMap<Box<str>, Option<Arc<CompiledAstQuery>>>>;
+static QUERY_CACHE: LazyLock<RwLock<QueriesByGrammar>> =
     LazyLock::new(|| RwLock::new(FxHashMap::default()));
 
 // Separate compiler ownership from cache publication so hits never wait for
@@ -87,10 +89,10 @@ static QUERY_COMPILERS: [Mutex<()>; QUERY_COMPILER_SHARDS] =
     [const { Mutex::new(()) }; QUERY_COMPILER_SHARDS];
 
 /// The compiler lock for `key`.
-fn query_compiler(key: &(String, String)) -> &'static Mutex<()> {
+fn query_compiler(lang: &tree_sitter::Language, query: &str) -> &'static Mutex<()> {
     use std::hash::{Hash, Hasher};
     let mut hasher = rustc_hash::FxHasher::default();
-    key.hash(&mut hasher);
+    (lang, query).hash(&mut hasher);
     &QUERY_COMPILERS[(hasher.finish() as usize) % QUERY_COMPILER_SHARDS]
 }
 static COMBINED_QUERY_COMPILER: Mutex<()> = Mutex::new(());
@@ -117,7 +119,7 @@ impl CompiledAstQuery {
         &self,
         tree: &tree_sitter::Tree,
         source: &str,
-        index: Option<&NodeTextIndex>,
+        index: Option<&NodeTextIndex<'_>>,
         enabled: &mut [bool],
         deadline: Option<Instant>,
         cancellation: Option<&AtomicBool>,
@@ -677,19 +679,16 @@ fn run_ast_query<'a>(
     // a file missing them cannot match. Asked before compiling when an earlier
     // process recorded the query's literals: most queries a file meets fail
     // here, and compiling one costs ~5 ms, more than the evaluation it gates.
-    if remembered_literals_may_match(lang, ctx.file_type, query_str, source.as_bytes())
-        == Some(false)
-    {
-        return ConditionResult::no_match();
-    }
-    let Some(compiled) = cached_ast_query(lang, ctx.file_type, query_str) else {
+    let Some(compiled) =
+        cached_ast_query_for_source(lang, ctx.file_type, query_str, Some(source.as_bytes()))
+    else {
         return ConditionResult::no_match();
     };
     // Reject impossible queries before walking or reparsing for comment removal.
     if !compiled.may_match(source.as_bytes()) {
         return ConditionResult::no_match();
     }
-    let normalization_start = thread_cpu_time();
+    let normalization_start = compiled.ignore_comments.then(thread_cpu_time);
     if compiled.ignore_comments && ctx.cached_commentless_ast.get().is_none() {
         let view = ctx.cached_commentless_ast.get_or_try_init(|| {
             let _timer = crate::validation_performance::ast_execution_started();
@@ -723,8 +722,8 @@ fn run_ast_query<'a>(
             };
         }
     }
-    let cpu_budget = if compiled.ignore_comments {
-        cpu_budget.saturating_sub(thread_cpu_time().saturating_sub(normalization_start))
+    let cpu_budget = if let Some(start) = normalization_start {
+        cpu_budget.saturating_sub(thread_cpu_time().saturating_sub(start))
     } else {
         cpu_budget
     };
@@ -1019,31 +1018,34 @@ fn cached_ast_query(
     file_type: FileType,
     query_str: &str,
 ) -> Option<Arc<CompiledAstQuery>> {
-    // Serialize misses without blocking cache readers. Hold compiler ownership
-    // through publication and recheck after acquiring it, so each key still
-    // compiles exactly once. Cache clearing takes the same compiler locks.
-    let key = (
-        ast_query_language_key(lang, file_type),
-        query_str.to_string(),
-    );
-    // Bind the lookup before the `if let` so the read guard is released here
-    // rather than at the end of the `if let` — the write lock below is taken on
-    // exactly the path that falls through it.
-    let hit = QUERY_CACHE.read().get(&key).cloned();
-    if let Some(entry) = hit {
+    cached_ast_query_for_source(lang, file_type, query_str, None)
+}
+
+fn cached_ast_query_for_source(
+    lang: &tree_sitter::Language,
+    file_type: FileType,
+    query_str: &str,
+    source: Option<&[u8]>,
+) -> Option<Arc<CompiledAstQuery>> {
+    let lookup = || QUERY_CACHE.read().get(lang)?.get(query_str).cloned();
+    if let Some(entry) = lookup() {
         return entry;
+    }
+    if let Some(source) = source
+        && remembered_literals_may_match(query_str, source) == Some(false)
+    {
+        return None;
     }
     let diagnostic = tracing::enabled!(tracing::Level::DEBUG);
     let wait_started = diagnostic.then(Instant::now);
-    let _compiler = query_compiler(&key).lock();
+    let _compiler = query_compiler(lang, query_str).lock();
     if let Some(started) = wait_started
         && started.elapsed().as_millis() >= 10
     {
-        tracing::debug!(wait_ms = started.elapsed().as_millis(), file_type = ?file_type, grammar = %key.0,
+        tracing::debug!(wait_ms = started.elapsed().as_millis(), file_type = ?file_type, grammar = ?lang.name(),
             "waited for AST query compiler");
     }
-    let hit = QUERY_CACHE.read().get(&key).cloned();
-    if let Some(entry) = hit {
+    if let Some(entry) = lookup() {
         return entry;
     }
     let compile_started = diagnostic.then(Instant::now);
@@ -1072,30 +1074,21 @@ fn cached_ast_query(
         })
     });
     if let Some(started) = compile_started {
-        tracing::debug!(compile_us = started.elapsed().as_micros(), file_type = ?file_type, grammar = %key.0,
+        tracing::debug!(compile_us = started.elapsed().as_micros(), file_type = ?file_type, grammar = ?lang.name(),
             success = compiled.is_some(), query = ?query_str, "compiled individual AST query");
     }
-    QUERY_CACHE.write().insert(key, compiled.clone());
+    QUERY_CACHE
+        .write()
+        .entry(lang.clone())
+        .or_default()
+        .insert(query_str.into(), compiled.clone());
     compiled
 }
 
 /// Whether `source` holds the literals some pattern of `query_str` requires,
 /// by the requirements an earlier process recorded. `None` when there is no
-/// record, or this process already compiled the query and its compiled gate
-/// answers instead. Mirrors [`RequiredLiterals::may_match`].
-fn remembered_literals_may_match(
-    lang: &tree_sitter::Language,
-    file_type: FileType,
-    query_str: &str,
-    source: &[u8],
-) -> Option<bool> {
-    let key = (
-        ast_query_language_key(lang, file_type),
-        query_str.to_string(),
-    );
-    if QUERY_CACHE.read().contains_key(&key) {
-        return None;
-    }
+/// record. Mirrors [`RequiredLiterals::may_match`].
+fn remembered_literals_may_match(query_str: &str, source: &[u8]) -> Option<bool> {
     crate::capabilities::derivation_memo::with_ast_literals(query_str, |patterns| {
         patterns.is_empty()
             || patterns.iter().any(|requirements| {
@@ -1198,7 +1191,7 @@ pub(crate) fn batch_ast_queries_with_index(
     deadline: Option<Instant>,
     cancellation: Option<&AtomicBool>,
     cpu_budget_override: Option<std::time::Duration>,
-    node_text: Option<&NodeTextIndex>,
+    node_text: Option<&NodeTextIndex<'_>>,
     boolean_queries: Option<&rustc_hash::FxHashSet<String>>,
 ) -> Option<FxHashMap<String, ConditionResult>> {
     let mut out = batch_ast_bank(
@@ -1275,7 +1268,7 @@ fn batch_ast_bank(
     deadline: Option<Instant>,
     cancellation: Option<&AtomicBool>,
     cpu_budget_override: Option<std::time::Duration>,
-    node_text: Option<&NodeTextIndex>,
+    node_text: Option<&NodeTextIndex<'_>>,
     boolean_queries: Option<&rustc_hash::FxHashSet<String>>,
     comment_view: bool,
 ) -> Option<FxHashMap<String, ConditionResult>> {

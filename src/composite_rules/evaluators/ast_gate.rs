@@ -121,6 +121,10 @@ pub(crate) fn source_contains(source: &[u8], literal: &[u8], ci: bool) -> bool {
     if !ci {
         return memchr::memmem::find(source, literal).is_some();
     }
+    if let Ok(needle) = std::str::from_utf8(literal) {
+        return crate::composite_rules::condition::cached_ci_searcher(needle)
+            .is_none_or(|ac| ac.is_match(source));
+    }
     aho_corasick::AhoCorasick::builder()
         .ascii_case_insensitive(true)
         .build([literal])
@@ -372,8 +376,8 @@ enum NodePredicateValue {
 /// Display evidence is truncated and decoded literals lose source spelling;
 /// neither can prove that a Tree-sitter capture is absent.
 #[derive(Debug, Default)]
-pub(crate) struct NodeTextIndex {
-    texts: rustc_hash::FxHashMap<String, rustc_hash::FxHashSet<Box<str>>>,
+pub(crate) struct NodeTextIndex<'src> {
+    texts: rustc_hash::FxHashMap<String, rustc_hash::FxHashSet<&'src str>>,
     kinds: rustc_hash::FxHashSet<Box<str>>,
     for_statements: Vec<std::ops::Range<usize>>,
     complete: bool,
@@ -400,7 +404,7 @@ fn indexed_kind(kind: &str) -> bool {
     )
 }
 
-impl NodeTextIndex {
+impl<'src> NodeTextIndex<'src> {
     pub(crate) fn finish(&mut self) {
         self.complete = true;
     }
@@ -420,7 +424,7 @@ impl NodeTextIndex {
         self.complete.then_some(&self.comments)
     }
 
-    pub(crate) fn record_node(&mut self, node: &tree_sitter::Node<'_>, source: &[u8]) {
+    pub(crate) fn record_node(&mut self, node: &tree_sitter::Node<'_>, source: &'src [u8]) {
         if super::ast_comment_view::is_comment(node)
             && self
                 .comments
@@ -451,23 +455,18 @@ impl NodeTextIndex {
         }
     }
 
-    pub(crate) fn record(&mut self, kind: &str, text: &str) {
+    pub(crate) fn record(&mut self, kind: &str, text: &'src str) {
         if !indexed_kind(kind) {
             return;
         }
         if let Some(values) = self.texts.get_mut(kind) {
-            if !values.contains(text) {
-                values.insert(text.into());
-            }
+            values.insert(text);
         } else {
-            self.texts
-                .entry(kind.to_owned())
-                .or_default()
-                .insert(text.into());
+            self.texts.entry(kind.to_owned()).or_default().insert(text);
         }
     }
 
-    pub(super) fn new(tree: &tree_sitter::Tree, source: &str) -> Self {
+    pub(super) fn new(tree: &tree_sitter::Tree, source: &'src str) -> Self {
         let mut values = Self::default();
         let mut cursor = tree.walk();
         let mut depth: u32 = 0;
@@ -581,11 +580,11 @@ impl RequiredNodes {
         )
     }
 
-    pub(super) fn may_match(&self, index: &NodeTextIndex) -> bool {
+    pub(super) fn may_match(&self, index: &NodeTextIndex<'_>) -> bool {
         self.0.is_empty() || (0..self.0.len()).any(|pattern| self.pattern_may_match(pattern, index))
     }
 
-    pub(super) fn pattern_may_match(&self, pattern: usize, index: &NodeTextIndex) -> bool {
+    pub(super) fn pattern_may_match(&self, pattern: usize, index: &NodeTextIndex<'_>) -> bool {
         self.0.get(pattern).is_none_or(|pattern| {
             pattern.iter().all(|p| {
                 if matches!(p.predicate, NodePredicateValue::Present) {

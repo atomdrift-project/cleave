@@ -211,7 +211,7 @@ fn eval_condition(
                         exact.as_ref(),
                         substr.as_ref(),
                         regex.as_ref(),
-                        arg.as_ref(),
+                        arg.as_deref(),
                         args.as_deref(),
                         crate::composite_rules::evaluators::symbol_string::CallSite {
                             module_level: *module_level,
@@ -230,7 +230,7 @@ fn eval_condition(
                             exact.as_ref(),
                             substr.as_ref(),
                             regex.as_ref(),
-                            arg.as_ref(),
+                            arg.as_deref(),
                             ctx,
                         )
                     )

@@ -1062,15 +1062,15 @@ impl UnifiedSourceAnalyzer {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn extract_ast_facts(
+    fn extract_ast_facts<'src>(
         &self,
         tree: &tree_sitter::Tree,
-        content: &str,
+        content: &'src str,
         report: &mut AnalysisReport,
         required_node_types: &FxHashSet<String>,
         call_node_types: &FxHashSet<&'static str>,
         kind_cache: &mut AstKindCache,
-        node_text: &mut crate::composite_rules::evaluators::NodeTextIndex,
+        node_text: &mut crate::composite_rules::evaluators::NodeTextIndex<'src>,
         seen_strings: &mut SeenStrings,
     ) {
         let source = content.as_bytes();
@@ -1089,15 +1089,15 @@ impl UnifiedSourceAnalyzer {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn walk_ast_facts<'a>(
+    fn walk_ast_facts<'a, 'src>(
         &self,
         cursor: &mut tree_sitter::TreeCursor<'a>,
-        source: &[u8],
+        source: &'src [u8],
         report: &mut AnalysisReport,
         required_node_types: &FxHashSet<String>,
         call_node_types: &FxHashSet<&'static str>,
         kind_cache: &mut AstKindCache,
-        node_text: &mut crate::composite_rules::evaluators::NodeTextIndex,
+        node_text: &mut crate::composite_rules::evaluators::NodeTextIndex<'src>,
         seen_strings: &mut SeenStrings,
     ) {
         let mut depth: u32 = 0;

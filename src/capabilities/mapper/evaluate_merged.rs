@@ -30,7 +30,7 @@ pub(crate) struct AnalysisBorrow<'a, 'b> {
     /// Kind-cache filled during the source analyzer's AST fact walk so
     /// evaluation does not walk the same tree again.
     pub(crate) ast_kind_cache: Option<&'a AstKindCache>,
-    pub(crate) ast_node_text: Option<&'a crate::composite_rules::evaluators::NodeTextIndex>,
+    pub(crate) ast_node_text: Option<&'a crate::composite_rules::evaluators::NodeTextIndex<'a>>,
 }
 
 impl<'a, 'b> AnalysisBorrow<'a, 'b> {
@@ -57,7 +57,7 @@ impl<'a, 'b> AnalysisBorrow<'a, 'b> {
 
     pub(crate) fn with_ast_node_text(
         mut self,
-        index: &'a crate::composite_rules::evaluators::NodeTextIndex,
+        index: &'a crate::composite_rules::evaluators::NodeTextIndex<'a>,
     ) -> Self {
         self.ast_node_text = Some(index);
         self

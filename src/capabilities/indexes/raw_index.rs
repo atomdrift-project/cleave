@@ -916,6 +916,35 @@ impl RawContentRegexIndex {
                         }
                     }
                 }
+                // For these literals the candidate test is just a substring
+                // search. Masking comments can synthesize whitespace, so those
+                // queries still evaluate their masked source directly.
+                Condition::Text(TextQuery {
+                    substr: Some(literal),
+                    word: None,
+                    regex: None,
+                    exact: None,
+                    exclude_html_comments: false,
+                    exclude_comments: false,
+                    case_insensitive,
+                    ..
+                }) if literal.is_ascii() && literal.len() >= 3 => {
+                    let pattern = WordPattern {
+                        word: literal.clone(),
+                        case_insensitive: *case_insensitive,
+                        trait_idx,
+                    };
+                    if trait_def.r#for.contains(&RuleFileType::All) {
+                        universal_substr.push(pattern);
+                    } else {
+                        for ft in &trait_def.r#for {
+                            by_file_type_substr
+                                .entry(*ft)
+                                .or_default()
+                                .push(pattern.clone());
+                        }
+                    }
+                }
                 Condition::Text(TextQuery {
                     regex: Some(regex_str),
                     case_insensitive,

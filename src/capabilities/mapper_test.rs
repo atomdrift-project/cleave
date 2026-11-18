@@ -2165,7 +2165,7 @@ traits:
 }
 
 #[test]
-fn source_text_regex_decoded_only_still_fires() {
+fn source_text_decoded_only_still_fires() {
     let yaml = r#"
 defaults:
   for: [javascript]
@@ -2176,6 +2176,12 @@ traits:
     if:
       type: text
       regex: "ZXQ_DECODED_REGEX_NEEDLE_9c4a"
+  - id: "test/source-text::decoded-substr"
+    desc: "substring only after decode"
+    crit: notable
+    if:
+      type: text
+      substr: "ZXQ_DECODED_REGEX_NEEDLE_9c4a"
 "#;
     let (_dir, path) = create_test_yaml(yaml);
     let mapper = CapabilityMapper::from_yaml(&path).unwrap();
@@ -2191,14 +2197,21 @@ traits:
         encoding_chain: vec!["base64".to_string()],
         fragments: None,
     });
+    let direct = mapper.evaluate_traits(&report, source.as_bytes());
     mapper.evaluate_and_merge_findings(&mut report, source.as_bytes(), None, None);
-    assert!(
-        report
-            .findings
-            .iter()
-            .any(|f| f.id == "test/source-text::decoded-regex"),
-        "decoded-only regex must survive raw-gate miss"
-    );
+    for id in [
+        "test/source-text::decoded-regex",
+        "test/source-text::decoded-substr",
+    ] {
+        assert!(
+            direct.iter().any(|f| f.id == id),
+            "direct evaluation missed {id}"
+        );
+        assert!(
+            report.findings.iter().any(|f| f.id == id),
+            "merged evaluation missed {id}"
+        );
+    }
 }
 
 #[test]

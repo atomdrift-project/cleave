@@ -54,6 +54,7 @@ pub(crate) struct TraitRegex {
 /// NFAs), the shared `REGEX_SIZE_LIMIT`, and the tunable lazy-DFA budget.
 pub(crate) fn engine_config() -> regex_automata::meta::Config {
     regex_automata::meta::Regex::config()
+        .pool_capacity(1) // Searches lease scratch from our shared pool.
         .onepass(false)
         // The full DFA with the automatic prefilter misses byte-mode matches
         // in regex-automata 0.4.18 (for example, a negated bracket class
@@ -259,8 +260,8 @@ pub(crate) fn shared_byte_engine(
             parking_lot::Mutex::new(Engines::with_hasher(REGEX_CACHE_CAP, Default::default()))
         });
     let key = (Box::from(pattern), insensitive, multiline);
-    let cached = ENGINES.lock().peek(&key).and_then(std::sync::Weak::upgrade);
-    if let Some(existing) = cached {
+    let existing = ENGINES.lock().peek(&key).and_then(std::sync::Weak::upgrade);
+    if let Some(existing) = existing {
         return Some(existing);
     }
     let re = regex_automata::meta::Regex::builder()
@@ -312,14 +313,11 @@ pub(super) fn compile_codepoint(pattern: &str) -> Option<regex_automata::meta::R
 /// pattern is compared on hit, so a hash collision cannot return the wrong
 /// regex — only cost a miss.
 ///
-/// Entries hold an `Arc` clone, so a pattern evicted from the global store
-/// stays alive while some thread's slot still references it. That is bounded by
-/// `LOCAL_REGEX_SLOTS` per thread and is the deliberate trade for dropping the
-/// lock traffic.
+/// Workers keep weak references so a budget eviction can actually release the engine.
 pub(super) const LOCAL_REGEX_SLOTS: usize = 4096;
 
 thread_local! {
-    static LOCAL_REGEX: std::cell::RefCell<Vec<Option<(Box<str>, bool, Arc<TraitRegex>)>>> =
+    static LOCAL_REGEX: std::cell::RefCell<Vec<Option<(Box<str>, bool, std::sync::Weak<TraitRegex>)>>> =
         std::cell::RefCell::new(vec![None; LOCAL_REGEX_SLOTS]);
 }
 
@@ -344,7 +342,7 @@ pub(super) fn local_regex_get(
         let cache = cache.borrow();
         match cache.get(slot) {
             Some(Some((key, ci, regex))) if *ci == case_insensitive && &**key == pattern => {
-                Some(Arc::clone(regex))
+                regex.upgrade()
             }
             _ => None,
         }
@@ -360,7 +358,7 @@ pub(super) fn local_regex_put(
 ) {
     LOCAL_REGEX.with(|cache| {
         if let Some(entry) = cache.borrow_mut().get_mut(slot) {
-            *entry = Some((Box::from(pattern), case_insensitive, Arc::clone(regex)));
+            *entry = Some((Box::from(pattern), case_insensitive, Arc::downgrade(regex)));
         }
     });
 }
@@ -470,33 +468,14 @@ pub(crate) fn lazy_regex(regex: Option<&str>, case_insensitive: bool) -> Option<
     compiled
 }
 
-/// Raw-content matcher's regex pattern source. Serves `word:` by building
-/// `\bword\b`, and enables multi-line mode (`(?m)`/`(?im)`) so `^`/`$` anchor per
-/// line — matching the byte-regex path's `multi_line(true)` (see
-/// `compile_bytes_regex`) so non-ASCII raw patterns honor per-line anchors
-/// identically.
-///
-/// Returns the **pattern string** without compiling anything: the raw matcher
-/// chooses the byte-vs-unicode engine from the pattern alone, so an ASCII pattern
-/// (which matches via a `regex::bytes::Regex`) never pays to compile the unicode
-/// `regex::Regex` it would only call `.as_str()` on — that wasted compile
-/// dominated peak RSS on member-heavy archives. The unicode engine is built (via
-/// [`cached_regex`]) only on the non-ASCII branch, with this exact string.
-pub(crate) fn raw_regex_pattern(
-    word: Option<&str>,
-    regex: Option<&str>,
-    case_insensitive: bool,
-) -> Option<String> {
-    let base = match (word, regex) {
-        (Some(w), _) => format!(r"\b{}\b", regex::escape(w)),
-        (None, Some(r)) => r.to_string(),
-        (None, None) => return None,
-    };
-    Some(if case_insensitive {
-        format!("(?im){base}")
+/// Spell the raw matcher's builder flags explicitly for window analysis and
+/// Unicode searches. The byte matcher takes the same flags directly.
+pub(crate) fn raw_regex_pattern(pattern: &str, case_insensitive: bool) -> String {
+    if case_insensitive {
+        format!("(?im){pattern}")
     } else {
-        format!("(?m){base}")
-    })
+        format!("(?m){pattern}")
+    }
 }
 
 /// Shared, lazy, leaked case-sensitive substring searcher per unique needle.
@@ -511,14 +490,14 @@ pub(crate) fn cached_finder(needle: &str) -> &'static memchr::memmem::Finder<'st
     // corpus), so each thread converges to an uncontended local hit.
     thread_local! {
         static TLS_FINDERS: std::cell::RefCell<
-            rustc_hash::FxHashMap<Box<str>, &'static memchr::memmem::Finder<'static>>,
+            rustc_hash::FxHashMap<&'static [u8], &'static memchr::memmem::Finder<'static>>,
         > = std::cell::RefCell::new(rustc_hash::FxHashMap::default());
     }
-    if let Some(f) = TLS_FINDERS.with(|m| m.borrow().get(needle).copied()) {
+    if let Some(f) = TLS_FINDERS.with(|m| m.borrow().get(needle.as_bytes()).copied()) {
         return f;
     }
     let resolved = cached_finder_shared(needle);
-    TLS_FINDERS.with(|m| m.borrow_mut().insert(Box::from(needle), resolved));
+    TLS_FINDERS.with(|m| m.borrow_mut().insert(resolved.needle(), resolved));
     resolved
 }
 
@@ -535,11 +514,13 @@ pub(super) fn cached_finder_shared(needle: &str) -> &'static memchr::memmem::Fin
     {
         return f;
     }
-    let finder: &'static _ = Box::leak(Box::new(memchr::memmem::Finder::new(needle).into_owned()));
+    let finder = memchr::memmem::Finder::new(needle).into_owned();
     if let Ok(mut cache) = CACHE.write() {
-        return cache.entry(needle.to_string()).or_insert(finder);
+        return cache
+            .entry(needle.to_string())
+            .or_insert_with(|| Box::leak(Box::new(finder)));
     }
-    finder
+    Box::leak(Box::new(finder))
 }
 
 /// Shared, lazy, leaked single-pattern ASCII-case-insensitive Aho-Corasick
@@ -578,11 +559,14 @@ pub(super) fn cached_ci_searcher_shared(
         .ascii_case_insensitive(true)
         .build([needle])
         .ok()?;
-    let ac: &'static _ = Box::leak(Box::new(ac));
     if let Ok(mut cache) = CACHE.write() {
-        return Some(*cache.entry(needle.to_string()).or_insert(ac));
+        return Some(
+            *cache
+                .entry(needle.to_string())
+                .or_insert_with(|| Box::leak(Box::new(ac))),
+        );
     }
-    Some(ac)
+    Some(Box::leak(Box::new(ac)))
 }
 
 #[inline]

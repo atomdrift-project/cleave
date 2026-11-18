@@ -10,8 +10,7 @@ fn classify_patterns() {
     let text = std::fs::read_to_string(path).unwrap();
     let (mut windowed, mut unbounded, mut invalid) = (0usize, 0usize, 0usize);
     for pat in text.lines().filter(|l| !l.is_empty()) {
-        let raw =
-            crate::composite_rules::condition::raw_regex_pattern(None, Some(pat), false).unwrap();
+        let raw = crate::composite_rules::condition::raw_regex_pattern(pat, false);
         if super::parse_hir_like_engine(&raw).is_none() {
             invalid += 1;
             continue;

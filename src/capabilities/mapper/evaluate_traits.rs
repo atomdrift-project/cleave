@@ -39,7 +39,7 @@ pub(crate) struct TraitEvalCache<'a> {
     /// Per regex trait, which `report.strings` hold its prefix literal.
     pub regex_candidate_strings: Option<&'a super::RegexCandidateStrings>,
     pub arch_ranges: Option<&'a [(Arch, std::ops::Range<usize>)]>,
-    pub ast_node_text: Option<&'a crate::composite_rules::evaluators::NodeTextIndex>,
+    pub ast_node_text: Option<&'a crate::composite_rules::evaluators::NodeTextIndex<'a>>,
     pub ast_kind_cache: Option<&'a AstKindCache>,
     /// Raw-file string-index scan ran for this source member. Enables
     /// skip-if-absent for exact/substr/regex-prefix `type: text` without
@@ -530,7 +530,9 @@ impl super::CapabilityMapper {
         // pass (an absent mandatory atom can't match regardless of other
         // findings).
         let has_content_regex = tf & super::flags::CONTENT_RAW != 0
-            || (tf & super::flags::CONTENT_TEXT != 0 && is_raw_text);
+            || (tf & super::flags::CONTENT_TEXT != 0
+                && is_raw_text
+                && (cache.decoded_candidates.is_some() || trait_ctx.encoded_strings().is_empty()));
         if has_content_regex && gate_stats_enabled() {
             RAW_GATE_ELIGIBLE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             if tf & super::flags::RAW_INDEXED != 0 {
@@ -582,7 +584,7 @@ impl super::CapabilityMapper {
         binary_data: &[u8],
         file_type: crate::composite_rules::FileType,
         cancellation: Option<&std::sync::atomic::AtomicBool>,
-        node_text: Option<&crate::composite_rules::evaluators::NodeTextIndex>,
+        node_text: Option<&crate::composite_rules::evaluators::NodeTextIndex<'_>>,
     ) -> Option<FxHashMap<String, crate::composite_rules::context::ConditionResult>> {
         // Rule-performance validation times queries one at a time: all of
         // them, or only those a scoped mapper names (see `measuring_only`).
@@ -1108,8 +1110,17 @@ impl super::CapabilityMapper {
 
         let doomed_index = self.doomed_skip_index();
         let indexes = self.match_indexes();
-        let (doomed_indices, rest_indices): (Vec<usize>, Vec<usize>) =
-            filtered_indices.into_iter().partition(|&idx| {
+        let signature = if file_type.uses_raw_text_search_in(report) {
+            super::content_signature::Signature::source(binary_data, report)
+        } else {
+            None
+        };
+        // Every spelling matched by a path condition is a slice of the target path.
+        let path = super::content_signature::Signature::ascii(report.target.path.as_bytes());
+        let (doomed_indices, rest_indices): (Vec<usize>, Vec<usize>) = filtered_indices
+            .into_iter()
+            .filter(|&idx| indexes.signatures[idx].accepts(signature.as_ref(), path.as_ref()))
+            .partition(|&idx| {
                 doomed_index.should_skip(
                     idx,
                     &self.trait_definitions,

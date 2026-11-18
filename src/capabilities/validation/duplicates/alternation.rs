@@ -512,7 +512,7 @@ pub(super) fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, Patt
             // pattern key so the dedup checker doesn't collapse them into one
             // "reusable atom". (Same name AND same arg still collide.)
             let disc = {
-                let arg_disc = symbol_argument_discriminator(arg.as_ref(), args.as_deref());
+                let arg_disc = symbol_argument_discriminator(arg.as_deref(), args.as_deref());
                 // An `alias:` filter narrows to *aliased* imports
                 // (`import base64 as x`) — a different atom from the plain
                 // import (`import base64`). Fold its presence/value in so the

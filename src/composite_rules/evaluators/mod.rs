@@ -61,8 +61,8 @@ mod yara_tests;
 // Shared Utilities
 // =============================================================================
 
-/// Maximum number of regex patterns to cache (sized for ~128K rules, not all use regex)
-const REGEX_CACHE_MAX_SIZE: usize = 16_384;
+/// Entry limit for the legacy string-regex cache used by lint and auxiliary matchers.
+const REGEX_CACHE_MAX_SIZE: usize = 1_024;
 
 /// Per-regex lazy-DFA scratch budget in bytes (`RegexBuilder::dfa_size_limit`,
 /// i.e. regex-automata's `hybrid_cache_capacity`). The default is 2 MiB per

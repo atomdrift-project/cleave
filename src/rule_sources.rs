@@ -603,6 +603,15 @@ pub(crate) fn shared(root: &Path) -> Result<Arc<RuleSources>> {
     Ok(snapshot)
 }
 
+/// Release the source text once validation has built its mapper and YARA engine.
+pub(crate) fn release_unused(root: &Path) {
+    if let Ok(root) = fs::canonicalize(root) {
+        SOURCES
+            .write()
+            .retain(|s| s.root != root || Arc::strong_count(s) > 1);
+    }
+}
+
 pub(crate) fn invalidate() {
     SOURCES.write().clear();
 }

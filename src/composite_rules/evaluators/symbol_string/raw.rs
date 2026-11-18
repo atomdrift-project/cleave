@@ -112,6 +112,7 @@ pub(crate) fn eval_numeric_literal<'a>(
 pub(super) fn source_raw_windows(
     ctx: &EvaluationContext<'_>,
     pattern: &str,
+    case_insensitive: bool,
     search_start: usize,
     search_end: usize,
 ) -> Option<Vec<(usize, usize)>> {
@@ -135,7 +136,8 @@ pub(super) fn source_raw_windows(
     // `unless:` / extra `type: text` regexes share `current_trait_idx` but not
     // those atoms — windowing them around the `if` hits misses their matches
     // (`loopback-http-url-reference`, `bearer-token`).
-    if !super::super::hits_are_pattern_atoms(ctx.binary_data, hits, pattern) {
+    let flagged = crate::composite_rules::condition::raw_regex_pattern(pattern, case_insensitive);
+    if !super::super::hits_are_pattern_atoms(ctx.binary_data, hits, &flagged) {
         ws::bump(&ws::ATOM_MISMATCH);
         ws::LAST_REASON.with(|r| r.set(3));
         return None;
@@ -143,7 +145,7 @@ pub(super) fn source_raw_windows(
     let windows = super::super::windows_from_atom_hits(
         ctx.binary_data,
         hits,
-        pattern,
+        &flagged,
         search_start,
         search_end,
     );
@@ -174,16 +176,6 @@ pub(crate) fn eval_raw<'a>(
         case_insensitive,
     } = pattern;
     let _mp = crate::mem_profile::phase(crate::mem_profile::Phase::EvalRaw);
-    // `word:` is a literal byte-boundary scan (no regex engine). Only `regex:`
-    // resolves to a pattern string here, and even then the engine is chosen
-    // from the string alone (ASCII → bytes engine, else unicode), so an ASCII
-    // pattern never compiles the unicode `regex::Regex` it would only read
-    // `.as_str()` off of — that wasted compile dominated peak RSS on archives.
-    let raw_pattern = crate::composite_rules::condition::raw_regex_pattern(
-        None,
-        regex.map(String::as_str),
-        case_insensitive,
-    );
     if too_short_for_unbounded_scan(exact, substr, location) {
         return ConditionResult::no_match();
     }
@@ -211,7 +203,7 @@ pub(crate) fn eval_raw<'a>(
     let mut evidence = Vec::new();
     let match_count = if let Some(w) = word {
         scan.word(w, case_insensitive, &mut evidence)
-    } else if let Some(pattern_str) = raw_pattern.as_deref() {
+    } else if let Some(pattern_str) = regex {
         scan.regex(
             pattern_str,
             case_insensitive,
@@ -242,7 +234,7 @@ pub(crate) fn eval_raw<'a>(
         warnings: Vec::new(),
         precision: raw_precision(
             exact.is_some(),
-            word.is_some() || raw_pattern.is_some(),
+            word.is_some() || regex.is_some(),
             substr.is_some(),
             case_insensitive,
             is_check.is_some(),
@@ -531,7 +523,13 @@ impl RawScan<'_, '_> {
                 return Err(true);
             }
             if considered >= MAX_MATCHES_TO_PROCESS {
-                log_match_limit(trait_id, pattern_str);
+                log_match_limit(
+                    trait_id,
+                    &crate::composite_rules::condition::raw_regex_pattern(
+                        pattern_str,
+                        case_insensitive,
+                    ),
+                );
                 return Err(false);
             }
             considered += 1;
@@ -564,7 +562,13 @@ impl RawScan<'_, '_> {
             };
             // Reuse atom offsets the raw-content gate already paid for. No
             // second memmem. Missing offsets / unbounded / PE → full scan.
-            if let Some(spans) = source_raw_windows(self.ctx, pattern_str, self.start, self.end) {
+            if let Some(spans) = source_raw_windows(
+                self.ctx,
+                pattern_str,
+                case_insensitive,
+                self.start,
+                self.end,
+            ) {
                 ws::bump(&ws::WINDOWED);
                 ws::add_bytes(
                     &ws::WINDOWED_BYTES,
@@ -590,7 +594,9 @@ impl RawScan<'_, '_> {
             ws::bump(&ws::STR_ENGINE);
             ws::bump(&ws::FULL);
             ws::add_bytes(&ws::FULL_BYTES, self.end - self.start);
-            if let Some(re) = crate::composite_rules::condition::cached_regex(pattern_str) {
+            let flagged =
+                crate::composite_rules::condition::raw_regex_pattern(pattern_str, case_insensitive);
+            if let Some(re) = crate::composite_rules::condition::cached_regex(&flagged) {
                 let content = self.utf8();
                 re.for_each_find(&content, |start, text| {
                     if let Err(keep_scanning) = admit(text.len()) {

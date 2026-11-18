@@ -340,7 +340,7 @@ pub(crate) struct EvaluationContext<'a> {
     /// batch did not answer, which are no measure of this file.
     pub(crate) measured_ast_queries: Option<&'a rustc_hash::FxHashSet<String>>,
     /// Node kinds and short node texts collected during the source walk.
-    pub(crate) ast_node_text: Option<&'a super::evaluators::NodeTextIndex>,
+    pub(crate) ast_node_text: Option<&'a super::evaluators::NodeTextIndex<'a>>,
     /// Index for O(1) exact string lookups. Values are indices into
     /// `report.strings` (not cloned strings) — the source is always
     /// `string_extractor` and the value/offset are looked up from the entry, so

@@ -32,7 +32,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use parking_lot::Mutex;
 use regex_automata::meta;
-use rustc_hash::FxHashMap;
+use rustc_hash::FxBuildHasher;
 
 /// Global pool budget in bytes: 32 MiB per hardware thread, clamped to
 /// 512 MiB..=4 GiB on 64-bit hosts (64 MiB on a 32-bit address space, where
@@ -159,6 +159,25 @@ fn reserve_cached(bytes: usize) -> bool {
     }
 }
 
+// Once the pool is full, make room for the newly used matcher by evicting
+// the least recently used parked matcher from its shard. Never evict an
+// active checkout or inspect another shard while holding a lock.
+fn admit(id: u64, bytes: usize) -> bool {
+    if reserve_cached(bytes) {
+        return true;
+    }
+    if bytes > global_budget_bytes() / GLOBAL_SHARDS {
+        return false;
+    }
+    let retired = shard_for(id).lock().pop_lru();
+    if let Some((_, entries)) = retired {
+        release_cached(entries.iter().map(|e| e.size).sum());
+        reserve_cached(bytes)
+    } else {
+        false
+    }
+}
+
 fn release_cached(bytes: usize) {
     release_counter(&CACHED_BYTES, bytes);
 }
@@ -171,11 +190,15 @@ fn release_counter(counter: &AtomicUsize, bytes: usize) {
     debug_assert!(previous >= bytes, "regex scratch byte accounting underflow");
 }
 
-type Shard = Mutex<FxHashMap<u64, Vec<Box<Entry>>>>;
+type Shard = Mutex<lru::LruCache<u64, smallvec::SmallVec<[Box<Entry>; 1]>, FxBuildHasher>>;
 
 fn shards() -> &'static [Shard; GLOBAL_SHARDS] {
     static SHARDS: OnceLock<[Shard; GLOBAL_SHARDS]> = OnceLock::new();
-    SHARDS.get_or_init(|| std::array::from_fn(|_| Mutex::new(FxHashMap::default())))
+    SHARDS.get_or_init(|| {
+        std::array::from_fn(|_| {
+            Mutex::new(lru::LruCache::unbounded_with_hasher(Default::default()))
+        })
+    })
 }
 
 #[allow(clippy::cast_possible_truncation)]
@@ -194,7 +217,7 @@ fn global_take(id: u64) -> Option<Box<Entry>> {
     if stack.is_empty() {
         // Do not leave an empty stack behind: ids are minted per compiled
         // engine, so over a long run the key set only ever grows.
-        shard.remove(&id);
+        shard.pop(&id);
     }
     entry
 }
@@ -210,7 +233,7 @@ fn global_take(id: u64) -> Option<Box<Entry>> {
 pub(crate) fn forget(id: u64) {
     // Deallocate outside the shard lock: other threads may be searching
     // unrelated engines in this shard while a retired engine releases bytes.
-    let removed = shard_for(id).lock().remove(&id);
+    let removed = shard_for(id).lock().pop(&id);
     let parked_bytes = removed
         .as_ref()
         .map_or(0, |stack| stack.iter().map(|e| e.size).sum::<usize>());
@@ -236,7 +259,7 @@ pub(crate) fn forget(id: u64) {
 fn global_park(id: u64, entry: Box<Entry>) {
     let size = entry.size;
     let mut shard = shard_for(id).lock();
-    let stack = shard.entry(id).or_default();
+    let stack = shard.get_or_insert_mut(id, Default::default);
     let parked = stack.len() < PER_REGEX_CAP;
     if parked {
         stack.push(entry);
@@ -254,7 +277,7 @@ pub(crate) fn clear_parked() {
     let mut freed = 0usize;
     for shard in shards() {
         let mut shard = shard.lock();
-        for entries in shard.values() {
+        for (_, entries) in shard.iter() {
             freed = freed.saturating_add(entries.iter().map(|entry| entry.size).sum::<usize>());
         }
         shard.clear();
@@ -380,14 +403,14 @@ fn finish(id: u64, mut entry: Box<Entry>, was_reserved: bool, batch: bool) {
         old_size
     };
     let retained = if was_reserved && new_size > old_size {
-        reserve_cached(new_size - old_size)
+        admit(id, new_size - old_size)
     } else if was_reserved {
         if new_size < old_size {
             release_cached(old_size - new_size);
         }
         true
     } else {
-        reserve_cached(new_size)
+        admit(id, new_size)
     };
     if !retained {
         // A previously-reserved cache still owns its old-size reservation when
@@ -500,10 +523,10 @@ mod tests {
         });
         // Switching engines parks the original cache for later reuse.
         with_cache(next_regex_id(), &engine("literal"), |_| {});
-        assert!(shard_for(id).lock().contains_key(&id));
+        assert!(shard_for(id).lock().contains(&id));
         drop(re);
         assert!(
-            !shard_for(id).lock().contains_key(&id),
+            !shard_for(id).lock().contains(&id),
             "the dead engine's ID can never retrieve this parked cache",
         );
     }

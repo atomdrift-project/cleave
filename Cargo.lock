@@ -1887,7 +1887,7 @@ checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 [[package]]
 name = "filefacts"
 version = "3.0.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#e3ee8ad9b8a1d263dbffefcbc35ea95f18e70dbd"
+source = "git+https://github.com/atomdrift-project/filefacts.git#8d3306ca849d439635a70db6d06708dc7323c442"
 dependencies = [
  "aes 0.9.4",
  "aho-corasick",
@@ -4076,9 +4076,9 @@ checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 
 [[package]]
 name = "rand_pcg"
-version = "0.10.2"
+version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "caa0f4137e1c0a72f4c651489402276c8e8e1cf081f3b0ba156d2cbeef09e86a"
+checksum = "eb95882a1e14462c69aea9984bb261293ccfe6022ef8de0eda18bd5afb0052df"
 dependencies = [
  "rand_core 0.10.1",
 ]
@@ -5563,7 +5563,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#e3ee8ad9b8a1d263dbffefcbc35ea95f18e70dbd"
+source = "git+https://github.com/atomdrift-project/filefacts.git#8d3306ca849d439635a70db6d06708dc7323c442"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -5823,7 +5823,7 @@ dependencies = [
 [[package]]
 name = "unpack"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/unpack.git#fb1ae83565ea7e81284f9be1f8a77c9b00ee0419"
+source = "git+https://github.com/atomdrift-project/unpack.git#4903247faecbb75eeeff699df4af252e3c6c93f3"
 dependencies = [
  "aes 0.9.4",
  "aes-gcm",

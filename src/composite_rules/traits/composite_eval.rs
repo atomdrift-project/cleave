@@ -1163,6 +1163,17 @@ impl CompositeTrait {
                         tagged_to_line(t, &line_starts).map(|line| (line, t.condition_index))
                     })
                     .collect();
+                // A positioned all-leg without a line mapping is different
+                // from a file-wide fact that never had a position.
+                if line_starts.is_empty()
+                    && tagged_locations.iter().any(|tag| {
+                        tag.condition_index < all_count
+                            && tagged_to_byte_offset(tag).is_some()
+                            && !items.iter().any(|(_, index)| *index == tag.condition_index)
+                    })
+                {
+                    return None;
+                }
                 line_window = Some(evidence_within_line_range_grouped(
                     &items,
                     max_line_span,
@@ -1213,10 +1224,14 @@ impl CompositeTrait {
             .into_iter()
             .filter_map(|mut ev| {
                 if !ev.offsets.is_empty() {
+                    let explicit_line = line_starts_cache
+                        .as_ref()
+                        .filter(|starts| starts.is_empty())
+                        .and_then(|starts| evidence_to_line(&ev, starts));
                     ev.offsets.retain(|offset| {
                         if let (Some((start, end)), Some(ls)) = (line_window, &line_starts_cache) {
-                            let line = byte_offset_to_line(ls, *offset as usize);
-                            return line >= start && line <= end;
+                            let line = byte_offset_to_line(ls, *offset as usize).or(explicit_line);
+                            return line.is_some_and(|line| (start..=end).contains(&line));
                         }
                         byte_window.is_none_or(|(start, end)| *offset >= start && *offset <= end)
                     });

@@ -3376,6 +3376,47 @@ fn test_near_lines_with_byte_offsets() {
 }
 
 #[test]
+fn test_near_lines_after_source_bytes_are_released() {
+    let report = empty_report();
+    let rule = proximity_rule(&["trait-a", "trait-b"], Some(0), None);
+    let offsets = [
+        finding_at_offset("trait-a", 4),
+        finding_at_offset("trait-b", 1200),
+    ];
+    assert!(
+        rule.evaluate(&proximity_ctx(&report, b"", &offsets))
+            .is_none()
+    );
+
+    let mut lines = [
+        finding_at_line("trait-a", 2, 1),
+        finding_at_line("trait-b", 2, 4),
+    ];
+    lines[0].evidence[0].offsets.push(4);
+    lines[1].evidence[0].offsets.push(7);
+    assert!(
+        rule.evaluate(&proximity_ctx(&report, b"", &lines))
+            .is_some()
+    );
+
+    let mut combined = [
+        lines[0].clone(),
+        lines[1].clone(),
+        finding_at_offset("trait-c", 1200),
+    ];
+    let rule = proximity_rule(&["trait-a", "trait-b", "trait-c"], Some(1), None);
+    assert!(
+        rule.evaluate(&proximity_ctx(&report, b"", &combined))
+            .is_none()
+    );
+    combined[2].evidence[0].offsets.clear();
+    assert!(
+        rule.evaluate(&proximity_ctx(&report, b"", &combined))
+            .is_some()
+    );
+}
+
+#[test]
 fn test_near_lines_mixed_evidence_formats() {
     // Mix of AST evidence (line:column) and string evidence (byte offset)
     let report = empty_report();
@@ -3869,7 +3910,7 @@ fn test_build_line_index() {
 #[test]
 fn test_build_line_index_empty() {
     let idx = super::traits::build_line_index(b"");
-    assert_eq!(idx, vec![0]);
+    assert!(idx.is_empty());
 }
 
 #[test]
@@ -3883,12 +3924,12 @@ fn test_byte_offset_to_line() {
     let data = b"aaa\nbbb\nccc\n";
     let idx = super::traits::build_line_index(data);
     // Line starts: [0, 4, 8, 12]
-    assert_eq!(super::traits::byte_offset_to_line(&idx, 0), 1); // start of line 1
-    assert_eq!(super::traits::byte_offset_to_line(&idx, 2), 1); // within line 1
-    assert_eq!(super::traits::byte_offset_to_line(&idx, 4), 2); // start of line 2
-    assert_eq!(super::traits::byte_offset_to_line(&idx, 6), 2); // within line 2
-    assert_eq!(super::traits::byte_offset_to_line(&idx, 8), 3); // start of line 3
-    assert_eq!(super::traits::byte_offset_to_line(&idx, 11), 3); // end of line 3
+    assert_eq!(super::traits::byte_offset_to_line(&idx, 0), Some(1)); // start of line 1
+    assert_eq!(super::traits::byte_offset_to_line(&idx, 2), Some(1)); // within line 1
+    assert_eq!(super::traits::byte_offset_to_line(&idx, 4), Some(2)); // start of line 2
+    assert_eq!(super::traits::byte_offset_to_line(&idx, 6), Some(2)); // within line 2
+    assert_eq!(super::traits::byte_offset_to_line(&idx, 8), Some(3)); // start of line 3
+    assert_eq!(super::traits::byte_offset_to_line(&idx, 11), Some(3)); // end of line 3
 }
 
 #[test]

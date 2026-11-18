@@ -1131,14 +1131,14 @@ fn tagged_to_line(tagged: &TaggedLocation, line_starts: &[usize]) -> Option<usiz
 
     // Try byte offset
     if let Some(offset) = tagged.byte_offset {
-        return Some(byte_offset_to_line(line_starts, offset as usize));
+        return byte_offset_to_line(line_starts, offset as usize);
     }
 
     // Try hex offset from location
     if let Some(ref loc) = tagged.location
         && let Some(offset) = parse_location_as_byte_offset(loc)
     {
-        return Some(byte_offset_to_line(line_starts, offset as usize));
+        return byte_offset_to_line(line_starts, offset as usize);
     }
 
     None
@@ -1190,6 +1190,11 @@ fn tag_evidence(evidence: &[Evidence], condition_index: usize) -> Vec<TaggedLoca
 }
 
 pub(super) fn build_line_index(data: &[u8]) -> Vec<usize> {
+    // Follow-up analysis can have evidence offsets without their source bytes.
+    // An index with only line 1 would put all of those offsets on that line.
+    if data.is_empty() {
+        return Vec::new();
+    }
     let mut starts = vec![0];
     for (i, &b) in data.iter().enumerate() {
         if b == b'\n' {
@@ -1200,11 +1205,14 @@ pub(super) fn build_line_index(data: &[u8]) -> Vec<usize> {
 }
 
 /// Convert a byte offset to a 1-indexed line number using the precomputed line index.
-pub(super) fn byte_offset_to_line(line_starts: &[usize], offset: usize) -> usize {
-    match line_starts.binary_search(&offset) {
+pub(super) fn byte_offset_to_line(line_starts: &[usize], offset: usize) -> Option<usize> {
+    if line_starts.is_empty() {
+        return None;
+    }
+    Some(match line_starts.binary_search(&offset) {
         Ok(idx) => idx + 1, // Exact start of a line
         Err(idx) => idx,    // Falls within line (idx-1), but 1-indexed → idx
-    }
+    })
 }
 
 /// Extract a line number from an evidence item.
@@ -1227,14 +1235,14 @@ pub(super) fn evidence_to_line(evidence: &Evidence, line_starts: &[usize]) -> Op
 
     // Try byte offsets from the offsets vec
     if let Some(&first_offset) = evidence.offsets.first() {
-        return Some(byte_offset_to_line(line_starts, first_offset as usize));
+        return byte_offset_to_line(line_starts, first_offset as usize);
     }
 
     // Try hex offset from location (e.g., "0x1234", "offset:0x1234")
     if let Some(ref loc) = evidence.location
         && let Some(offset) = parse_location_as_byte_offset(loc)
     {
-        return Some(byte_offset_to_line(line_starts, offset as usize));
+        return byte_offset_to_line(line_starts, offset as usize);
     }
 
     None

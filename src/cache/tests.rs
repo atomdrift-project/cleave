@@ -65,7 +65,7 @@ fn traits_index_serves_the_scan_until_the_tree_changes() {
     assert_eq!(served.rule_revision, scan.rule_revision);
     assert!(read_tree_index(&index, &tmp.path().join("other"), &canonical).is_none());
 
-    fs::write(&rule, b"rule a { strings: $s = \"abd\" condition: $s }\n").unwrap();
+    rewrite_keeping_mtime(&rule, "rule a { strings: $s = \"abd\" condition: $s }\n");
     assert!(read_tree_index(&index, &traits, &canonical).is_none());
     fs::write(&index, b"\xff\xff\xff\xff").unwrap();
     assert!(read_tree_index(&index, &traits, &canonical).is_none());
@@ -314,13 +314,15 @@ fn load_probe_desc(dir: &Path, full_validation: bool) -> Option<String> {
         .map(|t| t.desc.clone())
 }
 
-// The mapper cache written for one tree must not be served for a
-// same-length edit of it under a restored mtime, whether the load
+// The mapper cache written for a checkout must not be served after a
+// same-length edit under a restored mtime, whether the load
 // validates nothing or skips validation on a clean mark. Invalidating the
 // scan stands in for the next process, which reads the tree afresh.
 #[test]
 fn mapper_cache_misses_on_a_same_length_edit() {
     let dir = probe_tree("probe aaa");
+    // In-place edits need the file-level index check used for checkouts.
+    fs::create_dir(dir.path().join(".git")).unwrap();
     let yaml = dir.path().join("objectives/probe/memo.yaml");
     assert_eq!(
         load_probe_desc(dir.path(), false).as_deref(),

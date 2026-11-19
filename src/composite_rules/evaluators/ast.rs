@@ -105,6 +105,8 @@ struct CompiledAstQuery {
     subqueries: RequiredSubqueries,
     deferred: DeferredPredicates,
     ignore_comments: bool,
+    /// Tree-sitter's regex predicates need separate scratch during timing.
+    has_match_predicates: bool,
     /// Node kinds the patterns are rooted at, when every pattern is one
     /// node (see [`super::ast_gate::pattern_root_kinds`]): the query can then
     /// run per node of those kinds. Sorted for binary search.
@@ -275,10 +277,10 @@ pub(crate) fn eval_ast<'a>(
     };
 
     // Get node types to search for
-    let node_types: Vec<&str> = if let Some(k) = kind {
+    let node_types: &[&str] = if let Some(k) = kind {
         map_kind_to_node_types(k, ctx.file_type)
-    } else if let Some(n) = node {
-        vec![n]
+    } else if let Some(n) = node.as_ref() {
+        std::slice::from_ref(n)
     } else {
         return ConditionResult::no_match();
     };
@@ -333,7 +335,7 @@ pub(crate) fn eval_ast<'a>(
                 MatchMode::Regex => compiled.as_ref().is_some_and(|re| re.is_match(candidate)),
             }
         };
-        for &nt in &node_types {
+        for &nt in node_types {
             if let Some(nodes) = cache.get(nt) {
                 for node_ev in nodes {
                     // Try the primary value first (full node text), then
@@ -384,7 +386,7 @@ pub(crate) fn eval_ast<'a>(
     eval_ast_pattern_multi(
         cached_tree,
         source,
-        &node_types,
+        node_types,
         pattern,
         match_mode,
         case_insensitive,
@@ -406,30 +408,29 @@ fn simple_pattern_may_match(
     match_mode: MatchMode,
     case_insensitive: bool,
 ) -> bool {
-    let requirement: Option<Vec<(Box<[u8]>, bool)>> = match match_mode {
-        // The condition's flag compiles the regex case-insensitively; the
-        // atoms of the `(?i)` form follow the regex crate's own case folding.
-        MatchMode::Regex => super::ast_gate::regex_requirement(&if case_insensitive {
-            format!("(?i){pattern}")
-        } else {
-            pattern.to_owned()
-        }),
-        // Exact matching folds ASCII case only.
-        MatchMode::Exact => Some(vec![(pattern.as_bytes().into(), case_insensitive)]),
-        // Case-insensitive substrings compare Unicode lowercase forms, under
-        // which non-ASCII text can lowercase to ASCII (`K` Kelvin to `k`).
-        MatchMode::Substr if case_insensitive => None,
-        MatchMode::Substr => Some(vec![(pattern.as_bytes().into(), false)]),
-    };
-    let Some(any_of) = requirement else {
-        return true;
-    };
-    any_of.iter().any(|(literal, ci)| {
+    let present = |literal: &[u8], ci| {
         literal
             .split(|&b| b == b'.')
             .filter(|piece| piece.len() >= 3)
-            .all(|piece| super::ast_gate::source_contains(source, piece, *ci))
-    })
+            .all(|piece| super::ast_gate::source_contains(source, piece, ci))
+    };
+    match match_mode {
+        MatchMode::Regex => {
+            let folded;
+            let pattern = if case_insensitive {
+                folded = format!("(?i){pattern}");
+                &folded
+            } else {
+                pattern
+            };
+            super::ast_gate::regex_requirement(pattern)
+                .is_none_or(|atoms| atoms.iter().any(|(literal, ci)| present(literal, *ci)))
+        }
+        MatchMode::Exact => present(pattern.as_bytes(), case_insensitive),
+        // Substring matching lowercases Unicode. A non-ASCII source character
+        // can lowercase to an ASCII character absent from the original bytes.
+        MatchMode::Substr => case_insensitive || present(pattern.as_bytes(), false),
+    }
 }
 
 /// Evaluate AST pattern matching against multiple node types
@@ -751,8 +752,9 @@ fn run_ast_query<'a>(
     // contend on tiny inputs and charge that contention as AST execution.
     // deep_clone reuses compiled regex code while giving caches private pools;
     // copying stays outside cursor timing and inside the whole-rule deadline.
-    let measured_query =
-        crate::validation_performance::judges(query_str, ctx).then(|| compiled.query.deep_clone());
+    let measured_query = (compiled.has_match_predicates
+        && crate::validation_performance::judges(query_str, ctx))
+    .then(|| compiled.query.deep_clone());
     let _execution_timer = crate::validation_performance::ast_execution_started();
     if RequiredSubqueries::enabled() {
         let mut enabled = vec![true; compiled.query.pattern_count()];
@@ -1069,6 +1071,10 @@ fn cached_ast_query_for_source(
             nodes,
             subqueries,
             ignore_comments,
+            // Includes #any-match?, #not-match?, and #any-not-match?.
+            // Text or comments containing "match?" can only cause an
+            // unnecessary clone.
+            has_match_predicates: query_str.contains("match?"),
             root_kinds,
             anchors,
         })

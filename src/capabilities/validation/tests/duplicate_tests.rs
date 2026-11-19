@@ -957,6 +957,31 @@ fn test_cross_type_keeps_function_definition_distinct_from_call_and_text() {
     assert!(!warnings[0].contains("definitions.yaml"));
 }
 
+#[test]
+fn literal_coverage_scopes_preserve_declared_types() {
+    use super::super::shared::PatternScope;
+
+    let types = FileType::all_variants();
+    let scopes: Vec<_> = types.iter().map(|ty| PatternScope::new(&[*ty])).collect();
+    let empty = PatternScope::new(&[]);
+    for (left, a) in types.iter().zip(&scopes) {
+        assert_eq!(a.labels(), left.label());
+        assert!(empty.overlap_mask().intersects(a.overlap_mask()));
+        for (right, b) in types.iter().zip(&scopes) {
+            let expected =
+                *left == FileType::All || *right == FileType::All || left.label() == right.label();
+            assert_eq!(
+                a.overlap_mask().intersects(b.overlap_mask()),
+                expected,
+                "{left:?}, {right:?}"
+            );
+        }
+    }
+
+    let repeated = PatternScope::new(&[FileType::Pe, FileType::Elf, FileType::Pe]);
+    assert_eq!(repeated.labels(), "elf, pe");
+}
+
 /// Four same-context, same-tier regexes matching one literal phrase is the
 /// shape this reports: the phrase is covered several times over.
 #[test]
@@ -1055,6 +1080,15 @@ fn test_literal_coverage_with_stored_facts_matches_a_cold_run() {
         assert!(expected.is_empty(), "{expected:?}");
         assert_eq!(run(&edited, true), expected);
     }
+    // A malformed pattern in an ungated batch must not hide a valid neighbor.
+    let mut mixed = patterns.to_vec();
+    mixed.push(r"[A-Z][a-z]+");
+    let expected = run(&tree("GetProcAddress", &mixed), false);
+    assert!(expected[0].contains("matched by 5 regexes"));
+    mixed.push(r"[^");
+    let mixed = tree("GetProcAddress", &mixed);
+    assert_eq!(run(&mixed, false), expected);
+    assert_eq!(run(&mixed, true), expected);
     // The original tree is still served correctly after the edits.
     assert_eq!(run(&base, true), cold);
 }

@@ -13,7 +13,7 @@
 //!   (crit/conf/platforms/unless/downgrade) — candidates for one trait with a downgrade
 //! - **Alternation merge candidates**: Regex patterns differing only in first token case that could be combined
 
-use super::shared::{MatchSignature, PatternLocation};
+use super::shared::{MatchSignature, PatternLocation, PatternScope};
 use crate::composite_rules::{
     Arch, CompositeTrait, Condition, DowngradeConditions, FileType as RuleFileType, KvQuery,
     Platform, TraitDefinition, condition::EncodingSpec, evaluators::build_regex,
@@ -643,7 +643,10 @@ fn condition_label(location: &PatternLocation) -> String {
 /// - "all" in either set = overlaps with everything
 /// - Regular intersection check for specific file types
 fn has_filetype_overlap(loc_a: &PatternLocation, loc_b: &PatternLocation) -> bool {
-    has_filetype_overlap_case(&loc_a.for_types, &loc_b.for_types)
+    loc_a
+        .for_types
+        .overlap_mask()
+        .intersects(loc_b.for_types.overlap_mask())
 }
 
 fn has_same_count_density_filters(loc_a: &PatternLocation, loc_b: &PatternLocation) -> bool {
@@ -761,9 +764,7 @@ pub(crate) fn find_string_pattern_duplicates(
                     let for_str = if l.for_types.is_empty() {
                         "all types".to_string()
                     } else {
-                        let mut types: Vec<_> = l.for_types.iter().cloned().collect();
-                        types.sort();
-                        format!("[{}]", types.join(", "))
+                        format!("[{}]", l.for_types.labels())
                     };
                     format!(
                         "   {}: {} ({} {}: '{}', for: {}, conf: {:.2}, crit: {:?})",
@@ -822,9 +823,7 @@ pub(crate) fn find_string_pattern_duplicates(
                 let for_str = if l.for_types.is_empty() {
                     "all types".to_string()
                 } else {
-                    let mut types: Vec<_> = l.for_types.iter().cloned().collect();
-                    types.sort();
-                    format!("[{}]", types.join(", "))
+                    format!("[{}]", l.for_types.labels())
                 };
                 format!(
                     "   {}: {} ({} {}: '{}', for: {})",

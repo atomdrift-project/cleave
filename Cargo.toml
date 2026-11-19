@@ -140,7 +140,7 @@ streaming-iterator = "0.1"
 bytes = "1"
 
 # Serialization
-serde = { version = "1.0", features = ["derive"] }
+serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = { version = "1.0", features = ["raw_value"] }
 serde-saphyr = "1.3"
 simd-json = "0.17"
@@ -161,6 +161,7 @@ tar = "0.4"
 flate2 = "1.1"
 crc32fast = "1.5"
 bzip2 = "0.6"
+lzma-rust2 = { version = "0.25", default-features = false, features = ["std", "xz"] }
 xz2 = "0.1"
 ar = "0.9"
 cpio = "0.4"
@@ -414,6 +415,8 @@ opt-level = 3
 # once filefacts is pushed and `cargo update -p filefacts` runs.
 
 [patch.crates-io]
+# Fold Unicode ranges by visiting only mapped code points.
+regex-syntax = { git = "https://github.com/tstromberg/regex" }
 # tree-sitter carries an illumos build fix not yet released upstream; both
 # crates must come from the same fork because tree-sitter uses its in-tree
 # tree-sitter-language and Cargo links only one copy. Each root manifest

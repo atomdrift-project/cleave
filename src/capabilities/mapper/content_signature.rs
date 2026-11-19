@@ -1,4 +1,4 @@
-//! Short ASCII byte sequences used to reject impossible raw, text, and path matches.
+//! Short ASCII byte sequences used to reject impossible raw, text, path and literal matches.
 //! Hash collisions only admit extra candidates for the full matcher.
 use crate::composite_rules::{Condition, TraitDefinition};
 use regex_syntax::hir::{Hir, HirKind};
@@ -29,6 +29,7 @@ fn trigram(a: u8, b: u8, c: u8) -> u16 {
 pub(super) enum Requirement {
     Content(RequiredGrams),
     Path(RequiredGrams),
+    Literal(RequiredGrams),
     None,
 }
 
@@ -45,6 +46,19 @@ impl Requirement {
             Condition::Text(q) if !q.exclude_html_comments && !q.exclude_comments => Self::Content(
                 RequiredGrams::required(&q.exact, &q.substr, &q.word, &q.regex, q.case_insensitive),
             ),
+            Condition::Literal(q)
+                if matches!(q.kind.as_deref(), None | Some("string"))
+                    && q.value.is_none()
+                    && q.radix.is_none() =>
+            {
+                Self::Literal(RequiredGrams::required(
+                    &q.exact,
+                    &q.substr,
+                    &q.word,
+                    &q.regex,
+                    q.case_insensitive,
+                ))
+            }
             Condition::Path(q) => Self::Path(RequiredGrams::required(
                 &q.exact,
                 &q.substr,
@@ -56,9 +70,15 @@ impl Requirement {
         }
     }
 
-    pub(super) fn accepts(&self, source: Option<&Signature>, path: Option<&Signature>) -> bool {
+    pub(super) fn accepts(
+        &self,
+        source: Option<&Signature>,
+        path: Option<&Signature>,
+        literals: Option<&Signature>,
+    ) -> bool {
         match self {
             Self::Content(bits) => source.is_none_or(|s| s.accepts(bits)),
+            Self::Literal(bits) => literals.is_none_or(|s| s.accepts(bits)),
             Self::Path(bits) => path.is_none_or(|s| s.accepts(bits)),
             Self::None => true,
         }
@@ -110,6 +130,24 @@ impl Signature {
             signature.add_text(s.value.as_bytes());
         }
         Some(signature)
+    }
+
+    /// Use the same decoded values as the literal evaluator. Each value starts
+    /// a fresh sequence so adjacent literals cannot contribute a shared gram.
+    pub(super) fn literals(
+        ctx: &crate::composite_rules::context::EvaluationContext<'_>,
+    ) -> Option<Self> {
+        let mut sig = Self([0; 1024]);
+        let mut remaining: usize = 4 * 1024 * 1024;
+        for &index in ctx.literal_strings() {
+            let bytes = ctx.report.strings[index as usize].value.as_bytes();
+            remaining = remaining.checked_sub(bytes.len())?;
+            if !bytes.is_ascii() {
+                return None;
+            }
+            sig.add_text(bytes);
+        }
+        Some(sig)
     }
 
     pub(super) fn ascii(bytes: &[u8]) -> Option<Self> {
@@ -321,6 +359,33 @@ mod tests {
         let words = (0..16).map(|i| format!("{i:02}z")).collect::<Vec<_>>();
         let pattern = words.join("|");
         assert!(words.iter().all(|word| possible(&pattern, word)));
+    }
+
+    #[test]
+    fn literal_signature_uses_extracted_values_and_defers_on_unicode() {
+        use crate::composite_rules::{FileType, context::EvaluationContext};
+        let mut report = AnalysisReport::new(Default::default());
+        let required = RequiredGrams::required(&Some("ab".into()), &None, &None, &None, false);
+        for value in ["a", "b"] {
+            report.strings.push(crate::types::StringInfo {
+                value: value.into(),
+                offset: None,
+                encoding: String::new(),
+                string_type: None,
+                section: Some("ast".into()),
+                encoding_chain: Vec::new(),
+                fragments: None,
+            });
+        }
+        let signature = |report: &AnalysisReport| {
+            let ctx = EvaluationContext::test_only_new(report, b"ab", FileType::Python);
+            Signature::literals(&ctx)
+        };
+        assert!(signature(&report).is_some_and(|s| !s.accepts(&required)));
+        report.strings[0].value = "AB".into();
+        assert!(signature(&report).is_some_and(|s| s.accepts(&required)));
+        report.strings[1].value = "K".into();
+        assert!(signature(&report).is_none());
     }
 
     #[test]

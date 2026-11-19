@@ -202,14 +202,16 @@ pub(crate) fn find_should_use_defaults(
 #[must_use]
 pub(crate) fn find_impossible_needs(
     composite_rules: &[CompositeTrait],
-    all_trait_ids: &[String],
+    all_trait_ids: &rustc_hash::FxHashSet<&str>,
 ) -> Vec<(String, usize, usize)> {
     let mut violations = Vec::new();
+    let mut sorted_ids: Vec<_> = all_trait_ids.iter().copied().collect();
+    sorted_ids.sort_unstable();
 
     for rule in composite_rules {
         if let (Some(needs), Some(any_items)) = (rule.needs, rule.any.as_ref()) {
             // Calculate potential matches, accounting for directory references
-            let potential_matches = count_potential_matches(any_items, all_trait_ids);
+            let potential_matches = count_potential_matches(any_items, &sorted_ids);
 
             if needs > potential_matches {
                 violations.push((rule.id.clone(), needs, potential_matches));
@@ -225,7 +227,7 @@ pub(crate) fn find_impossible_needs(
 /// - Specific trait references (with `::`) count as 1
 /// - Directory references (with `/` but no `::`) count as the number of traits in that directory
 /// - Non-trait conditions count as 1
-fn count_potential_matches(conditions: &[Condition], all_trait_ids: &[String]) -> usize {
+fn count_potential_matches(conditions: &[Condition], sorted_ids: &[&str]) -> usize {
     let mut total = 0;
 
     for condition in conditions {
@@ -237,10 +239,12 @@ fn count_potential_matches(conditions: &[Condition], all_trait_ids: &[String]) -
                 // Directory reference: count traits matching this prefix
                 let prefix_new = format!("{}::", id);
                 let prefix_legacy = format!("{}/", id);
-                let matching_count = all_trait_ids
-                    .iter()
-                    .filter(|t| t.starts_with(&prefix_new) || t.starts_with(&prefix_legacy))
-                    .count();
+                // All ids with a given prefix form one contiguous range.
+                let count = |prefix: &str| {
+                    let start = sorted_ids.partition_point(|id| *id < prefix);
+                    sorted_ids[start..].partition_point(|id| id.starts_with(prefix))
+                };
+                let matching_count = count(&prefix_new) + count(&prefix_legacy);
                 // If no traits found, still count as 1 (might be a forward reference or typo)
                 total += matching_count.max(1);
             } else {
@@ -254,6 +258,23 @@ fn count_potential_matches(conditions: &[Condition], all_trait_ids: &[String]) -
     }
 
     total
+}
+
+#[test]
+fn potential_matches_respects_directory_boundaries() {
+    let ids = [
+        "pkg/worker",
+        "pkg/worker-extra::one",
+        "pkg/worker/a",
+        "pkg/worker/sub::two",
+        "pkg/worker::three",
+        "pkg/workers::four",
+    ];
+    let count = |id: &str| count_potential_matches(&[Condition::Trait { id: id.into() }], &ids);
+    assert_eq!(count("pkg/worker"), 3);
+    assert_eq!(count("pkg/worker/sub"), 1);
+    assert_eq!(count("pkg/missing"), 1);
+    assert_eq!(count("pkg/worker::three"), 1);
 }
 
 /// Find traits/rules with impossible size constraints (size_min > size_max).

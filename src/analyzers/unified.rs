@@ -1104,7 +1104,7 @@ impl UnifiedSourceAnalyzer {
         loop {
             let node = cursor.node();
             let kind = node.kind();
-            node_text.record_node(&node, source);
+            node_text.record_node(kind, &node, source);
             record_ast_kind_node(
                 kind,
                 &node,

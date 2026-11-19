@@ -3,6 +3,7 @@
 // Split out of the parent module for size; it shares the parent's namespace.
 #[allow(clippy::wildcard_imports)]
 use super::*;
+use crate::composite_rules::condition::{Engine, shared_byte_engine};
 
 /// Index for regex patterns from `type: raw` conditions.
 /// Builds per-file-type RegexSets to avoid running irrelevant patterns.
@@ -130,12 +131,12 @@ pub(super) struct FileTypeRegexSet {
     /// ever needed. A pattern that fails to compile stays `None` (warned
     /// once) — strictly better than the old behavior, where one bad pattern
     /// discarded the whole index.
-    pub(super) individual_regexes: Vec<OnceLock<Option<Arc<regex::bytes::Regex>>>>,
+    pub(super) individual_regexes: Vec<OnceLock<Option<GateRegex>>>,
     /// Individually-compiled regexes for ONLY patterns without extractable
     /// literals (see `no_literal_pass` for why not one `RegexSet`). Parallel
     /// to `no_literal_to_original`; patterns that fail to compile are dropped
     /// from both (warned once at build).
-    pub(super) no_literal_regexes: Vec<regex::bytes::Regex>,
+    pub(super) no_literal_regexes: Vec<GateRegex>,
     /// Maps no_literal_regexes index -> original pattern index
     pub(super) no_literal_to_original: Vec<usize>,
     /// Aho-Corasick automaton for CASE-SENSITIVE literal prefix pre-filtering
@@ -704,7 +705,6 @@ impl FileTypeRegexSet {
                 compile_engine_mirrored(pattern)
                     .inspect_err(|e| tracing::warn!(pattern, error = %e, "raw content pattern failed to compile; skipping"))
                     .ok()
-                    .map(Arc::new)
             });
             match regex {
                 Some(regex) if regex.is_match(content) => Some(trait_indices),
@@ -787,20 +787,43 @@ pub(super) fn compile_once<T>(
 /// engine's parse mode or the two diverge — Unicode-mode verifiers here were
 /// also the reason gate sweeps ran the PikeVM (Unicode `\b` quits the lazy
 /// DFA on non-ASCII bytes) instead of the DFA the engines use.
-pub(super) fn compile_engine_mirrored(pattern: &str) -> Result<regex::bytes::Regex, regex::Error> {
+fn compile_engine_mirrored(pattern: &str) -> Result<GateRegex, regex::Error> {
     const SIZE_LIMIT: usize = 100 * 1024 * 1024;
-    if pattern.is_ascii()
-        && let Ok(re) = regex::bytes::RegexBuilder::new(pattern)
+    if pattern.is_ascii() {
+        // The same raw pattern can appear in several file-type indexes and
+        // the evaluator. Reuse its automaton and byte-budgeted scratch.
+        if let Some(engine) = shared_byte_engine(pattern, false, false) {
+            return Ok(GateRegex::Shared(engine));
+        }
+        // The index has a larger historical compile budget.
+        if let Ok(re) = regex::bytes::RegexBuilder::new(pattern)
             .size_limit(SIZE_LIMIT)
             .unicode(false)
             .build()
-    {
-        return Ok(re);
+        {
+            return Ok(GateRegex::Fallback(re));
+        }
     }
     // `\p{..}` classes are ASCII source but only parse in codepoint mode.
     regex::bytes::RegexBuilder::new(pattern)
         .size_limit(SIZE_LIMIT)
         .build()
+        .map(GateRegex::Fallback)
+}
+
+#[derive(Clone)]
+pub(super) enum GateRegex {
+    Shared(Arc<Engine>),
+    Fallback(regex::bytes::Regex),
+}
+
+impl GateRegex {
+    fn is_match(&self, content: &[u8]) -> bool {
+        match self {
+            Self::Shared(engine) => engine.is_match(content),
+            Self::Fallback(regex) => regex.is_match(content),
+        }
+    }
 }
 
 /// A word pattern: the literal word and whether it's case-insensitive
@@ -1144,14 +1167,14 @@ impl RawContentRegexIndex {
 
         // Verifier regexes compile lazily on first atom hit (see
         // `verify_literal_candidates`); allocate the empty slots.
-        let individual_regexes: Vec<OnceLock<Option<Arc<regex::bytes::Regex>>>> =
+        let individual_regexes: Vec<OnceLock<Option<GateRegex>>> =
             (0..pattern_strs.len()).map(|_| OnceLock::new()).collect();
 
         // Compile the no-extractable-literal patterns individually (see
         // `no_literal_pass`). A pattern that fails to compile is dropped with
         // a warning — strictly better than the old single-RegexSet build,
         // where one bad pattern discarded every no-literal pattern.
-        let mut no_literal_regexes: Vec<regex::bytes::Regex> = Vec::new();
+        let mut no_literal_regexes: Vec<GateRegex> = Vec::new();
         let mut no_literal_to_original: Vec<usize> = Vec::new();
         for &idx in &patterns_without_literals {
             let Some(pattern) = pattern_strs.get(idx) else {

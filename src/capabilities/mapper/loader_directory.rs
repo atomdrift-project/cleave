@@ -370,17 +370,15 @@ fn merge_trait_files(
         })
         .collect();
 
-    // Use HashMaps during loading for O(1) duplicate detection (will
-    // convert to Vec later), sized up front so they never grow. The
-    // definition maps are sorted out by id below, so their hasher is
-    // free to be the fast one.
+    // Keep definitions in dense arrays during loading. The temporary ID maps
+    // only need a slot number for duplicate detection and replacement.
     let (n_traits, n_rules) = prepared.iter().flatten().fold((0, 0), |(t, r), file| {
         (t + file.traits.len(), r + file.rules.len())
     });
-    let mut trait_definitions_map: FxHashMap<String, TraitDefinition> =
-        FxHashMap::with_capacity_and_hasher(n_traits, Default::default());
-    let mut composite_rules_map: FxHashMap<String, CompositeTrait> =
-        FxHashMap::with_capacity_and_hasher(n_rules, Default::default());
+    let mut trait_definitions: Vec<TraitDefinition> = Vec::with_capacity(n_traits);
+    let mut composite_rules: Vec<CompositeTrait> = Vec::with_capacity(n_rules);
+    let mut trait_slots = FxHashMap::with_capacity_and_hasher(n_traits, Default::default());
+    let mut composite_slots = FxHashMap::with_capacity_and_hasher(n_rules, Default::default());
     let mut trait_source_files: HashMap<String, String> = HashMap::with_capacity(n_traits); // trait_id -> file_path
     let mut rule_source_files: HashMap<String, String> = HashMap::with_capacity(n_traits + n_rules); // rule_id -> file_path
     let mut warnings = crate::validation_controls::ValidationIssues::new();
@@ -413,13 +411,13 @@ fn merge_trait_files(
 
             // Check for ID conflicts with previously loaded traits (cross-file duplicates)
             // Duplicate trait id — two atomic traits resolving to the same
-            // `directory::id`. The runtime stores traits in a HashMap keyed
-            // by id, so the second silently overwrites the first and every
+            // `directory::id`. The second overwrites the first and every
             // reference resolves to whichever loaded last. This is never
             // acceptable: report it as an ungated hard error (cannot be
             // silenced via a validator override) so the tree is forced to
             // keep every id unique.
-            if trait_definitions_map.contains_key(&trait_def.id) {
+            let previous = trait_slots.get(&trait_def.id).copied();
+            if previous.is_some() {
                 let prior = trait_source_files
                     .get(&trait_def.id)
                     .map(std::string::String::as_str)
@@ -433,11 +431,10 @@ fn merge_trait_files(
                             path.display()
                         ),
                     );
-                // HashMap insert will automatically replace the old one
             }
 
             // Check for ID conflicts with composite rules
-            if composite_rules_map.contains_key(&trait_def.id) {
+            if let Some(slot) = composite_slots.remove(&trait_def.id) {
                 warnings.push_legacy(format!(
                     "Rule ID '{}' defined as both trait and composite rule - trait will be used",
                     trait_def.id
@@ -446,8 +443,10 @@ fn merge_trait_files(
                     warnings.push_legacy(format!("  Trait: {}", path.display()));
                     warnings.push_legacy(format!("  Composite (will be replaced): {}", comp_file));
                 }
-                // Remove the composite rule
-                composite_rules_map.remove(&trait_def.id);
+                composite_rules.swap_remove(slot);
+                if let Some(moved) = composite_rules.get(slot) {
+                    composite_slots.insert(moved.id.clone(), slot);
+                }
             }
 
             // Pre-compile regexes for this trait
@@ -463,7 +462,12 @@ fn merge_trait_files(
             // Track source file for error reporting
             trait_source_files.insert(trait_def.id.clone(), path_str.clone());
             rule_source_files.insert(trait_def.id.clone(), path_str.clone());
-            trait_definitions_map.insert(trait_def.id.clone(), trait_def);
+            if let Some(slot) = previous {
+                trait_definitions[slot] = trait_def;
+            } else {
+                trait_slots.insert(trait_def.id.clone(), trait_definitions.len());
+                trait_definitions.push(trait_def);
+            }
         }
 
         if let Some(error) = file.trait_failure {
@@ -481,7 +485,8 @@ fn merge_trait_files(
             // Duplicate composite id — two composites resolving to the same
             // `directory::id`. Same hazard as duplicate atomic ids: the
             // second silently overwrites the first. Ungated hard error.
-            if composite_rules_map.contains_key(&rule.id) {
+            let previous = composite_slots.get(&rule.id).copied();
+            if previous.is_some() {
                 let prior = rule_source_files
                     .get(&rule.id)
                     .map(std::string::String::as_str)
@@ -495,19 +500,20 @@ fn merge_trait_files(
                             path.display()
                         ),
                     );
-                // HashMap insert will automatically replace the old one
             }
 
             // Check for ID conflicts with trait definitions
-            if trait_definitions_map.contains_key(&rule.id) {
+            if let Some(slot) = trait_slots.remove(&rule.id) {
                 warnings.push_legacy(format!(
                         "Rule ID '{}' defined as both trait and composite rule - composite will be used",
                         rule.id
                     ));
                 warnings.push_legacy("  Trait (will be replaced): (already loaded)".to_string());
                 warnings.push_legacy(format!("  Composite: {}", path.display()));
-                // Remove the trait definition
-                trait_definitions_map.remove(&rule.id);
+                trait_definitions.swap_remove(slot);
+                if let Some(moved) = trait_definitions.get(slot) {
+                    trait_slots.insert(moved.id.clone(), slot);
+                }
             }
 
             // Pre-compile regexes for this composite rule
@@ -522,7 +528,12 @@ fn merge_trait_files(
 
             // Track source file for error reporting
             rule_source_files.insert(rule.id.clone(), path_str.clone());
-            composite_rules_map.insert(rule.id.clone(), rule);
+            if let Some(slot) = previous {
+                composite_rules[slot] = rule;
+            } else {
+                composite_slots.insert(rule.id.clone(), composite_rules.len());
+                composite_rules.push(rule);
+            }
         }
 
         // Add file path to file-type warnings, append others as-is
@@ -531,18 +542,9 @@ fn merge_trait_files(
         }
     }
 
-    // Convert HashMaps to Vecs now that loading is complete
-    // This was kept as HashMap during loading for O(1) duplicate detection
-    let mut trait_definitions: Vec<TraitDefinition> = trait_definitions_map.into_values().collect();
-    let mut composite_rules: Vec<CompositeTrait> = composite_rules_map.into_values().collect();
-    // Canonical order. `HashMap` iteration is seeded per process, so without
-    // this every mapper build handed out a different trait/composite order,
-    // the on-disk mapper cache then froze that order, and evaluation on
-    // large members is order-sensitive (composite crediting / `unless`
-    // interplay): the same archive produced different findings after a
-    // cache rebuild, and two identical copies of one rule bundle
-    // disagreed. Sorting by id makes the order a pure function of the
-    // rule set — reproducible across rebuilds, machines and bundle copies.
+    // Canonical order keeps on-disk mapper snapshots and evaluation on large
+    // members independent of load order (including composite crediting and
+    // interactions with `unless`).
     trait_definitions.sort_unstable_by(|a, b| a.id.cmp(&b.id));
     composite_rules.sort_unstable_by(|a, b| a.id.cmp(&b.id));
     Ok((
@@ -1239,6 +1241,9 @@ impl super::CapabilityMapper {
         } else {
             None
         };
+        #[cfg(feature = "lint")]
+        let _compile_checks = (enable_full_validation && _facts.is_none())
+            .then(crate::composite_rules::condition::begin_regex_compile_checks);
 
         let load_started = std::time::Instant::now();
         tracing::info!("Loading trait definitions from {}", dir_path.display());

@@ -821,11 +821,7 @@ pub(crate) fn find_structural_regex_duplicates(
         };
         let Some(regex) = regex_opt else { continue };
 
-        let for_types: HashSet<String> = trait_def
-            .r#for
-            .iter()
-            .map(|ft| format!("{:?}", ft).to_lowercase())
-            .collect();
+        let for_types = PatternScope::new(&trait_def.r#for);
 
         let section = if let Condition::Raw(RawQuery { section, .. }) = &trait_def.r#if {
             section.clone()

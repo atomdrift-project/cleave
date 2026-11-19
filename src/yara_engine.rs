@@ -356,8 +356,24 @@ enum TierSource {
         enable_third_party: bool,
         /// Per-bucket rule source, collected on the first cache miss. Keyed by
         /// filetype string (or [`FALLBACK_BUCKET`]).
-        sources: OnceLock<HashMap<String, Vec<(String, String)>>>,
+        sources: OnceLock<BucketSources>,
     },
+}
+
+#[derive(Debug)]
+struct BucketSources {
+    by_tier: HashMap<String, parking_lot::Mutex<Vec<(String, String)>>>,
+}
+
+impl From<HashMap<String, Vec<(String, String)>>> for BucketSources {
+    fn from(buckets: HashMap<String, Vec<(String, String)>>) -> Self {
+        Self {
+            by_tier: buckets
+                .into_iter()
+                .map(|(tier, sources)| (tier, sources.into()))
+                .collect(),
+        }
+    }
 }
 
 /// Fingerprint of the compiled-rule *producer*: this build's `yara_x`, the
@@ -620,7 +636,17 @@ impl YaraEngine {
     fn tier_rules(&self, bucket: &str) -> Option<&Arc<yara_x::Rules>> {
         self.tiers
             .get(bucket)?
-            .get_or_init(|| self.build_tier(bucket).map(Arc::new))
+            .get_or_init(|| {
+                let rules = self.build_tier(bucket).map(Arc::new);
+                // This cell keeps the compiled rules. Each other tier owns
+                // the source text it still needs for its first compilation.
+                if let TierSource::Lazy { sources, .. } = &self.source
+                    && let Some(text) = sources.get().and_then(|all| all.by_tier.get(bucket))
+                {
+                    *text.lock() = Vec::new();
+                }
+                rules
+            })
             .as_ref()
     }
 
@@ -669,15 +695,17 @@ impl YaraEngine {
         // 2. Cache miss — compile just this bucket from source. The rule text is
         //    read + classified once, lazily, and shared across buckets.
         let sources = sources.get_or_init(|| {
-            Self::collect_all_sources(traits_dir, third_party_dir, *enable_third_party).0
+            Self::collect_all_sources(traits_dir, third_party_dir, *enable_third_party)
+                .0
+                .into()
         });
-        let bucket_sources = sources.get(bucket)?;
+        let bucket_sources = sources.by_tier.get(bucket)?.lock();
         if bucket_sources.is_empty() {
             return None;
         }
         let mut compiler = yara_x::Compiler::new();
         let mut compile_errors = 0usize;
-        for (ns, src) in bucket_sources {
+        for (ns, src) in bucket_sources.iter() {
             compiler.new_namespace(ns);
             if let Err(e) = compiler.add_source(src.as_bytes()) {
                 compile_errors += 1;
@@ -1245,7 +1273,7 @@ impl YaraEngine {
         // Pre-fill the lazy source cell so the first scan compiles straight from
         // memory instead of re-reading the rule files.
         let sources = OnceLock::new();
-        let _ = sources.set(tier_sources);
+        let _ = sources.set(tier_sources.into());
         self.source = TierSource::Lazy {
             cache_dir,
             bucket_tags,

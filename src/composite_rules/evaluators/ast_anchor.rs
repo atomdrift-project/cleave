@@ -117,8 +117,9 @@ impl Anchors {
                             return None;
                         }
                         let literals = match op {
-                            Op::Eq => (!arg.is_empty())
-                                .then(|| vec![(arg.into_bytes().into_boxed_slice(), false)])?,
+                            Op::Eq => (!arg.is_empty()).then(|| {
+                                AnyOf::from([(arg.into_bytes().into_boxed_slice(), false)])
+                            })?,
                             Op::Match => regex_requirement(&arg)?,
                         };
                         Some(Anchor {
@@ -274,7 +275,7 @@ fn rarest<'a>(anchors: &'a [Anchor], source: &[u8]) -> Option<(&'a Anchor, Vec<(
 /// `literals` in `source`; `None` once there are more than `limit`.
 fn occurrences(literals: &AnyOf, source: &[u8], limit: usize) -> Option<Vec<(usize, usize)>> {
     let mut spans = Vec::new();
-    for (literal, ci) in literals {
+    for (literal, ci) in literals.iter() {
         if *ci {
             let automaton = aho_corasick::AhoCorasick::builder()
                 .ascii_case_insensitive(true)

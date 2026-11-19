@@ -587,7 +587,7 @@ pub(super) fn alternation_merge_candidates<'a>(input: &'a ValidationInput<'a>) -
 /// Validate: `needs` value exceeds number of potential matches in `any:` (impossible to satisfy)
 /// Directory references can match multiple traits, so we count potential matches
 pub(super) fn impossible_needs<'a>(input: &'a ValidationInput<'a>) -> Report<'a> {
-    let impossible_needs = find_impossible_needs(input.composite_rules, &input.all_trait_ids);
+    let impossible_needs = find_impossible_needs(input.composite_rules, &input.valid_trait_ids);
     report(move |warnings| {
         if !impossible_needs.is_empty() {
             eprintln!(

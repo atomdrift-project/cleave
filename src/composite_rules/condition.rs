@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 mod validate;
+#[cfg(feature = "lint")]
+pub(crate) use validate::begin_regex_compile_checks;
 #[allow(clippy::wildcard_imports)]
 use validate::*;
 

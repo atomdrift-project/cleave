@@ -13,6 +13,7 @@
 //! that did not happen.
 
 use crate::capabilities::indexes::StringMatchIndex;
+use std::sync::Arc;
 use tree_sitter::{CaptureQuantifier, Query};
 
 #[path = "ast_loop_gate.rs"]
@@ -110,7 +111,7 @@ impl DeferredPredicates {
 
 /// One requirement of a pattern: at least one of these literals occurs in
 /// every match, each flagged when it is to be found ASCII-case-insensitively.
-type AnyOf = Vec<(Box<[u8]>, bool)>;
+type AnyOf = Arc<[(Box<[u8]>, bool)]>;
 
 /// Per pattern, the literal requirements every match of that pattern meets.
 #[derive(Debug, Default)]
@@ -182,7 +183,7 @@ fn compute_regex_requirement(regex: &str) -> Option<AnyOf> {
     }
     StringMatchIndex::extract_regex_literal(regex)
         .filter(|literal| !literal.is_empty())
-        .map(|literal| vec![(literal.into_bytes().into_boxed_slice(), false)])
+        .map(|literal| Arc::from([(literal.into_bytes().into_boxed_slice(), false)]))
 }
 
 impl RequiredLiterals {
@@ -226,7 +227,7 @@ impl RequiredLiterals {
                     }
                     let requirement = match op {
                         Op::Eq => (!arg.is_empty())
-                            .then(|| vec![(arg.into_bytes().into_boxed_slice(), false)]),
+                            .then(|| Arc::from([(arg.into_bytes().into_boxed_slice(), false)])),
                         Op::Match => regex_requirement(&arg),
                     };
                     if let Some(requirement) = requirement
@@ -369,7 +370,85 @@ struct NodePredicate {
 enum NodePredicateValue {
     Present,
     Exact(String),
+    OneOf(Box<[Box<str>]>),
     Regex(regex::bytes::Regex),
+}
+
+/// A whole-node regex with a small finite language can use the same hash
+/// lookup as an equality predicate. Fall back when anchors or literal
+/// extraction cannot prove that the list is exhaustive.
+fn whole_node_literals(pattern: &str) -> Option<Box<[Box<str>]>> {
+    use regex_syntax::hir::{Hir, HirKind, Look, literal::Extractor};
+
+    let hir = regex_syntax::ParserBuilder::new()
+        .utf8(false)
+        .build()
+        .parse(pattern)
+        .ok()?;
+    let mut body = &hir;
+    while let HirKind::Capture(capture) = body.kind() {
+        body = &capture.sub;
+    }
+    let HirKind::Concat(parts) = body.kind() else {
+        return None;
+    };
+    let [start, inner @ .., end] = parts.as_slice() else {
+        return None;
+    };
+    if !matches!(start.kind(), HirKind::Look(Look::Start))
+        || !matches!(end.kind(), HirKind::Look(Look::End))
+    {
+        return None;
+    }
+    let body = Hir::concat(inner.to_vec());
+    if !body.properties().look_set().is_empty() {
+        return None;
+    }
+    let sequence = Extractor::new()
+        .limit_total(32)
+        .limit_literal_len(128)
+        .extract(&body);
+    if !sequence.is_exact() {
+        return None;
+    }
+    sequence
+        .literals()?
+        .iter()
+        .map(|literal| std::str::from_utf8(literal.as_bytes()).ok().map(Box::from))
+        .collect::<Option<Box<[_]>>>()
+}
+
+#[cfg(test)]
+#[test]
+fn whole_node_literals_preserve_anchor_and_case_semantics() {
+    for pattern in [
+        r"^foo$",
+        r"^(?:foo|bar)$",
+        r"^(?:ab)?c$",
+        r"(?i)^[ab]$",
+        r"^(?:π|τ)$",
+    ] {
+        let literals = whole_node_literals(pattern).expect("small finite language");
+        let regex = regex::bytes::Regex::new(pattern).expect("valid test pattern");
+        for value in [
+            "", "foo", "foo\n", "xfoo", "bar", "c", "abc", "A", "b", "π", "τ",
+        ] {
+            assert_eq!(
+                literals.iter().any(|literal| literal.as_ref() == value),
+                regex.is_match(value.as_bytes()),
+                "{pattern} on {value:?}"
+            );
+        }
+    }
+    for pattern in [
+        r"(?m)^foo$",
+        r"^foo",
+        r"^foo+$",
+        r"^\bfoo$",
+        r"^(?-u:\xFF)$",
+    ] {
+        assert!(whole_node_literals(pattern).is_none(), "{pattern}");
+    }
 }
 
 /// Complete raw capture text, collected during the existing AST facts walk.
@@ -424,8 +503,13 @@ impl<'src> NodeTextIndex<'src> {
         self.complete.then_some(&self.comments)
     }
 
-    pub(crate) fn record_node(&mut self, node: &tree_sitter::Node<'_>, source: &'src [u8]) {
-        if super::ast_comment_view::is_comment(node)
+    pub(crate) fn record_node(
+        &mut self,
+        kind: &str,
+        node: &tree_sitter::Node<'_>,
+        source: &'src [u8],
+    ) {
+        if super::ast_comment_view::is_comment(kind, node)
             && self
                 .comments
                 .last()
@@ -433,32 +517,29 @@ impl<'src> NodeTextIndex<'src> {
         {
             self.comments.push(node.range());
         }
-        if node.kind() == "for_statement" {
+        if kind == "for_statement" {
             self.for_statements.push(node.byte_range());
         }
-        if !self.kinds.contains(node.kind()) {
-            self.kinds.insert(node.kind().into());
+        if !self.kinds.contains(kind) {
+            self.kinds.insert(kind.into());
         }
         // A wildcard object-key capture can be any node kind, including a
         // quoted or computed key. Index the entire field, never a decoded or
         // truncated spelling, so absence is a sound negative even for `_`.
-        if node.kind() == "pair"
+        if kind == "pair"
             && let Some(key) = node.child_by_field_name("key")
             && let Ok(text) = key.utf8_text(source)
         {
             self.record("pair:key", text);
         }
-        if indexed_kind(node.kind())
+        if indexed_kind(kind)
             && let Ok(text) = node.utf8_text(source)
         {
-            self.record(node.kind(), text);
+            self.record(kind, text);
         }
     }
 
-    pub(crate) fn record(&mut self, kind: &str, text: &'src str) {
-        if !indexed_kind(kind) {
-            return;
-        }
+    fn record(&mut self, kind: &str, text: &'src str) {
         if let Some(values) = self.texts.get_mut(kind) {
             values.insert(text);
         } else {
@@ -472,7 +553,7 @@ impl<'src> NodeTextIndex<'src> {
         let mut depth: u32 = 0;
         loop {
             let node = cursor.node();
-            values.record_node(&node, source.as_bytes());
+            values.record_node(node.kind(), &node, source.as_bytes());
             if cursor.goto_first_child() {
                 depth += 1;
                 values.note_depth(depth);
@@ -523,7 +604,13 @@ impl RequiredNodes {
                                 // The tree-sitter Rust binding uses this same regex engine
                                 // and flags for #match?. Failed compilation cannot gate.
                                 Op::Match => {
-                                    NodePredicateValue::Regex(regex::bytes::Regex::new(&arg).ok()?)
+                                    if let Some(literals) = whole_node_literals(&arg) {
+                                        NodePredicateValue::OneOf(literals)
+                                    } else {
+                                        NodePredicateValue::Regex(
+                                            regex::bytes::Regex::new(&arg).ok()?,
+                                        )
+                                    }
                                 }
                             };
                             Some(NodePredicate {
@@ -571,7 +658,7 @@ impl RequiredNodes {
                     // indexed value for a regex the file cannot satisfy.
                     predicates.sort_by_key(|p| match p.predicate {
                         NodePredicateValue::Present => 0,
-                        NodePredicateValue::Exact(_) => 1,
+                        NodePredicateValue::Exact(_) | NodePredicateValue::OneOf(_) => 1,
                         NodePredicateValue::Regex(_) => 2,
                     });
                     predicates
@@ -596,6 +683,9 @@ impl RequiredNodes {
                 match &p.predicate {
                     NodePredicateValue::Present => true,
                     NodePredicateValue::Exact(value) => values.contains(value.as_str()),
+                    NodePredicateValue::OneOf(literals) => literals
+                        .iter()
+                        .any(|literal| values.contains(literal.as_ref())),
                     NodePredicateValue::Regex(regex) => {
                         values.iter().any(|v| regex.is_match(v.as_bytes()))
                     }

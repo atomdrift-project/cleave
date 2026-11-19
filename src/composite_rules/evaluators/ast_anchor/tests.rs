@@ -261,13 +261,13 @@ fn anchors_need_a_bound_literal_capture_in_every_pattern() {
 
 #[test]
 fn occurrences_overlap_and_stop_past_the_limit() {
-    let literal: AnyOf = vec![(Box::from(&b"aa"[..]), false)];
+    let literal = AnyOf::from([(Box::from(&b"aa"[..]), false)]);
     assert_eq!(
         occurrences(&literal, b"aaa", MAX_OCCURRENCES).unwrap(),
         vec![(0, 2), (1, 3)]
     );
     assert!(occurrences(&literal, b"aaa", 1).is_none());
-    let folded: AnyOf = vec![(Box::from(&b"dns"[..]), true)];
+    let folded = AnyOf::from([(Box::from(&b"dns"[..]), true)]);
     assert_eq!(
         occurrences(&folded, b"x DNS dns", MAX_OCCURRENCES)
             .unwrap()

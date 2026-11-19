@@ -23,8 +23,8 @@
 use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 
 // v2: mandatory_atom_set landed (any-of alternation atoms, CI runs,
 // anchored prefix composition, engine-mirrored parse mode). The v1 files
@@ -33,6 +33,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 // v3: prefix literals stop at the last whole UTF-8 character; v2 files hold
 // U+FFFD-substituted prefixes for patterns whose common prefix split one.
 const FILE_NAME: &str = "regex-derivations-v3.json";
+
+type AtomSet = Arc<[(String, bool)]>;
 
 #[derive(Default, Serialize, Deserialize)]
 struct MemoData {
@@ -44,7 +46,7 @@ struct MemoData {
     /// Additive field: files written before it deserialize with an empty map
     /// and recompute lazily.
     #[serde(default)]
-    atom_set: FxHashMap<String, Option<Vec<(String, bool)>>>,
+    atom_set: FxHashMap<String, Option<AtomSet>>,
     /// tree-sitter query text -> per pattern, the any-of literal sets every
     /// match contains (`ast_gate::RequiredLiterals`). A pure function of the
     /// query text: capture quantifiers come from the pattern's own structure,
@@ -151,27 +153,28 @@ pub(crate) fn mandatory_atom_utf8(pattern: &str) -> Option<String> {
 
 /// Memoized [`crate::composite_rules::evaluators::mandatory_atom_set`].
 pub(crate) fn mandatory_atom_set(pattern: &str) -> Option<Vec<(String, bool)>> {
+    shared_atom_set(pattern).map(|atoms| atoms.to_vec())
+}
+
+fn shared_atom_set(pattern: &str) -> Option<AtomSet> {
     memoized(
         pattern,
         |d| &d.atom_set,
         |d| &mut d.atom_set,
-        || crate::composite_rules::evaluators::mandatory_atom_set(pattern),
+        || crate::composite_rules::evaluators::mandatory_atom_set(pattern).map(Arc::from),
     )
 }
 
 thread_local! {
     /// Per-thread view of `atom_set`, handing out borrows instead of clones.
-    static LOCAL_ATOM_SETS: std::cell::RefCell<FxHashMap<Box<str>, Option<std::sync::Arc<Vec<(String, bool)>>>>> =
+    static LOCAL_ATOM_SETS: std::cell::RefCell<FxHashMap<Box<str>, Option<AtomSet>>> =
         std::cell::RefCell::new(FxHashMap::default());
 }
 
 /// Run `f` over the memoized atom set of `pattern` without cloning it.
 ///
-/// [`mandatory_atom_set`] returns an owned `Vec<String>` clone taken under the
-/// shared read lock; the raw-window check calls it once per (trait x member),
-/// and that clone + lock traffic measured ~13 s of pool time per corpus. The
-/// per-thread map resolves each pattern once per thread and then answers
-/// from a borrow with no shared-state access at all.
+/// Each worker looks up the shared literals once per pattern and borrows them
+/// from its local map for subsequent archive members.
 pub(crate) fn with_mandatory_atom_set<R>(
     pattern: &str,
     f: impl FnOnce(Option<&[(String, bool)]>) -> R,
@@ -179,12 +182,10 @@ pub(crate) fn with_mandatory_atom_set<R>(
     LOCAL_ATOM_SETS.with(|cell| {
         let mut map = cell.borrow_mut();
         if !map.contains_key(pattern) {
-            let shared = mandatory_atom_set(pattern).map(std::sync::Arc::new);
+            let shared = shared_atom_set(pattern);
             map.insert(Box::from(pattern), shared);
         }
-        f(map
-            .get(pattern)
-            .and_then(|v| v.as_deref().map(Vec::as_slice)))
+        f(map.get(pattern).and_then(Option::as_deref))
     })
 }
 
@@ -230,7 +231,7 @@ pub(crate) fn persist() {
         struct Union<'a> {
             prefix: Merged<'a, Option<String>>,
             atom: Merged<'a, Option<String>>,
-            atom_set: Merged<'a, Option<Vec<(String, bool)>>>,
+            atom_set: Merged<'a, Option<AtomSet>>,
             ast_literals: Merged<'a, AstLiterals>,
         }
         struct Merged<'a, T>(&'a FxHashMap<String, T>, &'a FxHashMap<String, T>);

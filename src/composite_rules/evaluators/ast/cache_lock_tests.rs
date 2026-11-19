@@ -19,6 +19,7 @@ fn ast_cache_hit_does_not_wait_for_compiler() {
         nodes: RequiredNodes::of(&language, &query, pattern),
         subqueries: RequiredSubqueries::default(),
         ignore_comments: false,
+        has_match_predicates: false,
         deferred: DeferredPredicates::of(&query, pattern),
         root_kinds: per_root_kinds(&language, &query, pattern),
         anchors: None,

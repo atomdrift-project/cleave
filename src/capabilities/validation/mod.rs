@@ -42,7 +42,7 @@ mod taxonomy;
 
 // Shared types used across validation modules
 pub(super) mod shared {
-    use std::collections::HashSet;
+    use crate::composite_rules::{FileType, TypeMask};
 
     pub(super) const SHORT_PATTERN_SCOPE_BYTES: i64 = 8 * 1024;
 
@@ -52,6 +52,43 @@ pub(super) mod shared {
         };
 
         end >= start && end - start <= SHORT_PATTERN_SCOPE_BYTES
+    }
+
+    /// Declared file types of a lint pattern. Diagnostics display the declared
+    /// labels, while overlap checks treat empty scopes and `all` as unrestricted.
+    #[derive(Debug, Clone, Copy)]
+    pub(super) struct PatternScope(TypeMask);
+
+    impl PatternScope {
+        pub(super) fn new(types: &[FileType]) -> Self {
+            Self(
+                types
+                    .iter()
+                    .fold(TypeMask::EMPTY, |mask, ty| mask | ty.type_bit()),
+            )
+        }
+
+        pub(super) fn is_empty(self) -> bool {
+            self.0 == TypeMask::EMPTY
+        }
+
+        pub(super) fn overlap_mask(self) -> TypeMask {
+            if self.is_empty() || self.0.intersects(FileType::All.type_bit()) {
+                TypeMask::ALL
+            } else {
+                self.0
+            }
+        }
+
+        pub(super) fn labels(self) -> String {
+            let mut labels: Vec<_> = FileType::all_variants()
+                .into_iter()
+                .filter(|ty| self.0.intersects(ty.type_bit()))
+                .map(|ty| ty.label())
+                .collect();
+            labels.sort_unstable();
+            labels.join(", ")
+        }
     }
 
     /// Information about where a pattern was found
@@ -77,7 +114,7 @@ pub(super) mod shared {
         /// that coincide are not duplicates when one stands down wherever the
         /// other fires — they partition the surface rather than share it.
         pub(super) suppressed_by: Vec<String>,
-        pub(super) for_types: HashSet<String>,
+        pub(super) for_types: PatternScope,
         pub(super) section: Option<String>,
         pub(super) count_min: Option<usize>,
         pub(super) count_max: Option<usize>,

@@ -501,9 +501,7 @@ pub(crate) fn check_same_string_different_types(
                         let for_str = if loc.for_types.is_empty() {
                             "all".to_string()
                         } else {
-                            let mut types: Vec<_> = loc.for_types.iter().cloned().collect();
-                            types.sort();
-                            types.join(", ")
+                            loc.for_types.labels()
                         };
                         format!(
                             "{}::{} ({} {}, for: {})",
@@ -653,35 +651,10 @@ pub(super) fn literal_coverage_in_bucket(
     // Patterns the engine rejects (lookaround, backreferences) are already
     // reported by `incompatible-regex`; skipping them keeps this check from
     // failing on a problem that has its own message.
-    // Parse the HIR rather than compiling: this only needs to know whether
-    // the engine accepts the pattern, and compiling every pattern in the
-    // bucket to throw the result away costs more than the rest of the check.
-    // Whether the engine accepts a pattern depends on the pattern alone, and
-    // whether a regex matches a phrase (below) on the two alone, so during a
-    // full validation an earlier run's verdicts stand (see `facts_cache`):
-    // parsing again, mostly case-folding `(?i)` classes, was most of a warm
-    // run's cost.
+    // Both the gated and ungated searches compile the patterns they use.
+    // A rejected pattern contributes no hit, so coverage needs no separate
+    // syntax pass over the bucket.
     let facts = super::super::facts_cache::active();
-    let compilable: Vec<&PatternLocation> = bucket
-        .par_iter()
-        .copied()
-        .filter(|location| {
-            let pattern = &location.original_value;
-            let parses = || {
-                regex_syntax::ParserBuilder::new()
-                    .build()
-                    .parse(pattern)
-                    .is_ok()
-            };
-            match &facts {
-                Some(facts) => facts.memoized(
-                    super::super::facts_cache::key("regex-parses", &[pattern.as_bytes()]),
-                    parses,
-                ),
-                None => parses(),
-            }
-        })
-        .collect();
 
     let mut atoms: Vec<String> = Vec::new();
     let mut atom_owners: Vec<Vec<usize>> = Vec::new();
@@ -689,7 +662,7 @@ pub(super) fn literal_coverage_in_bucket(
     let mut ci_owners: Vec<Vec<usize>> = Vec::new();
     let mut ungated: Vec<usize> = Vec::new();
     let mut by_atom: HashMap<(String, bool), usize> = HashMap::new();
-    let atom_sets: Vec<Option<Vec<(String, bool)>>> = compilable
+    let atom_sets: Vec<Option<Vec<(String, bool)>>> = bucket
         .par_iter()
         .map(|location| {
             crate::capabilities::derivation_memo::mandatory_atom_set(&location.original_value)
@@ -767,6 +740,19 @@ pub(super) fn literal_coverage_in_bucket(
         })
         .collect();
 
+    // A phrase can only be covered where at least one of its holders
+    // admits the regex. Check the union before searching uncached inputs.
+    let phrase_scopes: Vec<_> = phrases
+        .iter()
+        .map(|(_, holders)| {
+            holders
+                .iter()
+                .fold(crate::composite_rules::TypeMask::EMPTY, |mask, loc| {
+                    mask | loc.for_types.overlap_mask()
+                })
+        })
+        .collect();
+
     // The ungated remainder is small enough to stay a combined automaton,
     // split in half whenever a batch overflows the size ceiling. Chunks are
     // independent, so each is matched on its own and in parallel: a phrase's
@@ -778,20 +764,26 @@ pub(super) fn literal_coverage_in_bucket(
     let chunks: Vec<&[usize]> = ungated.chunks(REGEX_SET_START_WIDTH).collect();
     let chunk_matches: Vec<Vec<Vec<usize>>> = chunks
         .par_iter()
-        .map(|chunk| ungated_matches(chunk, &compilable, &haystacks, facts.as_deref()))
+        .map(|chunk| ungated_matches(chunk, bucket, &haystacks, facts.as_deref(), &phrase_scopes))
         .collect();
 
-    let mut phrases_of: Vec<Vec<usize>> = vec![Vec::new(); compilable.len()];
+    let mut phrases_of: Vec<Vec<usize>> = vec![Vec::new(); bucket.len()];
     for (phrase_idx, candidates) in gated.iter().enumerate() {
         for &idx in candidates {
-            phrases_of[idx].push(phrase_idx);
+            if bucket[idx]
+                .for_types
+                .overlap_mask()
+                .intersects(phrase_scopes[phrase_idx])
+            {
+                phrases_of[idx].push(phrase_idx);
+            }
         }
     }
     let gated_hits: Vec<(usize, usize)> = phrases_of
         .par_iter()
         .enumerate()
         .flat_map_iter(|(idx, phrase_idxs)| {
-            let source = &compilable[idx].original_value;
+            let source = &bucket[idx].original_value;
             // Compiled only when some phrase has no stored verdict.
             let mut compiled: Option<Option<regex::Regex>> = None;
             phrase_idxs
@@ -834,7 +826,7 @@ pub(super) fn literal_coverage_in_bucket(
         .par_iter()
         .zip(hits_of.into_par_iter())
         .enumerate()
-        .filter_map(|(phrase_idx, (&(phrase, holders), mut hits))| {
+        .filter_map(|(phrase_idx, (&(phrase, _), mut hits))| {
             for matches in chunk_matches.iter().rev() {
                 hits.extend_from_slice(&matches[phrase_idx]);
             }
@@ -844,11 +836,9 @@ pub(super) fn literal_coverage_in_bucket(
             // keeps the gate doing the cheap work.
             let covered_by: Vec<&PatternLocation> = hits
                 .into_iter()
-                .map(|idx| compilable[idx])
+                .map(|idx| bucket[idx])
                 .filter(|location| {
-                    holders
-                        .iter()
-                        .any(|holder| has_filetype_overlap(holder, location))
+                    phrase_scopes[phrase_idx].intersects(location.for_types.overlap_mask())
                 })
                 .collect();
             (!covered_by.is_empty()).then_some((phrase, covered_by))
@@ -897,21 +887,62 @@ pub(super) fn literal_coverage_in_bucket(
 }
 
 /// Which patterns of one chunk of ungated patterns match each haystack, as
-/// indices into `compilable`, ascending within the chunk. A haystack's matches
+/// indices into `bucket`, ascending within the chunk. A haystack's matches
 /// are stored under the chunk's patterns and the haystack, so an unchanged
 /// chunk and phrase reuse an earlier run's; the chunk's automata are built only
 /// when some haystack has no stored matches.
 pub(super) fn ungated_matches(
     chunk: &[usize],
-    compilable: &[&PatternLocation],
+    bucket: &[&PatternLocation],
     haystacks: &[String],
     facts: Option<&super::super::facts_cache::FactsCache>,
+    phrase_scopes: &[crate::composite_rules::TypeMask],
 ) -> Vec<Vec<usize>> {
     use rayon::prelude::*;
 
+    if facts.is_none() {
+        // A combined set with no useful literal prefilter traverses the
+        // whole NFA for every phrase. Search one pattern at a time instead,
+        // so each worker reuses its lazy DFA across all of the short inputs.
+        let hits_by_pattern: Vec<Vec<usize>> = chunk
+            .par_iter()
+            .map(|&idx| {
+                let pattern = &bucket[idx].original_value;
+                let regex = match regex::RegexBuilder::new(pattern)
+                    .size_limit(REGEX_SET_SIZE_LIMIT)
+                    .build()
+                {
+                    Ok(regex) => regex,
+                    Err(err) => {
+                        tracing::debug!(
+                            "literal-coverage: skipping oversized pattern {}: {err}",
+                            bucket[idx].trait_id
+                        );
+                        return Vec::new();
+                    }
+                };
+                let mask = bucket[idx].for_types.overlap_mask();
+                haystacks
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, haystack)| {
+                        (mask.intersects(phrase_scopes[i]) && regex.is_match(haystack)).then_some(i)
+                    })
+                    .collect()
+            })
+            .collect();
+        let mut matches = vec![Vec::new(); haystacks.len()];
+        for (&pattern, hits) in chunk.iter().zip(hits_by_pattern) {
+            for i in hits {
+                matches[i].push(pattern);
+            }
+        }
+        return matches;
+    }
+
     let patterns: Vec<&[u8]> = chunk
         .iter()
-        .map(|&i| compilable[i].original_value.as_bytes())
+        .map(|&i| bucket[i].original_value.as_bytes())
         .collect();
     let chunk_key = super::super::facts_cache::key("literal-coverage-chunk", &patterns);
     let keys: Vec<super::super::facts_cache::FactKey> = haystacks
@@ -930,7 +961,7 @@ pub(super) fn ungated_matches(
         .map(|key| facts.and_then(|facts| facts.get(key)))
         .collect();
     let sets = if known.iter().any(Option::is_none) {
-        regex_sets_for_chunk(chunk, compilable)
+        regex_sets_for_chunk(chunk, bucket)
     } else {
         Vec::new()
     };
@@ -968,7 +999,7 @@ pub(super) fn ungated_matches(
 /// order a depth-first split visits them, which is ascending.
 pub(super) fn regex_sets_for_chunk(
     chunk: &[usize],
-    compilable: &[&PatternLocation],
+    bucket: &[&PatternLocation],
 ) -> Vec<(Vec<usize>, regex::RegexSet)> {
     let mut sets = Vec::new();
     let mut pending: Vec<Vec<usize>> = vec![chunk.to_vec()];
@@ -978,7 +1009,7 @@ pub(super) fn regex_sets_for_chunk(
         }
         let pats: Vec<&str> = window
             .iter()
-            .map(|&i| compilable[i].original_value.as_str())
+            .map(|&i| bucket[i].original_value.as_str())
             .collect();
         match regex::RegexSetBuilder::new(&pats)
             .size_limit(REGEX_SET_SIZE_LIMIT)
@@ -993,7 +1024,7 @@ pub(super) fn regex_sets_for_chunk(
                 } else {
                     tracing::debug!(
                         "literal-coverage: skipping oversized pattern {}: {err}",
-                        compilable[window[0]].trait_id
+                        bucket[window[0]].trait_id
                     );
                 }
             }

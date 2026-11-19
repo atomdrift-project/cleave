@@ -844,6 +844,7 @@ dependencies = [
  "hex",
  "libc",
  "lru 0.18.5",
+ "lzma-rust2 0.25.0",
  "lzx",
  "memchr",
  "memmap2",
@@ -4194,8 +4195,7 @@ dependencies = [
 [[package]]
 name = "regex-syntax"
 version = "0.8.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d902046e6a28a1e4c3cab97258a0ce11e994903f01c2d97a9447a0b3df85f4f6"
+source = "git+https://github.com/tstromberg/regex#16bee32d661786cdb78dd8dc167fcdacadf4d563"
 
 [[package]]
 name = "reqwest"

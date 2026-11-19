@@ -161,15 +161,13 @@ impl LeanRegex {
         self.re.memory_usage() + std::mem::size_of::<Self>()
     }
 
-    /// Whether the pattern matches anywhere in `haystack`. Test-only primitive.
-    #[cfg(test)]
+    /// Whether the pattern matches anywhere in `haystack`.
     pub(crate) fn is_match(&self, haystack: &[u8]) -> bool {
-        let mut hit = false;
-        self.for_each_match(haystack, |_, _| {
-            hit = true;
-            false
-        });
-        hit
+        crate::composite_rules::regex_scratch::with_cache(self.id, &self.re, |cache| {
+            self.re
+                .search_half_with(cache, &regex_automata::Input::new(haystack).earliest(true))
+                .is_some()
+        })
     }
 }
 

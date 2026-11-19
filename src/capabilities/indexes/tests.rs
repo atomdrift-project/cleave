@@ -435,13 +435,20 @@ fn test_raw_content_regex_index_lazy_verifiers_match_per_bucket() {
     assert!(py_set.individual_regexes[0].get().is_none());
 
     // A find_matches pass over content containing the literal atom must
-    // trigger compilation and match in each bucket independently.
+    // trigger compilation and match in each bucket. The same pattern
+    // shares the engine between buckets.
     let js_matches = index.find_matches(b"some test content", &RuleFileType::JavaScript);
     let py_matches = index.find_matches(b"some test content", &RuleFileType::Python);
     assert!(!js_matches.is_empty());
     assert!(!py_matches.is_empty());
-    assert!(js_set.individual_regexes[0].get().is_some());
-    assert!(py_set.individual_regexes[0].get().is_some());
+    let engine = |set: &FileTypeRegexSet| {
+        let Some(Some(raw_index::GateRegex::Shared(engine))) = set.individual_regexes[0].get()
+        else {
+            panic!("expected a shared raw index engine");
+        };
+        Arc::clone(engine)
+    };
+    assert!(Arc::ptr_eq(&engine(js_set), &engine(py_set)));
 }
 
 // ==================== Overlapping Substr Match Tests ====================

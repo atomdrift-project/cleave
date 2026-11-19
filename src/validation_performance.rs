@@ -9,6 +9,7 @@ use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 pub(crate) const VALIDATOR: &str = "rule-performance";
@@ -46,12 +47,30 @@ struct CostKey {
 /// Per peer group, each rule's costliest AST query: the query text, so the
 /// file's outliers can be run again (see [`confirm_outliers`]), and what it
 /// cost.
-static QUERY_COSTS: Mutex<BTreeMap<CostKey, BTreeMap<String, QueryCost>>> =
-    Mutex::new(BTreeMap::new());
+type CostGroups = BTreeMap<CostKey, BTreeMap<Arc<str>, QueryCost>>;
+
+#[derive(Default)]
+struct QueryCosts {
+    groups: CostGroups,
+    // Every fixture normally measures many of the same rules. Keep the text
+    // once and retain only references alongside each fixture's timings.
+    names: rustc_hash::FxHashSet<Arc<str>>,
+}
+
+static QUERY_COSTS: LazyLock<Mutex<QueryCosts>> = LazyLock::new(Mutex::default);
+
+fn intern(names: &mut rustc_hash::FxHashSet<Arc<str>>, text: &str) -> Arc<str> {
+    if let Some(name) = names.get(text) {
+        return Arc::clone(name);
+    }
+    let name: Arc<str> = text.into();
+    names.insert(Arc::clone(&name));
+    name
+}
 
 struct QueryCost {
     cost: Duration,
-    query: String,
+    query: Arc<str>,
     /// Run again under [`confirm_outliers`]; `cost` is the lowest seen.
     confirmed: bool,
 }
@@ -199,27 +218,21 @@ impl Drop for QueryTimer<'_> {
 }
 
 /// Keep `id`'s costliest query in its peer group.
-fn record_cost(
-    costs: &mut BTreeMap<CostKey, BTreeMap<String, QueryCost>>,
-    key: CostKey,
-    id: &str,
-    query: &str,
-    elapsed: Duration,
-) {
-    let rules = costs.entry(key).or_default();
+fn record_cost(costs: &mut QueryCosts, key: CostKey, id: &str, query: &str, elapsed: Duration) {
+    let rules = costs.groups.entry(key).or_default();
     match rules.get_mut(id) {
         Some(cost) if cost.cost >= elapsed => {}
         Some(cost) => {
             cost.cost = elapsed;
-            query.clone_into(&mut cost.query);
+            cost.query = intern(&mut costs.names, query);
             cost.confirmed = false;
         }
         None => {
             rules.insert(
-                id.to_owned(),
+                intern(&mut costs.names, id),
                 QueryCost {
                     cost: elapsed,
-                    query: query.to_owned(),
+                    query: intern(&mut costs.names, query),
                     confirmed: false,
                 },
             );
@@ -269,9 +282,16 @@ pub(crate) fn confirm_outliers(
         let candidates: Vec<Candidate> = groups
             .iter()
             .flat_map(|key| {
-                let costs = QUERY_COSTS.lock();
+                let state = QUERY_COSTS.lock();
+                let costs = &state.groups;
                 let over_fence: Option<Vec<_>> = costs.get(key).and_then(|rules| {
-                    let (median, fence) = group_fence(&costs, key)?;
+                    if !rules
+                        .values()
+                        .any(|cost| cost.cost > AST_OUTLIER_NOISE_ALLOWANCE)
+                    {
+                        return None;
+                    }
+                    let (median, fence) = group_fence(costs, key)?;
                     let reference = median_query(rules)?;
                     Some(
                         rules
@@ -288,7 +308,7 @@ pub(crate) fn confirm_outliers(
                             .collect(),
                     )
                 });
-                drop(costs);
+                drop(state);
                 over_fence.unwrap_or_default()
             })
             .collect();
@@ -311,7 +331,11 @@ pub(crate) fn confirm_outliers(
                 });
             }
             let mut costs = QUERY_COSTS.lock();
-            if let Some(cost) = costs.get_mut(&c.key).and_then(|rules| rules.get_mut(&c.id)) {
+            if let Some(cost) = costs
+                .groups
+                .get_mut(&c.key)
+                .and_then(|rules| rules.get_mut(&c.id))
+            {
                 cost.cost = cost.cost.min(best);
                 cost.confirmed = true;
             }
@@ -323,15 +347,15 @@ pub(crate) fn confirm_outliers(
 /// time beside it.
 struct Candidate {
     key: CostKey,
-    id: String,
-    query: String,
+    id: Arc<str>,
+    query: Arc<str>,
     cost: Duration,
-    reference: String,
+    reference: Arc<str>,
     median: Duration,
 }
 
 /// The query whose recorded cost is the peers' median.
-fn median_query(rules: &BTreeMap<String, QueryCost>) -> Option<String> {
+fn median_query(rules: &BTreeMap<Arc<str>, QueryCost>) -> Option<Arc<str>> {
     let mut by_cost: Vec<_> = rules.values().collect();
     by_cost.sort_unstable_by_key(|c| c.cost);
     by_cost.get(by_cost.len() / 2).map(|c| c.query.clone())
@@ -356,10 +380,7 @@ const AST_OUTLIER_MULTIPLIER: u128 = 40;
 /// cost plus the allowance. An anchor whose literal is everywhere (`"0"`)
 /// roots the query at most of the tree; it then costs a walk, and a walk is
 /// what the rule would cost written with no literal at all, which passes.
-fn group_fence(
-    groups: &BTreeMap<CostKey, BTreeMap<String, QueryCost>>,
-    key: &CostKey,
-) -> Option<(Duration, Duration)> {
+fn group_fence(groups: &CostGroups, key: &CostKey) -> Option<(Duration, Duration)> {
     let (median, fence) = outlier_fence(groups.get(key)?)?;
     if !key.anchored {
         return Some((median, fence));
@@ -380,16 +401,15 @@ fn group_fence(
 /// cost above both 40 times the peer median and the median plus 40 median
 /// absolute deviations. The absolute allowance prevents tiny overruns of the
 /// relative boundary from failing validation.
-fn outlier_fence<C: MeasuredCost>(costs: &BTreeMap<String, C>) -> Option<(Duration, Duration)> {
+fn outlier_fence<C: MeasuredCost>(costs: &BTreeMap<impl Ord, C>) -> Option<(Duration, Duration)> {
     if costs.len() < 8 {
         return None;
     }
     let mut ns: Vec<_> = costs.values().map(|c| c.cost().as_nanos()).collect();
-    ns.sort_unstable();
-    let median = ns[ns.len() / 2];
+    let mid = ns.len() / 2;
+    let median = *ns.select_nth_unstable(mid).1;
     let mut deviations: Vec<_> = ns.iter().map(|n| n.abs_diff(median)).collect();
-    deviations.sort_unstable();
-    let mad = deviations[deviations.len() / 2];
+    let mad = *deviations.select_nth_unstable(mid).1;
     let fence = median
         .saturating_mul(AST_OUTLIER_MULTIPLIER)
         .max(median.saturating_add(mad.saturating_mul(AST_OUTLIER_MULTIPLIER)))
@@ -427,7 +447,7 @@ impl Session {
     pub(crate) fn begin() -> Self {
         FIXTURE_SESSION.store(true, Ordering::Relaxed);
         ISSUES.lock().clear();
-        QUERY_COSTS.lock().clear();
+        *QUERY_COSTS.lock() = QueryCosts::default();
         ACTIVE.0.store(
             !validation_controls::is_validator_disabled(VALIDATOR),
             Ordering::Relaxed,
@@ -438,7 +458,7 @@ impl Session {
     #[cfg(feature = "lint")]
     pub(crate) fn issues(&self) -> Vec<ValidationIssue> {
         let mut issues = ISSUES.lock().clone();
-        let outliers = outlier_issues(&QUERY_COSTS.lock());
+        let outliers = outlier_issues(&QUERY_COSTS.lock().groups);
         for (key, problem) in outliers {
             issues.entry(key).or_insert(problem);
         }
@@ -448,11 +468,15 @@ impl Session {
 
 /// Each peer group's costs over its fence, keyed like [`ISSUES`].
 #[cfg(any(test, feature = "lint"))]
-fn outlier_issues(
-    groups: &BTreeMap<CostKey, BTreeMap<String, QueryCost>>,
-) -> Vec<((String, String), ValidationIssue)> {
+fn outlier_issues(groups: &CostGroups) -> Vec<((String, String), ValidationIssue)> {
     let mut issues = Vec::new();
     for (key, costs) in groups {
+        if !costs
+            .values()
+            .any(|cost| cost.cost > AST_OUTLIER_NOISE_ALLOWANCE)
+        {
+            continue;
+        }
         let Some((median, fence)) = group_fence(groups, key) else {
             continue;
         };
@@ -471,7 +495,7 @@ fn outlier_issues(
                     costs.len()
                 );
                 let problem = issue(id, &key.path, &detail);
-                issues.push(((id.clone(), key.path.clone()), problem));
+                issues.push(((id.to_string(), key.path.clone()), problem));
             }
         }
     }
@@ -483,7 +507,7 @@ impl Drop for Session {
         FIXTURE_SESSION.store(false, Ordering::Relaxed);
         ACTIVE.0.store(false, Ordering::Relaxed);
         ISSUES.lock().clear();
-        QUERY_COSTS.lock().clear();
+        *QUERY_COSTS.lock() = QueryCosts::default();
     }
 }
 
@@ -716,10 +740,10 @@ mod tests {
                     (format!("peer{i}"), 30)
                 };
                 (
-                    i.to_string(),
+                    i.to_string().into(),
                     QueryCost {
                         cost: Duration::from_micros(us),
-                        query,
+                        query: query.into(),
                         confirmed: false,
                     },
                 )
@@ -731,7 +755,7 @@ mod tests {
             full_count: false,
             anchored: true,
         };
-        QUERY_COSTS.lock().insert(key.clone(), rules);
+        QUERY_COSTS.lock().groups.insert(key.clone(), rules);
         confirm_outliers(path, "sha", |query, full_count| {
             (!full_count).then(|| {
                 Duration::from_micros(if query == "candidate" {
@@ -741,7 +765,7 @@ mod tests {
                 })
             })
         });
-        QUERY_COSTS.lock().remove(&key).unwrap()["8"].cost
+        QUERY_COSTS.lock().groups.remove(&key).unwrap()["8"].cost
     }
 
     #[test]
@@ -776,17 +800,17 @@ mod tests {
         }
     }
 
-    fn costs<S: AsRef<str>>(entries: &[(S, u64)]) -> BTreeMap<String, QueryCost> {
+    fn costs<S: AsRef<str>>(entries: &[(S, u64)]) -> BTreeMap<Arc<str>, QueryCost> {
         entries
             .iter()
             .map(|(id, us)| {
                 let id = id.as_ref();
                 let cost = QueryCost {
                     cost: Duration::from_micros(*us),
-                    query: format!("q-{id}"),
+                    query: format!("q-{id}").into(),
                     confirmed: false,
                 };
-                (id.to_owned(), cost)
+                (id.into(), cost)
             })
             .collect()
     }
@@ -811,17 +835,14 @@ mod tests {
         (anchored, unanchored)
     }
 
-    fn bundle_groups(
-        anchored: &[(String, u64)],
-        unanchored: &[(String, u64)],
-    ) -> BTreeMap<CostKey, BTreeMap<String, QueryCost>> {
+    fn bundle_groups(anchored: &[(String, u64)], unanchored: &[(String, u64)]) -> CostGroups {
         BTreeMap::from([
             (group("bundle.js", true), costs(anchored)),
             (group("bundle.js", false), costs(unanchored)),
         ])
     }
 
-    fn flagged(groups: &BTreeMap<CostKey, BTreeMap<String, QueryCost>>) -> Vec<String> {
+    fn flagged(groups: &CostGroups) -> Vec<String> {
         let mut ids: Vec<_> = outlier_issues(groups)
             .into_iter()
             .map(|((id, _), _)| id)
@@ -899,7 +920,7 @@ mod tests {
 
     #[test]
     fn recorded_costs_stay_in_their_peer_group() {
-        let mut groups = BTreeMap::new();
+        let mut groups = QueryCosts::default();
         let us = Duration::from_micros;
         record_cost(&mut groups, group("f.js", true), "rule", "anchored", us(30));
         record_cost(&mut groups, group("f.js", false), "rule", "walk", us(2000));
@@ -910,9 +931,9 @@ mod tests {
             "cheaper",
             us(1500),
         );
-        assert_eq!(groups[&group("f.js", true)]["rule"].cost, us(30));
-        let walk = &groups[&group("f.js", false)]["rule"];
-        assert_eq!((walk.cost, walk.query.as_str()), (us(2000), "walk"));
+        assert_eq!(groups.groups[&group("f.js", true)]["rule"].cost, us(30));
+        let walk = &groups.groups[&group("f.js", false)]["rule"];
+        assert_eq!((walk.cost, walk.query.as_ref()), (us(2000), "walk"));
         record_cost(
             &mut groups,
             group("f.js", false),
@@ -920,8 +941,8 @@ mod tests {
             "costlier",
             us(2500),
         );
-        let walk = &groups[&group("f.js", false)]["rule"];
-        assert_eq!((walk.cost, walk.query.as_str()), (us(2500), "costlier"));
+        let walk = &groups.groups[&group("f.js", false)]["rule"];
+        assert_eq!((walk.cost, walk.query.as_ref()), (us(2500), "costlier"));
     }
 
     /// An unanchored candidate is rerun beside its own group's median query:
@@ -935,8 +956,12 @@ mod tests {
         walks.push(("candidate".to_owned(), 90_000));
         QUERY_COSTS
             .lock()
+            .groups
             .insert(group(path, true), costs(&anchored));
-        QUERY_COSTS.lock().insert(group(path, false), costs(&walks));
+        QUERY_COSTS
+            .lock()
+            .groups
+            .insert(group(path, false), costs(&walks));
         let mut references = Vec::new();
         confirm_outliers(path, "sha", |query, full_count| {
             if full_count {
@@ -949,8 +974,16 @@ mod tests {
             references.push(query.to_owned());
             Some(Duration::from_micros(4000))
         });
-        let anchored = QUERY_COSTS.lock().remove(&group(path, true)).unwrap();
-        let walks = QUERY_COSTS.lock().remove(&group(path, false)).unwrap();
+        let anchored = QUERY_COSTS
+            .lock()
+            .groups
+            .remove(&group(path, true))
+            .unwrap();
+        let walks = QUERY_COSTS
+            .lock()
+            .groups
+            .remove(&group(path, false))
+            .unwrap();
         assert!(!references.is_empty());
         assert!(
             references.iter().all(|q| q.starts_with("q-w")),

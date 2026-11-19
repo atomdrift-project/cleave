@@ -45,7 +45,12 @@ fn build_index_automaton<P: AsRef<[u8]>>(
         return None;
     }
     let started = std::time::Instant::now();
-    match AhoCorasick::builder()
+    let mut builder = AhoCorasick::builder();
+    // For small file-type indexes, only the root needs a dense transition table.
+    if patterns.len() <= 4096 {
+        builder.dense_depth(1);
+    }
+    match builder
         .ascii_case_insensitive(ascii_case_insensitive)
         .build(patterns)
     {

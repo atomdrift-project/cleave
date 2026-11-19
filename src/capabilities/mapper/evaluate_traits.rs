@@ -274,7 +274,7 @@ impl super::CapabilityMapper {
                 &self.trait_definitions[idx].r#if
             {
                 if let Some(k) = kind {
-                    for nt in map_kind_to_node_types(k, file_type) {
+                    for &nt in map_kind_to_node_types(k, file_type) {
                         required_node_types.insert(nt.to_owned());
                     }
                 } else if let Some(n) = node {
@@ -283,7 +283,8 @@ impl super::CapabilityMapper {
             }
         }
         let call_node_types = map_kind_to_node_types("call", file_type)
-            .into_iter()
+            .iter()
+            .copied()
             .collect();
         let plan = std::sync::Arc::new(AstKindPlan {
             required: required_node_types,
@@ -1117,9 +1118,16 @@ impl super::CapabilityMapper {
         };
         // Every spelling matched by a path condition is a slice of the target path.
         let path = super::content_signature::Signature::ascii(report.target.path.as_bytes());
+        let literals = super::content_signature::Signature::literals(&ctx);
         let (doomed_indices, rest_indices): (Vec<usize>, Vec<usize>) = filtered_indices
             .into_iter()
-            .filter(|&idx| indexes.signatures[idx].accepts(signature.as_ref(), path.as_ref()))
+            .filter(|&idx| {
+                indexes.signatures[idx].accepts(
+                    signature.as_ref(),
+                    path.as_ref(),
+                    literals.as_ref(),
+                )
+            })
             .partition(|&idx| {
                 doomed_index.should_skip(
                     idx,

@@ -2368,7 +2368,7 @@ fn test_lazy_tier_compiles_then_loads_from_per_tier_cache() {
         )],
     );
     let cell = OnceLock::new();
-    let _ = cell.set(sources);
+    let _ = cell.set(sources.into());
 
     let mut engine = YaraEngine::new_for_test();
     engine.populated_tiers.insert(bucket.to_string());
@@ -2382,6 +2382,11 @@ fn test_lazy_tier_compiles_then_loads_from_per_tier_cache() {
         sources: cell,
     };
     // First access compiles from source and writes the per-bucket cache file.
+    assert!(engine.tier_rules(bucket).is_some());
+    let TierSource::Lazy { sources, .. } = &engine.source else {
+        panic!("expected lazy source");
+    };
+    assert!(sources.get().unwrap().by_tier[bucket].lock().is_empty());
     assert!(engine.tier_rules(bucket).is_some());
     assert!(
         compiled_path(dir.path(), bucket, "0123456789abcdef").exists(),
@@ -2417,7 +2422,7 @@ fn test_lazy_tier_does_not_cache_empty_rules() {
         vec![("empty_ns".to_string(), "// no rules".to_string())],
     );
     let cell = OnceLock::new();
-    let _ = cell.set(sources);
+    let _ = cell.set(sources.into());
 
     let mut engine = YaraEngine::new_for_test();
     engine.populated_tiers.insert(bucket.to_string());

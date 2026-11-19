@@ -215,36 +215,38 @@ pub fn run_with_options(
     // every analysis worker below reuses this same Arc, so the trait set is
     // parsed from disk exactly once per run.
     let setup_ms = started.elapsed().as_millis();
-    let mapper_started = Instant::now();
-    let mapper = Arc::new(
-        CapabilityMapper::load(cleave::LoadOptions {
-            full_validation: true,
-            ..cleave::LoadOptions::default()
-        })?
-        .with_slow_rule_ms(slow_rule_ms),
-    );
-    let mapper_and_lint_ms = mapper_started.elapsed().as_millis();
-    // Both preparations reuse the loaded rule sources. Build the match indexes
-    // while YARA initializes. Keep the caller off Rayon while it waits for YARA,
-    // whose own loader can need the entire pool, including on one-thread runs.
-    let (index_ms, yara_ms) = std::thread::scope(|scope| {
-        let index = scope.spawn(|| {
+    let warm_buckets = result_cache.is_none() && targets.len() >= 1024;
+    let prepare_yara = || {
+        let start = Instant::now();
+        cleave::prefetch_yara_engine(options.third_party_yara);
+        if warm_buckets {
+            cleave::prewarm_yara_buckets_background(options.third_party_yara);
+        }
+        start.elapsed().as_millis()
+    };
+    let (mapper, mapper_and_lint_ms, index_ms, yara_ms) =
+        std::thread::scope(|scope| -> Result<_> {
+            // A large uncached run will use every index. Start YARA while the
+            // mapper parses and lints. A plain thread leaves Rayon available to both.
+            let early_yara = warm_buckets.then(|| scope.spawn(prepare_yara));
+            let start = Instant::now();
+            let mapper = Arc::new(
+                CapabilityMapper::load(cleave::LoadOptions {
+                    full_validation: true,
+                    ..cleave::LoadOptions::default()
+                })?
+                .with_slow_rule_ms(slow_rule_ms),
+            );
+            let mapper_and_lint_ms = start.elapsed().as_millis();
+            let yara = early_yara.unwrap_or_else(|| scope.spawn(prepare_yara));
             let start = Instant::now();
             if !cleave::analysis_cache::has_reports_for_current_traits() {
                 mapper.warm_indexes();
             }
-            start.elapsed().as_millis()
-        });
-        let start = Instant::now();
-        cleave::prefetch_yara_engine(options.third_party_yara);
-        let yara_ms = start.elapsed().as_millis();
-        (
-            index
-                .join()
-                .unwrap_or_else(|e| std::panic::resume_unwind(e)),
-            yara_ms,
-        )
-    });
+            let index_ms = start.elapsed().as_millis();
+            let yara_ms = yara.join().unwrap_or_else(|e| std::panic::resume_unwind(e));
+            Ok((mapper, mapper_and_lint_ms, index_ms, yara_ms))
+        })?;
 
     // Which fixtures this edit can have changed. The last run's per-fixture
     // state is kept under the same gate as the result cache; without it,
@@ -364,7 +366,17 @@ pub fn run_with_options(
         let target = &targets[i];
         let size = target.metadata.as_ref().map_or(0, std::fs::Metadata::len);
         let path = target.path();
-        let logical = if path.extension().is_some_and(|ext| ext == "xz") {
+        let xz = path.extension().is_some_and(|ext| ext == "xz");
+        // Even a very small XZ wrapper can expand into a large source file or archive.
+        // An unreadable index leaves the on-disk size as the scheduling estimate.
+        let size = if xz {
+            std::fs::File::open(path)
+                .and_then(|file| lzma_rust2::xz_uncompressed_size(std::io::BufReader::new(file)))
+                .unwrap_or(size)
+        } else {
+            size
+        };
+        let logical = if xz {
             path.file_stem().map(Path::new).unwrap_or(path)
         } else {
             path

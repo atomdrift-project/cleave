@@ -9,10 +9,10 @@ use crate::composite_rules::types::FileType;
 /// Map an abstract kind to language-specific tree-sitter node types.
 /// Returns multiple node types since some kinds map to several node types per language.
 #[must_use]
-pub(crate) fn map_kind_to_node_types(kind: &str, file_type: FileType) -> Vec<&'static str> {
+pub(crate) fn map_kind_to_node_types(kind: &str, file_type: FileType) -> &'static [&'static str] {
     match kind {
         "call" => match file_type {
-            FileType::Python | FileType::Elixir => vec!["call"],
+            FileType::Python | FileType::Elixir => &["call"],
             FileType::JavaScript
             | FileType::TypeScript
             | FileType::Go
@@ -21,17 +21,17 @@ pub(crate) fn map_kind_to_node_types(kind: &str, file_type: FileType) -> Vec<&'s
             | FileType::Rust
             | FileType::Swift
             | FileType::Scala
-            | FileType::Zig => vec!["call_expression"],
-            FileType::Ruby => vec!["call", "method_call"],
-            FileType::Java => vec!["method_invocation"],
-            FileType::CSharp => vec!["invocation_expression"],
-            FileType::Php => vec!["function_call_expression", "member_call_expression"],
-            FileType::Shell => vec!["command"],
-            FileType::Makefile => vec!["recipe"],
-            FileType::Lua | FileType::Perl => vec!["function_call"],
-            FileType::PowerShell => vec!["command_expression", "invocation_expression"],
-            FileType::Groovy => vec!["method_call"],
-            _ => vec![],
+            | FileType::Zig => &["call_expression"],
+            FileType::Ruby => &["call", "method_call"],
+            FileType::Java => &["method_invocation"],
+            FileType::CSharp => &["invocation_expression"],
+            FileType::Php => &["function_call_expression", "member_call_expression"],
+            FileType::Shell => &["command"],
+            FileType::Makefile => &["recipe"],
+            FileType::Lua | FileType::Perl => &["function_call"],
+            FileType::PowerShell => &["command_expression", "invocation_expression"],
+            FileType::Groovy => &["method_call"],
+            _ => &[],
         },
 
         "function" => match file_type {
@@ -39,98 +39,92 @@ pub(crate) fn map_kind_to_node_types(kind: &str, file_type: FileType) -> Vec<&'s
             | FileType::C
             | FileType::ObjectiveC
             | FileType::Shell
-            | FileType::Scala => vec!["function_definition"],
-            FileType::JavaScript | FileType::TypeScript => {
-                vec![
-                    "function_declaration",
-                    "arrow_function",
-                    "function_expression",
-                ]
-            }
-            FileType::Ruby => vec!["method", "singleton_method"],
-            FileType::Go => vec!["function_declaration", "method_declaration"],
-            FileType::Rust => vec!["function_item"],
-            FileType::Java | FileType::CSharp => vec!["method_declaration"],
-            FileType::Php => vec!["function_definition", "method_declaration"],
-            FileType::Lua => vec!["function_definition", "local_function_definition_statement"],
-            FileType::Perl => vec!["subroutine_declaration_statement"],
-            FileType::PowerShell => vec!["function_statement"],
-            FileType::Swift | FileType::Zig => vec!["function_declaration"],
-            FileType::Groovy => vec!["method_definition"],
-            FileType::Elixir => vec!["call"], // def/defp are function calls in Elixir AST
-            FileType::Makefile => vec!["rule"],
-            _ => vec![],
+            | FileType::Scala => &["function_definition"],
+            FileType::JavaScript | FileType::TypeScript => &[
+                "function_declaration",
+                "arrow_function",
+                "function_expression",
+            ],
+            FileType::Ruby => &["method", "singleton_method"],
+            FileType::Go => &["function_declaration", "method_declaration"],
+            FileType::Rust => &["function_item"],
+            FileType::Java | FileType::CSharp => &["method_declaration"],
+            FileType::Php => &["function_definition", "method_declaration"],
+            FileType::Lua => &["function_definition", "local_function_definition_statement"],
+            FileType::Perl => &["subroutine_declaration_statement"],
+            FileType::PowerShell => &["function_statement"],
+            FileType::Swift | FileType::Zig => &["function_declaration"],
+            FileType::Groovy => &["method_definition"],
+            FileType::Elixir => &["call"], // def/defp are function calls in Elixir AST
+            FileType::Makefile => &["rule"],
+            _ => &[],
         },
 
         "class" => match file_type {
-            FileType::Python | FileType::Groovy | FileType::Scala => vec!["class_definition"],
-            FileType::JavaScript | FileType::TypeScript => vec!["class_declaration", "class"],
-            FileType::Ruby => vec!["class", "singleton_class"],
-            FileType::Go => vec!["type_declaration"],
-            FileType::C => vec!["struct_specifier"],
-            FileType::ObjectiveC => vec!["class_interface", "class_implementation"],
-            FileType::Rust => vec!["struct_item", "impl_item"],
+            FileType::Python | FileType::Groovy | FileType::Scala => &["class_definition"],
+            FileType::JavaScript | FileType::TypeScript => &["class_declaration", "class"],
+            FileType::Ruby => &["class", "singleton_class"],
+            FileType::Go => &["type_declaration"],
+            FileType::C => &["struct_specifier"],
+            FileType::ObjectiveC => &["class_interface", "class_implementation"],
+            FileType::Rust => &["struct_item", "impl_item"],
             FileType::Java | FileType::CSharp | FileType::Php | FileType::Swift => {
-                vec!["class_declaration"]
+                &["class_declaration"]
             }
-            FileType::Perl => vec!["package_statement"],
-            FileType::PowerShell => vec!["class_statement"],
+            FileType::Perl => &["package_statement"],
+            FileType::PowerShell => &["class_statement"],
             // Zig has no class construct; containers are the closest
             // declaration-level analogue and are represented by distinct
             // struct/enum/union/opaque nodes in tree-sitter-zig.
-            FileType::Zig => vec![
+            FileType::Zig => &[
                 "struct_declaration",
                 "enum_declaration",
                 "union_declaration",
                 "opaque_declaration",
             ],
-            FileType::Elixir => vec!["call"], // defmodule is a function call in Elixir AST
-            _ => vec![],
+            FileType::Elixir => &["call"], // defmodule is a function call in Elixir AST
+            _ => &[],
         },
 
         "import" => match file_type {
-            FileType::Python => vec!["import_statement", "import_from_statement"],
+            FileType::Python => &["import_statement", "import_from_statement"],
             FileType::JavaScript | FileType::TypeScript => {
-                vec!["import_statement", "import_declaration"]
+                &["import_statement", "import_declaration"]
             }
-            FileType::Ruby | FileType::Elixir => vec!["call"],
+            FileType::Ruby | FileType::Elixir => &["call"],
             FileType::Go
             | FileType::Java
             | FileType::Swift
             | FileType::Groovy
-            | FileType::Scala => {
-                vec!["import_declaration"]
-            }
-            FileType::C | FileType::ObjectiveC => vec!["preproc_include", "preproc_import"],
-            FileType::Rust => vec!["use_declaration"],
-            FileType::CSharp => vec!["using_directive"],
-            FileType::Php => vec!["use_declaration", "namespace_use_declaration"],
-            FileType::Shell => vec!["command"], // source/. commands
-            FileType::Lua => vec!["function_call"], // require is a function call
-            FileType::Perl => vec!["use_statement", "require_statement"],
-            FileType::PowerShell => vec!["using_statement"],
-            FileType::Zig => vec!["builtin_function"], // @import
-            _ => vec![],
+            | FileType::Scala => &["import_declaration"],
+            FileType::C | FileType::ObjectiveC => &["preproc_include", "preproc_import"],
+            FileType::Rust => &["use_declaration"],
+            FileType::CSharp => &["using_directive"],
+            FileType::Php => &["use_declaration", "namespace_use_declaration"],
+            FileType::Shell => &["command"],     // source/. commands
+            FileType::Lua => &["function_call"], // require is a function call
+            FileType::Perl => &["use_statement", "require_statement"],
+            FileType::PowerShell => &["using_statement"],
+            FileType::Zig => &["builtin_function"], // @import
+            _ => &[],
         },
 
         "string" => match file_type {
-            FileType::Python => vec!["string", "concatenated_string"],
-            FileType::JavaScript | FileType::TypeScript => vec!["string", "template_string"],
-            FileType::Ruby => vec!["string", "string_content", "heredoc_body"],
-            FileType::Go => vec!["interpreted_string_literal", "raw_string_literal"],
-            FileType::C | FileType::ObjectiveC | FileType::Java => {
-                vec!["string_literal"]
-            }
-            FileType::Zig => vec!["string", "multiline_string"],
-            FileType::Rust => vec!["string_literal", "raw_string_literal"],
-            FileType::CSharp => vec!["string_literal", "verbatim_string_literal"],
-            FileType::Php => vec!["string", "encapsed_string"],
-            FileType::Shell => vec!["string", "raw_string"],
-            FileType::Lua | FileType::Groovy | FileType::Scala | FileType::Elixir => vec!["string"],
-            FileType::Perl => vec!["string_literal", "interpolated_string_literal"],
-            FileType::PowerShell => vec!["string_literal", "expandable_string_literal"],
-            FileType::Swift => vec!["line_string_literal"],
-            _ => vec![],
+            FileType::Python => &["string", "concatenated_string"],
+            FileType::JavaScript | FileType::TypeScript => &["string", "template_string"],
+            FileType::Ruby => &["string", "string_content", "heredoc_body"],
+            FileType::Go => &["interpreted_string_literal", "raw_string_literal"],
+            FileType::C | FileType::ObjectiveC | FileType::Java => &["string_literal"],
+            FileType::Zig => &["string", "multiline_string"],
+            FileType::Rust => &["string_literal", "raw_string_literal"],
+            FileType::CSharp => &["string_literal", "verbatim_string_literal"],
+            FileType::Php => &["string", "encapsed_string"],
+            FileType::Shell => &["string", "raw_string"],
+            FileType::Lua | FileType::Groovy | FileType::Scala | FileType::Elixir => &["string"],
+            FileType::Perl => &["string_literal", "interpolated_string_literal"],
+            FileType::PowerShell => &["string_literal", "expandable_string_literal"],
+            FileType::Swift => &["line_string_literal"],
+            _ => &[],
         },
 
         "comment" => match file_type {
@@ -149,36 +143,36 @@ pub(crate) fn map_kind_to_node_types(kind: &str, file_type: FileType) -> Vec<&'s
             | FileType::PowerShell
             | FileType::Groovy
             | FileType::Scala
-            | FileType::Elixir => vec!["comment"],
-            FileType::Rust | FileType::Java => vec!["line_comment", "block_comment"],
-            FileType::Swift => vec!["comment", "multiline_comment"],
-            FileType::Zig => vec!["line_comment"],
-            _ => vec![],
+            | FileType::Elixir => &["comment"],
+            FileType::Rust | FileType::Java => &["line_comment", "block_comment"],
+            FileType::Swift => &["comment", "multiline_comment"],
+            FileType::Zig => &["line_comment"],
+            _ => &[],
         },
 
         "assignment" => match file_type {
-            FileType::Python => vec!["assignment", "augmented_assignment"],
+            FileType::Python => &["assignment", "augmented_assignment"],
             FileType::JavaScript | FileType::TypeScript => {
-                vec!["assignment_expression", "variable_declaration"]
+                &["assignment_expression", "variable_declaration"]
             }
-            FileType::Ruby => vec!["assignment"],
-            FileType::Go => vec!["short_var_declaration", "assignment_statement"],
+            FileType::Ruby => &["assignment"],
+            FileType::Go => &["short_var_declaration", "assignment_statement"],
             FileType::C
             | FileType::ObjectiveC
             | FileType::Php
             | FileType::Perl
             | FileType::PowerShell
-            | FileType::Groovy => vec!["assignment_expression"],
-            FileType::Rust => vec!["let_declaration"],
-            FileType::Java => vec!["assignment_expression", "local_variable_declaration"],
-            FileType::CSharp => vec!["assignment_expression", "local_declaration_statement"],
-            FileType::Shell => vec!["variable_assignment"],
-            FileType::Lua => vec!["assignment_statement"],
-            FileType::Swift => vec!["value_binding_pattern"],
-            FileType::Scala => vec!["val_definition", "var_definition"],
-            FileType::Zig => vec!["assignment_expression", "variable_declaration"],
-            FileType::Elixir => vec!["binary_operator"], // = is a binary operator in Elixir
-            _ => vec![],
+            | FileType::Groovy => &["assignment_expression"],
+            FileType::Rust => &["let_declaration"],
+            FileType::Java => &["assignment_expression", "local_variable_declaration"],
+            FileType::CSharp => &["assignment_expression", "local_declaration_statement"],
+            FileType::Shell => &["variable_assignment"],
+            FileType::Lua => &["assignment_statement"],
+            FileType::Swift => &["value_binding_pattern"],
+            FileType::Scala => &["val_definition", "var_definition"],
+            FileType::Zig => &["assignment_expression", "variable_declaration"],
+            FileType::Elixir => &["binary_operator"], // = is a binary operator in Elixir
+            _ => &[],
         },
 
         "return" => match file_type {
@@ -194,18 +188,18 @@ pub(crate) fn map_kind_to_node_types(kind: &str, file_type: FileType) -> Vec<&'s
             | FileType::Lua
             | FileType::PowerShell
             | FileType::Swift
-            | FileType::Groovy => vec!["return_statement"],
-            FileType::Ruby => vec!["return"],
+            | FileType::Groovy => &["return_statement"],
+            FileType::Ruby => &["return"],
             FileType::Rust | FileType::Scala | FileType::Zig | FileType::Perl => {
-                vec!["return_expression"]
+                &["return_expression"]
             }
-            FileType::Shell => vec!["command"], // return is a command
+            FileType::Shell => &["command"], // return is a command
             // Elixir doesn't have explicit return
-            _ => vec![],
+            _ => &[],
         },
 
         "binary_op" => match file_type {
-            FileType::Python => vec!["binary_operator", "comparison_operator", "boolean_operator"],
+            FileType::Python => &["binary_operator", "comparison_operator", "boolean_operator"],
             FileType::JavaScript
             | FileType::TypeScript
             | FileType::Go
@@ -220,11 +214,11 @@ pub(crate) fn map_kind_to_node_types(kind: &str, file_type: FileType) -> Vec<&'s
             | FileType::Perl
             | FileType::PowerShell
             | FileType::Groovy
-            | FileType::Zig => vec!["binary_expression"],
-            FileType::Ruby => vec!["binary"],
-            FileType::Swift | FileType::Scala => vec!["infix_expression"],
-            FileType::Elixir => vec!["binary_operator"],
-            _ => vec![],
+            | FileType::Zig => &["binary_expression"],
+            FileType::Ruby => &["binary"],
+            FileType::Swift | FileType::Scala => &["infix_expression"],
+            FileType::Elixir => &["binary_operator"],
+            _ => &[],
         },
 
         "identifier" => match file_type {
@@ -242,59 +236,57 @@ pub(crate) fn map_kind_to_node_types(kind: &str, file_type: FileType) -> Vec<&'s
             | FileType::Groovy
             | FileType::Scala
             | FileType::Zig
-            | FileType::Elixir => vec!["identifier"],
-            FileType::Php => vec!["name"],
-            FileType::Shell => vec!["word", "variable_name"],
-            FileType::Perl => vec!["scalar_variable", "array_variable", "hash_variable"],
-            FileType::PowerShell => vec!["variable"],
-            FileType::Swift => vec!["simple_identifier"],
-            _ => vec![],
+            | FileType::Elixir => &["identifier"],
+            FileType::Php => &["name"],
+            FileType::Shell => &["word", "variable_name"],
+            FileType::Perl => &["scalar_variable", "array_variable", "hash_variable"],
+            FileType::PowerShell => &["variable"],
+            FileType::Swift => &["simple_identifier"],
+            _ => &[],
         },
 
         "attribute" => match file_type {
-            FileType::Python => vec!["attribute"],
+            FileType::Python => &["attribute"],
             FileType::JavaScript
             | FileType::TypeScript
             | FileType::PowerShell
-            | FileType::Groovy => vec!["member_expression"],
-            FileType::Ruby => vec!["call"], // method calls look like attribute access
-            FileType::Go => vec!["selector_expression"],
+            | FileType::Groovy => &["member_expression"],
+            FileType::Ruby => &["call"], // method calls look like attribute access
+            FileType::Go => &["selector_expression"],
             FileType::C
             | FileType::ObjectiveC
             | FileType::Rust
             | FileType::Lua
-            | FileType::Scala => {
-                vec!["field_expression"]
-            }
-            FileType::Java => vec!["field_access"],
-            FileType::Zig => vec!["field_expression"],
-            FileType::CSharp | FileType::Php => vec!["member_access_expression"],
+            | FileType::Scala => &["field_expression"],
+            FileType::Java => &["field_access"],
+            FileType::Zig => &["field_expression"],
+            FileType::CSharp | FileType::Php => &["member_access_expression"],
             // Shell doesn't have attribute access
-            FileType::Perl => vec!["method_call_expression"],
-            FileType::Swift => vec!["navigation_expression"],
-            FileType::Elixir => vec!["access_call"],
-            _ => vec![],
+            FileType::Perl => &["method_call_expression"],
+            FileType::Swift => &["navigation_expression"],
+            FileType::Elixir => &["access_call"],
+            _ => &[],
         },
 
         "subscript" => match file_type {
-            FileType::Python => vec!["subscript"],
-            FileType::JavaScript | FileType::TypeScript => vec!["subscript_expression"],
-            FileType::Ruby => vec!["element_reference"],
+            FileType::Python => &["subscript"],
+            FileType::JavaScript | FileType::TypeScript => &["subscript_expression"],
+            FileType::Ruby => &["element_reference"],
             FileType::Go | FileType::Rust | FileType::PowerShell | FileType::Groovy => {
-                vec!["index_expression"]
+                &["index_expression"]
             }
             FileType::C | FileType::ObjectiveC | FileType::Php | FileType::Swift => {
-                vec!["subscript_expression"]
+                &["subscript_expression"]
             }
-            FileType::Java => vec!["array_access"],
-            FileType::Zig => vec!["index_expression"],
-            FileType::CSharp => vec!["element_access_expression"],
+            FileType::Java => &["array_access"],
+            FileType::Zig => &["index_expression"],
+            FileType::CSharp => &["element_access_expression"],
             // Shell uses ${array[index]} syntax
-            FileType::Lua => vec!["bracket_index_expression"],
-            FileType::Perl => vec!["array_element_expression", "hash_element_expression"],
-            FileType::Scala => vec!["call_expression"], // Scala uses apply() for indexing
-            FileType::Elixir => vec!["access_call"],
-            _ => vec![],
+            FileType::Lua => &["bracket_index_expression"],
+            FileType::Perl => &["array_element_expression", "hash_element_expression"],
+            FileType::Scala => &["call_expression"], // Scala uses apply() for indexing
+            FileType::Elixir => &["access_call"],
+            _ => &[],
         },
 
         "conditional" => match file_type {
@@ -302,72 +294,66 @@ pub(crate) fn map_kind_to_node_types(kind: &str, file_type: FileType) -> Vec<&'s
             | FileType::C
             | FileType::ObjectiveC
             | FileType::CSharp
-            | FileType::Php => {
-                vec!["if_statement", "conditional_expression"]
-            }
+            | FileType::Php => &["if_statement", "conditional_expression"],
             FileType::JavaScript | FileType::TypeScript | FileType::Java | FileType::Swift => {
-                vec!["if_statement", "ternary_expression"]
+                &["if_statement", "ternary_expression"]
             }
-            FileType::Ruby => vec!["if", "unless", "if_modifier", "unless_modifier"],
+            FileType::Ruby => &["if", "unless", "if_modifier", "unless_modifier"],
             FileType::Go | FileType::Lua | FileType::PowerShell | FileType::Groovy => {
-                vec!["if_statement"]
+                &["if_statement"]
             }
-            FileType::Rust | FileType::Scala | FileType::Zig => vec!["if_expression"],
-            FileType::Shell => vec!["if_statement", "case_statement"],
-            FileType::Perl => vec!["if_statement", "unless_statement", "ternary_expression"],
-            FileType::Elixir => vec!["call"], // if/unless are function calls in Elixir
-            _ => vec![],
+            FileType::Rust | FileType::Scala | FileType::Zig => &["if_expression"],
+            FileType::Shell => &["if_statement", "case_statement"],
+            FileType::Perl => &["if_statement", "unless_statement", "ternary_expression"],
+            FileType::Elixir => &["call"], // if/unless are function calls in Elixir
+            _ => &[],
         },
 
         "loop" => match file_type {
             FileType::Python | FileType::Shell | FileType::Groovy => {
-                vec!["for_statement", "while_statement"]
+                &["for_statement", "while_statement"]
             }
-            FileType::JavaScript | FileType::TypeScript => {
-                vec![
-                    "for_statement",
-                    "while_statement",
-                    "for_in_statement",
-                    "for_of_statement",
-                ]
-            }
-            FileType::Ruby => vec!["for", "while", "until", "while_modifier", "until_modifier"],
-            FileType::Go => vec!["for_statement"],
+            FileType::JavaScript | FileType::TypeScript => &[
+                "for_statement",
+                "while_statement",
+                "for_in_statement",
+                "for_of_statement",
+            ],
+            FileType::Ruby => &["for", "while", "until", "while_modifier", "until_modifier"],
+            FileType::Go => &["for_statement"],
             FileType::C | FileType::ObjectiveC => {
-                vec!["for_statement", "while_statement", "do_statement"]
+                &["for_statement", "while_statement", "do_statement"]
             }
-            FileType::Rust => vec!["for_expression", "while_expression", "loop_expression"],
-            FileType::Java => vec![
+            FileType::Rust => &["for_expression", "while_expression", "loop_expression"],
+            FileType::Java => &[
                 "for_statement",
                 "enhanced_for_statement",
                 "while_statement",
                 "do_statement",
             ],
-            FileType::CSharp => {
-                vec![
-                    "for_statement",
-                    "foreach_statement",
-                    "while_statement",
-                    "do_statement",
-                ]
-            }
+            FileType::CSharp => &[
+                "for_statement",
+                "foreach_statement",
+                "while_statement",
+                "do_statement",
+            ],
             FileType::Php | FileType::PowerShell => {
-                vec!["for_statement", "foreach_statement", "while_statement"]
+                &["for_statement", "foreach_statement", "while_statement"]
             }
-            FileType::Lua => vec!["for_statement", "while_statement", "repeat_statement"],
-            FileType::Perl => vec![
+            FileType::Lua => &["for_statement", "while_statement", "repeat_statement"],
+            FileType::Perl => &[
                 "for_statement",
                 "foreach_statement",
                 "while_statement",
                 "until_statement",
             ],
-            FileType::Swift => vec!["for_statement", "while_statement", "repeat_while_statement"],
-            FileType::Scala | FileType::Zig => vec!["for_expression", "while_expression"],
-            FileType::Elixir => vec!["call"], // for/Enum.each are function calls
-            _ => vec![],
+            FileType::Swift => &["for_statement", "while_statement", "repeat_while_statement"],
+            FileType::Scala | FileType::Zig => &["for_expression", "while_expression"],
+            FileType::Elixir => &["call"], // for/Enum.each are function calls
+            _ => &[],
         },
 
-        // If kind is not recognized, return empty vec
-        _ => vec![],
+        // If kind is not recognized, return an empty slice
+        _ => &[],
     }
 }

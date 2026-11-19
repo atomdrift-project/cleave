@@ -952,8 +952,54 @@ pub(super) fn cached_fact<T>(_kind: &str, _input: &str, compute: impl FnOnce() -
 /// unchanged pattern is not recompiled, by either.
 pub(super) fn regex_compile_error(pattern: &str) -> Option<String> {
     cached_fact("regex-compile", pattern, || {
+        #[cfg(feature = "lint")]
+        {
+            let checks = REGEX_COMPILE_CHECKS.lock().upgrade();
+            if let Some(checks) = checks {
+                return checks.check(pattern);
+            }
+        }
         regex::Regex::new(pattern).err().map(|e| e.to_string())
     })
+}
+
+// When validation has no disk facts, separate checks can still share the
+// syntax verdict for an identical pattern during the same load.
+#[cfg(feature = "lint")]
+pub(crate) struct RegexCompileChecks {
+    shards: [parking_lot::Mutex<rustc_hash::FxHashMap<Box<str>, Option<String>>>; 32],
+}
+
+#[cfg(feature = "lint")]
+static REGEX_COMPILE_CHECKS: parking_lot::Mutex<std::sync::Weak<RegexCompileChecks>> =
+    parking_lot::Mutex::new(std::sync::Weak::new());
+
+#[cfg(feature = "lint")]
+pub(crate) fn begin_regex_compile_checks() -> std::sync::Arc<RegexCompileChecks> {
+    let mut active = REGEX_COMPILE_CHECKS.lock();
+    if let Some(checks) = active.upgrade() {
+        return checks;
+    }
+    let checks = std::sync::Arc::new(RegexCompileChecks {
+        shards: std::array::from_fn(|_| Default::default()),
+    });
+    *active = std::sync::Arc::downgrade(&checks);
+    checks
+}
+
+#[cfg(feature = "lint")]
+impl RegexCompileChecks {
+    fn check(&self, pattern: &str) -> Option<String> {
+        use std::hash::BuildHasher;
+        let hash = rustc_hash::FxBuildHasher.hash_one(pattern);
+        let shard = &self.shards[hash as usize % self.shards.len()];
+        if let Some(verdict) = shard.lock().get(pattern) {
+            return verdict.clone();
+        }
+        let verdict = regex::Regex::new(pattern).err().map(|e| e.to_string());
+        shard.lock().insert(pattern.into(), verdict.clone());
+        verdict
+    }
 }
 
 /// Remove escaped literal `()` call markers from a symbol regex. Unescaped

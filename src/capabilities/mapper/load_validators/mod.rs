@@ -43,8 +43,7 @@ struct ValidationInput<'a> {
     dir_list: Vec<String>,
     patterns: ExtractedPatterns,
     /// Every trait and composite id: what the broken-reference check reads.
-    valid_trait_ids: FxHashSet<String>,
-    all_trait_ids: Vec<String>,
+    valid_trait_ids: FxHashSet<&'a str>,
 }
 
 impl<'a> ValidationInput<'a> {
@@ -52,13 +51,12 @@ impl<'a> ValidationInput<'a> {
         let (known_prefixes, prefix_hierarchy) =
             known_prefixes(&rules.trait_definitions, &rules.composite_rules);
         let dir_list = known_prefixes.iter().map(|&p| p.to_owned()).collect();
-        let mut valid_trait_ids: FxHashSet<String> = rules
+        let valid_trait_ids = rules
             .trait_definitions
             .iter()
-            .map(|t| t.id.clone())
+            .map(|t| t.id.as_str())
+            .chain(rules.composite_rules.iter().map(|r| r.id.as_str()))
             .collect();
-        valid_trait_ids.extend(rules.composite_rules.iter().map(|r| r.id.clone()));
-        let all_trait_ids = valid_trait_ids.iter().cloned().collect();
         Self {
             dir_path,
             yaml_files,
@@ -70,7 +68,6 @@ impl<'a> ValidationInput<'a> {
             dir_list,
             patterns: ExtractedPatterns::of(&rules.trait_definitions),
             valid_trait_ids,
-            all_trait_ids,
         }
     }
 }

@@ -95,17 +95,13 @@ pub(crate) fn check_exact_contained_by_substr(
                     let for_exact = if exact_loc.for_types.is_empty() {
                         "all".to_string()
                     } else {
-                        let mut types: Vec<_> = exact_loc.for_types.iter().cloned().collect();
-                        types.sort();
-                        types.join(", ")
+                        exact_loc.for_types.labels()
                     };
 
                     let for_substr = if substr_loc.for_types.is_empty() {
                         "all".to_string()
                     } else {
-                        let mut types: Vec<_> = substr_loc.for_types.iter().cloned().collect();
-                        types.sort();
-                        types.join(", ")
+                        substr_loc.for_types.labels()
                     };
 
                     warnings.push(format!(
@@ -573,11 +569,8 @@ pub(super) fn has_filetype_overlap_case(
     types_a: &HashSet<String>,
     types_b: &HashSet<String>,
 ) -> bool {
-    let unrestricted =
-        |types: &HashSet<String>| types.is_empty() || types.iter().any(|t| t == "all");
-    unrestricted(types_a)
-        || unrestricted(types_b)
-        || types_a.iter().any(|a| types_b.iter().any(|b| a == b))
+    let unrestricted = |types: &HashSet<String>| types.is_empty() || types.contains("all");
+    unrestricted(types_a) || unrestricted(types_b) || !types_a.is_disjoint(types_b)
 }
 
 /// Helper to create tier note for warnings

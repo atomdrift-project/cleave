@@ -328,8 +328,8 @@ pub(super) fn compile_codepoint(pattern: &str) -> Option<regex_automata::meta::R
 pub(super) const LOCAL_REGEX_SLOTS: usize = 4096;
 
 thread_local! {
-    static LOCAL_REGEX: std::cell::RefCell<Vec<Option<(Box<str>, bool, std::sync::Weak<TraitRegex>)>>> =
-        std::cell::RefCell::new(vec![None; LOCAL_REGEX_SLOTS]);
+    static LOCAL_REGEX: std::cell::RefCell<Vec<std::sync::Weak<TraitRegex>>> =
+        std::cell::RefCell::new(vec![std::sync::Weak::new(); LOCAL_REGEX_SLOTS]);
 }
 
 /// Direct-mapped slot for `pattern` under `case_insensitive`. The flag is
@@ -351,27 +351,37 @@ pub(super) fn local_regex_get(
 ) -> Option<Arc<TraitRegex>> {
     LOCAL_REGEX.with(|cache| {
         let cache = cache.borrow();
-        match cache.get(slot) {
-            Some(Some((key, ci, regex))) if *ci == case_insensitive && &**key == pattern => {
-                regex.upgrade()
-            }
-            _ => None,
-        }
+        let regex = cache.get(slot)?.upgrade()?;
+        let spelling = if case_insensitive {
+            regex.pattern.strip_prefix("(?i)")?
+        } else {
+            &regex.pattern
+        };
+        (spelling == pattern).then_some(regex)
     })
 }
 
 /// Publish `regex` into this thread's memo, replacing any colliding entry.
-pub(super) fn local_regex_put(
-    slot: usize,
-    pattern: &str,
-    case_insensitive: bool,
-    regex: &Arc<TraitRegex>,
-) {
+pub(super) fn local_regex_put(slot: usize, regex: &Arc<TraitRegex>) {
     LOCAL_REGEX.with(|cache| {
         if let Some(entry) = cache.borrow_mut().get_mut(slot) {
-            *entry = Some((Box::from(pattern), case_insensitive, Arc::downgrade(regex)));
+            *entry = Arc::downgrade(regex);
         }
     });
+}
+
+#[cfg(test)]
+#[test]
+fn memo_slot_verifies_the_compiled_pattern_and_flags() {
+    let regex = Arc::new(TraitRegex::compile("(?i)sample").expect("valid regex"));
+    // Force the requests into the same slot.
+    local_regex_put(0, &regex);
+    assert!(local_regex_get(0, "sample", false).is_none());
+    assert!(local_regex_get(0, "other", true).is_none());
+    assert!(local_regex_get(0, "sample", true).is_some());
+    assert!(local_regex_get(0, "(?i)sample", false).is_some());
+    drop(regex);
+    assert!(local_regex_get(0, "sample", true).is_none());
 }
 
 pub(crate) fn cached_regex(pattern: &str) -> Option<Arc<TraitRegex>> {
@@ -388,7 +398,7 @@ pub(crate) fn cached_regex(pattern: &str) -> Option<Arc<TraitRegex>> {
         .ok()
         .and_then(|c| c.peek(pattern).cloned())
     {
-        local_regex_put(slot, pattern, false, &arc);
+        local_regex_put(slot, &arc);
         return Some(arc);
     }
     // Miss: claim the key so racing workers pick up one compile instead of
@@ -424,7 +434,7 @@ pub(crate) fn cached_regex(pattern: &str) -> Option<Arc<TraitRegex>> {
         compile_and_put()
     };
     if let Some(arc) = compiled.as_ref() {
-        local_regex_put(slot, pattern, false, arc);
+        local_regex_put(slot, arc);
     }
     compiled
 }
@@ -474,7 +484,7 @@ pub(crate) fn lazy_regex(regex: Option<&str>, case_insensitive: bool) -> Option<
     }
     let compiled = cached_regex(&format!("(?i){raw}"));
     if let Some(ref arc) = compiled {
-        local_regex_put(slot, raw, true, arc);
+        local_regex_put(slot, arc);
     }
     compiled
 }

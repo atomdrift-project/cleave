@@ -131,8 +131,8 @@ pub(super) fn build(
     Ok(Some(parsed))
 }
 
-pub(super) fn is_comment(node: &tree_sitter::Node<'_>) -> bool {
-    matches!(node.kind(), "comment" | "line_comment" | "block_comment") && node.is_extra()
+pub(super) fn is_comment(kind: &str, node: &tree_sitter::Node<'_>) -> bool {
+    matches!(kind, "comment" | "line_comment" | "block_comment") && node.is_extra()
 }
 
 fn find_comments(
@@ -148,7 +148,7 @@ fn find_comments(
             stopped()?;
         }
         let node = cursor.node();
-        if is_comment(&node) {
+        if is_comment(node.kind(), &node) {
             ranges.push(node.range());
         } else if cursor.goto_first_child() {
             continue;

@@ -405,11 +405,7 @@ impl ExtractedPatterns {
 pub(super) fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation)> {
     let mut patterns = Vec::new();
 
-    let for_types: HashSet<String> = trait_def
-        .r#for
-        .iter()
-        .map(|ft| ft.label().to_string())
-        .collect();
+    let for_types = PatternScope::new(&trait_def.r#for);
 
     let file_path = trait_def.defined_in.to_string_lossy().to_string();
 
@@ -471,7 +467,7 @@ pub(super) fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, Patt
                 discriminator: discriminator.to_owned(),
                 bare_normalized,
                 suppressed_by: suppressed_by.clone(),
-                for_types: for_types.clone(),
+                for_types,
                 section,
                 count_min: trait_def.count_min,
                 count_max: trait_def.count_max,

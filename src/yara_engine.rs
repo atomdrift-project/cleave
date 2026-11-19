@@ -713,6 +713,7 @@ impl YaraEngine {
                 tracing::error!("Bucket {bucket}: YARA rule source failed to compile: {e}");
             }
         }
+        drop(bucket_sources);
         let rules = compiler.build();
 
         // A bucket can have source entries that compile successfully without

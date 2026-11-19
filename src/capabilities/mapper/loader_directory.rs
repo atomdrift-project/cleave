@@ -1234,16 +1234,18 @@ impl super::CapabilityMapper {
         // Facts this validation derives from patterns are kept for the next
         // one (see `facts_cache`). The last run's are read on their own thread
         // while the files below are found and parsed; the session saves them
-        // when the load ends.
+        // when the load ends. When facts are unavailable, keep an in-memory
+        // cache of regex compile checks for the same scope.
         #[cfg(feature = "lint")]
-        let _facts = if enable_full_validation {
-            crate::capabilities::validation::facts_cache::begin()
+        let _validation_sessions = if enable_full_validation {
+            let facts = crate::capabilities::validation::facts_cache::begin();
+            let compile_checks = facts
+                .is_none()
+                .then(crate::composite_rules::condition::begin_regex_compile_checks);
+            (compile_checks, facts)
         } else {
-            None
+            (None, None)
         };
-        #[cfg(feature = "lint")]
-        let _compile_checks = (enable_full_validation && _facts.is_none())
-            .then(crate::composite_rules::condition::begin_regex_compile_checks);
 
         let load_started = std::time::Instant::now();
         tracing::info!("Loading trait definitions from {}", dir_path.display());

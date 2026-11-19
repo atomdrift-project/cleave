@@ -84,7 +84,7 @@ pub(super) mod shared {
             let mut labels: Vec<_> = FileType::all_variants()
                 .into_iter()
                 .filter(|ty| self.0.intersects(ty.type_bit()))
-                .map(|ty| ty.label())
+                .map(FileType::label)
                 .collect();
             labels.sort_unstable();
             labels.join(", ")

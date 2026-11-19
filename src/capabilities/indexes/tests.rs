@@ -378,6 +378,8 @@ fn test_raw_content_regex_index_find_matches_invalid_utf8() {
 
 #[test]
 fn test_raw_content_regex_index_lazy_verifiers_match_per_bucket() {
+    use raw_index::GateRegex::Shared;
+
     let make_raw_regex_trait = |id: &str, file_type: RuleFileType| TraitDefinition {
         id: id.to_string(),
         desc: id.to_string(),
@@ -441,14 +443,16 @@ fn test_raw_content_regex_index_lazy_verifiers_match_per_bucket() {
     let py_matches = index.find_matches(b"some test content", &RuleFileType::Python);
     assert!(!js_matches.is_empty());
     assert!(!py_matches.is_empty());
-    let engine = |set: &FileTypeRegexSet| {
-        let Some(Some(raw_index::GateRegex::Shared(engine))) = set.individual_regexes[0].get()
-        else {
-            panic!("expected a shared raw index engine");
-        };
-        Arc::clone(engine)
-    };
-    assert!(Arc::ptr_eq(&engine(js_set), &engine(py_set)));
+    assert!(
+        matches!(
+            (
+                js_set.individual_regexes[0].get(),
+                py_set.individual_regexes[0].get(),
+            ),
+            (Some(Some(Shared(js))), Some(Some(Shared(py)))) if Arc::ptr_eq(js, py)
+        ),
+        "expected both buckets to use the same shared raw index engine"
+    );
 }
 
 // ==================== Overlapping Substr Match Tests ====================

@@ -328,8 +328,11 @@ pub(super) fn compile_codepoint(pattern: &str) -> Option<regex_automata::meta::R
 pub(super) const LOCAL_REGEX_SLOTS: usize = 4096;
 
 thread_local! {
-    static LOCAL_REGEX: std::cell::RefCell<Vec<std::sync::Weak<TraitRegex>>> =
-        std::cell::RefCell::new(vec![std::sync::Weak::new(); LOCAL_REGEX_SLOTS]);
+    static LOCAL_REGEX: std::cell::RefCell<Vec<std::sync::Weak<TraitRegex>>> = {
+        // An empty Weak has no allocation, so cloning it only fills the slots.
+        let empty = std::sync::Weak::new();
+        std::cell::RefCell::new(vec![empty; LOCAL_REGEX_SLOTS])
+    };
 }
 
 /// Direct-mapped slot for `pattern` under `case_insensitive`. The flag is
@@ -372,8 +375,10 @@ pub(super) fn local_regex_put(slot: usize, regex: &Arc<TraitRegex>) {
 
 #[cfg(test)]
 #[test]
-fn memo_slot_verifies_the_compiled_pattern_and_flags() {
-    let regex = Arc::new(TraitRegex::compile("(?i)sample").expect("valid regex"));
+fn memo_slot_verifies_the_compiled_pattern_and_flags() -> anyhow::Result<()> {
+    use anyhow::Context;
+
+    let regex = Arc::new(TraitRegex::compile("(?i)sample").context("compile test regex")?);
     // Force the requests into the same slot.
     local_regex_put(0, &regex);
     assert!(local_regex_get(0, "sample", false).is_none());
@@ -382,6 +387,7 @@ fn memo_slot_verifies_the_compiled_pattern_and_flags() {
     assert!(local_regex_get(0, "(?i)sample", false).is_some());
     drop(regex);
     assert!(local_regex_get(0, "sample", true).is_none());
+    Ok(())
 }
 
 pub(crate) fn cached_regex(pattern: &str) -> Option<Arc<TraitRegex>> {

@@ -420,7 +420,9 @@ fn whole_node_literals(pattern: &str) -> Option<Box<[Box<str>]>> {
 
 #[cfg(test)]
 #[test]
-fn whole_node_literals_preserve_anchor_and_case_semantics() {
+fn whole_node_literals_preserve_anchor_and_case_semantics() -> anyhow::Result<()> {
+    use anyhow::Context;
+
     for pattern in [
         r"^foo$",
         r"^(?:foo|bar)$",
@@ -428,8 +430,10 @@ fn whole_node_literals_preserve_anchor_and_case_semantics() {
         r"(?i)^[ab]$",
         r"^(?:π|τ)$",
     ] {
-        let literals = whole_node_literals(pattern).expect("small finite language");
-        let regex = regex::bytes::Regex::new(pattern).expect("valid test pattern");
+        let literals = whole_node_literals(pattern)
+            .with_context(|| format!("expected a finite literal set for {pattern:?}"))?;
+        let regex = regex::bytes::Regex::new(pattern)
+            .with_context(|| format!("compile test pattern {pattern:?}"))?;
         for value in [
             "", "foo", "foo\n", "xfoo", "bar", "c", "abc", "A", "b", "π", "τ",
         ] {
@@ -449,6 +453,7 @@ fn whole_node_literals_preserve_anchor_and_case_semantics() {
     ] {
         assert!(whole_node_literals(pattern).is_none(), "{pattern}");
     }
+    Ok(())
 }
 
 /// Complete raw capture text, collected during the existing AST facts walk.

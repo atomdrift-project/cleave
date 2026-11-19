@@ -828,6 +828,13 @@ impl Analyzer for PEAnalyzer {
             input.sha256.as_deref(),
             ctx,
         );
+        // Call predicates read the projected symbols while evaluating traits.
+        // The archive member's metadata fallback runs after this method.
+        report.filefacts = Some(crate::types::FilefactsView::of(
+            ctx,
+            self.engine.compact_members(),
+        ));
+        report.identity = ctx.identity();
 
         // Post-processing
         self.engine.evaluate_and_merge_findings_with_precomputed(

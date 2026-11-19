@@ -257,9 +257,9 @@ pub(crate) fn map_kind_to_node_types(kind: &str, file_type: FileType) -> &'stati
             | FileType::ObjectiveC
             | FileType::Rust
             | FileType::Lua
-            | FileType::Scala => &["field_expression"],
+            | FileType::Scala
+            | FileType::Zig => &["field_expression"],
             FileType::Java => &["field_access"],
-            FileType::Zig => &["field_expression"],
             FileType::CSharp | FileType::Php => &["member_access_expression"],
             // Shell doesn't have attribute access
             FileType::Perl => &["method_call_expression"],

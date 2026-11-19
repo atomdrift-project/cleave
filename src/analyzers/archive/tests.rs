@@ -3556,6 +3556,43 @@ fn every_archive_type_reaches_an_extractor() {
     );
 }
 
+#[test]
+fn freebsd_package_scans_installed_members() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("example-1.0.pkg");
+    let manifest = br#"{"name":"example","version":"1.0","origin":"misc/example","abi":"FreeBSD:14:*","prefix":"/usr/local"}"#;
+    let member = "/usr/local/share/example/readme.txt";
+    let mut archive = tar::Builder::new(Vec::new());
+    for (name, contents) in [
+        ("+COMPACT_MANIFEST", manifest.as_slice()),
+        (
+            member,
+            b"Example FreeBSD package documentation.\n".as_slice(),
+        ),
+    ] {
+        let mut header = tar::Header::new_gnu();
+        header.set_mode(0o644);
+        header.set_size(contents.len() as u64);
+        header.as_gnu_mut().unwrap().name[..name.len()].copy_from_slice(name.as_bytes());
+        header.set_cksum();
+        archive.append(&header, contents).unwrap();
+    }
+    let compressed = zstd::stream::encode_all(archive.into_inner().unwrap().as_slice(), 0).unwrap();
+    std::fs::write(&path, compressed).unwrap();
+
+    let report = ArchiveAnalyzer::new()
+        .with_capability_mapper(CapabilityMapper::empty())
+        .analyze(&path)
+        .unwrap();
+    assert!(
+        report
+            .files
+            .iter()
+            .any(|file| file.path.ends_with(member.trim_start_matches('/')))
+    );
+    assert_eq!(guard_recorded(&report, "path_traversals"), 0);
+}
+
 /// A small plain stream decodes to exactly one leaf file named after the
 /// archive's stem, and a nested chain leaves only the innermost file —
 /// no `.cleave-decode-` scratch files survive.

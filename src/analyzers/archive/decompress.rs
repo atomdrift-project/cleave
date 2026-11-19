@@ -208,14 +208,18 @@ pub(super) fn dispatch_decompressed_file(
             dest_dir,
             guard,
         ),
-        FileType::TarZst | FileType::PkgArch | FileType::PkgFreebsd | FileType::Xbps => {
-            tar::extract_tar_entries_safe(
-                zstd::stream::read::Decoder::new(reopen_decoded(&tmp, stem)?)
-                    .context("Failed to create zstd decoder")?,
-                dest_dir,
-                guard,
-            )
-        }
+        FileType::PkgFreebsd => tar::extract_freebsd_tar_entries(
+            zstd::stream::read::Decoder::new(reopen_decoded(&tmp, stem)?)
+                .context("Failed to create zstd decoder")?,
+            dest_dir,
+            guard,
+        ),
+        FileType::TarZst | FileType::PkgArch | FileType::Xbps => tar::extract_tar_entries_safe(
+            zstd::stream::read::Decoder::new(reopen_decoded(&tmp, stem)?)
+                .context("Failed to create zstd decoder")?,
+            dest_dir,
+            guard,
+        ),
         FileType::Gz | FileType::Bz2 | FileType::Xz | FileType::Lzma | FileType::Zst
             if decompression_depth >= MAX_RECURSIVE_DECOMPRESSION_LAYERS =>
         {

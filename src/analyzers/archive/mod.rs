@@ -196,6 +196,11 @@ fn should_suppress_path_traversal_findings(
     contents: &[ArchiveEntry],
     hostile_reasons: &[HostileArchiveReason],
 ) -> bool {
+    // The FreeBSD tar extractor already interprets package-rooted paths.
+    // Any path it rejects must still be reported.
+    if archive_type == FileType::PkgFreebsd {
+        return false;
+    }
     if !hostile_reasons
         .iter()
         .any(|reason| matches!(reason, HostileArchiveReason::PathTraversal(_)))
@@ -1438,15 +1443,19 @@ impl ArchiveAnalyzer {
                 dest_dir,
                 guard,
             ),
-            // zstd-tar packages: generic `.tar.zst`, Arch and FreeBSD `.pkg*`.
-            FileType::TarZst | FileType::PkgArch | FileType::PkgFreebsd | FileType::Xbps => {
-                tar::extract_tar_entries_safe(
-                    zstd::stream::read::Decoder::new(Cursor::new(data))
-                        .context("Failed to create zstd decoder")?,
-                    dest_dir,
-                    guard,
-                )
-            }
+            FileType::PkgFreebsd => tar::extract_freebsd_tar_entries(
+                zstd::stream::read::Decoder::new(Cursor::new(data))
+                    .context("Failed to create zstd decoder")?,
+                dest_dir,
+                guard,
+            ),
+            // Other zstd-tar archives and packages.
+            FileType::TarZst | FileType::PkgArch | FileType::Xbps => tar::extract_tar_entries_safe(
+                zstd::stream::read::Decoder::new(Cursor::new(data))
+                    .context("Failed to create zstd decoder")?,
+                dest_dir,
+                guard,
+            ),
             FileType::Gz => decompress_to_file(
                 flate2::read::MultiGzDecoder::new(Cursor::new(data)),
                 archive_path,

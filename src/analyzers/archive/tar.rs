@@ -28,8 +28,25 @@ pub(crate) fn extract_tar_entries_safe<R: Read>(
     dest_dir: &Path,
     guard: &ExtractionGuard,
 ) -> Result<()> {
+    extract_tar_with_path_policy(reader, dest_dir, guard, false)
+}
+
+pub(super) fn extract_freebsd_tar_entries<R: Read>(
+    reader: R,
+    dest_dir: &Path,
+    guard: &ExtractionGuard,
+) -> Result<()> {
+    extract_tar_with_path_policy(reader, dest_dir, guard, true)
+}
+
+fn extract_tar_with_path_policy<R: Read>(
+    reader: R,
+    dest_dir: &Path,
+    guard: &ExtractionGuard,
+    freebsd: bool,
+) -> Result<()> {
     let (reader, repairs) = BlankFieldRepair::new(reader);
-    let result = extract_entries(tar::Archive::new(reader), dest_dir, guard);
+    let result = extract_entries(tar::Archive::new(reader), dest_dir, guard, freebsd);
     repairs.report(guard);
     result
 }
@@ -38,15 +55,32 @@ fn extract_entries<R: Read>(
     mut archive: tar::Archive<R>,
     dest_dir: &Path,
     guard: &ExtractionGuard,
+    freebsd: bool,
 ) -> Result<()> {
-    for entry_result in archive.entries()? {
+    let mut has_package_manifest = false;
+    for (index, entry_result) in archive.entries()?.enumerate() {
         if !guard.check_file_count() {
             anyhow::bail!("Exceeded maximum file count");
         }
 
         let mut entry = entry_result.context("Failed to read tar entry")?;
         let entry_path = entry.path()?;
-        let entry_name = entry_path.to_string_lossy().replace('\\', "/");
+        let raw_name = entry_path.to_string_lossy();
+        let entry_type = entry.header().entry_type();
+        if freebsd && index == 0 && entry_type.is_file() {
+            has_package_manifest = matches!(
+                raw_name.trim_start_matches("./"),
+                "+COMPACT_MANIFEST" | "+MANIFEST"
+            );
+        }
+        // FreeBSD names installed members from the package root. Strip its
+        // single POSIX root separator before using the normal traversal guard.
+        let relative_name = if has_package_manifest {
+            raw_name.strip_prefix('/').unwrap_or(&raw_name)
+        } else {
+            &raw_name
+        };
+        let entry_name = relative_name.replace('\\', "/");
 
         if entry_name.len() > MAX_PATH_COMPONENT_LEN {
             guard.add_hostile_reason(HostileArchiveReason::ExcessiveEntryName {
@@ -60,7 +94,6 @@ fn extract_entries<R: Read>(
             continue;
         };
 
-        let entry_type = entry.header().entry_type();
         // A file whose name a previous member already claimed
         // (case-insensitively) is renamed rather than left to overwrite it.
         // Directories keep their sanitized name so members extracted beneath

@@ -212,6 +212,58 @@ fn test_eval_hex_variable_gap_x64_rwx_alloc_shape() {
     assert_eq!(result.match_count, 1);
 }
 
+// An alternative in front of a lone opcode byte: `socket(AF_ALG, ..)` argument
+// setup in either order, then `call`. The search is anchored on the five-byte
+// atoms each branch guarantees, not on the `E8` that every call in the file
+// carries, and must still find both orders, every gap width, and nothing else.
+#[test]
+fn test_eval_hex_alternative_atoms_outrank_a_lone_trailing_byte() {
+    let edi = [0xBF, 0x26, 0x00, 0x00, 0x00]; // mov edi,0x26
+    let esi = [0xBE, 0x05, 0x00, 0x00, 0x00]; // mov esi,5
+    let mut binary_data = Vec::new();
+    // Calls with neither argument, and one with only half of the setup.
+    for _ in 0..64 {
+        binary_data.extend_from_slice(&[0xE8, 0x10, 0x20, 0x30, 0x40, 0x90]);
+    }
+    binary_data.extend_from_slice(&edi);
+    binary_data.extend_from_slice(&[0xE8, 0x00, 0x00, 0x00, 0x00]);
+    // edi first, no gap before esi, call eight bytes later.
+    let first = binary_data.len();
+    binary_data.extend_from_slice(&edi);
+    binary_data.extend_from_slice(&esi);
+    binary_data.extend_from_slice(&[0x90; 8]);
+    binary_data.extend_from_slice(&[0xE8, 0x00, 0x00, 0x00, 0x00]);
+    // esi first, six bytes before edi, call immediately.
+    let second = binary_data.len();
+    binary_data.extend_from_slice(&esi);
+    binary_data.extend_from_slice(&[0x31, 0xD2, 0x90, 0x90, 0x90, 0x90]);
+    binary_data.extend_from_slice(&edi);
+    binary_data.extend_from_slice(&[0xE8, 0x00, 0x00, 0x00, 0x00]);
+    // Both arguments, but the call is nine bytes away: one past the gap.
+    binary_data.extend_from_slice(&edi);
+    binary_data.extend_from_slice(&esi);
+    binary_data.extend_from_slice(&[0x90; 9]);
+    binary_data.extend_from_slice(&[0xE8, 0x00, 0x00, 0x00, 0x00]);
+
+    let ctx = create_test_context(create_test_report(), binary_data);
+    let result = eval_hex(
+        "( BF 26 00 00 00 [0-6] BE 05 00 00 00 | BE 05 00 00 00 [0-6] BF 26 00 00 00 ) [0-8] E8",
+        None,
+        &full_scan_location(),
+        &ctx,
+        None,
+    );
+
+    assert!(result.matched);
+    assert_eq!(result.match_count, 2, "one match per argument order");
+    let starts: Vec<_> = result
+        .evidence
+        .iter()
+        .filter_map(|e| e.location.clone())
+        .collect();
+    assert_eq!(starts, [format!("0x{first:x}"), format!("0x{second:x}")]);
+}
+
 // Boundary: gap == min (0) and gap == max (8), atom after the gap.
 #[test]
 fn test_eval_hex_variable_gap_before_atom_boundaries() {

@@ -239,9 +239,14 @@ fn heavy_member_parallelism() -> usize {
     })
 }
 
+/// Whether an archive's heavy members start largest-first, native ones ahead
+/// of the rest (`CLEAVE_PRIORITY_HEAVY_MEMBERS=0` restores archive order). In
+/// archive order a large member near the end of the central directory starts
+/// last and runs on alone after the pool has drained: a wheel whose 42 MB
+/// extension module is its final member spent its last 5 s on one thread.
 fn prioritized_heavy_members() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| crate::env::flag("CLEAVE_PRIORITY_HEAVY_MEMBERS"))
+    *ENABLED.get_or_init(|| crate::env::bool_var("CLEAVE_PRIORITY_HEAVY_MEMBERS").unwrap_or(true))
 }
 
 /// Native analysis includes a long external disassembly pass. Start those
@@ -589,13 +594,23 @@ fn par_filter_fold_members<T, U, F>(
                     } else if prioritized {
                         for_each_priority_member(group, |i| deliver(i, f(&chunk[i])));
                     } else {
-                        group.par_iter().for_each(|&i| deliver(i, f(&chunk[i])));
+                        group
+                            .par_iter()
+                            .with_max_len(1)
+                            .for_each(|&i| deliver(i, f(&chunk[i])));
                     }
                 }
             },
+            // One member to a job. Rayon otherwise cuts the list into a few
+            // runs per thread and a run is walked by the thread that took it:
+            // members are far from equal, and a run of large ones (a
+            // toolchain's compiler binaries sit side by side in a tarball)
+            // kept one thread busy for 20 s while the rest had nothing left
+            // to steal.
             || {
                 light_items
                     .par_iter()
+                    .with_max_len(1)
                     .for_each(|&i| deliver(i, f(&chunk[i])));
             },
         );
@@ -1192,20 +1207,25 @@ fn member_window_count() -> usize {
 /// least two rayon workers: the producer is usually itself a pool worker, and
 /// while it is parked in a channel send it cannot steal work — on a 1-thread
 /// pool the consumer's par_iter would then never be executed and both sides
-/// would wait forever. Kill switch: `CLEAVE_PIPELINE_MEMBER_WINDOWS=0` (also
-/// how a single binary A/Bs the pipeline in benchmarks).
-fn pipeline_member_windows() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| {
-        // Opt-in (=1), not opt-out: measured on the typed corpus,
-        // handing windows to the consumer thread was a wash at 63k members and
-        // 24% SLOWER at 16k — the consumer is an external thread rayon won't
-        // run pool work on, and the producer parked in a channel send is a
-        // worker the pool loses outright. The window-size defaults above are
-        // what actually recover the barrier idle; revisit this gate only with
-        // fresh numbers showing a win.
-        crate::env::flag("CLEAVE_PIPELINE_MEMBER_WINDOWS") && rayon::current_num_threads() >= 2
-    })
+/// would wait forever. `CLEAVE_PIPELINE_MEMBER_WINDOWS` set to 0 or 1 decides
+/// for every archive (also how a single binary A/Bs the pipeline in
+/// benchmarks); unset, only a `slow_decoder` stream is pipelined.
+///
+/// Not on for every archive: measured on the typed corpus, handing windows to
+/// the consumer thread was a wash at 63k members and 24% SLOWER at 16k — the
+/// consumer is an external thread rayon won't run pool work on, and the
+/// producer parked in a channel send is a worker the pool loses outright.
+/// There the producer inflates faster than the pool analyzes. An xz or bzip2
+/// stream is the other way round: it decodes at about 130 MB/s on one thread,
+/// so the pool idled for seconds while each window filled. Pipelined, a
+/// 589 MB toolchain tarball (4k members, ten of them 30 MB ELFs) went from
+/// 20.6 s to 18.8 s and a 14.8k-member source tarball from 49.2 s to 44.8 s,
+/// with identical output and resident memory.
+fn pipeline_member_windows(slow_decoder: bool) -> bool {
+    static SET: std::sync::OnceLock<Option<bool>> = std::sync::OnceLock::new();
+    SET.get_or_init(|| crate::env::bool_var("CLEAVE_PIPELINE_MEMBER_WINDOWS"))
+        .unwrap_or(slow_decoder)
+        && rayon::current_num_threads() >= 2
 }
 
 /// The pipelined half of a [`MemberWindow`]: a consumer thread (scoped, so it
@@ -1262,7 +1282,8 @@ impl<'a: 'scope, 'scope> MemberWindow<'a, 'scope> {
     }
 
     /// Like [`MemberWindow::new`], but flushes hand windows to a consumer
-    /// thread spawned on `scope` (when pipelining is enabled), overlapping the
+    /// thread spawned on `scope` (when pipelining is enabled, see
+    /// [`pipeline_member_windows`]), overlapping the
     /// producer's decompression with member analysis. The caller's producer
     /// loop simply runs inside `std::thread::scope(|s| ...)`; every early exit
     /// drops this struct and with it the channel sender, so the consumer
@@ -1271,9 +1292,10 @@ impl<'a: 'scope, 'scope> MemberWindow<'a, 'scope> {
         scope: &'scope std::thread::Scope<'scope, '_>,
         analyzer: &'a ArchiveAnalyzer,
         slow_log_label: &'static str,
+        slow_decoder: bool,
     ) -> Self {
         let mut this = Self::new(analyzer, slow_log_label);
-        if !pipeline_member_windows() {
+        if !pipeline_member_windows(slow_decoder) {
             return this;
         }
         let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<MemoryArchiveMember>>(1);

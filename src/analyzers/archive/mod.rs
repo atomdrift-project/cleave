@@ -793,6 +793,7 @@ impl ArchiveAnalyzer {
                         start,
                         &guard,
                         label,
+                        false,
                     )?,
                     FileType::TarBz2 => self.analyze_tar_archive_in_memory(
                         bzip2::read::BzDecoder::new(Cursor::new(data)),
@@ -800,6 +801,7 @@ impl ArchiveAnalyzer {
                         start,
                         &guard,
                         label,
+                        true,
                     )?,
                     FileType::TarXz => self.analyze_tar_archive_in_memory(
                         xz2::read::XzDecoder::new(Cursor::new(data)),
@@ -807,6 +809,7 @@ impl ArchiveAnalyzer {
                         start,
                         &guard,
                         label,
+                        true,
                     )?,
                     FileType::TarZst => self.analyze_tar_archive_in_memory(
                         zstd::stream::read::Decoder::new(Cursor::new(data))
@@ -815,6 +818,7 @@ impl ArchiveAnalyzer {
                         start,
                         &guard,
                         label,
+                        false,
                     )?,
                     _ => self.analyze_tar_archive_in_memory(
                         flate2::read::GzDecoder::new(Cursor::new(data)),
@@ -822,6 +826,7 @@ impl ArchiveAnalyzer {
                         start,
                         &guard,
                         label,
+                        false,
                     )?,
                 }
             } else if matches!(file_type, FileType::Crx) {

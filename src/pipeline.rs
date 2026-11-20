@@ -1129,9 +1129,16 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             // cached on the `ParsedFile`, so deriving identity here is free.
             // Re-`open`ing instead, as this used to, re-ran the *entire*
             // extraction pipeline (a second recovery per binary) just to recompute
-            // an identity that is empty for stripped/unsigned files. Only open a
-            // fresh context only for paths that never opened one (archives).
-            let fresh = if file_ctx.is_none() && input.parsed_ctx.is_none() {
+            // an identity that is empty for stripped/unsigned files. Open a
+            // fresh context only for paths that never opened one.
+            //
+            // An archive whose analyzer attached its facts is not one of them:
+            // it opened these bytes under this path and derived the identity
+            // there, so `None` means the identity is empty. Opening again
+            // decoded and walked a compressed tar a second time, on one
+            // thread after its members had finished, to learn that again.
+            let derived = file_type.is_archive() && report.filefacts.is_some();
+            let fresh = if file_ctx.is_none() && input.parsed_ctx.is_none() && !derived {
                 Some(crate::analysis_context::AnalysisContext::open_with(
                     facts_options.clone(),
                     path,

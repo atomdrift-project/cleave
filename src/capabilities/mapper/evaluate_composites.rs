@@ -1085,7 +1085,27 @@ impl super::CapabilityMapper {
         section_map: &SectionMap,
         target_path: Option<&str>,
     ) {
-        if target_findings.is_empty() {
+        // Shared lazy rule-ID index: this runs once per archive member in the
+        // container phase, so a per-call map build dominated small-member
+        // corpora.
+        let composite_by_id = self.composite_id_index();
+        // Only a finding whose rule widened its downgrade to the container is
+        // reconsidered. Most members carry none, and the context built below
+        // indexes every container finding: built regardless, it cost an
+        // archive its member count times its finding count.
+        let pools_members = |finding: &crate::types::Finding| {
+            let id = finding.id.as_str();
+            let atomic = self
+                .trait_id_map
+                .get(id)
+                .and_then(|&idx| self.trait_definitions[idx].downgrade.as_ref());
+            let composite = composite_by_id
+                .get(id)
+                .and_then(|&idx| self.composite_rules[idx].downgrade.as_ref());
+            atomic.is_some_and(downgrade_spans_container)
+                || composite.is_some_and(downgrade_spans_container)
+        };
+        if !target_findings.iter().any(pools_members) {
             return;
         }
 
@@ -1110,11 +1130,6 @@ impl super::CapabilityMapper {
         .with_section_map(section_map)
         .with_file_caches(&file_caches);
         ctx.target_path_override = target_path;
-
-        // Shared lazy rule-ID index: this runs once per archive member in the
-        // container phase, so a per-call map build dominated small-member
-        // corpora.
-        let composite_by_id = self.composite_id_index();
 
         for finding in target_findings.iter_mut() {
             // Atomic traits first: look up the TraitDefinition by id and
@@ -1499,19 +1514,51 @@ impl super::CapabilityMapper {
             raw_text.then_some(container_bytes),
             &container_report.strings,
         );
-        let mut container_findings: Vec<Finding> = indexes
+        // Where each indexed regex's atoms sit in the container's bytes, as the
+        // atomic pass over a file has them: a raw regex then searches windows
+        // around its own atoms instead of the whole container, once per trait.
+        let raw_hits = (raw_text && indexes.raw_content_regex_index.has_patterns()).then(|| {
+            indexes.raw_content_regex_index.find_matches_detailed(
+                container_bytes,
+                &rule_file_type,
+                true,
+            )
+        });
+        parent_trait_ctx = parent_trait_ctx
+            .with_raw_atom_offsets(raw_hits.as_ref().map(|hits| &hits.atom_offsets));
+        let pending: Vec<usize> = indexes
             .trait_index
             .applicable(&rule_file_type)
             .into_indices_static()
-            .filter(|&idx| !absent.contains(idx))
-            .filter_map(|idx| {
-                let rule = &self.trait_definitions[idx];
-                if seen_ids.contains(rule.id.as_str()) {
-                    return None;
-                }
-                rule.evaluate_pregated(&parent_trait_ctx)
+            .filter(|&idx| {
+                !absent.contains(idx) && !seen_ids.contains(self.trait_definitions[idx].id.as_str())
             })
             .collect();
+        // Every rule here reads the same scope and none reads another's
+        // result, so chunks run on whichever workers are free. A file holding
+        // one decoded child reaches this pass with its own bytes as the
+        // container: on a 1.5 MB one-line bundle the serial walk was half the
+        // file's analysis, on one thread, after the rest of its archive had
+        // finished. Findings collect in rule order either way.
+        let eval_chunk = |chunk: &[usize]| -> Vec<Finding> {
+            let mut ctx = parent_trait_ctx.clone();
+            chunk
+                .iter()
+                .filter_map(|&idx| {
+                    ctx.current_trait_idx = Some(idx);
+                    self.trait_definitions[idx].evaluate_pregated(&ctx)
+                })
+                .collect()
+        };
+        let mut container_findings: Vec<Finding> = if crate::rayon_nest::inner_work_parallel() {
+            use rayon::prelude::*;
+            pending
+                .par_chunks(super::evaluate_traits::PARALLEL_TRAIT_CHUNK)
+                .flat_map_iter(eval_chunk)
+                .collect()
+        } else {
+            eval_chunk(&pending)
+        };
 
         for finding in &container_findings {
             seen_ids.insert(finding.id.to_string());

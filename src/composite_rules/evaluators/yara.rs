@@ -532,6 +532,10 @@ fn anchored_hex_matches(
                 continue;
             };
             let lo = abs_atom.saturating_sub(atom.prefix_max).max(search_start);
+            // Hits only move forward: past the range, no later one starts in it.
+            if lo >= search_end {
+                break;
+            }
             let hi = hi.min(search_end - 1);
             // Subsequent atom hits have nondecreasing lower bounds. Once
             // these cannot precede the retained matches, this atom is done.
@@ -848,8 +852,31 @@ pub(crate) fn eval_hex<'a>(
             }
         }
     } else {
-        // Complex pattern: use atom extraction for pre-filtering
-        if let Some(atom) = extract_best_atom(&segments) {
+        // Complex pattern: candidate starts come from fixed bytes the pattern
+        // cannot match without.
+        let atom = extract_best_atom(&segments);
+        // The sequence's own fixed bytes can be far weaker than what an
+        // alternative guarantees: `( BF 26 00 00 00 .. | .. ) [0-8] E8` has
+        // one top-level byte, the x86 call opcode, and anchoring on it
+        // verified the pattern at every call in a 30 MB compiler for two
+        // seconds, where each branch's five-byte atom occurs a handful of
+        // times.
+        let stronger = mandatory_hex_atoms(&segments).filter(|atoms| {
+            atom.is_none_or(|top| atoms.iter().all(|inner| inner.bytes.len() > top.len()))
+        });
+        if let Some(atoms) = stronger {
+            let found = anchored_hex_matches(
+                data,
+                search_start,
+                search_end,
+                &segments,
+                &atoms,
+                accepts,
+                MAX_COUNT_MATCHES,
+            );
+            total_count = found.len();
+            matches.extend(found.into_iter().take(MAX_STORED_MATCHES));
+        } else if let Some(atom) = atom {
             let finder = memchr::memmem::Finder::new(atom);
 
             // Distance from the pattern start to the chosen atom. A variable gap
@@ -901,31 +928,15 @@ pub(crate) fn eval_hex<'a>(
                 }
             }
         } else {
-            // Whole-pattern alternatives have no single top-level atom. Use
-            // each branch's mandatory atom to find candidates instead of
-            // testing every byte whenever just one such atom exists.
-            if let Some(atoms) = mandatory_hex_atoms(&segments) {
-                let found = anchored_hex_matches(
-                    data,
-                    search_start,
-                    search_end,
-                    &segments,
-                    &atoms,
-                    accepts,
-                    MAX_COUNT_MATCHES,
-                );
-                total_count = found.len();
-                matches.extend(found.into_iter().take(MAX_STORED_MATCHES));
-            } else {
-                for pos in search_start..search_end {
-                    if match_pattern_at(data, pos, &segments) && accepts(pos) {
-                        total_count += 1;
-                        if matches.len() < MAX_STORED_MATCHES {
-                            matches.push(pos);
-                        }
-                        if total_count >= MAX_COUNT_MATCHES {
-                            break;
-                        }
+            // No fixed bytes at all: every position is a candidate.
+            for pos in search_start..search_end {
+                if match_pattern_at(data, pos, &segments) && accepts(pos) {
+                    total_count += 1;
+                    if matches.len() < MAX_STORED_MATCHES {
+                        matches.push(pos);
+                    }
+                    if total_count >= MAX_COUNT_MATCHES {
+                        break;
                     }
                 }
             }

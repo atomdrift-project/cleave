@@ -54,6 +54,14 @@ struct MemoData {
     /// did not is always compiled again. Additive, like `atom_set`.
     #[serde(default)]
     ast_literals: FxHashMap<String, AstLiterals>,
+    /// [`ast_analysis_key`] -> the pattern analysis tree-sitter computed when
+    /// it compiled that query (`tree_sitter::Query::analysis`), which is most
+    /// of what compiling it costs. Depends on the grammar as well as the
+    /// query text, so unlike the rest of the memo it is keyed by both.
+    /// Hex, which a JSON reader takes several times faster than an array of
+    /// byte values. Additive, like `atom_set`.
+    #[serde(default)]
+    ast_analysis: FxHashMap<String, String>,
 }
 
 /// The stored form of `ast_gate::RequiredLiterals`.
@@ -214,6 +222,46 @@ pub(crate) fn record_ast_literals(query: &str, literals: AstLiterals) {
     memo.dirty.store(true, Ordering::Relaxed);
 }
 
+/// The memo key of `query` compiled for `grammar`: fixed-size, because a
+/// combined query bank runs to hundreds of kilobytes of source.
+fn ast_analysis_key(grammar: &str, query: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(grammar.as_bytes());
+    hasher.update([0]);
+    hasher.update(query.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+/// Compile `query` with `compile`, handing it the pattern analysis an earlier
+/// process recorded for this grammar and query (empty when none did), and
+/// record the analysis of a query compiled without one.
+pub(crate) fn with_ast_analysis(
+    grammar: &str,
+    query: &str,
+    compile: impl FnOnce(&[u8]) -> Option<tree_sitter::Query>,
+) -> Option<tree_sitter::Query> {
+    let memo = memo();
+    let key = ast_analysis_key(grammar, query);
+    // Cloned out so the compile does not run under the lock.
+    let recorded = match memo.loaded.ast_analysis.get(&key) {
+        Some(analysis) => Some(analysis.clone()),
+        None => memo.added.read().ast_analysis.get(&key).cloned(),
+    };
+    if let Some(analysis) = recorded {
+        // An entry that is not hex decodes to nothing, and tree-sitter
+        // analyzes a query handed an analysis that does not fit it.
+        return compile(&hex::decode(analysis).unwrap_or_default());
+    }
+    let compiled = compile(&[])?;
+    memo.added
+        .write()
+        .ast_analysis
+        .insert(key, hex::encode(compiled.analysis()));
+    memo.dirty.store(true, Ordering::Relaxed);
+    Some(compiled)
+}
+
 /// Flush the memo to disk if any entry was added since load. Called after the
 /// match indexes finish building, and after each top-level analysis, which is
 /// when tree-sitter queries first compile.
@@ -233,6 +281,7 @@ pub(crate) fn persist() {
             atom: Merged<'a, Option<String>>,
             atom_set: Merged<'a, Option<AtomSet>>,
             ast_literals: Merged<'a, AstLiterals>,
+            ast_analysis: Merged<'a, String>,
         }
         struct Merged<'a, T>(&'a FxHashMap<String, T>, &'a FxHashMap<String, T>);
         impl<T: Serialize> Serialize for Merged<'_, T> {
@@ -249,6 +298,7 @@ pub(crate) fn persist() {
             atom: Merged(&memo.loaded.atom, &added.atom),
             atom_set: Merged(&memo.loaded.atom_set, &added.atom_set),
             ast_literals: Merged(&memo.loaded.ast_literals, &added.ast_literals),
+            ast_analysis: Merged(&memo.loaded.ast_analysis, &added.ast_analysis),
         })
     };
     // pid-suffixed so two cold processes never interleave writes into one tmp.

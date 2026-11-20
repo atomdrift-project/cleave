@@ -6,8 +6,14 @@ use super::{
 use std::sync::atomic::AtomicUsize;
 use std::sync::mpsc::{self, SyncSender};
 
+/// Serialized bytes the writer may have queued before further stores are
+/// dropped. Checked before an item is admitted, so the backlog overshoots it
+/// by at most that one item.
 const MAX_BYTES: usize = 32 * 1024 * 1024;
-const MAX_ITEM_BYTES: usize = 8 * 1024 * 1024;
+/// The largest analysis kept. The reports that cost the most to recompute are
+/// the largest ones: a native binary's runs to tens of megabytes of JSON and a
+/// whole archive's to hundreds, and both compress about tenfold.
+const MAX_ITEM_BYTES: usize = 512 * 1024 * 1024;
 static WRITER: OnceLock<Option<Writer>> = OnceLock::new();
 
 struct Entry {
@@ -61,13 +67,16 @@ impl Writer {
     fn enqueue(&self, entry: Entry) {
         let bytes = entry.json.len();
         if bytes > MAX_ITEM_BYTES {
+            tracing::debug!(sha256 = %entry.sha, bytes, limit = MAX_ITEM_BYTES, "analysis too large to cache");
             return;
         }
         let mut pending = self.pending_bytes.load(Ordering::Acquire);
         loop {
-            let Some(next) = pending.checked_add(bytes).filter(|&n| n <= MAX_BYTES) else {
+            if pending > MAX_BYTES {
+                tracing::debug!(sha256 = %entry.sha, bytes, pending, limit = MAX_BYTES, "cache writer backlogged; analysis not cached");
                 return;
-            };
+            }
+            let next = pending.saturating_add(bytes);
             match self.pending_bytes.compare_exchange_weak(
                 pending,
                 next,
@@ -78,8 +87,11 @@ impl Writer {
                 Err(current) => pending = current,
             }
         }
-        if self.tx.try_send(entry).is_err() {
+        if let Err(refused) = self.tx.try_send(entry) {
             self.pending_bytes.fetch_sub(bytes, Ordering::Release);
+            let (mpsc::TrySendError::Full(entry) | mpsc::TrySendError::Disconnected(entry)) =
+                refused;
+            tracing::debug!(sha256 = %entry.sha, bytes, "cache writer queue full; analysis not cached");
         }
     }
 }
@@ -190,6 +202,32 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn a_report_larger_than_the_backlog_bound_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.db");
+        let writer = Writer::start(path.clone()).unwrap();
+        let json = vec![b' '; MAX_BYTES + 1];
+        writer.enqueue(Entry {
+            kind: memo::Kind::Report,
+            sha: "whole-archive".into(),
+            options: "opts".into(),
+            revision: 1,
+            json: json.clone(),
+        });
+        // Behind it the backlog is over its bound, so the next store is dropped
+        // rather than queued; once it drains, stores are admitted again.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while writer.pending_bytes.load(Ordering::Acquire) != 0 {
+            assert!(std::time::Instant::now() < deadline, "writer never drained");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let reader = open_connection(&path).unwrap();
+        let stored =
+            cache_lookup_conn(&reader, memo::Kind::Report, "whole-archive", "opts", 1).unwrap();
+        assert_eq!(stored.len(), json.len());
+    }
+
     #[test]
     fn oversized_entries_do_not_consume_the_queue_budget() {
         let dir = tempfile::tempdir().unwrap();

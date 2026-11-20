@@ -3755,3 +3755,46 @@ fn member_cache_options_carry_the_analyzer_memory_limit() {
         7 << 20
     );
 }
+
+/// An xz tarball is read on one thread while another analyzes the windows it
+/// has filled; a plain tarball is analyzed in step with the read. Both must
+/// report the same members in the same order, across a window boundary.
+#[test]
+fn an_xz_tarball_reports_the_members_of_its_plain_tarball_in_order() {
+    // More than one default window of 2,048 members.
+    let count = 2_100;
+    let mut archive = tar::Builder::new(Vec::new());
+    for i in 0..count {
+        let body = format!("member {i}\n");
+        let mut header = tar::Header::new_gnu();
+        header.set_size(body.len() as u64);
+        header.set_mode(0o644);
+        archive
+            .append_data(&mut header, format!("pkg/file-{i:04}.txt"), body.as_bytes())
+            .unwrap();
+    }
+    let tar_bytes = archive.into_inner().unwrap();
+    let mut encoder = xz2::write::XzEncoder::new(Vec::new(), 1);
+    encoder.write_all(&tar_bytes).unwrap();
+    let xz_bytes = encoder.finish().unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let members = |name: &str, bytes: &[u8]| -> Vec<(String, String)> {
+        let path = dir.path().join(name);
+        std::fs::write(&path, bytes).unwrap();
+        let report = ArchiveAnalyzer::new()
+            .with_capability_mapper(CapabilityMapper::empty())
+            .analyze(&path)
+            .unwrap();
+        report
+            .files
+            .iter()
+            .map(|file| (file.path.clone(), file.sha256.clone()))
+            .collect()
+    };
+    let plain = members("bundle.tar", &tar_bytes);
+    let xz = members("bundle.tar.xz", &xz_bytes);
+    assert_eq!(plain.len(), count, "every member is reported");
+    assert_eq!(plain[0].0, "pkg/file-0000.txt");
+    assert_eq!(xz, plain);
+}

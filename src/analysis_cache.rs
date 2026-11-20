@@ -92,6 +92,18 @@ static REPORT_STORE_COUNT: AtomicU64 = AtomicU64::new(0);
 /// Global store counter for file analysis cache eviction scheduling.
 static FILE_ANALYSIS_STORE_COUNT: AtomicU64 = AtomicU64::new(0);
 
+/// Bytes a table takes on between size checks. A check leaves a table at or
+/// under nine tenths of its cap, so it cannot pass the cap before another
+/// tenth is stored; half of that covers an eviction that stopped short of its
+/// target. Summing a full table's blob lengths on every eviction pass cost a
+/// cold dependency scan ~37 core-seconds.
+const SIZE_CHECK_BYTES: u64 = MAX_TABLE_BYTES.unsigned_abs() / 20;
+
+/// Bytes stored to each table since its last size check. Each starts at the
+/// threshold so a process's first eviction pass measures the table.
+static REPORT_BYTES_UNCHECKED: AtomicU64 = AtomicU64::new(SIZE_CHECK_BYTES);
+static FILE_ANALYSIS_BYTES_UNCHECKED: AtomicU64 = AtomicU64::new(SIZE_CHECK_BYTES);
+
 /// Database path, resolved once at first use. `None` means no cache directory.
 static DB_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
 
@@ -789,6 +801,22 @@ fn evict_idle(conn: &Connection, table: &str) {
     }
 }
 
+/// [`enforce_table_bytes`], once [`SIZE_CHECK_BYTES`] have been stored to the
+/// table since its last check.
+fn enforce_table_bytes_when_due(
+    conn: &Connection,
+    table: &str,
+    blob: &str,
+    max_bytes: i64,
+    unchecked: &AtomicU64,
+) {
+    if unchecked.load(Ordering::Relaxed) < SIZE_CHECK_BYTES {
+        return;
+    }
+    unchecked.store(0, Ordering::Relaxed);
+    enforce_table_bytes(conn, table, blob, max_bytes);
+}
+
 /// Keep `table`'s live data within its byte share ([`MAX_TABLE_BYTES`]) by
 /// deleting the least-recently-used rows (by `last_accessed`). The row count to
 /// delete is estimated from the mean entry size — approximate, but eviction is
@@ -858,7 +886,13 @@ fn evict_report_cache(conn: &Connection) {
         }
     }
 
-    enforce_table_bytes(conn, "toplevel_report_cache", "report", MAX_TABLE_BYTES);
+    enforce_table_bytes_when_due(
+        conn,
+        "toplevel_report_cache",
+        "report",
+        MAX_TABLE_BYTES,
+        &REPORT_BYTES_UNCHECKED,
+    );
 }
 
 /// Compute a short deterministic hash of the result-affecting analysis options.
@@ -1420,6 +1454,7 @@ pub(crate) fn report_cache_store(
             traits_revision,
             json.clone(),
         );
+        REPORT_BYTES_UNCHECKED.fetch_add(json.len() as u64, Ordering::Relaxed);
         let count = REPORT_STORE_COUNT.fetch_add(1, Ordering::Relaxed);
         if count.is_multiple_of(EVICTION_CHECK_INTERVAL) {
             spawn_eviction(&REPORT_EVICTING, evict_report_cache);
@@ -1524,6 +1559,7 @@ pub(crate) fn file_analysis_cache_store(
             traits_revision,
             json.clone(),
         );
+        FILE_ANALYSIS_BYTES_UNCHECKED.fetch_add(json.len() as u64, Ordering::Relaxed);
         let count = FILE_ANALYSIS_STORE_COUNT.fetch_add(1, Ordering::Relaxed);
         if count.is_multiple_of(EVICTION_CHECK_INTERVAL) {
             spawn_eviction(&FILE_ANALYSIS_EVICTING, evict_file_analysis_cache);
@@ -1565,11 +1601,12 @@ fn evict_file_analysis_cache(conn: &Connection) {
         }
     }
 
-    enforce_table_bytes(
+    enforce_table_bytes_when_due(
         conn,
         "file_analysis_cache",
         "file_analysis",
         MAX_TABLE_BYTES,
+        &FILE_ANALYSIS_BYTES_UNCHECKED,
     );
 }
 

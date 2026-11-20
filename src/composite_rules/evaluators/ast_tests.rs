@@ -2503,3 +2503,32 @@ fn disabling_wildcard_rooted_patterns_keeps_a_query_walkable() {
     assert_eq!(walk(&[0, 1]), vec![2], "no wildcard root left");
     assert_eq!(walk(&[2]), vec![0, 1], "only wildcard roots left");
 }
+
+#[test]
+fn a_query_compiled_from_its_recorded_analysis_matches_like_one_analyzed() {
+    use streaming_iterator::StreamingIterator;
+    let source: &[u8] = b"function f(){ return new Date(); }\nconst g = new Map();\n";
+    let parsed = parsed_for_test("module.js", source);
+    let tree = parsed.source_ast().expect("source_ast").tree;
+    let lang = tree.language();
+    // A query no rule carries, so the first compile below is the one that
+    // records its analysis.
+    let query_str = "((new_expression constructor: (identifier) @recorded_analysis_probe))";
+    let count = |query: &tree_sitter::Query| {
+        let mut cursor = tree_sitter::QueryCursor::new();
+        let mut matches = cursor.matches(query, tree.root_node(), source);
+        let mut count = 0usize;
+        while matches.next().is_some() {
+            count += 1;
+        }
+        count
+    };
+
+    let analyzed = super::ast::compile_query(&lang, query_str).expect("the query compiles");
+    let restored =
+        super::ast::compile_query(&lang, query_str).expect("and compiles from its record");
+    assert_eq!(restored.analysis(), analyzed.analysis());
+    assert_eq!(count(&analyzed), 2);
+    assert_eq!(count(&restored), 2);
+    assert!(super::ast::compile_query(&lang, "(no_such_node_kind) @x").is_none());
+}

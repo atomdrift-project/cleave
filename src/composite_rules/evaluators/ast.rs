@@ -566,6 +566,14 @@ fn walk_ast_for_pattern_multi<'a>(
 /// Evaluate full tree-sitter query condition
 #[must_use]
 pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -> ConditionResult {
+    // The two answers that need no run, given before the budget is worked
+    // out: that reads the whole query text, and most evaluations end here.
+    if let Some(cached) = ctx.ast_query_cache.and_then(|cache| cache.get(query_str)) {
+        return cached.clone();
+    }
+    if ctx.cached_ast.is_none() {
+        return ConditionResult::no_match();
+    }
     eval_ast_query_with_budget(
         query_str,
         ctx,
@@ -1051,7 +1059,7 @@ fn cached_ast_query_for_source(
         return entry;
     }
     let compile_started = diagnostic.then(Instant::now);
-    let compiled = tree_sitter::Query::new(lang, query_str).ok().map(|query| {
+    let compiled = compile_query(lang, query_str).map(|query| {
         let literals = RequiredLiterals::of(&query, query_str);
         crate::capabilities::derivation_memo::record_ast_literals(query_str, literals.to_stored());
         let nodes = RequiredNodes::of(lang, &query, query_str);
@@ -1314,6 +1322,7 @@ fn batch_ast_bank(
         presence.insert(key, found);
         found
     };
+    compile_missing(lang, file_type, query_strs);
     // Keep this set independent of source text: filtering before building the
     // bank would recompile one native query for each file-specific subset.
     for &q in query_strs {
@@ -1408,7 +1417,7 @@ fn batch_ast_bank(
             // combined source, so retrying it per member only burns CPU.
             let entry = (|| {
                 let compile_started = Instant::now();
-                let query = tree_sitter::Query::new(lang, &combined_source).ok()?;
+                let query = compile_query(lang, &combined_source)?;
                 tracing::debug!(
                     queries = compiling.len(),
                     patterns = query.pattern_count(),
@@ -1960,5 +1969,8 @@ mod batch_design_exclusion_tests;
 mod cache_lock_tests;
 
 mod anchor_check;
+mod compile;
 mod match_sink;
+use compile::compile_missing;
+pub(super) use compile::compile_query;
 use match_sink::MatchSink;

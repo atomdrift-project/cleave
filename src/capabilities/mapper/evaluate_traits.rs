@@ -155,7 +155,7 @@ fn gate_stats_enabled() -> bool {
 
 /// Traits evaluated serially per Rayon job before that job's mutable context
 /// is dropped.
-const PARALLEL_TRAIT_CHUNK: usize = 64;
+pub(super) const PARALLEL_TRAIT_CHUNK: usize = 64;
 /// Source size from which AST queries without a batch result are evaluated
 /// one trait per job ahead of the chunked loop. Below it a standalone query
 /// is cheap and the per-job context clone would dominate.

@@ -790,6 +790,40 @@ fn enforce_table_bytes_evicts_least_recently_used_over_cap() {
 }
 
 #[test]
+fn table_size_is_checked_only_after_enough_bytes_were_stored() {
+    let conn = test_conn();
+    // Five 400-byte reports: twice a 1000-byte cap.
+    for i in 0..5i64 {
+        conn.execute(
+            "INSERT INTO toplevel_report_cache
+                 (sha256, options_hash, traits_timestamp, report, created_at, last_accessed)
+                 VALUES (?1, 'h', 0, ?2, 0, ?3)",
+            rusqlite::params![format!("s{i}"), vec![0u8; 400], i],
+        )
+        .expect("insert");
+    }
+    let rows = || -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM toplevel_report_cache", [], |r| {
+            r.get(0)
+        })
+        .expect("count")
+    };
+
+    let unchecked = AtomicU64::new(SIZE_CHECK_BYTES - 1);
+    enforce_table_bytes_when_due(&conn, "toplevel_report_cache", "report", 1000, &unchecked);
+    assert_eq!(rows(), 5, "below the threshold the table is not measured");
+
+    unchecked.store(SIZE_CHECK_BYTES, Ordering::Relaxed);
+    enforce_table_bytes_when_due(&conn, "toplevel_report_cache", "report", 1000, &unchecked);
+    assert_eq!(rows(), 3, "at the threshold the cap is enforced");
+    assert_eq!(
+        unchecked.load(Ordering::Relaxed),
+        0,
+        "and the count of unchecked bytes starts over"
+    );
+}
+
+#[test]
 fn test_roundtrip() {
     let conn = test_conn();
     let sha = "abc123def456";

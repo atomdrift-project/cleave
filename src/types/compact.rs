@@ -1211,8 +1211,13 @@ pub fn compact_from_files(
     files: &[super::file_analysis::FileAnalysis],
     facts: Facts,
 ) -> CompactReport {
-    let compact_files: Vec<CompactFile> =
-        files.iter().map(|f| convert_file(f, f.id, facts)).collect();
+    use rayon::prelude::*;
+    // `convert_file` is pure, and a fetched package's report runs to tens of
+    // thousands of files.
+    let compact_files: Vec<CompactFile> = files
+        .par_iter()
+        .map(|f| convert_file(f, f.id, facts))
+        .collect();
     assemble_report(compact_files, facts)
 }
 

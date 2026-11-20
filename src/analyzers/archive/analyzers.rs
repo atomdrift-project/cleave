@@ -1207,25 +1207,27 @@ fn member_window_count() -> usize {
 /// least two rayon workers: the producer is usually itself a pool worker, and
 /// while it is parked in a channel send it cannot steal work — on a 1-thread
 /// pool the consumer's par_iter would then never be executed and both sides
-/// would wait forever. `CLEAVE_PIPELINE_MEMBER_WINDOWS` set to 0 or 1 decides
-/// for every archive (also how a single binary A/Bs the pipeline in
-/// benchmarks); unset, only a `slow_decoder` stream is pipelined.
+/// would wait forever. Kill switch: `CLEAVE_PIPELINE_MEMBER_WINDOWS=0` (also
+/// how a single binary A/Bs the pipeline in benchmarks).
 ///
-/// Not on for every archive: measured on the typed corpus, handing windows to
-/// the consumer thread was a wash at 63k members and 24% SLOWER at 16k — the
-/// consumer is an external thread rayon won't run pool work on, and the
-/// producer parked in a channel send is a worker the pool loses outright.
-/// There the producer inflates faster than the pool analyzes. An xz or bzip2
-/// stream is the other way round: it decodes at about 130 MB/s on one thread,
-/// so the pool idled for seconds while each window filled. Pipelined, a
-/// 589 MB toolchain tarball (4k members, ten of them 30 MB ELFs) went from
-/// 20.6 s to 18.8 s and a 14.8k-member source tarball from 49.2 s to 44.8 s,
-/// with identical output and resident memory.
-fn pipeline_member_windows(slow_decoder: bool) -> bool {
-    static SET: std::sync::OnceLock<Option<bool>> = std::sync::OnceLock::new();
-    SET.get_or_init(|| crate::env::bool_var("CLEAVE_PIPELINE_MEMBER_WINDOWS"))
-        .unwrap_or(slow_decoder)
-        && rayon::current_num_threads() >= 2
+/// Never from a pool worker, whatever the setting. The consumer analyzes its
+/// windows on the pool, so a worker that waits for it waits on a thread that
+/// is waiting for a worker: with a tarball in flight on every worker (twelve
+/// nested in one archive, or twelve files of a directory scan) each waited on
+/// the other for good. A slow decoder is overlapped with analysis by
+/// [`super::read_ahead::ReadAhead`] instead, whose helper needs no pool.
+fn pipeline_member_windows() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        // Opt-in (=1), not opt-out: measured on the typed corpus,
+        // handing windows to the consumer thread was a wash at 63k members and
+        // 24% SLOWER at 16k — the consumer is an external thread rayon won't
+        // run pool work on, and the producer parked in a channel send is a
+        // worker the pool loses outright. The window-size defaults above are
+        // what actually recover the barrier idle; revisit this gate only with
+        // fresh numbers showing a win.
+        crate::env::flag("CLEAVE_PIPELINE_MEMBER_WINDOWS") && rayon::current_num_threads() >= 2
+    }) && rayon::current_thread_index().is_none()
 }
 
 /// The pipelined half of a [`MemberWindow`]: a consumer thread (scoped, so it
@@ -1282,8 +1284,7 @@ impl<'a: 'scope, 'scope> MemberWindow<'a, 'scope> {
     }
 
     /// Like [`MemberWindow::new`], but flushes hand windows to a consumer
-    /// thread spawned on `scope` (when pipelining is enabled, see
-    /// [`pipeline_member_windows`]), overlapping the
+    /// thread spawned on `scope` (when pipelining is enabled), overlapping the
     /// producer's decompression with member analysis. The caller's producer
     /// loop simply runs inside `std::thread::scope(|s| ...)`; every early exit
     /// drops this struct and with it the channel sender, so the consumer
@@ -1292,10 +1293,9 @@ impl<'a: 'scope, 'scope> MemberWindow<'a, 'scope> {
         scope: &'scope std::thread::Scope<'scope, '_>,
         analyzer: &'a ArchiveAnalyzer,
         slow_log_label: &'static str,
-        slow_decoder: bool,
     ) -> Self {
         let mut this = Self::new(analyzer, slow_log_label);
-        if !pipeline_member_windows(slow_decoder) {
+        if !pipeline_member_windows() {
             return this;
         }
         let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<MemoryArchiveMember>>(1);

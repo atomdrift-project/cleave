@@ -1855,3 +1855,58 @@ fn test_non_simple_alternation_does_not_warn() {
             .any(|w| w.contains("simple alphanumeric alternation chain"))
     );
 }
+
+#[test]
+fn test_unix_platform_admits_linux_package_formats() {
+    use crate::composite_rules::FileType;
+    let apply = |platforms: &[&str], types: &[&str]| {
+        let defaults = super::super::models::TraitDefaults {
+            platforms: Some(platforms.iter().map(ToString::to_string).collect()),
+            ..super::super::models::TraitDefaults::default()
+        };
+        let raw = make_raw_trait(
+            "test-trait",
+            Some(types.iter().map(ToString::to_string).collect()),
+        );
+        let mut warnings = Vec::new();
+        let parsed = super::apply_trait_defaults(
+            raw,
+            &defaults,
+            &mut warnings,
+            std::path::Path::new("test.yaml"),
+            true,
+        );
+        (parsed.r#for, warnings)
+    };
+
+    // The `unix` umbrella includes Linux: explicit and group-expanded Linux
+    // package formats survive, without an incompatible-platform warning.
+    let (types, warnings) = apply(&["unix", "windows"], &["deb", "rpm"]);
+    assert!(
+        types.contains(&FileType::Deb) && types.contains(&FileType::Rpm),
+        "{types:?}"
+    );
+    assert!(
+        !warnings.iter().any(|w| w.contains("requires [linux]")),
+        "{warnings:?}"
+    );
+    let (types, _) = apply(&["unix"], &["archives"]);
+    assert!(
+        types.contains(&FileType::Deb) && types.contains(&FileType::Rpm),
+        "{types:?}"
+    );
+
+    // Linux itself is unchanged.
+    let (types, _) = apply(&["linux"], &["archives"]);
+    assert!(types.contains(&FileType::Deb), "{types:?}");
+
+    // A specific non-Linux Unix flavor still drops them from groups and
+    // warns when they are named explicitly.
+    let (types, _) = apply(&["freebsd"], &["archives"]);
+    assert!(!types.contains(&FileType::Deb), "{types:?}");
+    let (_, warnings) = apply(&["freebsd"], &["deb"]);
+    assert!(
+        warnings.iter().any(|w| w.contains("requires [linux]")),
+        "{warnings:?}"
+    );
+}

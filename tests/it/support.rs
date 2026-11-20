@@ -32,6 +32,7 @@ pub(crate) const ISOLATED_MODULES: &[&str] = &[
     "facts_cli_json",
     "follow_outcomes",
     "follow_outcomes_batch",
+    "nested_xz_tarballs_no_deadlock",
     "nuitka_macho",
     "packed_rules_cli",
     "rpm_scriptlets",

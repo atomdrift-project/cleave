@@ -106,6 +106,11 @@ pub(crate) const CLEAVE_OWNED_METRIC_FIELDS: &[&str] = &[
     // Needs every shipped module's imports beside the manifest, so no
     // single-file parse can reach it.
     "consistency.unused_runtime_deps",
+    // `.pth` hook imports resolved against the archive's other members
+    // (`compute_pth_startup_imports`): the hook names a module, and only the
+    // full member list says whether that module ships native or sourceless.
+    "consistency.pth_native_imports",
+    "consistency.pth_bytecode_imports",
     // Written by scan's follow phase (`attribute_reference_outcomes`), which
     // attributes each fetch outcome back to the file that declared it. Neither
     // filefacts nor cleave can compute these — only a run that actually

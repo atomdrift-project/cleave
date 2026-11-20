@@ -52,7 +52,7 @@ impl ArchiveAnalyzer {
         // (including the mid-loop `return Ok(false)` fallbacks) drops the
         // window and its channel before the scope joins, so it cannot hang.
         std::thread::scope(|scope| -> Result<bool> {
-            let mut window = MemberWindow::new_in(scope, self, "filefacts ZIP index", false);
+            let mut window = MemberWindow::new_in(scope, self, "filefacts ZIP index");
             let mut jar_members: Vec<MemoryArchiveMember> = Vec::new();
             let mut pyarmor = pyarmor_members::Collector::default();
             let mut rc4 = (report.target.file_type == FileType::ApkAndroid.report_file_type())
@@ -287,7 +287,7 @@ impl ArchiveAnalyzer {
         // Scope for the window's pipelined consumer; all exit paths drop the
         // window (and its sender) before the join.
         std::thread::scope(|scope| -> Result<()> {
-            let mut window = MemberWindow::new_in(scope, self, "memory ZIP", false);
+            let mut window = MemberWindow::new_in(scope, self, "memory ZIP");
             let mut jar_members: Vec<MemoryArchiveMember> = Vec::new();
             let mut pyarmor = pyarmor_members::Collector::default();
             let mut rc4 = (report.target.file_type == FileType::ApkAndroid.report_file_type())
@@ -521,6 +521,27 @@ impl ArchiveAnalyzer {
         })
     }
 
+    /// [`Self::analyze_tar_archive_in_memory`] for a stream that decodes more
+    /// slowly than the pool analyzes (xz, bzip2): `decoder` runs on a thread
+    /// of its own, up to one member window ahead of the members being
+    /// analyzed.
+    pub(in super::super) fn analyze_slow_tar_archive<R: Read + Send>(
+        &self,
+        decoder: R,
+        report: &mut AnalysisReport,
+        start: std::time::Instant,
+        guard: &ExtractionGuard,
+        label: &'static str,
+    ) -> Result<()> {
+        use super::super::read_ahead::ReadAhead;
+
+        std::thread::scope(|scope| {
+            let reader = ReadAhead::spawn(scope, decoder, super::member_window_bytes())
+                .context("Failed to start the tar decode thread")?;
+            self.analyze_tar_archive_in_memory(reader, report, start, guard, label)
+        })
+    }
+
     /// Tar-family twin of [`Self::analyze_zip_archive_in_memory`]: stream the
     /// entries straight from the (decompressing) reader into the member
     /// window instead of extracting to a temp tree and walking it back.
@@ -532,9 +553,6 @@ impl ArchiveAnalyzer {
     /// Guards, hostile-archive reasons and per-member metadata mirror
     /// `tar::extract_tar_entries_safe` one for one, including the disk walk's
     /// depth cap, so the member set and its order are the walk's.
-    ///
-    /// `slow_decoder` says `reader` decodes slower than the pool analyzes (xz,
-    /// bzip2), so members are analyzed while the next window decodes.
     pub(in super::super) fn analyze_tar_archive_in_memory<R: Read>(
         &self,
         reader: R,
@@ -542,7 +560,6 @@ impl ArchiveAnalyzer {
         start: std::time::Instant,
         guard: &ExtractionGuard,
         label: &'static str,
-        slow_decoder: bool,
     ) -> Result<()> {
         use super::super::guards::ExtractedMemberMetadata;
         use super::super::tar::tar_entry_type_label;
@@ -559,7 +576,7 @@ impl ArchiveAnalyzer {
         // before the cut are still analyzed (with an extraction note) as long
         // as there is at least one; with none, the error surfaces.
         std::thread::scope(|scope| -> Result<()> {
-            let mut window = MemberWindow::new_in(scope, self, "memory TAR", slow_decoder);
+            let mut window = MemberWindow::new_in(scope, self, "memory TAR");
             let mut pyarmor = pyarmor_members::Collector::default();
             let mut pushed = 0usize;
             let mut stop_reason: Option<anyhow::Error> = None;
@@ -1090,7 +1107,7 @@ impl ArchiveAnalyzer {
         // Scope for the window's pipelined consumer; all exit paths drop the
         // window (and its sender) before the join.
         std::thread::scope(|scope| -> Result<()> {
-            let mut window = MemberWindow::new_in(scope, self, "memory ASAR", false);
+            let mut window = MemberWindow::new_in(scope, self, "memory ASAR");
 
             for (entry_path, data_offset, entry_size) in entries {
                 if self.is_cancelled() {
@@ -1201,7 +1218,7 @@ impl ArchiveAnalyzer {
         // Scope for the window's pipelined consumer; all exit paths drop the
         // window (and its sender) before the join.
         std::thread::scope(|scope| -> Result<()> {
-            let mut window = MemberWindow::new_in(scope, self, "memory phar", false);
+            let mut window = MemberWindow::new_in(scope, self, "memory phar");
 
             for entry in entries {
                 if self.is_cancelled() {

@@ -8,6 +8,7 @@ mod guards;
 mod guards_test;
 mod iso;
 mod member_data;
+mod read_ahead;
 mod rpa;
 mod source_context;
 mod squashfs;
@@ -793,23 +794,20 @@ impl ArchiveAnalyzer {
                         start,
                         &guard,
                         label,
-                        false,
                     )?,
-                    FileType::TarBz2 => self.analyze_tar_archive_in_memory(
+                    FileType::TarBz2 => self.analyze_slow_tar_archive(
                         bzip2::read::BzDecoder::new(Cursor::new(data)),
                         &mut report,
                         start,
                         &guard,
                         label,
-                        true,
                     )?,
-                    FileType::TarXz => self.analyze_tar_archive_in_memory(
+                    FileType::TarXz => self.analyze_slow_tar_archive(
                         xz2::read::XzDecoder::new(Cursor::new(data)),
                         &mut report,
                         start,
                         &guard,
                         label,
-                        true,
                     )?,
                     FileType::TarZst => self.analyze_tar_archive_in_memory(
                         zstd::stream::read::Decoder::new(Cursor::new(data))
@@ -818,7 +816,6 @@ impl ArchiveAnalyzer {
                         start,
                         &guard,
                         label,
-                        false,
                     )?,
                     _ => self.analyze_tar_archive_in_memory(
                         flate2::read::GzDecoder::new(Cursor::new(data)),
@@ -826,7 +823,6 @@ impl ArchiveAnalyzer {
                         start,
                         &guard,
                         label,
-                        false,
                     )?,
                 }
             } else if matches!(file_type, FileType::Crx) {
@@ -1109,6 +1105,23 @@ impl ArchiveAnalyzer {
                 .filefacts_metrics
                 .get_or_insert_with(Default::default)
                 .insert("consistency.unused_runtime_deps".to_string(), count as f64);
+        }
+
+        // Cross-member Python startup linkage: `.pth` hook imports that land
+        // on a native extension or sourceless bytecode shipped in the same
+        // archive, read by `type: metrics` traits at archive scope.
+        if let Some(pth) = compute_pth_startup_imports(report) {
+            let metrics = report
+                .filefacts_metrics
+                .get_or_insert_with(Default::default);
+            metrics.insert(
+                "consistency.pth_native_imports".to_string(),
+                pth.native as f64,
+            );
+            metrics.insert(
+                "consistency.pth_bytecode_imports".to_string(),
+                pth.bytecode as f64,
+            );
         }
 
         // Every single-manifest judgement -- typosquat, copied identity,

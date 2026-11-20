@@ -251,7 +251,7 @@ pub const VARIABLES: &[Variable] = &[
     var(
         "CLEAVE_PIPELINE_MEMBER_WINDOWS",
         Tuning,
-        "Start the next member window before the last one drains (unset: xz and bzip2 tar streams only).",
+        "Start the next member window before the last one drains.",
     ),
     var(
         "CLEAVE_PRIORITY_HEAVY_MEMBERS",

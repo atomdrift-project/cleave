@@ -905,10 +905,12 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 | Platform::Zos
         )
     });
-    // Linux-specific features: systemd, deb, rpm require Linux, not generic Unix.
+    // Linux-specific formats (systemd, deb, rpm, apk): Linux itself, OpenWrt,
+    // and the `unix` umbrella, which includes Linux. A specific non-Linux
+    // flavor (BSD, AIX, Solaris, ...) does not admit them.
     let has_linux = platforms
         .iter()
-        .any(|p| matches!(p, Platform::Linux | Platform::OpenWrt));
+        .any(|p| matches!(p, Platform::Linux | Platform::Unix | Platform::OpenWrt));
     let has_android = platforms.contains(&Platform::Android);
     let has_macos = platforms.contains(&Platform::MacOS);
     let has_ios = platforms.contains(&Platform::Ios);

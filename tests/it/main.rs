@@ -46,6 +46,7 @@ mod json_rejection_test;
 mod keylogger_detection_test;
 mod lnk_anchor_and_member_yara_test;
 mod metaparse_integration_test;
+mod nested_xz_tarballs_no_deadlock;
 mod nuitka_macho;
 mod office_documents_test;
 mod output_discipline_test;

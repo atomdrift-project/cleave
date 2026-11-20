@@ -3756,9 +3756,9 @@ fn member_cache_options_carry_the_analyzer_memory_limit() {
     );
 }
 
-/// An xz tarball is read on one thread while another analyzes the windows it
-/// has filled; a plain tarball is analyzed in step with the read. Both must
-/// report the same members in the same order, across a window boundary.
+/// An xz tarball is decoded on a thread of its own, ahead of the members
+/// being analyzed; a plain tarball is read in step with the analysis. Both
+/// must report the same members in the same order, across a window boundary.
 #[test]
 fn an_xz_tarball_reports_the_members_of_its_plain_tarball_in_order() {
     // More than one default window of 2,048 members.

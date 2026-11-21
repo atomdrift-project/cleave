@@ -159,6 +159,13 @@ impl TraitRegex {
         })
     }
 
+    /// What `is:` judges in `matched`, a match borrowed from `haystack`: the
+    /// first capture group when the pattern has one and it took part,
+    /// otherwise the whole match (see [`is_subject`]).
+    pub(crate) fn is_subject<'h>(&self, haystack: &'h str, matched: &'h str) -> &'h str {
+        is_subject(&self.pattern, haystack, matched)
+    }
+
     /// Batch callers keep this engine's scratch storage across independent inputs.
     pub(crate) fn with_scratch<R>(
         &self,
@@ -294,6 +301,102 @@ pub(crate) fn shared_byte_engine(
     engines.put(key, Arc::downgrade(&engine));
     drop(engines);
     Some(engine)
+}
+
+/// The span of `pattern`'s first capture group in the match at `span` of
+/// `haystack`, or `None` when the pattern has no capture group or the group
+/// took no part in this match.
+///
+/// This is what `is:` judges when a regex has a group; see [`is_subject`].
+/// The search engines discard explicit groups (`WhichCaptures::Implicit`
+/// keeps their NFAs small), so a pattern with groups gets a second,
+/// capture-tracking engine, built on first use and cached. Only a match that
+/// already passed pays for it: the group is read by re-running that match
+/// anchored at its own start, with the whole haystack as context so `^`, `$`
+/// and `\b` see what the original search saw.
+pub(crate) fn first_group_span(
+    pattern: &str,
+    haystack: &[u8],
+    span: std::ops::Range<usize>,
+) -> Option<std::ops::Range<usize>> {
+    let engine = group_engine(pattern)?;
+    let input = regex_automata::Input::new(haystack)
+        .range(span)
+        .anchored(regex_automata::Anchored::Yes);
+    let mut caps = engine.create_captures();
+    engine.search_captures(&input, &mut caps);
+    caps.get_group(1).map(|group| group.range())
+}
+
+/// What `is:` judges in `matched`, a match of `pattern` borrowed from
+/// `haystack`: the pattern's first capture group when it has one and the
+/// group took part, otherwise the whole match.
+pub(crate) fn is_subject<'h>(pattern: &str, haystack: &'h str, matched: &'h str) -> &'h str {
+    let start = (matched.as_ptr() as usize).wrapping_sub(haystack.as_ptr() as usize);
+    if start.checked_add(matched.len()).is_none_or(|end| end > haystack.len()) {
+        return matched;
+    }
+    first_group_span(pattern, haystack.as_bytes(), start..start + matched.len())
+        .and_then(|group| haystack.get(group))
+        .unwrap_or(matched)
+}
+
+/// The capture-tracking engine for `pattern`, compiled with the semantics
+/// [`TraitRegex::compile`] picks (bytes for ASCII, codepoints otherwise), or
+/// `None` when the pattern has no explicit group or does not compile.
+fn group_engine(pattern: &str) -> Option<Arc<regex_automata::meta::Regex>> {
+    use std::sync::{LazyLock, RwLock};
+    type Engines = rustc_hash::FxHashMap<Box<str>, Option<Arc<regex_automata::meta::Regex>>>;
+    static ENGINES: LazyLock<RwLock<Engines>> = LazyLock::new(|| RwLock::new(Engines::default()));
+    if let Some(found) = ENGINES.read().ok()?.get(pattern) {
+        return found.clone();
+    }
+    let has_group = regex_syntax::parse(pattern)
+        .is_ok_and(|hir| hir.properties().explicit_captures_len() > 0);
+    let engine = has_group.then(|| compile_with_groups(pattern)).flatten().map(Arc::new);
+    ENGINES
+        .write()
+        .ok()?
+        .entry(pattern.into())
+        .or_insert(engine)
+        .clone()
+}
+
+fn compile_with_groups(pattern: &str) -> Option<regex_automata::meta::Regex> {
+    let config = engine_config()
+        .which_captures(regex_automata::nfa::thompson::WhichCaptures::All)
+        .onepass(true);
+    let bytes = regex_automata::util::syntax::Config::new()
+        .unicode(false)
+        .utf8(false);
+    if pattern.is_ascii()
+        && let Ok(re) = regex_automata::meta::Regex::builder()
+            .configure(config.clone().utf8_empty(false))
+            .syntax(bytes)
+            .build(pattern)
+    {
+        return Some(re);
+    }
+    regex_automata::meta::Regex::builder()
+        .configure(config.utf8_empty(true))
+        .build(pattern)
+        .ok()
+}
+
+/// What `is:` judges in a match `m` of the facade regex `re` over `haystack`:
+/// its first capture group when it has one and the group took part,
+/// otherwise the whole match. See [`is_subject`].
+pub(crate) fn facade_is_subject<'h>(
+    re: &regex::Regex,
+    haystack: &'h str,
+    m: regex::Match<'h>,
+) -> &'h str {
+    if re.captures_len() < 2 {
+        return m.as_str();
+    }
+    re.captures_at(haystack, m.start())
+        .and_then(|caps| caps.get(1))
+        .map_or(m.as_str(), |group| group.as_str())
 }
 
 /// Codepoint-mode compile: exact `regex::Regex::new` semantics. Still searches

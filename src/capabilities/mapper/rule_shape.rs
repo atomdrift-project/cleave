@@ -15,6 +15,11 @@ pub(crate) struct RuleShape {
     /// Condition summaries, e.g. `text/regex`, `tree-sitter/query`,
     /// `any(trait, raw/substr) near_lines`.
     pub(crate) conditions: String,
+    /// Declared criticality.
+    pub(crate) crit: crate::types::Criticality,
+    /// A trait that matches content itself, rather than composing other
+    /// traits (a composite, or a trait whose `if:` is a `trait:` reference).
+    pub(crate) atomic: bool,
 }
 
 /// `text/regex`, `raw/substr`, `tree-sitter/query`, `yara`, ... : the
@@ -93,6 +98,8 @@ impl CapabilityMapper {
                     defined_in: t.defined_in.display().to_string(),
                     r#for: for_list(&t.r#for),
                     conditions,
+                    crit: t.crit,
+                    atomic: !matches!(t.r#if, Condition::Trait { .. }),
                 },
             );
         }
@@ -125,6 +132,8 @@ impl CapabilityMapper {
                     defined_in: c.defined_in.display().to_string(),
                     r#for: for_list(&c.r#for),
                     conditions: parts.join(" "),
+                    crit: c.crit,
+                    atomic: false,
                 },
             );
         }

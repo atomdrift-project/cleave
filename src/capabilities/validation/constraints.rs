@@ -31,6 +31,9 @@ mod references;
 #[allow(clippy::wildcard_imports)]
 pub(crate) use references::*;
 
+mod dead_exceptions;
+pub(crate) use dead_exceptions::find_dead_regex_exceptions;
+
 /// Compare two slices of strings in a case-insensitive, order-independent way.
 fn vec_values_equal(a: &[String], b: &[String]) -> bool {
     if a.len() != b.len() {

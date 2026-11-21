@@ -10,7 +10,7 @@
 //! for their target domain.
 
 use super::helpers::{find_line_number, is_ast_source_type, is_binary_file_type};
-use crate::composite_rules::condition::NotException;
+use super::rule_regexes::rule_regexes;
 use crate::composite_rules::{
     CommentQuery, EncodedQuery, HexQuery, LiteralQuery, PathQuery, RawQuery, SectionQuery,
     SymbolQuery, TextQuery, TreeSitterQuery,
@@ -542,48 +542,67 @@ fn regex_engine_accepts(pattern: &str) -> bool {
 }
 
 /// Reject regex patterns cleave's engine cannot compile — chiefly lookaround
-/// and backreferences (see [`regex_engine_accepts`]).
+/// and backreferences (see [`regex_engine_accepts`]) — wherever a rule uses
+/// one: its `if:`, `unless:`, `downgrade:` and composite legs, and every
+/// `not:` exception.
 ///
-/// This is a *silent* failure otherwise: the condition never compiles, so the
-/// trait never fires, and no other check notices — the `regex-memory` validator
-/// only inspects counted-repetition patterns (those with `{`), which lookaround
-/// patterns rarely are. A detection-integrity error (`Severity::Hard`), not a
-/// style nit: the rule is dead as written.
+/// This is a *silent* failure otherwise: a pattern that never compiles never
+/// matches, so a condition never fires and an exception never excludes, and
+/// no other check notices — the `regex-memory` validator only inspects
+/// counted-repetition patterns (those with `{`), which lookaround patterns
+/// rarely are. A detection-integrity error (`Severity::Hard`), not a style
+/// nit: the rule does not do what it says.
 pub(crate) fn find_incompatible_regex_features(
     traits: &[TraitDefinition],
+    composites: &[CompositeTrait],
     errors: &mut Vec<String>,
 ) {
     // Each distinct pattern is judged once: acceptance is a property of the
-    // pattern alone, and the same regex recurs across many traits.
+    // pattern alone, and the same regex recurs across many rules.
     let mut accepted: HashMap<&str, bool> = HashMap::new();
-    for trait_def in traits {
-        let Some(pattern) = substr_regex_fields(&trait_def.r#if).and_then(|(_, r, _)| r) else {
-            continue;
-        };
+    for r in rule_regexes(traits, composites) {
         if *accepted
-            .entry(pattern)
-            .or_insert_with(|| regex_engine_accepts(pattern))
+            .entry(r.pattern)
+            .or_insert_with(|| regex_engine_accepts(r.pattern))
         {
             continue;
         }
-        let source_file = trait_def
-            .defined_in
-            .to_str()
-            .unwrap_or("unknown")
-            .to_string();
-        let location = match find_line_number(&source_file, &trait_def.id) {
-            Some(line) => format!("{source_file}:{line}"),
-            None => source_file,
-        };
         errors.push(format!(
-            "Uncompilable regex: trait '{}' in {} has a pattern the engine cannot compile \
-             ('{}'), so the condition silently never matches. Usual causes: lookaround \
-             ((?=…), (?!…), (?<=…), (?<!…)) and backreferences (unsupported by the linear-time \
-             engine — rewrite with \\b / an anchored alternation, or split into composite legs \
-             joined by near_lines/near_bytes), or an over-escaped pattern (`\\\\b` in a \
-             single-quoted YAML string is a literal backslash, not a word boundary — use `\\b`).",
-            trait_def.id, location, pattern
+            "Uncompilable regex: {} has a pattern in its {} the engine cannot compile ('{}'), \
+             so it silently never matches. Usual causes: lookaround ((?=…), (?!…), (?<=…), \
+             (?<!…)) and backreferences (unsupported by the linear-time engine — rewrite with \
+             \\b / an anchored alternation, or split into composite legs joined by \
+             near_lines/near_bytes), or an over-escaped pattern (`\\\\b` in a single-quoted \
+             YAML string is a literal backslash, not a word boundary — use `\\b`).",
+            r.rule(),
+            r.place,
+            r.pattern
         ));
+    }
+}
+
+/// Flag regexes with a backtracking shape — an unbounded `.*`/`.+`, an
+/// unbounded negated class, or nested quantifiers — wherever a rule lists one
+/// that scans files or blobs (see [`super::rule_regexes::RuleRegex::reads_broad_input`]); on a
+/// short bounded value such as a symbol name or path the shape costs nothing.
+pub(crate) fn find_backtracking_regex_patterns(
+    traits: &[TraitDefinition],
+    composites: &[CompositeTrait],
+    warnings: &mut Vec<String>,
+) {
+    for r in rule_regexes(traits, composites) {
+        if !r.reads_broad_input() {
+            continue;
+        }
+        if let Some(issue) = crate::composite_rules::condition::find_backtrack_issue(r.pattern) {
+            warnings.push(format!(
+                "{} has a pattern in its {}: {issue} - use bounded pattern like .{{0,50}} \
+                 instead: {}",
+                r.rule(),
+                r.place,
+                r.pattern
+            ));
+        }
     }
 }
 
@@ -593,38 +612,22 @@ pub(crate) fn find_incompatible_regex_features(
 /// on broad raw/text scans and unusually large counted repetitions. Bounded
 /// structured fields such as `kv`, `symbol`, `string_literal`, and `basename`
 /// are intentionally much more permissive.
-pub(crate) fn find_slow_regex_patterns(traits: &[TraitDefinition], warnings: &mut Vec<String>) {
-    for trait_def in traits {
-        // Extract regex pattern from any regex-bearing condition variant
-        let pattern_opt = substr_regex_fields(&trait_def.r#if)
-            .and_then(|(_, r, type_label)| r.map(|pattern| (pattern, type_label)));
-
-        if let Some((pattern, type_label)) = pattern_opt {
-            let facts = RegexFacts::analyze(pattern, type_label);
-            let issues = regex_performance_issues(&facts);
-
-            if !issues.is_empty() {
-                let source_file = trait_def
-                    .defined_in
-                    .to_str()
-                    .unwrap_or("unknown")
-                    .to_string();
-
-                let line_hint = find_line_number(&source_file, &trait_def.id);
-                let location = if let Some(line) = line_hint {
-                    format!("{}:{}", source_file, line)
-                } else {
-                    source_file
-                };
-
-                warnings.push(format!(
-                    "Regex performance: trait '{}' in {} has potentially slow pattern '{}': {}",
-                    trait_def.id,
-                    location,
-                    facts.pattern,
-                    issues.join(", ")
-                ));
-            }
+pub(crate) fn find_slow_regex_patterns(
+    traits: &[TraitDefinition],
+    composites: &[CompositeTrait],
+    warnings: &mut Vec<String>,
+) {
+    for r in rule_regexes(traits, composites) {
+        let facts = RegexFacts::analyze(r.pattern, r.reads);
+        let issues = regex_performance_issues(&facts);
+        if !issues.is_empty() {
+            warnings.push(format!(
+                "Regex performance: {} has potentially slow pattern in its {} '{}': {}",
+                r.rule(),
+                r.place,
+                facts.pattern,
+                issues.join(", ")
+            ));
         }
     }
 }
@@ -771,59 +774,6 @@ fn condition_regex(condition: &Condition) -> Option<(&str, bool)> {
     }
 }
 
-/// The structured `not:` exception list attached to a condition, if any.
-/// Exception regexes compile through the same shared cache (case-sensitively).
-fn condition_not_exceptions(condition: &Condition) -> &[NotException] {
-    let (Condition::Text(TextQuery { not, .. })
-    | Condition::Raw(RawQuery { not, .. })
-    | Condition::Encoded(EncodedQuery { not, .. })
-    | Condition::Symbol(SymbolQuery { not, .. })
-    | Condition::Comment(CommentQuery { not, .. })
-    | Condition::Literal(LiteralQuery { not, .. })
-    | Condition::Hex(HexQuery { not, .. })) = condition
-    else {
-        return &[];
-    };
-    not.as_deref().unwrap_or_default()
-}
-
-/// Invoke `f` with every `(pattern, case_insensitive)` regex these exceptions
-/// compile at evaluation time.
-fn for_each_not_exception_regex<'a>(
-    exceptions: &'a [NotException],
-    f: &mut impl FnMut(&'a str, bool),
-) {
-    for exception in exceptions {
-        if let NotException::Structured(structured) = exception
-            && let Some(regex) = &structured.regex
-        {
-            f(regex, false);
-        }
-    }
-}
-
-/// Invoke `f` with every regex a single condition compiles: its `regex:`
-/// field and any inline `not:` exception regexes.
-fn for_each_condition_regex<'a>(condition: &'a Condition, f: &mut impl FnMut(&'a str, bool)) {
-    if let Some((regex, case_insensitive)) = condition_regex(condition) {
-        f(regex, case_insensitive);
-    }
-    for_each_not_exception_regex(condition_not_exceptions(condition), f);
-}
-
-/// Invoke `f` with every regex in a downgrade block's `any:`/`all:` legs.
-fn for_each_downgrade_regex<'a>(
-    downgrade: &'a DowngradeConditions,
-    f: &mut impl FnMut(&'a str, bool),
-) {
-    for condition in [&downgrade.any, &downgrade.all]
-        .into_iter()
-        .flat_map(|legs| legs.as_deref().unwrap_or_default())
-    {
-        for_each_condition_regex(condition, f);
-    }
-}
-
 /// Detect rule regexes whose compiled engines hog memory.
 ///
 /// Every distinct `regex:` in a rule — including `unless:`, `downgrade:`, and
@@ -841,47 +791,7 @@ pub(crate) fn find_memory_hungry_regex_patterns(
 ) {
     // Every regex in rule order, then measured in parallel: each measurement
     // compiles NFAs, which made this ~15s of the load when run one by one.
-    let mut regexes: Vec<(&str, &str, &std::path::Path, String, bool)> = Vec::new();
-    for trait_def in traits {
-        let mut report = |pattern: &str, case_insensitive: bool| {
-            regexes.push((
-                "trait",
-                &trait_def.id,
-                &trait_def.defined_in,
-                pattern.to_string(),
-                case_insensitive,
-            ));
-        };
-        for_each_condition_regex(&trait_def.r#if, &mut report);
-        for_each_not_exception_regex(trait_def.not.as_deref().unwrap_or_default(), &mut report);
-        for condition in trait_def.unless.as_deref().unwrap_or_default() {
-            for_each_condition_regex(condition, &mut report);
-        }
-        if let Some(downgrade) = &trait_def.downgrade {
-            for_each_downgrade_regex(downgrade, &mut report);
-        }
-    }
-    for rule in composites {
-        let mut report = |pattern: &str, case_insensitive: bool| {
-            regexes.push((
-                "composite",
-                &rule.id,
-                &rule.defined_in,
-                pattern.to_string(),
-                case_insensitive,
-            ));
-        };
-        for condition in [&rule.all, &rule.any, &rule.unless]
-            .into_iter()
-            .flat_map(|legs| legs.as_deref().unwrap_or_default())
-        {
-            for_each_condition_regex(condition, &mut report);
-        }
-        for_each_not_exception_regex(rule.not.as_deref().unwrap_or_default(), &mut report);
-        if let Some(downgrade) = &rule.downgrade {
-            for_each_downgrade_regex(downgrade, &mut report);
-        }
-    }
+    let regexes = rule_regexes(traits, composites);
 
     // Measured once per distinct pattern: the same regex recurs across many
     // rules, and each measurement compiles NFAs.
@@ -889,11 +799,11 @@ pub(crate) fn find_memory_hungry_regex_patterns(
     let mut distinct: Vec<(&str, bool)> = Vec::new();
     let slots: Vec<usize> = regexes
         .iter()
-        .map(|(_, _, _, pattern, case_insensitive)| {
+        .map(|r| {
             *slot_of
-                .entry((pattern.as_str(), *case_insensitive))
+                .entry((r.pattern, r.case_insensitive))
                 .or_insert_with(|| {
-                    distinct.push((pattern.as_str(), *case_insensitive));
+                    distinct.push((r.pattern, r.case_insensitive));
                     distinct.len() - 1
                 })
         })
@@ -923,33 +833,29 @@ pub(crate) fn find_memory_hungry_regex_patterns(
         })
         .collect();
 
-    for ((kind, id, defined_in, pattern, _), slot) in regexes.iter().zip(slots) {
+    for (r, slot) in regexes.iter().zip(slots) {
         let Some(issue) = &issues[slot] else {
             continue;
         };
-        let source_file = defined_in.to_str().unwrap_or("unknown");
-        let location = match find_line_number(source_file, id) {
-            Some(line) => format!("{source_file}:{line}"),
-            None => source_file.to_string(),
-        };
+        let (rule, place, pattern) = (r.rule(), r.place, r.pattern);
         let split_hint = "replace the counted run with a loop plus length_min \
                           (e.g. `[A-Za-z0-9]+` + `length_min: 4000`), or split the wide gap \
                           into atomic traits joined by a near_lines/near_bytes composite";
         warnings.push(match *issue {
             RegexMemoryIssue::OverBudget(bytes) => format!(
-                "Regex memory: {kind} '{id}' in {location} compiles '{pattern}' to a {} KB NFA \
+                "Regex memory: {rule} compiles '{pattern}' in its {place} to a {} KB NFA \
                  (budget {} KB) — {split_hint}",
                 bytes / 1024,
                 REGEX_NFA_BUDGET_BYTES / 1024,
             ),
             RegexMemoryIssue::NeverCompiles => format!(
-                "Regex memory: {kind} '{id}' in {location} has pattern '{pattern}' beyond the \
+                "Regex memory: {rule} has pattern '{pattern}' in its {place} beyond the \
                  {} MB engine compile limit — no engine can be built, so it never matches; \
                  {split_hint}",
                 crate::composite_rules::evaluators::REGEX_SIZE_LIMIT >> 20,
             ),
             RegexMemoryIssue::UnicodeDegrades => format!(
-                "Regex memory: {kind} '{id}' in {location} has pattern '{pattern}' whose Unicode \
+                "Regex memory: {rule} has pattern '{pattern}' in its {place} whose Unicode \
                  engine exceeds the {} MB compile limit — matching silently degrades to no-match \
                  on non-ASCII content; {split_hint}",
                 crate::composite_rules::evaluators::REGEX_SIZE_LIMIT >> 20,

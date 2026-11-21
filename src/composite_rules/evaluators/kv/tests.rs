@@ -1018,7 +1018,8 @@ fn is_validator_gates_a_value_condition() {
 #[test]
 fn not_exclusion_filters_a_matched_value() {
     // A `not:` on a value condition used to parse cleanly and then be
-    // dropped, so the exception silently did nothing.
+    // dropped, so the exception silently did nothing. It judges what the
+    // regex matched, so the regex takes in the file name.
     let json_content = br#"{"name":"p","files": ["report.accreport.html", "index.html"]}"#;
     let build = |not: Option<Vec<crate::composite_rules::condition::NotException>>| {
         Condition::Kv(KvQuery {
@@ -1026,7 +1027,7 @@ fn not_exclusion_filters_a_matched_value() {
             path: "files[*]".to_string(),
             exact: None,
             substr: None,
-            regex: Some(r"(?i)\.html?$".to_string()),
+            regex: Some(r"(?i)[\w.]*\.html?$".to_string()),
             eq: None,
             ne: None,
             case_insensitive: false,
@@ -1055,6 +1056,52 @@ fn not_exclusion_filters_a_matched_value() {
         !ev.value.contains("accreport"),
         "excluded value: {}",
         ev.value
+    );
+}
+
+#[test]
+fn not_judges_only_what_a_value_condition_matched() {
+    let json_content = br#"{"name":"p","files": ["report.accreport.html"]}"#;
+    let build = |substr: Option<&str>, regex: Option<&str>, not: &str| {
+        Condition::Kv(KvQuery {
+            match_mode: Default::default(),
+            path: "files[*]".to_string(),
+            exact: None,
+            substr: substr.map(str::to_string),
+            regex: regex.map(str::to_string),
+            eq: None,
+            ne: None,
+            case_insensitive: false,
+            exists: None,
+            length_min: None,
+            length_max: None,
+            is_check: None,
+            not: Some(vec![
+                crate::composite_rules::condition::NotException::Shorthand(not.to_string()),
+            ]),
+        })
+    };
+    let path = Path::new("package.json");
+    // The exception names text beside the match, never inside it.
+    assert!(
+        evaluate_kv_test(&build(Some(".html"), None, "accreport"), json_content, path).is_some()
+    );
+    assert!(
+        evaluate_kv_test(
+            &build(None, Some(r"\.html$"), "accreport"),
+            json_content,
+            path
+        )
+        .is_some()
+    );
+    // Inside the match, it excludes.
+    assert!(
+        evaluate_kv_test(
+            &build(None, Some(r"\w+\.html$"), "accreport"),
+            json_content,
+            path
+        )
+        .is_none()
     );
 }
 

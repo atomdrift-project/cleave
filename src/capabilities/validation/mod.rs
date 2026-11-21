@@ -38,6 +38,7 @@ pub(crate) mod facts_cache;
 mod helpers;
 mod patterns;
 pub(crate) mod regex_cost;
+mod rule_regexes;
 mod taxonomy;
 
 // Shared types used across validation modules
@@ -171,8 +172,8 @@ pub(crate) use composite::{
 
 // Pattern quality checks
 pub(crate) use patterns::{
-    find_ast_function_call_should_use_symbol, find_brittle_path_patterns,
-    find_incompatible_regex_features, find_literal_regex_patterns,
+    find_ast_function_call_should_use_symbol, find_backtracking_regex_patterns,
+    find_brittle_path_patterns, find_incompatible_regex_features, find_literal_regex_patterns,
     find_memory_hungry_regex_patterns, find_non_capturing_groups, find_raw_should_use_text,
     find_short_pattern_warnings, find_slow_regex_patterns, find_string_literal_should_use_text,
     find_uncompilable_ast_queries,
@@ -212,9 +213,9 @@ pub(crate) use constraints::{
     MISSING_CONDITIONS, UNPROVEN_SIGNER_SUPPRESSOR, UNVERIFIED_SIGNATURE_SUPPRESSOR,
     find_broad_notable_downgrades, find_container_name_convictions,
     find_convictions_without_content, find_dangling_directory_refs, find_dead_any_alternatives,
-    find_dead_composites, find_dead_downgrades, find_directory_shadowed_refs,
-    find_empty_condition_clauses, find_excessive_file_types, find_excessive_skip_conditions,
-    find_exhaustive_suppressors, find_hex_binary_missing_section,
+    find_dead_composites, find_dead_downgrades, find_dead_regex_exceptions,
+    find_directory_shadowed_refs, find_empty_condition_clauses, find_excessive_file_types,
+    find_excessive_skip_conditions, find_exhaustive_suppressors, find_hex_binary_missing_section,
     find_hostile_composites_with_too_few_notable_legs, find_impossible_composite_filetypes,
     find_impossible_count_constraints, find_impossible_length_bounds, find_impossible_needs,
     find_impossible_size_constraints, find_invalid_hex_patterns, find_invalid_not_usage,

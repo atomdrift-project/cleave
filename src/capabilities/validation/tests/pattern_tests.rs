@@ -88,7 +88,7 @@ fn test_incompatible_lookaround_and_backref_detected() {
     ] {
         let traits = vec![create_raw_regex_trait("test-incompat", pat)];
         let mut errors = Vec::new();
-        find_incompatible_regex_features(&traits, &mut errors);
+        find_incompatible_regex_features(&traits, &[], &mut errors);
         assert_eq!(
             errors.len(),
             1,
@@ -112,7 +112,7 @@ fn test_compatible_patterns_not_flagged() {
     ] {
         let traits = vec![create_raw_regex_trait("test-ok", pat)];
         let mut errors = Vec::new();
-        find_incompatible_regex_features(&traits, &mut errors);
+        find_incompatible_regex_features(&traits, &[], &mut errors);
         assert!(
             errors.is_empty(),
             "{pat:?} must not be flagged, got {errors:?}"

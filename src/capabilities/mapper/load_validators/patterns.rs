@@ -7,7 +7,8 @@ use crate::capabilities::validation::{
     check_overlapping_regex_patterns, check_regex_alternative_subsets,
     check_regex_or_overlapping_exact, check_regex_should_be_exact,
     check_same_string_different_types, find_ast_function_call_should_use_symbol,
-    find_brittle_path_patterns, find_case_insensitive_overlap_issues, find_duplicate_atomic_traits,
+    find_backtracking_regex_patterns, find_brittle_path_patterns,
+    find_case_insensitive_overlap_issues, find_duplicate_atomic_traits,
     find_duplicate_composite_rules, find_duplicate_inline_exclusions,
     find_incompatible_regex_features, find_literal_regex_patterns,
     find_literals_covered_by_regexes, find_memory_hungry_regex_patterns, find_non_capturing_groups,
@@ -158,7 +159,7 @@ pub(super) fn cross_type_patterns<'a>(input: &'a ValidationInput<'a>) -> Report<
 /// Detect regex patterns that are costly for broad raw/text scans.
 pub(super) fn slow_regexes<'a>(input: &'a ValidationInput<'a>) -> Report<'a> {
     let slow_regexes = collect_early("regex-performance", |w| {
-        find_slow_regex_patterns(input.trait_definitions, w);
+        find_slow_regex_patterns(input.trait_definitions, input.composite_rules, w);
     });
     report(move |warnings| {
         let step_start = std::time::Instant::now();
@@ -167,6 +168,19 @@ pub(super) fn slow_regexes<'a>(input: &'a ValidationInput<'a>) -> Report<'a> {
             warnings.collect_as("regex-performance", |warnings| warnings.extend(messages));
         }
         tracing::trace!("Step 1h completed in {:?}", step_start.elapsed());
+    })
+}
+
+/// Detect backtracking-shaped regexes (nested quantifiers, unbounded
+/// wildcards or negated classes) wherever a rule lists one.
+pub(super) fn backtracking_regexes<'a>(input: &'a ValidationInput<'a>) -> Report<'a> {
+    let backtracking = collect_early("nested-quantifier", |w| {
+        find_backtracking_regex_patterns(input.trait_definitions, input.composite_rules, w);
+    });
+    report(move |warnings| {
+        if let Some(messages) = backtracking {
+            warnings.collect_as("nested-quantifier", |warnings| warnings.extend(messages));
+        }
     })
 }
 
@@ -185,12 +199,14 @@ pub(super) fn memory_hungry_regexes<'a>(input: &'a ValidationInput<'a>) -> Repor
     })
 }
 
-/// Probe each text/raw regex's lazy DFA on its own alphabet: a
-/// pattern that explodes there explodes on real bundles (soft).
+/// Probe every regex that scans files — wherever a rule lists it — for a
+/// lazy DFA that explodes on its own alphabet: a pattern that explodes there
+/// explodes on real bundles (soft).
 pub(super) fn pathological_regexes<'a>(input: &'a ValidationInput<'a>) -> Report<'a> {
     let regex_explosion = collect_early("regex-explosion", |w| {
         crate::capabilities::validation::find_pathological_regex_patterns(
             input.trait_definitions,
+            input.composite_rules,
             w,
         );
     });
@@ -238,10 +254,11 @@ pub(super) fn non_capturing_groups<'a>(input: &'a ValidationInput<'a>) -> Report
 }
 
 /// Reject regexes the linear-time engine can't compile (lookaround,
-/// backreferences) — a silently-dead condition, so this is Hard.
+/// backreferences) anywhere a rule uses one, `not:` exceptions included — a
+/// silently-dead condition or exception, so this is Hard.
 pub(super) fn incompatible_regexes<'a>(input: &'a ValidationInput<'a>) -> Report<'a> {
     let incompatible_regex = collect_early("incompatible-regex", |w| {
-        find_incompatible_regex_features(input.trait_definitions, w);
+        find_incompatible_regex_features(input.trait_definitions, input.composite_rules, w);
     });
     report(move |warnings| {
         let step_start = std::time::Instant::now();

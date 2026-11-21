@@ -7,8 +7,8 @@
 //! - String count analysis
 
 use super::{
-    ContentLocationParams, TextPattern, build_regex, match_window, resolve_effective_range,
-    resolve_effective_range_opt, symbol_matches, truncate_evidence,
+    ContentLocationParams, TextPattern, build_regex, resolve_effective_range,
+    resolve_effective_range_opt, truncate_evidence,
 };
 use crate::composite_rules::condition::{
     NotException, StringValidator, SymbolKind, cached_ci_searcher,
@@ -344,7 +344,7 @@ pub(crate) fn eval_symbol<'a>(
     // Search in imports
     if want_imports {
         for import in &ctx.report.imports {
-            if symbol_matches_condition(
+            if let Some(span) = symbol_match_span(
                 &import.symbol,
                 norm_exact_ref,
                 norm_substr_ref,
@@ -354,9 +354,13 @@ pub(crate) fn eval_symbol<'a>(
             ) {
                 // Check if this symbol should be excluded by not: or is: filters
                 let excluded_by_not = not
-                    .map(|exceptions| exceptions.iter().any(|exc| exc.matches(&import.symbol)))
+                    .map(|exceptions| exceptions.iter().any(|exc| exc.matches(span)))
                     .unwrap_or(false);
-                let excluded_by_is = !validate_match(&import.symbol, is_check);
+                let excluded_by_is = is_check.is_some()
+                    && !validate_match(
+                        symbol_is_subject(&import.symbol, span, effective_regex, pattern),
+                        is_check,
+                    );
                 // An `alias:` filter narrows to aliased imports (and, when it
                 // carries exact/substr/regex, to a specific alias). A plain
                 // import never matches when an alias filter is present.
@@ -400,28 +404,25 @@ pub(crate) fn eval_symbol<'a>(
             }
             let candidates: [Option<&str>; 2] =
                 [Some(export.symbol.as_str()), export.forward_to.as_deref()];
-            let mut hit_value: Option<&str> = None;
-            for candidate in candidates.into_iter().flatten() {
-                if symbol_matches_condition(
+            let Some((hit, span)) = candidates.into_iter().flatten().find_map(|candidate| {
+                symbol_match_span(
                     candidate,
                     norm_exact_ref,
                     norm_substr_ref,
                     pattern,
                     effective_regex,
                     effective_finder,
-                ) {
-                    hit_value = Some(candidate);
-                    break;
-                }
-            }
-            let Some(hit) = hit_value else {
+                )
+                .map(|span| (candidate, span))
+            }) else {
                 continue;
             };
 
             let excluded_by_not = not
-                .map(|exceptions| exceptions.iter().any(|exc| exc.matches(hit)))
+                .map(|exceptions| exceptions.iter().any(|exc| exc.matches(span)))
                 .unwrap_or(false);
-            let excluded_by_is = !validate_match(hit, is_check);
+            let excluded_by_is = is_check.is_some()
+                && !validate_match(symbol_is_subject(hit, span, effective_regex, pattern), is_check);
 
             if !excluded_by_not && !excluded_by_is {
                 match_count += 1;
@@ -447,7 +448,7 @@ pub(crate) fn eval_symbol<'a>(
     // Search in internal functions (important for statically linked Go binaries)
     if want_functions {
         for func in &ctx.report.functions {
-            if symbol_matches_condition(
+            if let Some(span) = symbol_match_span(
                 &func.name,
                 norm_exact_ref,
                 norm_substr_ref,
@@ -457,12 +458,16 @@ pub(crate) fn eval_symbol<'a>(
             ) {
                 // Check if this symbol should be excluded by not: filters
                 let excluded_by_not = not
-                    .map(|exceptions| exceptions.iter().any(|exc| exc.matches(&func.name)))
+                    .map(|exceptions| exceptions.iter().any(|exc| exc.matches(span)))
                     .unwrap_or(false);
                 // `is:` applies here as it does to imports and exports; without
                 // it a `kind: function` + `is: random_like` rule counted every
                 // name its regex admitted.
-                let excluded_by_is = !validate_match(&func.name, is_check);
+                let excluded_by_is = is_check.is_some()
+                    && !validate_match(
+                        symbol_is_subject(&func.name, span, effective_regex, pattern),
+                        is_check,
+                    );
 
                 if !excluded_by_not && !excluded_by_is {
                     match_count += 1;
@@ -503,41 +508,81 @@ pub(crate) fn eval_symbol<'a>(
     }
 }
 
-/// Check if a symbol matches an exact name, substring, or pattern.
-fn symbol_matches_condition(
-    symbol: &str,
+/// What a symbol condition matched in `symbol`, as a borrow of it: the whole
+/// name for `exact:`, the needle's occurrence for `substr:`, the regex's
+/// leftmost match for `regex:`. `None` when it does not match. A `not:`
+/// exception judges this span, as on every other condition.
+fn symbol_match_span<'s>(
+    symbol: &'s str,
     exact: Option<&String>,
     substr: Option<&String>,
     pattern: Option<&String>,
     compiled_regex: Option<&crate::composite_rules::condition::TraitRegex>,
     compiled_finder: Option<&memchr::memmem::Finder<'static>>,
-) -> bool {
-    // If exact is specified, do strict equality match
+) -> Option<&'s str> {
     if let Some(exact_val) = exact {
-        return symbol == exact_val;
+        return (symbol == exact_val).then_some(symbol);
     }
-
-    // If substr is specified, do substring match using the pre-compiled finder when available
     if let Some(substr_val) = substr {
-        return if let Some(finder) = compiled_finder {
-            finder.find(symbol.as_bytes()).is_some()
-        } else {
-            memchr::memmem::find(symbol.as_bytes(), substr_val.as_bytes()).is_some()
-        };
+        let start = match compiled_finder {
+            Some(finder) => finder.find(symbol.as_bytes()),
+            None => memchr::memmem::find(symbol.as_bytes(), substr_val.as_bytes()),
+        }?;
+        return symbol.get(start..start + substr_val.len());
     }
+    if let Some(re) = compiled_regex {
+        return re.find_str(symbol);
+    }
+    // Not pre-compiled: the name itself, or a pattern with regex
+    // metacharacters (see `symbol_matches`).
+    let pattern_val = pattern?;
+    if symbol == pattern_val {
+        return Some(symbol);
+    }
+    if !(pattern_val.contains('|') || pattern_val.contains('*') || pattern_val.contains('[')) {
+        return None;
+    }
+    build_regex(pattern_val, false)
+        .ok()?
+        .find(symbol)
+        .map(|m| m.as_str())
+}
 
-    // If pattern is specified, use precompiled regex if available
-    if pattern.is_some() {
-        if let Some(re) = compiled_regex {
-            return re.is_match(symbol);
-        } else if let Some(pattern_val) = pattern {
-            // Fallback: use the existing pattern matching logic if not pre-compiled
-            return symbol_matches(symbol, pattern_val);
+/// What `is:` judges in a symbol match `span` of `symbol`: the regex's first
+/// capture group when it has one and the group took part, otherwise `span`.
+fn symbol_is_subject<'s>(
+    symbol: &'s str,
+    span: &'s str,
+    compiled_regex: Option<&crate::composite_rules::condition::TraitRegex>,
+    pattern: Option<&String>,
+) -> &'s str {
+    match (compiled_regex, pattern) {
+        (Some(re), _) => re.is_subject(symbol, span),
+        (None, Some(pattern)) => {
+            crate::composite_rules::condition::is_subject(pattern, symbol, span)
         }
+        (None, None) => span,
     }
+}
 
-    // Neither exact nor substr nor pattern specified - no match
-    false
+/// The first occurrence of `needle` in `value`, as a borrow of `value`: what
+/// a `substr:` matched, for `not:` to judge. A case-insensitive search folds
+/// both sides and maps the hit back onto `value`'s own bytes (see
+/// [`raw::LoweredOffsets`]).
+pub(crate) fn substr_span<'v>(
+    value: &'v str,
+    needle: &str,
+    case_insensitive: bool,
+) -> Option<&'v str> {
+    if !case_insensitive {
+        let start = value.find(needle)?;
+        return value.get(start..start + needle.len());
+    }
+    let needle = needle.to_lowercase();
+    let hit = value.to_lowercase().find(&needle)?;
+    let mut offsets = raw::LoweredOffsets::new(value, true);
+    let start = offsets.original(hit);
+    value.get(start..offsets.original(hit + needle.len()))
 }
 
 /// Whether a matched span's byte length satisfies the condition's
@@ -689,8 +734,8 @@ impl<'p> StringMatcher<'p> {
     }
 
     /// Match `value`, returning the matched text as a **borrow into `value`** for
-    /// evidence — no allocation. `word:`/`regex:` return the matched span; `substr:`
-    /// and `exact:` return the whole value. Callers clone only when actually storing
+    /// evidence — no allocation. `substr:`/`word:`/`regex:` return the matched span;
+    /// `exact:` returns the whole value. Callers clone only when actually storing
     /// evidence (≤ `MAX_EVIDENCE_PER_TRAIT`), so match-counting and `not:`/`is:`
     /// filtering on non-stored matches cost zero allocations.
     fn match_value_ref<'v>(&self, value: &'v str) -> Option<&'v str> {
@@ -704,8 +749,10 @@ impl<'p> StringMatcher<'p> {
                 };
                 matched.then_some(value)
             }
-            Self::SubstrCs(finder) => finder.find(value.as_bytes()).is_some().then_some(value),
-            Self::SubstrCi(ac) => ac.is_match(value).then_some(value),
+            Self::SubstrCs(finder) => finder
+                .find(value.as_bytes())
+                .and_then(|start| value.get(start..start + finder.needle().len())),
+            Self::SubstrCi(ac) => ac.find(value).and_then(|m| value.get(m.range())),
             Self::WordCs { needle, finder } => {
                 word_match_cs(value, needle, finder).map(|s| &value[s..s + needle.len()])
             }
@@ -714,6 +761,26 @@ impl<'p> StringMatcher<'p> {
             }
             Self::Regex(re) => re.find_str(value),
             Self::Never => None,
+        }
+    }
+
+    /// What `is:` and `length_min`/`length_max` judge for a match of `value`:
+    /// the matched span, except for `substr:`, which finds the string a
+    /// length bound then judges whole. `not:` and `is:` judge the match
+    /// (see [`Self::is_subject`]).
+    /// What `is:` judges in a match: a regex's first capture group when it
+    /// has one and the group took part, otherwise the matched text.
+    fn is_subject<'v>(&self, value: &'v str, matched: &'v str) -> &'v str {
+        match self {
+            Self::Regex(re) => re.is_subject(value, matched),
+            _ => matched,
+        }
+    }
+
+    fn context_subject<'v>(&self, value: &'v str, matched: &'v str) -> &'v str {
+        match self {
+            Self::SubstrCs(_) | Self::SubstrCi(_) => value,
+            _ => matched,
         }
     }
 
@@ -745,7 +812,7 @@ impl<'p> StringMatcher<'p> {
             }
             _ => self
                 .match_value_ref(value)
-                .filter(|span| span_length_ok(span.len(), bounds)),
+                .filter(|span| span_length_ok(self.context_subject(value, span).len(), bounds)),
         }
     }
 }
@@ -823,29 +890,36 @@ pub(crate) fn eval_comment<'a, 'b>(
     let mut match_count = 0usize;
     for c in &ctx.report.comments {
         let v = c.value.as_str();
-        let hit = if let Some(e) = params.exact {
-            if params.case_insensitive {
+        let mut subject = None;
+        // What matched: the whole comment for `exact:`, else the span the
+        // substr, regex or word found — which is all a `not:` judges.
+        let matched = if let Some(e) = params.exact {
+            let equal = if params.case_insensitive {
                 v.eq_ignore_ascii_case(e)
             } else {
                 v == e
-            }
+            };
+            equal.then_some(v)
         } else if let Some(s) = params.substr {
-            if params.case_insensitive {
-                v.to_lowercase().contains(&s.to_lowercase())
-            } else {
-                v.contains(s)
-            }
-        } else if let Some(re) = &regex {
-            re.is_match(v)
-        } else if let Some(re) = &word_regex {
-            re.is_match(v)
+            substr_span(v, s, params.case_insensitive)
+        } else if let Some(re) = regex.as_ref().or(word_regex.as_ref()) {
+            re.find(v).map(|m| {
+                if params.is_check.is_some() {
+                    subject = Some(crate::composite_rules::condition::facade_is_subject(re, v, m));
+                }
+                m.as_str()
+            })
         } else {
-            false
+            None
         };
-        if !hit || !validate_match(v, params.is_check) {
+        let Some(matched) = matched else {
+            continue;
+        };
+        // `is:` judges a regex's first capture group, else what matched.
+        if !validate_match(subject.unwrap_or(matched), params.is_check) {
             continue;
         }
-        if trait_not.is_some_and(|ex| ex.iter().any(|e| e.matches(v))) {
+        if trait_not.is_some_and(|ex| ex.iter().any(|e| e.matches(matched))) {
             continue;
         }
         match_count += 1;
@@ -1120,14 +1194,19 @@ pub(crate) fn eval_text<'a, 'b>(
                 let excluded_by_not = trait_not
                     .map(|exceptions| exceptions.iter().any(|exc| exc.matches(match_value)))
                     .unwrap_or(false);
-                let excluded_by_is = !validate_match(match_value, params.is_check);
+                let excluded_by_is = !validate_match(
+                    matcher
+                        .matcher
+                        .is_subject(&string_info.value, match_value),
+                    params.is_check,
+                );
 
                 if !excluded_by_not && !excluded_by_is {
                     match_count += 1;
                     // Allocate the evidence string only when actually storing it.
                     if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
-                        // `match_value` is a subslice of the string for word/regex
-                        // matches (e.g. `.dll` inside `name.dll`); offset it within
+                        // `match_value` is a subslice of the string for substr/word/
+                        // regex matches (e.g. `.dll` inside `name.dll`); offset it within
                         // the string so the location points at the match, not the
                         // enclosing string's start. A string that carries no offset
                         // (version-resource/derived entries) still anchors via
@@ -1136,14 +1215,20 @@ pub(crate) fn eval_text<'a, 'b>(
                         // so a content match never reaches `report_unanchored` locationless.
                         // A parsed literal may be reconstructed or UTF-16, so a
                         // decoded substring index is not a file displacement at
-                        // all; those keep the parser's own anchor.
-                        let within = if string_info.section.as_deref() == Some("literal") {
-                            0
-                        } else {
-                            (match_value.as_ptr() as usize)
-                                .saturating_sub(string_info.value.as_ptr() as usize)
-                                as u64
-                        };
+                        // all; those keep the parser's own anchor. A decoded
+                        // layer maps its index into the encoded source, as in
+                        // `eval_text_encoded`.
+                        let (within, match_len) =
+                            if string_info.section.as_deref() == Some("literal") {
+                                (0, None)
+                            } else {
+                                encoded_match_span(
+                                    (match_value.as_ptr() as usize)
+                                        .saturating_sub(string_info.value.as_ptr() as usize),
+                                    match_value.len(),
+                                    &string_info.encoding_chain,
+                                )
+                            };
                         let location = match string_info.offset {
                             Some(o) => format!("{:#x}", o.saturating_add(within)),
                             None => string_info_location(ctx.report, string_info),
@@ -1153,6 +1238,7 @@ pub(crate) fn eval_text<'a, 'b>(
                             source: "string_extractor".to_string(),
                             value: truncate_evidence_value(match_value),
                             location: Some(location),
+                            match_len,
                             ..Default::default()
                         });
                     }
@@ -1202,18 +1288,29 @@ pub(crate) fn eval_text<'a, 'b>(
     }
 }
 
-/// Byte length of the *encoded* source that produced a `decoded_len`-byte string
-/// through `encoding_chain`. A `type: text` match on decoded content must span
-/// the encoded bytes in the source, not the shorter decoded length — e.g. the 34
-/// decoded bytes of a `jsonkeeper.com` URL occupy 48 base64 bytes. Returns
-/// `None` for chains we can't size precisely (multi-layer, or encodings that
-/// aren't a fixed expansion), so callers fall back to the decoded length.
+/// Where decoded bytes `start..start + len` of a string sit in the *encoded*
+/// source that produced it through `encoding_chain`: their displacement from
+/// the encoded string's start, and their encoded length. A `type: text` match
+/// on decoded content must span the encoded bytes in the source, not the
+/// shorter decoded length — e.g. the 34 decoded bytes of a `jsonkeeper.com`
+/// URL occupy 48 base64 bytes — and only the matched bytes, not the rest of
+/// the layer. Standard base64 is exact to the 4-char quad. Other chains (multi-
+/// layer, or encodings that aren't a fixed expansion) keep the decoded
+/// displacement and return no length, so callers fall back to the decoded one.
 #[must_use]
-pub(crate) fn encoded_source_len(decoded_len: usize, encoding_chain: &[String]) -> Option<u64> {
+pub(crate) fn encoded_match_span(
+    start: usize,
+    len: usize,
+    encoding_chain: &[String],
+) -> (u64, Option<u64>) {
     match encoding_chain {
         // Standard base64 packs 3 source bytes into 4 padded chars.
-        [layer] if layer == "base64" => Some((decoded_len.div_ceil(3) * 4) as u64),
-        _ => None,
+        [layer] if layer == "base64" => {
+            let first = start / 3 * 4;
+            let end = (start + len).div_ceil(3) * 4;
+            (first as u64, Some((end - first) as u64))
+        }
+        _ => (start as u64, None),
     }
 }
 
@@ -1250,7 +1347,12 @@ fn eval_text_encoded<'a, 'b>(
             let excluded_by_not = trait_not
                 .map(|exceptions| exceptions.iter().any(|exc| exc.matches(match_value)))
                 .unwrap_or(false);
-            let excluded_by_is = !validate_match(match_value, params.is_check);
+            let excluded_by_is = !validate_match(
+                matcher
+                    .matcher
+                    .is_subject(&string_info.value, match_value),
+                params.is_check,
+            );
             if excluded_by_not || excluded_by_is {
                 continue;
             }
@@ -1260,7 +1362,7 @@ fn eval_text_encoded<'a, 'b>(
                 // The match lives inside an encoded blob: a sub-offset into the
                 // decoded value has no meaning in the source byte space, so anchor at
                 // the string's offset and span the *encoded* source bytes — not the
-                // shorter decoded length (see `encoded_source_len`). An offset-less
+                // shorter decoded length (see `encoded_match_span`). An offset-less
                 // entry still anchors via `string_info_location` (section start, else
                 // `0x0`), so the match never reaches `report_unanchored` locationless.
                 //
@@ -1271,13 +1373,13 @@ fn eval_text_encoded<'a, 'b>(
                 // minified file) look adjacent. Record where the match sits within
                 // the layer — exact to the base64 quad for base64, decoded bytes
                 // otherwise — clamped to the file so it stays a real offset.
+                let (within, match_len) = encoded_match_span(
+                    (match_value.as_ptr() as usize)
+                        .saturating_sub(string_info.value.as_ptr() as usize),
+                    match_value.len(),
+                    &string_info.encoding_chain,
+                );
                 let offsets = string_info.offset.map_or_else(Vec::new, |anchor| {
-                    let within = (match_value.as_ptr() as usize)
-                        .saturating_sub(string_info.value.as_ptr() as usize);
-                    let within = match string_info.encoding_chain.as_slice() {
-                        [layer] if layer == "base64" => within / 3 * 4,
-                        _ => within,
-                    } as u64;
                     let last = (ctx.binary_data.len() as u64).saturating_sub(1);
                     vec![anchor.saturating_add(within).min(last.max(anchor))]
                 });
@@ -1287,10 +1389,7 @@ fn eval_text_encoded<'a, 'b>(
                     value: truncate_evidence_value(match_value),
                     location: Some(string_info_location(ctx.report, string_info)),
                     offsets,
-                    match_len: encoded_source_len(
-                        string_info.value.len(),
-                        &string_info.encoding_chain,
-                    ),
+                    match_len,
                     ..Default::default()
                 });
             }
@@ -1385,7 +1484,12 @@ pub(crate) fn eval_string_literal_with_options<'a, 'b>(
                 let excluded_by_not = trait_not
                     .map(|exceptions| exceptions.iter().any(|exc| exc.matches(match_value)))
                     .unwrap_or(false);
-                let excluded_by_is = !validate_match(match_value, params.is_check);
+                let excluded_by_is = !validate_match(
+                    matcher
+                        .matcher
+                        .is_subject(&string_info.value, match_value),
+                    params.is_check,
+                );
 
                 if !excluded_by_not && !excluded_by_is {
                     let within = (match_value.as_ptr() as usize)
@@ -1407,8 +1511,8 @@ pub(crate) fn eval_string_literal_with_options<'a, 'b>(
                     match_count += 1;
                     // Allocate the evidence string only when actually storing it.
                     if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
-                        // `match_value` is a subslice for word/regex matches; offset
-                        // it within the literal so the location points at the match,
+                        // `match_value` is a subslice for substr/word/regex matches;
+                        // offset it within the literal so the location points at the match,
                         // not the enclosing literal's start (mirrors `eval_text`).
                         let location = match match_offset {
                             Some(o) => format!("{:#x}", o),
@@ -1495,3 +1599,7 @@ mod validator_wiring_tests;
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod batch_match_tests;
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod substr_span_tests;

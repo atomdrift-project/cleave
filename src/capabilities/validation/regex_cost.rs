@@ -26,8 +26,8 @@
 //! practice — a pathological regex whose gate atom never occurs costs
 //! nothing — only that it explodes whenever its atom does occur.
 
-use super::helpers::find_line_number;
-use crate::composite_rules::{Condition, RawQuery, TextQuery, TraitDefinition};
+use super::rule_regexes::{RuleRegex, rule_regexes};
+use crate::composite_rules::{CompositeTrait, TraitDefinition};
 use rayon::prelude::*;
 use regex_automata::hybrid::dfa::DFA;
 use regex_automata::{Anchored, Input, MatchErrorKind};
@@ -619,22 +619,25 @@ impl Explosion {
 /// resuming after each — and read its counters. `None` when the pattern
 /// does not compile (another validator reports that).
 pub(crate) fn probe(pattern: &str, case_insensitive: bool, hay: &[u8]) -> Option<Explosion> {
-    let dfa = DFA::builder()
-        .configure(
-            DFA::config()
-                .cache_capacity(crate::composite_rules::evaluators::REGEX_DFA_CACHE_BYTES)
-                .minimum_cache_clear_count(Some(3))
-                .minimum_bytes_per_state(Some(10)),
-        )
-        .syntax(
-            regex_automata::util::syntax::Config::new()
-                .case_insensitive(case_insensitive)
-                .multi_line(true)
-                .unicode(false)
-                .utf8(false),
-        )
+    let syntax = regex_automata::util::syntax::Config::new()
+        .case_insensitive(case_insensitive)
+        .multi_line(true);
+    let mut builder = DFA::builder();
+    builder.configure(
+        DFA::config()
+            .cache_capacity(crate::composite_rules::evaluators::REGEX_DFA_CACHE_BYTES)
+            .minimum_cache_clear_count(Some(3))
+            .minimum_bytes_per_state(Some(10)),
+    );
+    let dfa = match builder
+        .clone()
+        .syntax(syntax.unicode(false).utf8(false))
         .build(pattern)
-        .ok()?;
+    {
+        Ok(dfa) => dfa,
+        // A pattern that needs Unicode mode runs on the Unicode engine.
+        Err(_) => builder.syntax(syntax).build(pattern).ok()?,
+    };
     let mut cache = dfa.create_cache();
     let mut gave_up = false;
     // Three legs over one cache; growth is measured on the last one.
@@ -673,45 +676,15 @@ pub(crate) fn explosion(pattern: &str, case_insensitive: bool) -> Option<Explosi
 
 // ---------------------------------------------------------------- validator
 
-fn can_use_byte_matching(pattern: &str) -> bool {
-    pattern.is_ascii() && !crate::composite_rules::evaluators::has_unicode_escape(pattern)
-}
-
-struct Candidate<'a> {
-    trait_idx: usize,
-    pattern: &'a str,
-    case_insensitive: bool,
-    kind: &'static str,
-}
-
-fn candidates(traits: &[TraitDefinition]) -> Vec<Candidate<'_>> {
-    traits
-        .iter()
-        .enumerate()
-        .filter_map(|(trait_idx, t)| match &t.r#if {
-            Condition::Text(TextQuery {
-                regex: Some(regex),
-                case_insensitive,
-                ..
-            }) => Some(Candidate {
-                trait_idx,
-                pattern: regex,
-                case_insensitive: *case_insensitive,
-                kind: "text",
-            }),
-            Condition::Raw(RawQuery {
-                regex: Some(regex),
-                case_insensitive,
-                ..
-            }) => Some(Candidate {
-                trait_idx,
-                pattern: regex,
-                case_insensitive: *case_insensitive,
-                kind: "raw",
-            }),
-            _ => None,
-        })
-        .filter(|c| can_use_byte_matching(c.pattern))
+/// The regexes that scan whole files or blobs — wherever a rule lists them —
+/// which is where a lazy DFA that explodes costs per byte.
+fn candidates<'a>(
+    traits: &'a [TraitDefinition],
+    composites: &'a [CompositeTrait],
+) -> Vec<RuleRegex<'a>> {
+    rule_regexes(traits, composites)
+        .into_iter()
+        .filter(RuleRegex::reads_broad_input)
         .collect()
 }
 
@@ -726,11 +699,12 @@ pub(crate) struct ExplosionReport {
 /// Probe every text/raw regex; one warning per pathological pattern.
 pub(crate) fn find_pathological_regex_patterns(
     traits: &[TraitDefinition],
+    composites: &[CompositeTrait],
     warnings: &mut Vec<String>,
 ) -> ExplosionReport {
     let started = Instant::now();
     let hay = haystack();
-    let cands = candidates(traits);
+    let cands = candidates(traits, composites);
     // Probed once per distinct pattern: the probe is a pure function of the
     // pattern and its flag, and the same regex recurs across many traits.
     let mut slot_of: HashMap<(&str, bool), usize> = HashMap::new();
@@ -759,6 +733,8 @@ pub(crate) fn find_pathological_regex_patterns(
                     super::facts_cache::key(
                         "regex-explosion",
                         &[
+                            // v2: patterns that need Unicode mode are probed too.
+                            b"v2",
                             pattern.as_bytes(),
                             &[u8::from(case_insensitive)],
                             &cache_bytes.to_le_bytes(),
@@ -781,12 +757,6 @@ pub(crate) fn find_pathological_regex_patterns(
         .collect();
     for (i, e) in &hits {
         let c = &cands[*i];
-        let t = &traits[c.trait_idx];
-        let file = t.defined_in.to_str().unwrap_or("unknown").to_string();
-        let location = match find_line_number(&file, &t.id) {
-            Some(line) => format!("{file}:{line}"),
-            None => file,
-        };
         let how = if e.gave_up {
             "gave up (PikeVM fallback in production)".to_string()
         } else if e.cache_clears > 0 {
@@ -803,11 +773,11 @@ pub(crate) fn find_pathological_regex_patterns(
             )
         };
         warnings.push(format!(
-            "Regex explosion: trait '{}' in {} — on {} KB of bundle-shaped text the lazy DFA of this `type: {}` regex {}. Pattern: {}",
-            t.id,
-            location,
+            "Regex explosion: {} — on {} KB of bundle-shaped text the lazy DFA of the `type: {}` regex in its {} {}. Pattern: {}",
+            c.rule(),
             HAYSTACK_BYTES >> 10,
-            c.kind,
+            c.reads,
+            c.place,
             how,
             c.pattern
         ));
@@ -884,6 +854,14 @@ mod tests {
             assert!(b.is_pathological(), "should explode: {bad} ({b:?})");
             assert!(!g.is_pathological(), "should not explode: {good} ({g:?})");
         }
+    }
+
+    /// A pattern byte mode rejects (`\p{Greek}` needs Unicode tables) runs on
+    /// the Unicode engine in production, so it is probed there too.
+    #[test]
+    fn patterns_that_need_unicode_are_probed() {
+        assert!(explosion(r"\p{Greek}+x", false).is_some());
+        assert!(explosion("(?=lookahead)", false).is_none());
     }
 
     #[test]

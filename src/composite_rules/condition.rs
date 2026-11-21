@@ -7,6 +7,7 @@ use std::sync::Arc;
 mod validate;
 #[cfg(feature = "lint")]
 pub(crate) use validate::begin_regex_compile_checks;
+pub(crate) use validate::find_backtrack_issue;
 #[allow(clippy::wildcard_imports)]
 use validate::*;
 
@@ -207,6 +208,24 @@ pub(crate) enum NotException {
 impl NotException {
     /// Check if a string matches this exception
     #[must_use]
+    /// The exception as written, for messages: `'text'`, `(exact) 'text'`,
+    /// `(regex) 'pattern'`, `(substr) 'text'`.
+    pub(crate) fn shown(&self) -> String {
+        match self {
+            NotException::Shorthand(pattern) => format!("'{pattern}'"),
+            NotException::Structured(NotExceptionStructured { exact: Some(p), .. }) => {
+                format!("(exact) '{p}'")
+            }
+            NotException::Structured(NotExceptionStructured { regex: Some(p), .. }) => {
+                format!("(regex) '{p}'")
+            }
+            NotException::Structured(NotExceptionStructured {
+                substr: Some(p), ..
+            }) => format!("(substr) '{p}'"),
+            NotException::Structured(_) => "(empty)".to_owned(),
+        }
+    }
+
     pub(crate) fn matches(&self, value: &str) -> bool {
         match self {
             NotException::Shorthand(pattern) => {

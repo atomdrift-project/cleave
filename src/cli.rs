@@ -293,6 +293,15 @@ pub enum Command {
         /// ...), so a cheaper equivalent can be chosen. N defaults to 25.
         #[arg(long, value_name = "N", num_args = 0..=1, default_missing_value = "25")]
         slow_rules: Option<usize>,
+
+        /// Audit for duplicate traits: list pairs of atomic traits that
+        /// consistently match the same bytes.
+        ///
+        /// Every fixture is analyzed without any cache. Each DIR given is also
+        /// analyzed, for co-location only (it is not judged), so traits that no
+        /// fixture triggers can be compared too. Advisory: never fails the run.
+        #[arg(long, value_name = "DIR", num_args = 0.., value_hint = clap::ValueHint::DirPath)]
+        dupes: Option<Vec<std::path::PathBuf>>,
     },
 
     /// Compare two versions for supply-chain attack detection.

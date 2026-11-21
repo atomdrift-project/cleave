@@ -207,6 +207,7 @@ pub(crate) fn dispatch_command(
             exclude,
             soft,
             slow_rules,
+            dupes,
         }) => cleave::commands::validate::run_with_options(
             ctx.format,
             exclude.as_deref(),
@@ -214,6 +215,7 @@ pub(crate) fn dispatch_command(
             soft,
             ctx.analyze.slow_rule_ms,
             slow_rules,
+            dupes.as_deref(),
         )?,
         Some(cli::Command::Diff {
             old,

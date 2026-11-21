@@ -355,28 +355,6 @@ impl Condition {
         }
     }
 
-    /// Check for regex patterns that can cause catastrophic backtracking.
-    /// Returns a warning message if found, None otherwise.
-    #[must_use]
-    pub(crate) fn check_greedy_patterns(&self) -> Option<String> {
-        let regex_to_check = match self {
-            Condition::Text(TextQuery { regex: Some(r), .. })
-            | Condition::Raw(RawQuery { regex: Some(r), .. })
-            | Condition::TreeSitter(TreeSitterQuery { regex: Some(r), .. }) => Some(r.as_str()),
-            _ => None,
-        };
-
-        if let Some(regex) = regex_to_check
-            && let Some(issue) = find_backtrack_issue(regex)
-        {
-            return Some(format!(
-                "{} - use bounded pattern like .{{0,50}} instead: {}",
-                issue, regex
-            ));
-        }
-        None
-    }
-
     /// Check for regex patterns that are just `\bWORD\b` which should use `type: word` instead.
     /// Returns a warning message if found, None otherwise.
     #[must_use]
@@ -1019,7 +997,7 @@ pub(super) fn normalize_legacy_call_regex(pattern: &mut String) {
 /// - Unbounded wildcard:  `.*` or `.+`
 /// - Negated char class:  `[^x]+` (matches almost anything, equivalent to `.+`)
 /// - Nested quantifiers:  `(\w+)+` or `(.+)+` (exponential backtracking)
-pub(super) fn find_backtrack_issue(regex: &str) -> Option<&'static str> {
+pub(crate) fn find_backtrack_issue(regex: &str) -> Option<&'static str> {
     let chars: Vec<char> = regex.chars().collect();
     let len = chars.len();
     let mut i = 0;

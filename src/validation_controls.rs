@@ -1189,6 +1189,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Add metadata/signature/verified/ to all:, or cite metadata/signature/verified/signer::<name>.",
     },
     ValidatorSpec {
+        id: "dead-exception",
+        category: ValidatorCategory::Quality,
+        display_id: "dead-not",
+        description: "A `not:` exception on a regex or word condition can never apply to what the condition matches, or the exceptions exclude every match.",
+        fix: "A `not:` judges only the matched text. Take the context the exception names into the regex as an optional group (`(localhost/)?` before the part that must match), move file-level context to `unless:`, or drop the exception.",
+    },
+    ValidatorSpec {
         id: "dead-downgrade",
         category: ValidatorCategory::Quality,
         display_id: "dead-downgrade",

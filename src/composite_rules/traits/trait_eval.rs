@@ -3,6 +3,7 @@
 // Split out of the parent module for size; it shares the parent's namespace.
 #[allow(clippy::wildcard_imports)]
 use super::*;
+use crate::composite_rules::KvQuery;
 
 impl TraitDefinition {
     /// Whether this rule was written without an `if:`: it tunes an
@@ -258,6 +259,9 @@ impl TraitDefinition {
     /// Returns a warning message if misused, None otherwise.
     #[must_use]
     pub(crate) fn check_not_field_usage(&self) -> Option<String> {
+        if let Some(problem) = self.check_substr_not_exceptions() {
+            return Some(problem);
+        }
         let not_exceptions = self.not.as_ref()?;
 
         // Helper to check if a pattern could match a literal string
@@ -266,15 +270,6 @@ impl TraitDefinition {
                 re.is_match(literal)
             } else {
                 false
-            }
-        }
-
-        // Helper to check if a string contains a substring (case-sensitive or insensitive)
-        fn contains_substr(haystack: &str, needle: &str, case_insensitive: bool) -> bool {
-            if case_insensitive {
-                haystack.to_lowercase().contains(&needle.to_lowercase())
-            } else {
-                haystack.contains(needle)
             }
         }
 
@@ -288,44 +283,6 @@ impl TraitDefinition {
                 return Some(
                     "not: field used with symbol exact match - consider using 'unless:' instead for deterministic patterns".to_string()
                 );
-            }
-            Condition::Symbol(SymbolQuery {
-                substr: Some(search_substr),
-                regex: None,
-                ..
-            }) => {
-                // For symbol substr, validate not: exceptions contain the search substr
-                for exc in not_exceptions {
-                    match exc {
-                        NotException::Shorthand(exc_str) if !exc_str.contains(search_substr) => {
-                            return Some(format!(
-                                "not: exception '{}' does not contain the search substr '{}' - symbols matching the substr won't contain this exception, so it will never be applied",
-                                exc_str, search_substr
-                            ));
-                        }
-                        NotException::Structured(NotExceptionStructured {
-                            exact: Some(exc_str),
-                            ..
-                        }) if !exc_str.contains(search_substr) => {
-                            return Some(format!(
-                                "not: exception (exact) '{}' does not contain the search substr '{}' - symbols matching the substr won't match this exception, so it will never be applied",
-                                exc_str, search_substr
-                            ));
-                        }
-                        NotException::Structured(NotExceptionStructured {
-                            substr: Some(exc_substr),
-                            ..
-                        }) if !exc_substr.contains(search_substr)
-                            && !search_substr.contains(exc_substr) =>
-                        {
-                            return Some(format!(
-                                "not: exception (substr) '{}' has no overlap with search substr '{}' - they won't match the same symbols, so the exception will never be applied",
-                                exc_substr, search_substr
-                            ));
-                        }
-                        _ => {}
-                    }
-                }
             }
             Condition::Symbol(SymbolQuery {
                 regex: Some(pattern),
@@ -386,72 +343,6 @@ impl TraitDefinition {
                     "not: field used with content/exact match - this doesn't make sense. Content exact matches the entire file content.".to_string()
                 );
             }
-            // For String substr matches, validate that not: exceptions could match strings containing the substr
-            Condition::Text(TextQuery {
-                substr: Some(search_substr),
-                regex: None,
-                word: None,
-                case_insensitive,
-                ..
-            })
-            | Condition::Literal(LiteralQuery {
-                substr: Some(search_substr),
-                regex: None,
-                word: None,
-                case_insensitive,
-                ..
-            }) => {
-                let case_insensitive = *case_insensitive;
-
-                for exc in not_exceptions {
-                    match exc {
-                        // For shorthand (substr match in not:), check if the exception contains the search substr
-                        NotException::Shorthand(exc_str)
-                            if !contains_substr(exc_str, search_substr, case_insensitive) =>
-                        {
-                            return Some(format!(
-                                "not: exception '{}' does not contain the search substr '{}' - strings matching the substr won't contain this exception, so it will never be applied",
-                                exc_str, search_substr
-                            ));
-                        }
-                        // Exception is exact match - it should contain the search substr.
-                        NotException::Structured(NotExceptionStructured {
-                            exact: Some(exc_str),
-                            ..
-                        }) if !contains_substr(exc_str, search_substr, case_insensitive) => {
-                            return Some(format!(
-                                "not: exception (exact) '{}' does not contain the search substr '{}' - strings matching the substr won't match this exception, so it will never be applied",
-                                exc_str, search_substr
-                            ));
-                        }
-                        // Exception is substr - it should contain the search substr or vice versa.
-                        NotException::Structured(NotExceptionStructured {
-                            substr: Some(exc_substr),
-                            ..
-                        }) if !contains_substr(exc_substr, search_substr, case_insensitive)
-                            && !contains_substr(search_substr, exc_substr, case_insensitive) =>
-                        {
-                            return Some(format!(
-                                "not: exception (substr) '{}' has no overlap with search substr '{}' - they won't match the same strings, so the exception will never be applied",
-                                exc_substr, search_substr
-                            ));
-                        }
-                        // Regex exceptions with substr searches can't be validated cheaply.
-                        _ => {}
-                    }
-                }
-            }
-            // For Content substr matches, not: is unclear - content searches don't extract individual strings
-            Condition::Raw(RawQuery {
-                substr: Some(_),
-                regex: None,
-                word: None,
-                ..
-            }) => {
-                return Some(
-                    "not: field used with content/substr match - behavior is unclear because content searches on binary data don't extract individual strings for filtering. Use regex instead, or use 'string' type with substr.".to_string()
-                );
-            }
             // For regex matches, validate that exceptions could potentially match
             Condition::Text(TextQuery {
                 regex: Some(pattern),
@@ -504,6 +395,85 @@ impl TraitDefinition {
         }
 
         None
+    }
+
+    /// A `not:` exception on a `substr:` condition (`text`, `literal`, `raw`,
+    /// `encoded`, `comment`, `value`, `symbol`) judges only what the substring
+    /// matched, which is the needle
+    /// itself — in some casing when the search is case-insensitive. So each
+    /// exception, trait- or condition-level, either holds for every hit (the
+    /// trait can never fire) or for none (it never applies). Only one that
+    /// tells a case-insensitive hit's casings apart is meaningful.
+    pub(crate) fn check_substr_not_exceptions(&self) -> Option<String> {
+        let (needle, case_insensitive, condition_not) = match &self.r#if {
+            Condition::Text(TextQuery {
+                exact: None,
+                substr: Some(needle),
+                regex: None,
+                word: None,
+                case_insensitive,
+                not,
+                ..
+            })
+            | Condition::Literal(LiteralQuery {
+                exact: None,
+                substr: Some(needle),
+                regex: None,
+                word: None,
+                case_insensitive,
+                not,
+                ..
+            })
+            | Condition::Raw(RawQuery {
+                exact: None,
+                substr: Some(needle),
+                regex: None,
+                word: None,
+                case_insensitive,
+                not,
+                ..
+            })
+            | Condition::Encoded(EncodedQuery {
+                exact: None,
+                substr: Some(needle),
+                regex: None,
+                word: None,
+                case_insensitive,
+                not,
+                ..
+            })
+            | Condition::Comment(CommentQuery {
+                exact: None,
+                substr: Some(needle),
+                regex: None,
+                word: None,
+                case_insensitive,
+                not,
+                ..
+            })
+            | Condition::Kv(KvQuery {
+                exact: None,
+                substr: Some(needle),
+                regex: None,
+                case_insensitive,
+                not,
+                ..
+            }) => (needle, *case_insensitive, not),
+            // Symbol names match case-sensitively.
+            Condition::Symbol(SymbolQuery {
+                exact: None,
+                substr: Some(needle),
+                regex: None,
+                not,
+                ..
+            }) => (needle, false, not),
+            _ => return None,
+        };
+        self.not
+            .iter()
+            .flatten()
+            .chain(condition_not.iter().flatten())
+            .find_map(|exception| substr_not_problem(exception, needle, case_insensitive))
     }
 
     /// The shared `Istr` for this definition's id (see `id_shared`).
@@ -1170,5 +1140,37 @@ impl TraitDefinition {
             condition,
             ctx,
         )
+    }
+}
+
+/// Why `exception` is meaningless on a `substr: needle` condition, if it is:
+/// it holds for every casing the needle can match in (it excludes every hit),
+/// or for none (it never applies).
+fn substr_not_problem(
+    exception: &NotException,
+    needle: &str,
+    case_insensitive: bool,
+) -> Option<String> {
+    let mut casings = vec![needle.to_owned()];
+    if case_insensitive {
+        casings.extend([needle.to_lowercase(), needle.to_uppercase()]);
+        casings.sort();
+        casings.dedup();
+    }
+    let excluded = casings
+        .iter()
+        .filter(|casing| exception.matches(casing))
+        .count();
+    let shown = exception.shown();
+    if excluded == casings.len() {
+        Some(format!(
+            "not: exception {shown} excludes every match of substr '{needle}' - a substr's not: judges only the matched text, so this trait can never fire"
+        ))
+    } else if excluded == 0 {
+        Some(format!(
+            "not: exception {shown} can never apply to substr '{needle}' - a substr's not: judges only the matched text, not the text around it; express the context with unless: or a regex condition instead"
+        ))
+    } else {
+        None
     }
 }

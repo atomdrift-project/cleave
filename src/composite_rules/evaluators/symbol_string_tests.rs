@@ -474,9 +474,9 @@ fn test_eval_symbol_no_match() {
 
 #[test]
 fn test_eval_symbol_not_filters_substr_match() {
-    // Two imports both contain "eval" — `eval` (a real call) and
-    // `safe_eval_template` (a helper we want to exclude). A `not:` substring
-    // exception on `template` must drop the helper but keep `eval`.
+    // Two imports both match `\w*eval\w*` — `eval` (a real call) and
+    // `safe_eval_template` (a helper we want to exclude). A `not:` exception
+    // on `template` judges the matched name: it drops the helper, keeps `eval`.
     let mut report = create_test_report();
     report.imports.push(Import {
         symbol: "eval".to_string(),
@@ -493,14 +493,34 @@ fn test_eval_symbol_not_filters_substr_match() {
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
-    let pattern = "eval".to_string();
+    let pattern = r"\w*eval\w*".to_string();
     let not = vec![NotException::Shorthand("template".to_string())];
 
-    let result = eval_symbol(None, Some(&pattern), None, None, None, Some(&not), &ctx);
+    let result = eval_symbol(None, None, Some(&pattern), None, None, Some(&not), &ctx);
 
     assert!(result.matched);
     assert_eq!(result.evidence.len(), 1);
     assert_eq!(result.evidence[0].value, "eval");
+}
+
+#[test]
+fn test_eval_symbol_substr_not_judges_only_the_match() {
+    // A `substr: eval` matches only `eval` in `safe_eval_template`, so a
+    // `not: template` beside it cannot apply; a `not:` on the match does.
+    let mut report = create_test_report();
+    report.imports.push(Import {
+        symbol: "safe_eval_template".to_string(),
+        library: None,
+        offset: None,
+        alias: None,
+    });
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+    let substr = "eval".to_string();
+    let beside = vec![NotException::Shorthand("template".to_string())];
+    let on = vec![NotException::Shorthand("eval".to_string())];
+    assert!(eval_symbol(None, Some(&substr), None, None, None, Some(&beside), &ctx).matched);
+    assert!(!eval_symbol(None, Some(&substr), None, None, None, Some(&on), &ctx).matched);
 }
 
 #[test]
@@ -517,10 +537,10 @@ fn test_eval_symbol_not_filters_all_matches() {
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
-    let pattern = "eval".to_string();
+    let pattern = r"\w*eval\w*".to_string();
     let not = vec![NotException::Shorthand("template".to_string())];
 
-    let result = eval_symbol(None, Some(&pattern), None, None, None, Some(&not), &ctx);
+    let result = eval_symbol(None, None, Some(&pattern), None, None, Some(&not), &ctx);
 
     assert!(!result.matched);
     assert!(result.evidence.is_empty());
@@ -2315,53 +2335,51 @@ fn test_eval_string_match_count_exceeds_evidence_cap() {
 // B1: eval_encoded not: and external_ip: filtering
 // =============================================================================
 
+/// `not:` on an encoded-string `substr:` judges only what the substring
+/// matched: an exception naming the rest of the decoded string never applies.
 #[test]
-fn test_eval_encoded_not_filter() {
+fn test_eval_encoded_not_judges_only_the_matched_substr() {
     use crate::composite_rules::condition::EncodingSpec;
 
     let mut report = create_test_report();
-    report.strings.push(StringInfo {
-        value: ("http://evil.com/payload".to_string()).into(),
-        offset: Some(0x1000),
-        encoding: "utf8".to_string(),
-        string_type: Some(crate::types::StringType::Url),
-        section: None,
-        encoding_chain: vec!["base64".to_string()],
-        fragments: None,
-    });
-    report.strings.push(StringInfo {
-        value: ("http://apple.com/safe".to_string()).into(),
-        offset: Some(0x2000),
-        encoding: "utf8".to_string(),
-        string_type: Some(crate::types::StringType::Url),
-        section: None,
-        encoding_chain: vec!["base64".to_string()],
-        fragments: None,
-    });
-
+    for (value, offset) in [
+        ("http://evil.com/payload", 0x1000),
+        ("http://apple.com/safe", 0x2000),
+    ] {
+        report.strings.push(StringInfo {
+            value: value.to_string().into(),
+            offset: Some(offset),
+            encoding: "utf8".to_string(),
+            string_type: Some(crate::types::StringType::Url),
+            section: None,
+            encoding_chain: vec!["base64".to_string()],
+            fragments: None,
+        });
+    }
     let data = vec![];
     let ctx = create_test_context(&report, &data);
-    let location = ContentLocationParams::default();
-
     let encoding = Some(EncodingSpec::Single("base64".to_string()));
-    let not_exceptions = vec![NotException::Shorthand("apple.com".to_string())];
+    let needle = "http".to_string();
+    let run = |exception: &str| {
+        eval_encoded(
+            encoding.as_ref(),
+            TextPattern {
+                substr: Some(&needle),
+                ..TextPattern::default()
+            },
+            &ContentLocationParams::default(),
+            false,
+            Some(&vec![NotException::Shorthand(exception.to_string())]),
+            &ctx,
+        )
+    };
 
-    let result = eval_encoded(
-        encoding.as_ref(),
-        TextPattern {
-            substr: Some(&"http".to_string()),
-            ..TextPattern::default()
-        },
-        &location,
-        false,
-        Some(&not_exceptions),
-        &ctx,
+    let rest = run("apple.com");
+    assert_eq!(rest.match_count, 2, "the rest of the string is not judged");
+    assert!(
+        !run("http").matched,
+        "an exception naming the needle excludes it"
     );
-
-    assert!(result.matched);
-    // Only evil.com should match — apple.com excluded by not:
-    assert_eq!(result.match_count, 1);
-    assert!(result.evidence[0].value.contains("evil.com"));
 }
 
 #[test]
@@ -2415,33 +2433,43 @@ fn test_eval_encoded_external_ip_filter() {
     assert!(result.evidence[0].value.contains("45.33.32.156"));
 }
 
+/// `not:` judges what a `substr:` matched, not the text around it. This
+/// reverses B19, which judged a context window: an exception naming nearby
+/// text no longer suppresses a hit, and one naming the needle suppresses all.
 #[test]
-fn test_eval_raw_not_excludes_by_context() {
-    // B19: not: filtering should use match context, not the search pattern.
-    // Content has two "http" matches: one near "safe.com" (excluded) and one near "evil.com" (kept).
+fn test_eval_raw_not_judges_only_the_matched_substr() {
     let report = create_test_report();
     let content = b"aaaa http://safe.com/ok bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb http://evil.com/bad cccc";
     let ctx = create_test_context(&report, content.as_ref());
+    let needle = "http".to_string();
+    let run = |exception: &str| {
+        eval_raw(
+            TextPattern {
+                substr: Some(&needle),
+                ..TextPattern::default()
+            },
+            false,
+            Some(&vec![NotException::Shorthand(exception.to_string())]),
+            &ContentLocationParams::default(),
+            &ctx,
+            None,
+        )
+    };
 
-    let not_exceptions = vec![NotException::Shorthand("safe.com".to_string())];
-    let location = ContentLocationParams::default();
-    let result = eval_raw(
-        TextPattern {
-            substr: Some(&"http".to_string()),
-            ..TextPattern::default()
-        },
-        false,
-        Some(&not_exceptions),
-        &location,
-        &ctx,
-        None,
+    let nearby = run("safe.com");
+    assert!(nearby.matched);
+    assert_eq!(nearby.match_count, 2, "nearby text does not exclude a hit");
+    assert!(
+        !run("http").matched,
+        "an exception naming the needle excludes every hit"
     );
-
-    assert!(result.matched, "Should still match http://evil.com context");
-    // Only the non-excluded match should count
-    assert_eq!(
-        result.match_count, 1,
-        "Only http://evil.com should count (safe.com excluded by not:)"
+    assert!(
+        !run("HTTP").matched,
+        "shorthand exceptions are case-insensitive"
+    );
+    assert!(
+        !run("tt").matched,
+        "an exception inside the needle excludes it"
     );
 }
 
@@ -3980,7 +4008,7 @@ fn raw_literal_boolean_preserves_first_evidence_and_count_consumers() {
 }
 
 #[test]
-fn raw_literal_boolean_continues_past_rejected_contexts() {
+fn raw_literal_boolean_continues_past_rejected_hits() {
     let report = create_test_report();
     let exceptions = vec![
         serde_json::from_value::<NotException>(serde_json::json!({"substr":"blocked"})).unwrap(),
@@ -4018,7 +4046,10 @@ fn raw_literal_boolean_continues_past_rejected_contexts() {
                     let _count = MatchCountGuard::set(true);
                     run()
                 };
-                assert_eq!(full.match_count, 2);
+                // `not: blocked` judges only the matched needle, so it never
+                // applies; `is: external_ip` judges the text around each hit
+                // and rejects the first, which has no IP nearby.
+                assert_eq!(full.match_count, if external_ip { 2 } else { 3 });
                 let _boolean = MatchCountGuard::set(false);
                 let boolean = run();
                 assert!(boolean.matched);
@@ -4027,7 +4058,11 @@ fn raw_literal_boolean_continues_past_rejected_contexts() {
                     serde_json::to_value(&boolean.evidence).unwrap(),
                     serde_json::to_value(&full.evidence).unwrap()
                 );
-                assert!(boolean.evidence[0].offsets[0] > 200);
+                assert_eq!(
+                    boolean.evidence[0].offsets[0] > 200,
+                    external_ip,
+                    "{needle}/{case_insensitive}/{external_ip}"
+                );
             }
         }
     }

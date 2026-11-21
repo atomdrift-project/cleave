@@ -24,6 +24,8 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
+#[path = "validate_dupes.rs"]
+mod dupes;
 #[path = "validate_state.rs"]
 mod fixture_state;
 #[path = "validate_cache.rs"]
@@ -80,6 +82,7 @@ pub fn run(format: &OutputFormat, exclude: Option<&str>, verbose: bool) -> Resul
         false,
         CapabilityMapper::DEFAULT_SLOW_RULE_MS,
         None,
+        None,
     )
 }
 
@@ -103,6 +106,7 @@ pub fn run_soft(format: &OutputFormat, exclude: Option<&str>, verbose: bool) -> 
         true,
         CapabilityMapper::DEFAULT_SLOW_RULE_MS,
         None,
+        None,
     )
 }
 
@@ -112,6 +116,11 @@ pub fn run_soft(format: &OutputFormat, exclude: Option<&str>, verbose: bool) -> 
 /// `slow_rules` asks for the slow-rule audit: every fixture is analyzed with
 /// no result or per-fixture cache, every rule evaluation is timed, and the
 /// top `n` rules by total time are printed before the verdict.
+///
+/// `dupes` asks for the duplicate-trait audit: every fixture, plus every file
+/// under the given directories, is analyzed with no result or per-fixture
+/// cache, and pairs of atomic traits that consistently match the same bytes
+/// are printed before the verdict. The extra directories are not judged.
 pub fn run_with_options(
     format: &OutputFormat,
     exclude: Option<&str>,
@@ -119,6 +128,7 @@ pub fn run_with_options(
     soft: bool,
     slow_rule_ms: u64,
     slow_rules: Option<usize>,
+    dupes: Option<&[PathBuf]>,
 ) -> Result<String> {
     let started = Instant::now();
     if slow_rules.is_some() {
@@ -134,22 +144,22 @@ pub fn run_with_options(
     let traits_dir = std::fs::canonicalize(cleave::traits_repo::try_resolve()?)?;
     // The two walks that decide a cache hit, side by side.
     let discovery_started = Instant::now();
-    let (targets, rule_tree) =
-        if slow_rules.is_none() && result_cache::ResultCache::enabled(soft, verbose) {
-            rayon::join(collect_targets, || {
-                result_cache::stamp_rule_tree(&traits_dir)
-            })
-        } else {
-            (collect_targets(), None)
-        };
+    // The audits need every fixture analyzed: no cached verdict, no
+    // per-fixture reuse (both hang off the result cache).
+    let audit = slow_rules.is_some() || dupes.is_some();
+    let (targets, rule_tree) = if !audit && result_cache::ResultCache::enabled(soft, verbose) {
+        rayon::join(collect_targets, || {
+            result_cache::stamp_rule_tree(&traits_dir)
+        })
+    } else {
+        (collect_targets(), None)
+    };
     let targets = targets?;
     tracing::info!(
         fixtures = targets.len(),
         elapsed_ms = discovery_started.elapsed().as_millis(),
         "fixtures discovered and rule tree digested"
     );
-    // The audit measures every rule on every fixture: no cached verdict, no
-    // per-fixture reuse (both hang off the result cache).
     let result_cache = rule_tree.and_then(|stamp| {
         result_cache::ResultCache::new(
             &traits_dir,
@@ -317,6 +327,7 @@ pub fn run_with_options(
     whales.sort_by_key(|&i| std::cmp::Reverse(plan.previous_elapsed_ms(i)));
     let mut reports: Vec<OnceLock<Result<FixtureResult>>> =
         targets.iter().map(|_| OnceLock::new()).collect();
+    let dupe_tally = dupes.map(|_| dupes::Tally::new(&mapper, &traits_dir));
     let elapsed: Vec<std::sync::atomic::AtomicU64> = targets
         .iter()
         .map(|_| std::sync::atomic::AtomicU64::new(0))
@@ -336,6 +347,9 @@ pub fn run_with_options(
             tracing::info!(path = %t.path().display(), elapsed_ms, "slow validation fixture");
         }
         elapsed[i].store(elapsed_ms as u64, Ordering::Relaxed);
+        if let (Ok(report), Some(tally)) = (&report, &dupe_tally) {
+            tally.add(report);
+        }
         let result =
             report.and_then(|report| FixtureResult::from_report(report, t.expected, verbose));
         let _ = reports[i].set(result);
@@ -471,6 +485,19 @@ pub fn run_with_options(
     if let Some(n) = slow_rules {
         print_slow_rules(&slow_rules::audit(&mapper, n), format);
     }
+    if let (Some(tally), Some(dirs)) = (dupe_tally, dupes) {
+        analyze_corpus(dirs, |path| {
+            match stage.analyze(path, |p| {
+                cleave::analyze_file_with_mapper(p, &options, &mapper)
+            }) {
+                Ok(report) => tally.add(&report),
+                Err(e) => {
+                    tracing::warn!(path = %path.display(), error = %e, "corpus file not analyzed")
+                }
+            }
+        })?;
+        print_dupes(&tally.audit(), format);
+    }
     let results: Vec<(usize, Result<FixtureResult>)> = selected
         .iter()
         .map(|&i| {
@@ -581,6 +608,44 @@ fn print_slow_rules(audit: &slow_rules::Audit, format: &OutputFormat) {
         },
         OutputFormat::Annotate | OutputFormat::Index => print!("{}", audit.table()),
     }
+}
+
+/// The duplicate-trait audit, printed like the slow-rule audit.
+fn print_dupes(audit: &dupes::Audit, format: &OutputFormat) {
+    match format {
+        OutputFormat::Json => match serde_json::to_string(audit) {
+            Ok(json) => println!("{json}"),
+            Err(error) => eprintln!("duplicate-trait audit not encoded: {error}"),
+        },
+        OutputFormat::Annotate | OutputFormat::Index => print!("{}", audit.table()),
+    }
+}
+
+/// Analyze every regular file under `dirs`, one lane per pool thread as for
+/// the fixtures, so no analysis starts inside another's rayon join.
+fn analyze_corpus(dirs: &[PathBuf], analyze: impl Fn(&Path) + Sync) -> Result<()> {
+    let mut files = Vec::new();
+    for dir in dirs {
+        for entry in walkdir::WalkDir::new(dir) {
+            let entry = entry.with_context(|| format!("walking {}", safe_path(dir)))?;
+            if entry.file_type().is_file() {
+                files.push(entry.into_path());
+            }
+        }
+    }
+    tracing::info!(files = files.len(), "analyzing duplicate-trait corpus");
+    let pending = crate::rayon_nest::PendingPaths::new(files.len());
+    let queue = parking_lot::Mutex::new(files.into_iter());
+    rayon::broadcast(|_| {
+        loop {
+            let Some(path) = queue.lock().next() else {
+                break;
+            };
+            pending.admit();
+            analyze(&path);
+        }
+    });
+    Ok(())
 }
 
 fn print_performance_issues(

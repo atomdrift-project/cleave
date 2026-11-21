@@ -1,4 +1,20 @@
 use super::find_backtrack_issue;
+
+/// What the `nested-quantifier` validator reports for a trait whose `if:` is `cond`.
+fn backtracking_warnings(cond: Condition) -> Vec<String> {
+    let trait_def = crate::composite_rules::TraitDefinition {
+        id: "test/backtrack::t".to_string(),
+        r#if: cond,
+        ..Default::default()
+    };
+    let mut warnings = Vec::new();
+    crate::capabilities::validation::find_backtracking_regex_patterns(
+        &[trait_def],
+        &[],
+        &mut warnings,
+    );
+    warnings
+}
 use crate::composite_rules::condition::SymbolKind;
 use crate::composite_rules::{Condition, KvQuery, LiteralQuery, PathQuery, SymbolQuery};
 
@@ -99,7 +115,7 @@ fn greedy_pattern_lint_skips_kv_regex() {
         is_check: None,
         not: None,
     });
-    assert!(cond.check_greedy_patterns().is_none());
+    assert!(backtracking_warnings(cond).is_empty());
 }
 
 #[test]
@@ -524,7 +540,7 @@ fn greedy_pattern_lint_skips_string_literal_regex() {
         section_offset: None,
         section_offset_range: None,
     });
-    assert!(cond.check_greedy_patterns().is_none());
+    assert!(backtracking_warnings(cond).is_empty());
 }
 
 #[test]
@@ -543,7 +559,7 @@ fn greedy_pattern_lint_skips_symbol_regex() {
         module_level: false,
         receiver: None,
     });
-    assert!(cond.check_greedy_patterns().is_none());
+    assert!(backtracking_warnings(cond).is_empty());
 }
 
 #[test]
@@ -557,7 +573,7 @@ fn greedy_pattern_lint_skips_basename_regex() {
         basename: true,
         dirname: false,
     });
-    assert!(cond.check_greedy_patterns().is_none());
+    assert!(backtracking_warnings(cond).is_empty());
 }
 
 #[test]

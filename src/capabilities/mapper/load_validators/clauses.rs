@@ -939,6 +939,23 @@ pub(super) fn too_short_patterns<'a>(input: &'a ValidationInput<'a>) -> Report<'
     })
 }
 
+/// Validate: every `not:` on a regex or word condition can apply to what it
+/// matches, and the exceptions leave some match standing.
+pub(super) fn dead_regex_exceptions<'a>(input: &'a ValidationInput<'a>) -> Report<'a> {
+    let dead = crate::capabilities::validation::find_dead_regex_exceptions(
+        input.trait_definitions,
+        input.composite_rules,
+    );
+    report(move |warnings| {
+        for d in &dead {
+            warnings.push_id(
+                "dead-exception",
+                format!("rule '{}' in {}: {}", d.rule, d.file, d.problem),
+            );
+        }
+    })
+}
+
 /// Validate: `not:` only used with `regex:` patterns
 pub(super) fn invalid_not_usage<'a>(input: &'a ValidationInput<'a>) -> Report<'a> {
     let invalid_not = find_invalid_not_usage(input.trait_definitions);

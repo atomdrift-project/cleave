@@ -489,7 +489,7 @@ fn debug_value_condition_honours_not_exclusions() {
         r#"
 type: value
 path: files[*]
-regex: '(?i)\.html?$'
+regex: '(?i)[\w.]*\.html?$'
 not:
   - regex: 'accreport\.html?$'
 "#,

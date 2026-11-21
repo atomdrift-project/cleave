@@ -151,27 +151,34 @@ impl KvMatcher {
     fn scalar_matches(&self, value: &Value) -> bool {
         let s = value_to_string(value);
 
-        // The validator gates every other matcher, exactly as it does for the
-        // text conditions: a value must satisfy `is:` before anything else is
-        // consulted. With no other matcher set, passing it is the whole test.
-        if !crate::composite_rules::evaluators::symbol_string::validate_match(&s, self.is_check) {
+        if self.not.is_empty() && self.is_check.is_none() {
+            return self.hits(&s);
+        }
+        // `not:` and `is:` judge only what matched, as on every condition:
+        // `is:` a regex's first capture group when it has one, else the
+        // match. With no string matcher the match is the whole value.
+        let Some(matched) = self.matched(&s) else {
             return false;
-        }
-        if self.not.iter().any(|exc| exc.matches(&s)) {
-            return false;
-        }
-        if self.exact.is_none() && self.substr.is_none() && self.regex.is_none() {
-            return true;
-        }
+        };
+        let subject = match &self.regex {
+            Some(re) if self.exact.is_none() && self.substr.is_none() => {
+                re.is_subject(&s, matched)
+            }
+            _ => matched,
+        };
+        crate::composite_rules::evaluators::symbol_string::validate_match(subject, self.is_check)
+            && !self.not.iter().any(|exc| exc.matches(matched))
+    }
 
+    /// Whether `s` satisfies the string matcher (any value, when none is set).
+    fn hits(&self, s: &str) -> bool {
         if let Some(ref exact_val) = self.exact {
             return if self.case_insensitive {
                 s.eq_ignore_ascii_case(exact_val)
             } else {
-                s == *exact_val
+                s == exact_val
             };
         }
-
         if let Some(ref substr_val) = self.substr {
             return if self.case_insensitive {
                 let s_lower = s.to_lowercase();
@@ -179,19 +186,36 @@ impl KvMatcher {
                 if let Some(ref pattern_lower) = self.substr_lower {
                     s_lower.contains(pattern_lower.as_str())
                 } else {
-                    // Fallback: compute lowercase (happens when struct initialized directly)
                     s_lower.contains(&substr_val.to_lowercase())
                 }
             } else {
                 s.contains(substr_val.as_str())
             };
         }
-
         if let Some(ref re) = self.regex {
-            return re.is_match(&s);
+            return re.is_match(s);
         }
+        true
+    }
 
-        false
+    /// What the string matcher matched in `s`: the whole value for `exact:`
+    /// (or no matcher), the needle's occurrence for `substr:`, the leftmost
+    /// match for `regex:`.
+    fn matched<'s>(&self, s: &'s str) -> Option<&'s str> {
+        if self.exact.is_some() {
+            return self.hits(s).then_some(s);
+        }
+        if let Some(ref substr_val) = self.substr {
+            return crate::composite_rules::evaluators::symbol_string::substr_span(
+                s,
+                substr_val,
+                self.case_insensitive,
+            );
+        }
+        if let Some(ref re) = self.regex {
+            return re.find_str(s);
+        }
+        Some(s)
     }
 }
 

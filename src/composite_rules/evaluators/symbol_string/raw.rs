@@ -443,6 +443,15 @@ impl RawScan<'_, '_> {
         self.is_check.is_some() || self.not.is_some()
     }
 
+    /// Whether a hit passes: the validator judges `subject` (a regex's first
+    /// capture group, else what matched), a `not:` exception only `matched`.
+    fn accepts_parts(&self, matched: &str, subject: &str) -> bool {
+        validate_match(subject, self.is_check)
+            && !self
+                .not
+                .is_some_and(|exceptions| exceptions.iter().any(|e| e.matches(matched)))
+    }
+
     /// Whether `text` passes the validator and no `not:` exception.
     fn accepts(&self, text: &str) -> bool {
         validate_match(text, self.is_check)
@@ -544,13 +553,25 @@ impl RawScan<'_, '_> {
             let Some(lean) = cached_bytes_regex(pattern_str, case_insensitive, tls_hit) else {
                 return 0;
             };
+            // `is:` judges the first capture group, when the pattern has one.
+            let flagged = self.is_check.is_some().then(|| {
+                crate::composite_rules::condition::raw_regex_pattern(pattern_str, case_insensitive)
+            });
             let mut visit_bytes = |abs_start: usize, abs_end: usize| -> bool {
                 if let Err(keep_scanning) = admit(abs_end - abs_start) {
                     return keep_scanning;
                 }
                 let bytes = &self.ctx.binary_data[abs_start..abs_end];
                 let text = String::from_utf8_lossy(bytes);
-                if !self.accepts(&text) {
+                let group = flagged.as_deref().and_then(|flagged| {
+                    crate::composite_rules::condition::first_group_span(
+                        flagged,
+                        self.ctx.binary_data,
+                        abs_start..abs_end,
+                    )
+                });
+                let subject = group.map(|g| String::from_utf8_lossy(&self.ctx.binary_data[g]));
+                if !self.accepts_parts(&text, subject.as_deref().unwrap_or(&text)) {
                     return true;
                 }
                 record_raw_match(evidence, &text, abs_start, bytes.len());
@@ -602,7 +623,12 @@ impl RawScan<'_, '_> {
                     if let Err(keep_scanning) = admit(text.len()) {
                         return keep_scanning;
                     }
-                    if !self.accepts(text) {
+                    let subject = if self.is_check.is_some() {
+                        re.is_subject(&content, text)
+                    } else {
+                        text
+                    };
+                    if !self.accepts_parts(text, subject) {
                         return true;
                     }
                     record_raw_match(evidence, text, self.start + start, text.len());
@@ -710,7 +736,8 @@ impl RawScan<'_, '_> {
     }
 
     /// ASCII `substr:` over raw bytes, without UTF-8 conversion. A validator
-    /// or `not:` filter judges the 50 bytes on either side of each match.
+    /// judges the 50 bytes on either side of each match; a `not:` exception
+    /// judges only the matched bytes.
     fn substr_ascii(&self, substr_str: &str, case_insensitive: bool) -> (usize, Vec<u64>) {
         let data = self.data;
         let mut match_count = 0;
@@ -745,9 +772,8 @@ impl RawScan<'_, '_> {
             return (match_count, kept);
         }
         let accepts_at = |abs_pos: usize, needle_len: usize| {
-            let ctx_start = abs_pos.saturating_sub(50);
-            let ctx_end = (abs_pos + needle_len + 50).min(data.len());
-            self.accepts(&String::from_utf8_lossy(&data[ctx_start..ctx_end]))
+            let end = (abs_pos + needle_len).min(data.len());
+            self.accepts(&String::from_utf8_lossy(&data[abs_pos..end]))
         };
         if case_insensitive {
             for_each_ascii_ci_substr(data, substr_str, true, |abs_pos, needle_len| {
@@ -778,7 +804,7 @@ impl RawScan<'_, '_> {
     /// Unicode `substr:` over the UTF-8 view. Case-insensitive search folds
     /// both sides into owned copies and maps hits back (see
     /// [`LoweredOffsets`]). A validator judges the 50 characters on either
-    /// side of a match; a `not:` filter alone judges [`match_window`].
+    /// side of a match; a `not:` exception judges only the matched text.
     ///
     /// A case-sensitive Unicode literal without U+FFFD cannot appear only
     /// through lossy decoding: each matching UTF-8 byte must be present in
@@ -846,14 +872,7 @@ impl RawScan<'_, '_> {
             let abs_pos = start + pos;
             let match_start = starts.original(abs_pos);
             let match_end = ends.original(abs_pos + search_pattern.len());
-            let accepted = if self.is_check.is_some() {
-                let context_start = content.floor_char_boundary(match_start.saturating_sub(50));
-                let context_end = content.ceil_char_boundary((match_end + 50).min(content.len()));
-                self.accepts(&content[context_start..context_end])
-            } else {
-                self.accepts(&match_window(&content, match_start, match_end, 50))
-            };
-            if accepted {
+            if self.accepts(&content[match_start..match_end]) {
                 self.keep_offset(&mut kept, (self.start + match_start) as u64);
                 match_count += 1;
             }
@@ -966,16 +985,17 @@ pub(crate) fn eval_encoded<'a>(
 
     for string_info in candidates {
         let mut matches = false;
-        // The span a `regex:`/`word:` matcher actually hit. `is:` validates
-        // this rather than the whole decoded string, matching how the `text`
-        // evaluator treats a regex match: a whole-string validator such as
-        // `random_like` judges the most letter-dense token it can find, so
-        // handing it the entire line lets unrelated text outvote the span the
+        // The span a `regex:`/`word:` matcher actually hit, and what `is:`
+        // judges in it: the regex's first capture group when it has one,
+        // otherwise the span. A whole-string validator such as `random_like`
+        // handed the entire line lets unrelated text outvote the span the
         // rule selected (`--connect-timeout` outscoring a DGA hostname in the
-        // same `curl` command). Falls back to the whole value when the match
-        // came from `exact:`/`substr:`, where the span is the value or a
-        // caller-supplied literal and there is nothing to narrow to.
+        // same `curl` command). An `exact:` match is the whole value.
         let mut matched_span: Option<&str> = None;
+        let mut is_subject: Option<&str> = None;
+        // A `substr:` hit. `not:` and `is:` judge what any matcher matched —
+        // this span, `matched_span`, or the whole value for `exact:`.
+        let mut substr_span: Option<&str> = None;
 
         // Check exact match (full string equality)
         if let Some(exact_str) = exact {
@@ -987,15 +1007,13 @@ pub(crate) fn eval_encoded<'a>(
         }
 
         // Check substring match
-        if !matches && let Some(substr_str) = substr {
-            matches = if case_insensitive {
-                string_info
-                    .value
-                    .to_lowercase()
-                    .contains(&substr_str.to_lowercase())
-            } else {
-                string_info.value.contains(substr_str.as_str())
-            };
+        if !matches
+            && let Some(substr_str) = substr
+            && let Some(span) =
+                super::substr_span(string_info.value.as_str(), substr_str, case_insensitive)
+        {
+            matches = true;
+            substr_span = Some(span);
         }
 
         // Check regex or word match
@@ -1016,17 +1034,31 @@ pub(crate) fn eval_encoded<'a>(
             if let Some(m) = found {
                 matches = true;
                 matched_span = Some(m.as_str());
+                if is_check.is_some() {
+                    is_subject = Some(crate::composite_rules::condition::facade_is_subject(
+                        re, value, m,
+                    ));
+                }
             }
         }
 
         if matches {
             // Apply not: exclusions
+            let not_subject = substr_span
+                .or(matched_span)
+                .unwrap_or(string_info.value.as_str());
             let excluded_by_not = not
-                .map(|exceptions| exceptions.iter().any(|exc| exc.matches(&string_info.value)))
+                .map(|exceptions| exceptions.iter().any(|exc| exc.matches(not_subject)))
                 .unwrap_or(false);
             // Apply validator: filter
-            let excluded_by_is =
-                !validate_match(matched_span.unwrap_or(string_info.value.as_str()), is_check);
+            // `is:` judges a regex's first capture group, else what matched.
+            let excluded_by_is = !validate_match(
+                is_subject
+                    .or(substr_span)
+                    .or(matched_span)
+                    .unwrap_or(string_info.value.as_str()),
+                is_check,
+            );
 
             if !excluded_by_not && !excluded_by_is {
                 match_count += 1;

@@ -28,6 +28,8 @@ use std::sync::{Arc, OnceLock};
 mod compiled_text_tests;
 mod content_signature;
 #[cfg(test)]
+mod rule_shape_tests;
+#[cfg(test)]
 mod tiny_text_tests;
 
 use crate::capabilities::indexes::{

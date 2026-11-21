@@ -1,6 +1,5 @@
 use crate::composite_rules::{
-    Arch, Condition, RawQuery, SymbolQuery, TextQuery, TraitDefinition,
-    condition::{NotException, NotExceptionStructured},
+    Arch, Condition, RawQuery, SymbolQuery, TextQuery, TraitDefinition, condition::NotException,
 };
 use crate::types::Criticality;
 
@@ -69,261 +68,135 @@ fn test_exact_match_should_use_unless() {
     );
 }
 
+/// A content condition from its YAML-shaped JSON.
+fn condition(json: serde_json::Value) -> Condition {
+    serde_json::from_value(json).unwrap()
+}
+
+fn exception(json: serde_json::Value) -> NotException {
+    serde_json::from_value(json).unwrap()
+}
+
+/// `check_not_field_usage` for `if: condition` with trait-level `not:`.
+fn substr_warning(condition: serde_json::Value, not: serde_json::Value) -> Option<String> {
+    create_test_trait(self::condition(condition), Some(vec![exception(not)]))
+        .check_not_field_usage()
+}
+
+const NEVER_APPLIES: &str = "can never apply to substr";
+const NEVER_FIRES: &str = "excludes every match of substr";
+
+// A `substr:` match is the needle itself, so its `not:` judges only the
+// needle: an exception describing the text around it never applies, and one
+// that holds for the needle excludes every hit.
+
 #[test]
-fn test_substr_with_valid_not_exception() {
-    // substr: "test" should match strings like "testing", "test123", etc.
-    // not: ["testing"] should work because "testing" contains "test"
-    let cond = Condition::Text(TextQuery {
-        encoding: None,
-        length_min: None,
-        length_max: None,
-        exclude_html_comments: false,
-        exclude_comments: false,
-        exact: None,
-        substr: Some("test".to_string()),
-        regex: None,
-        word: None,
-        case_insensitive: false,
-        is_check: None,
-        section: None,
-        offset: None,
-        offset_range: None,
-        section_offset: None,
-        section_offset_range: None,
-        not: None,
-        platforms: None,
-    });
+fn test_substr_not_naming_surrounding_text_never_applies() {
+    let text = serde_json::json!({"type": "text", "substr": "test"});
+    for not in [
+        serde_json::json!("testing"),
+        serde_json::json!({"substr": "testing"}),
+        serde_json::json!({"exact": "testing"}),
+        serde_json::json!({"regex": "test\\s+suite"}),
+        serde_json::json!("hurl"),
+        serde_json::json!({"substr": "hurl"}),
+    ] {
+        let warning = substr_warning(text.clone(), not.clone()).unwrap_or_default();
+        assert!(warning.contains(NEVER_APPLIES), "{not}: {warning}");
+        assert!(warning.contains("'test'"), "{warning}");
+    }
+}
 
-    let not = vec![NotException::Shorthand("testing".to_string())];
-    let trait_def = create_test_trait(cond, Some(not));
+#[test]
+fn test_substr_not_holding_for_the_needle_excludes_every_hit() {
+    let text = serde_json::json!({"type": "text", "substr": "test"});
+    for not in [
+        serde_json::json!("test"),
+        serde_json::json!("es"),
+        serde_json::json!({"substr": "TEST"}),
+        serde_json::json!({"exact": "test"}),
+        serde_json::json!({"regex": "^test$"}),
+    ] {
+        let warning = substr_warning(text.clone(), not.clone()).unwrap_or_default();
+        assert!(warning.contains(NEVER_FIRES), "{not}: {warning}");
+    }
+}
 
-    let warning = trait_def.check_not_field_usage();
-    assert!(
-        warning.is_none(),
-        "Should not warn for valid substr/not combination"
+#[test]
+fn test_case_insensitive_substr_not_that_tells_casings_apart_is_kept() {
+    let text = serde_json::json!({"type": "text", "substr": "test", "case_insensitive": true});
+    // Case-sensitive exceptions can exclude one casing of a hit and not another.
+    assert_eq!(
+        substr_warning(text.clone(), serde_json::json!({"exact": "TEST"})),
+        None
     );
-}
-
-#[test]
-fn test_substr_with_invalid_not_exception() {
-    // substr: "test" won't match "hurl", so not: ["hurl"] will never apply
-    let cond = Condition::Text(TextQuery {
-        encoding: None,
-        length_min: None,
-        length_max: None,
-        exclude_html_comments: false,
-        exclude_comments: false,
-        exact: None,
-        substr: Some("test".to_string()),
-        regex: None,
-        word: None,
-        case_insensitive: false,
-        is_check: None,
-        section: None,
-        offset: None,
-        offset_range: None,
-        section_offset: None,
-        section_offset_range: None,
-        not: None,
-        platforms: None,
-    });
-
-    let not = vec![NotException::Shorthand("hurl".to_string())];
-    let trait_def = create_test_trait(cond, Some(not));
-
-    let warning = trait_def.check_not_field_usage();
-    assert!(warning.is_some());
-    assert!(
-        warning
-            .as_ref()
-            .unwrap()
-            .contains("does not contain the search substr")
+    assert_eq!(
+        substr_warning(text.clone(), serde_json::json!({"regex": "^[a-z]+$"})),
+        None
     );
-    assert!(warning.as_ref().unwrap().contains("hurl"));
-    assert!(warning.as_ref().unwrap().contains("test"));
+    // Shorthand and `substr` exceptions ignore case, so they hold for every casing.
+    let warning = substr_warning(text.clone(), serde_json::json!("TESTING")).unwrap();
+    assert!(warning.contains(NEVER_APPLIES), "{warning}");
+    let warning = substr_warning(text, serde_json::json!({"substr": "Test"})).unwrap();
+    assert!(warning.contains(NEVER_FIRES), "{warning}");
 }
 
 #[test]
-fn test_substr_with_exact_not_exception_valid() {
-    // substr: "test" should match "testing"
-    // not: {exact: "testing"} should work
-    let cond = Condition::Text(TextQuery {
-        encoding: None,
-        length_min: None,
-        length_max: None,
-        exclude_html_comments: false,
-        exclude_comments: false,
-        exact: None,
-        substr: Some("test".to_string()),
-        regex: None,
-        word: None,
-        case_insensitive: false,
-        is_check: None,
-        section: None,
-        offset: None,
-        offset_range: None,
-        section_offset: None,
-        section_offset_range: None,
-        not: None,
-        platforms: None,
-    });
-
-    let not = vec![NotException::Structured(NotExceptionStructured {
-        exact: Some("testing".to_string()),
-        substr: None,
-        regex: None,
-        lowered_substr: None,
-    })];
-    let trait_def = create_test_trait(cond, Some(not));
-
-    let warning = trait_def.check_not_field_usage();
-    assert!(warning.is_none());
+fn test_substr_not_is_checked_for_every_content_type() {
+    for kind in ["text", "literal", "string_literal", "raw", "encoded"] {
+        let warning = substr_warning(
+            serde_json::json!({"type": kind, "substr": "test"}),
+            serde_json::json!("testing"),
+        )
+        .unwrap_or_default();
+        assert!(warning.contains(NEVER_APPLIES), "{kind}: {warning}");
+    }
 }
 
 #[test]
-fn test_substr_with_exact_not_exception_invalid() {
-    // substr: "test" won't match strings containing "hurl"
-    // not: {exact: "hurl"} will never apply
-    let cond = Condition::Text(TextQuery {
-        encoding: None,
-        length_min: None,
-        length_max: None,
-        exclude_html_comments: false,
-        exclude_comments: false,
-        exact: None,
-        substr: Some("test".to_string()),
-        regex: None,
-        word: None,
-        case_insensitive: false,
-        is_check: None,
-        section: None,
-        offset: None,
-        offset_range: None,
-        section_offset: None,
-        section_offset_range: None,
-        not: None,
-        platforms: None,
-    });
-
-    let not = vec![NotException::Structured(NotExceptionStructured {
-        exact: Some("hurl".to_string()),
-        substr: None,
-        regex: None,
-        lowered_substr: None,
-    })];
-    let trait_def = create_test_trait(cond, Some(not));
-
-    let warning = trait_def.check_not_field_usage();
-    assert!(warning.is_some());
-    assert!(warning.as_ref().unwrap().contains("exact"));
-    assert!(warning.as_ref().unwrap().contains("hurl"));
+fn test_condition_level_substr_not_is_checked() {
+    let trait_def = create_test_trait(
+        condition(serde_json::json!({
+            "type": "text",
+            "substr": "android.permission.BIND_DEVICE_ADMIN",
+            "not": [{"regex": "[\\w-]+:node\\s*=\\s*[\"']remove(All)?[\"']"}],
+        })),
+        None,
+    );
+    let warning = trait_def.check_not_field_usage().unwrap_or_default();
+    assert!(warning.contains(NEVER_APPLIES), "{warning}");
+    assert!(warning.contains("(regex)"), "{warning}");
 }
 
 #[test]
-fn test_substr_with_overlapping_substr_not_exception() {
-    // substr: "test" and not: {substr: "testing"}
-    // "testing" contains "test", so this should be valid
-    let cond = Condition::Text(TextQuery {
-        encoding: None,
-        length_min: None,
-        length_max: None,
-        exclude_html_comments: false,
-        exclude_comments: false,
-        exact: None,
-        substr: Some("test".to_string()),
-        regex: None,
-        word: None,
-        case_insensitive: false,
-        is_check: None,
-        section: None,
-        offset: None,
-        offset_range: None,
-        section_offset: None,
-        section_offset_range: None,
-        not: None,
-        platforms: None,
-    });
-
-    let not = vec![NotException::Structured(NotExceptionStructured {
-        exact: None,
-        substr: Some("testing".to_string()),
-        regex: None,
-        lowered_substr: None,
-    })];
-    let trait_def = create_test_trait(cond, Some(not));
-
-    let warning = trait_def.check_not_field_usage();
-    assert!(warning.is_none());
+fn test_substr_without_not_is_fine() {
+    let trait_def = create_test_trait(
+        condition(serde_json::json!({"type": "text", "substr": "test"})),
+        None,
+    );
+    assert_eq!(trait_def.check_not_field_usage(), None);
 }
 
 #[test]
-fn test_substr_with_non_overlapping_substr_not_exception() {
-    // substr: "test" and not: {substr: "hurl"}
-    // No overlap, so the not will never apply
-    let cond = Condition::Text(TextQuery {
-        encoding: None,
-        length_min: None,
-        length_max: None,
-        exclude_html_comments: false,
-        exclude_comments: false,
-        exact: None,
-        substr: Some("test".to_string()),
-        regex: None,
-        word: None,
-        case_insensitive: false,
-        is_check: None,
-        section: None,
-        offset: None,
-        offset_range: None,
-        section_offset: None,
-        section_offset_range: None,
-        not: None,
-        platforms: None,
-    });
-
-    let not = vec![NotException::Structured(NotExceptionStructured {
-        exact: None,
-        substr: Some("hurl".to_string()),
-        regex: None,
-        lowered_substr: None,
-    })];
-    let trait_def = create_test_trait(cond, Some(not));
-
-    let warning = trait_def.check_not_field_usage();
-    assert!(warning.is_some());
-    assert!(warning.as_ref().unwrap().contains("no overlap"));
-}
-
-#[test]
-fn test_substr_case_insensitive() {
-    // substr: "test" (case insensitive) should match "TESTING"
-    // not: ["TESTING"] should work
-    let cond = Condition::Text(TextQuery {
-        encoding: None,
-        length_min: None,
-        length_max: None,
-        exclude_html_comments: false,
-        exclude_comments: false,
-        exact: None,
-        substr: Some("test".to_string()),
-        regex: None,
-        word: None,
-        case_insensitive: true,
-        is_check: None,
-        section: None,
-        offset: None,
-        offset_range: None,
-        section_offset: None,
-        section_offset_range: None,
-        not: None,
-        platforms: None,
-    });
-
-    let not = vec![NotException::Shorthand("TESTING".to_string())];
-    let trait_def = create_test_trait(cond, Some(not));
-
-    let warning = trait_def.check_not_field_usage();
-    assert!(warning.is_none());
+fn test_word_and_regex_not_keep_their_own_checks() {
+    // `word:` matches are the word too, but this rule covers `substr:` only.
+    assert_eq!(
+        substr_warning(
+            serde_json::json!({"type": "text", "word": "test"}),
+            serde_json::json!("testing"),
+        ),
+        None
+    );
+    // A regex condition's `not:` is still checked against the regex.
+    let warning = substr_warning(
+        serde_json::json!({"type": "text", "regex": "^test$"}),
+        serde_json::json!("hurl"),
+    )
+    .unwrap_or_default();
+    assert!(
+        warning.contains("does not match the search regex"),
+        "{warning}"
+    );
 }
 
 #[test]
@@ -429,35 +302,6 @@ fn test_regex_with_non_matching_not_exception() {
 }
 
 #[test]
-fn test_content_substr_with_not_should_error() {
-    // content + substr + not should be an error - behavior is unclear
-    let cond = Condition::Raw(RawQuery {
-        length_min: None,
-        length_max: None,
-        exact: None,
-        substr: Some("test".to_string()),
-        regex: None,
-        word: None,
-        case_insensitive: false,
-        is_check: None,
-        section: None,
-        offset: None,
-        offset_range: None,
-        section_offset: None,
-        section_offset_range: None,
-        not: None,
-    });
-
-    let not = vec![NotException::Shorthand("testing".to_string())];
-    let trait_def = create_test_trait(cond, Some(not));
-
-    let warning = trait_def.check_not_field_usage();
-    assert!(warning.is_some());
-    assert!(warning.as_ref().unwrap().contains("content/substr"));
-    assert!(warning.as_ref().unwrap().contains("behavior is unclear"));
-}
-
-#[test]
 fn test_content_exact_with_not_should_error() {
     // content + exact + not should be an error - doesn't make sense
     let cond = Condition::Raw(RawQuery {
@@ -542,7 +386,7 @@ fn test_symbol_exact_with_not_should_warn() {
 
 #[test]
 fn test_symbol_substr_with_valid_not() {
-    // Symbol substr with not: should work if exception contains substr
+    // A not: equal to the needle is live: it excludes every match
     let cond = Condition::Symbol(SymbolQuery {
         exact: None,
         substr: Some("test".to_string()),
@@ -558,16 +402,23 @@ fn test_symbol_substr_with_valid_not() {
         receiver: None,
     });
 
-    let not = vec![NotException::Shorthand("testing".to_string())];
+    let not = vec![NotException::Structured(
+        crate::composite_rules::condition::NotExceptionStructured {
+            exact: None,
+            substr: None,
+            regex: Some("^test$".to_string()),
+            lowered_substr: None,
+        },
+    )];
     let trait_def = create_test_trait(cond, Some(not));
 
     let warning = trait_def.check_not_field_usage();
-    assert!(warning.is_none());
+    assert!(warning.is_some_and(|w| w.contains("can never fire")));
 }
 
 #[test]
 fn test_symbol_substr_with_invalid_not() {
-    // Symbol substr with not: should error if exception doesn't contain substr
+    // A symbol substr's not: judges only the needle; `hurl` never applies
     let cond = Condition::Symbol(SymbolQuery {
         exact: None,
         substr: Some("test".to_string()),
@@ -588,9 +439,12 @@ fn test_symbol_substr_with_invalid_not() {
 
     let warning = trait_def.check_not_field_usage();
     assert!(warning.is_some());
-    assert!(warning.as_ref().unwrap().contains("does not contain"));
-    assert!(warning.as_ref().unwrap().contains("hurl"));
-    assert!(warning.as_ref().unwrap().contains("test"));
+    let warning = warning.unwrap();
+    assert!(warning.contains("can never apply"), "{warning}");
+    assert!(
+        warning.contains("hurl") && warning.contains("test"),
+        "{warning}"
+    );
 }
 
 #[test]

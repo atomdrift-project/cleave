@@ -1238,26 +1238,6 @@ pub fn clear_regex_caches() {
     crate::composite_rules::regex_scratch::clear_parked();
 }
 
-/// Check if a symbol matches a pattern (supports exact match or regex).
-/// Uses cached regex compilation for patterns with metacharacters.
-/// Note: Symbols are normalized (leading underscores stripped) at load time.
-#[must_use]
-pub(crate) fn symbol_matches(symbol: &str, pattern: &str) -> bool {
-    // Try exact match first
-    if symbol == pattern {
-        return true;
-    }
-
-    // Try as regex if pattern contains regex metacharacters
-    if (pattern.contains('|') || pattern.contains('*') || pattern.contains('['))
-        && let Ok(re) = build_regex(pattern, false)
-    {
-        return re.is_match(symbol);
-    }
-
-    false
-}
-
 /// Build a regex with optional case insensitivity.
 /// Results are cached globally for reuse across files.
 pub(crate) fn build_regex(pattern: &str, case_insensitive: bool) -> anyhow::Result<Regex> {

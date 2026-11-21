@@ -309,29 +309,27 @@ pub(crate) fn eval_path(
         if target.is_empty() {
             return false;
         }
-        let matched = if let Some(e) = exact {
-            if !case_insensitive {
+        // What matched, which is what `is:` judges: the whole path for
+        // `exact:`, the needle for `substr:`, and for `regex:` its first
+        // capture group when it has one, else the match.
+        let subject = if let Some(e) = exact {
+            let equal = if !case_insensitive {
                 target == e
             } else if target.is_ascii() && e.is_ascii() {
                 target.eq_ignore_ascii_case(e)
             } else {
                 target.to_lowercase() == e.to_lowercase()
-            }
+            };
+            equal.then_some(target)
         } else if let Some(s) = substr {
-            if case_insensitive {
-                target.to_lowercase().contains(&s.to_lowercase())
-            } else {
-                target.contains(s.as_str())
-            }
+            super::symbol_string::substr_span(target, s, case_insensitive)
         } else if let Some(r) = regex {
             crate::composite_rules::condition::lazy_regex(Some(r.as_str()), case_insensitive)
-                .map(|re| re.is_match(target))
-                .unwrap_or(false)
+                .and_then(|re| re.find_str(target).map(|m| re.is_subject(target, m)))
         } else {
-            false
+            None
         };
-
-        matched && validate_match(target, is_check)
+        subject.is_some_and(|subject| validate_match(subject, is_check))
     };
 
     // Report the spelling that actually matched, so the evidence names the

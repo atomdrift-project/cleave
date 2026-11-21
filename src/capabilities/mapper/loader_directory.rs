@@ -1006,15 +1006,6 @@ fn compact_condition_lists<const N: usize>(
 /// The per-trait checks the merge reports for one trait, in report order.
 fn trait_issues(trait_def: &TraitDefinition, path: &Path) -> PendingIssues {
     let mut warnings = PendingIssues::default();
-    // Check for greedy regex patterns
-    if !crate::validation_controls::is_validator_disabled("nested-quantifier")
-        && let Some(warning) = trait_def.r#if.check_greedy_patterns()
-    {
-        warnings.push_id(
-            "nested-quantifier",
-            format!("trait '{}' in {:?}: {}", trait_def.id, path, warning),
-        );
-    }
     // Check for word boundary regex patterns that should use type: word
     if !crate::validation_controls::is_validator_disabled("simple-word-boundary-regex")
         && let Some(warning) = trait_def.r#if.check_word_boundary_regex()

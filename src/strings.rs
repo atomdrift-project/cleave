@@ -13,15 +13,7 @@ use stng::{ExtractedString, StringMethod};
 
 /// Strings from filefacts' text view, plus format-parsed SCPT literals.
 /// Byte extraction and literal decoding remain owned by filefacts.
-/// Returns empty when filefacts can't open the bytes. Use this at call
-/// sites that have a path + bytes but no pre-opened [`AnalysisContext`].
-///
-/// [`AnalysisContext`]: crate::analysis_context::AnalysisContext
-pub(crate) fn strings_from_filefacts(path: &std::path::Path, data: &[u8]) -> Vec<StringInfo> {
-    strings_from_context(&crate::analysis_context::AnalysisContext::open(path, data))
-}
-
-/// [`strings_from_filefacts`] over an already-open context.
+/// Empty when filefacts could not read the bytes.
 pub(crate) fn strings_from_context(
     ctx: &crate::analysis_context::AnalysisContext<'_>,
 ) -> Vec<StringInfo> {
@@ -548,7 +540,8 @@ mod tests {
         assert_eq!(decoded[0].encoding, "utf8");
         assert_eq!(decoded[0].offset, parent.offset);
         assert_eq!(decoded[0].section.as_deref(), Some("literal"));
-        let combined = strings_from_filefacts(path, bytes);
+        let combined =
+            strings_from_context(&crate::analysis_context::AnalysisContext::open(path, bytes));
         assert_eq!(
             combined
                 .iter()

@@ -1,4 +1,9 @@
-//! Content-equal source files must not share path-dependent verdicts.
+//! What content-equal files share.
+//!
+//! Members of an archive keep path-dependent verdicts: `pkg/build.rs` and
+//! `pkg/lib.rs` hold the same bytes and are different files of one package.
+//! Files named for analysis are one file kept more than once: the same bytes
+//! are analyzed once, whatever they are called and wherever they lie.
 
 use std::collections::BTreeSet;
 use std::process::Command;
@@ -133,30 +138,34 @@ fn cache_preserves_archive_and_memory_api_context() {
             assert_context(&member.path, member.findings.iter().map(|f| f.id.as_str()));
         }
 
-        for (index, name) in [
-            "ordinary/lib.rs",
-            "ordinary/build.rs",
-            "tests/lib.rs",
-            "other/build.rs",
-        ]
-        .iter()
-        .enumerate()
+        // Named files of the same bytes are one analysis, through every way
+        // in: the first to be analyzed answers for the rest, each under its
+        // own path. A name a rule reads (`build.rs`) or a directory one
+        // excludes (`/tests/`) does not hold it back.
+        let first = root.join("ordinary/lib.rs");
+        let first = first.to_str().unwrap();
+        let analyzed = cleave::analyze_bytes_owned(SOURCE.to_vec(), first, &options).unwrap();
+        assert!(!analyzed.cache_hit);
+        assert_eq!(analyzed.target.path, first);
+        assert_context(first, analyzed.findings.iter().map(|f| f.id.as_str()));
+        for (index, name) in ["ordinary/build.rs", "tests/lib.rs", "other/build.rs"]
+            .iter()
+            .enumerate()
         {
             let path = root.join(name);
             let path = path.to_str().unwrap();
             let report = match index {
-                0 => cleave::analyze_bytes_owned(SOURCE.to_vec(), path, &options),
-                1 => {
+                0 => {
                     cleave::analyze_bytes_shared(bytes::Bytes::from_static(SOURCE), path, &options)
                 }
-                2 => cleave::analyze_bytes(SOURCE, path, &options),
+                1 => cleave::analyze_bytes(SOURCE, path, &options),
                 _ => cleave::analyze_file(path, &options),
             }
             .unwrap();
+            assert!(report.cache_hit, "{path}");
             assert_eq!(report.target.path, path);
-            assert_context(path, report.findings.iter().map(|f| f.id.as_str()));
+            assert_context(first, report.findings.iter().map(|f| f.id.as_str()));
         }
-        // Equivalence checks must retain useful cross-path sharing.
         let warm = root.join("warm/lib.rs");
         let _ =
             cleave::analyze_bytes_owned(SOURCE.to_vec(), warm.to_str().unwrap(), &options).unwrap();
@@ -167,10 +176,7 @@ fn cache_preserves_archive_and_memory_api_context() {
             &options,
         )
         .unwrap();
-        assert!(
-            report.cache_hit,
-            "equivalent paths should still share an analysis"
-        );
+        assert!(report.cache_hit, "the same bytes share an analysis");
         assert_eq!(report.target.path, equivalent.to_str().unwrap());
         return;
     }

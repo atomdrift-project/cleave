@@ -527,6 +527,132 @@ fn archives_preserve_native_inline_yara_and_composites() {
     }
 }
 
+/// The native fixtures, each with and without the marker, as `(name, type,
+/// unmarked, marked)`.
+fn native_fixture_pairs() -> Vec<(String, crate::FileType, Vec<u8>, Vec<u8>)> {
+    let mut cases = native_fixture_cases()
+        .into_iter()
+        .filter(|(_, ft, _, _)| *ft != crate::FileType::AppleScript);
+    let mut pairs = Vec::new();
+    while let (Some((name, ft, marked, true)), Some((_, _, unmarked, false))) =
+        (cases.next(), cases.next())
+    {
+        pairs.push((name, ft, unmarked, marked));
+    }
+    assert_eq!(pairs.len(), 4);
+    pairs
+}
+
+/// Whether analysing `bytes` as a member with `ctx` lent finds the marker,
+/// in the inline trait and the composite over it alike.
+fn marker_found<'a>(
+    analyzer: &dyn crate::analyzers::Analyzer,
+    logical: &'a Path,
+    bytes: &'a [u8],
+    ft: crate::FileType,
+    ctx: &'a crate::analysis_context::AnalysisContext<'a>,
+) -> bool {
+    let input = crate::analyzers::AnalysisInput::new(logical, bytes, ft)
+        .at_depth(1)
+        .with_parsed_ctx(ctx);
+    let report = analyzer.analyze_input(&input).unwrap();
+    let marker = |id: &str| report.findings.iter().any(|f| f.id == id);
+    assert_eq!(
+        marker("test/native::marker"),
+        marker("test/native::combined")
+    );
+    marker("test/native::marker")
+}
+
+/// The engine takes the YARA scan its context holds in place of scanning:
+/// a held scan that found the marker shows in the report of bytes without
+/// it. It takes it once, and only for the context's own bytes over the
+/// buckets scanned; otherwise it scans the bytes it is given.
+#[test]
+fn the_engine_takes_the_scan_its_context_holds() {
+    use crate::analyzers::FileTypeExt;
+    let dir = tempfile::tempdir().unwrap();
+    let engine = native_inline_test_engine(dir.path());
+    let yara = engine.yara().unwrap();
+    for (name, ft, unmarked, marked) in native_fixture_pairs() {
+        let logical = Path::new("archive-member").join(&name);
+        let analyzer = crate::analyzers::analyzer_for_file_type_arc(&ft, &engine).unwrap();
+        let filters = ft.yara_filetypes();
+        let found = |bytes, ctx| marker_found(&*analyzer, &logical, bytes, ft, ctx);
+        let scan_of_marked = || yara.scan_bytes(&marked, Some(filters.as_slice()));
+
+        // Held for these bytes and buckets: taken, once.
+        let copy = unmarked.clone();
+        let ctx = crate::analysis_context::AnalysisContext::open(&logical, &unmarked);
+        ctx.hold_yara(filters.clone(), scan_of_marked());
+        assert!(found(&unmarked, &ctx), "{name}: the held scan is taken");
+        assert!(!found(&unmarked, &ctx), "{name}: and taken once");
+
+        // Other bytes, equal though they are: scanned.
+        ctx.hold_yara(filters.clone(), scan_of_marked());
+        assert!(!found(&copy, &ctx), "{name}: a copy is scanned");
+        assert!(found(&unmarked, &ctx), "{name}: the scan was left held");
+
+        // Other buckets: scanned.
+        ctx.hold_yara(vec!["class"], scan_of_marked());
+        assert!(!found(&unmarked, &ctx), "{name}: other buckets are scanned");
+        assert!(ctx.take_yara(&unmarked, &["class"]).is_some());
+        assert!(ctx.take_yara(&unmarked, &["class"]).is_none());
+    }
+}
+
+/// A large native member's YARA scan runs beside its parse. Its inline
+/// evidence, the composites over it and its regular matches are those of a
+/// member scanned after the parse.
+#[test]
+fn large_native_members_keep_inline_yara_and_composites() {
+    use crate::analyzers::Analyzer;
+    let dir = tempfile::tempdir().unwrap();
+    let engine = native_inline_test_engine(dir.path());
+    let large = crate::analysis_context::LARGE_NATIVE_BYTES;
+    let archive = dir.path().join("large-native-fixtures.zip");
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+    let pairs = native_fixture_pairs();
+    for (name, _, unmarked, marked) in &pairs {
+        for (label, bytes) in [("without", unmarked), ("with", marked)] {
+            // The fixture, zeros to the size of a large binary, its tail.
+            let tail = bytes.len() - 32;
+            let mut member = bytes[..tail].to_vec();
+            member.resize(large, 0);
+            member.extend_from_slice(&bytes[tail..]);
+            zip.start_file(
+                format!("{label}-{name}"),
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+            std::io::Write::write_all(&mut zip, &member).unwrap();
+        }
+    }
+    zip.finish().unwrap();
+    let report = crate::analyzers::archive::ArchiveAnalyzer::new()
+        .with_engine(engine.clone())
+        .with_yara_arc(engine.yara().unwrap().clone())
+        .analyze(&archive)
+        .unwrap();
+    for (name, _, _, _) in &pairs {
+        for (label, expected) in [("without", false), ("with", true)] {
+            let member = format!("{label}-{name}");
+            let child = report
+                .files
+                .iter()
+                .find(|f| f.path.ends_with(&member))
+                .expect("archive child");
+            assert!(child.size >= large as u64, "{member}");
+            assert_native_marker(&child.findings, expected, &member);
+            assert_eq!(
+                child.findings.iter().any(|f| f.id == "test/native/regular"),
+                expected,
+                "{member}"
+            );
+        }
+    }
+}
+
 #[test]
 fn office_variant_uses_canonical_yara_bucket() {
     use crate::analyzers::Analyzer;

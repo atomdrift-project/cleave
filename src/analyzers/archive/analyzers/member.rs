@@ -681,11 +681,46 @@ impl ArchiveAnalyzer {
             // member again.
             let _nested_parallel;
             let (mut report, payloads) = {
-                let member_ctx = crate::analysis_context::AnalysisContext::open_with(
-                    crate::engine::filefacts_options(self.engine.settings()),
-                    logical_path,
-                    data,
-                );
+                let open = || {
+                    let ctx = crate::analysis_context::AnalysisContext::open_with(
+                        crate::engine::filefacts_options(self.engine.settings()),
+                        logical_path,
+                        data,
+                    );
+                    let _ = ctx.text_rows();
+                    ctx
+                };
+                // A large native member is parsed for seconds and then
+                // scanned by YARA for seconds more, and both read only its
+                // bytes: an app bundle's 307 MB main binary spent 2 s of a
+                // 26 s scan in YARA after an 8 s parse. So the two run side
+                // by side, as they do for a lone binary, and the engine takes
+                // the scan the context holds. Under the same conditions the
+                // engine scans by: a member it would skip is not scanned.
+                let yara_ahead = self
+                    .engine
+                    .yara()
+                    .filter(|yara| yara.is_loaded())
+                    .filter(|_| {
+                        data.len() >= crate::analysis_context::LARGE_NATIVE_BYTES
+                            && matches!(file_type, FileType::Elf | FileType::Pe | FileType::MachO)
+                            && crate::engine::yara_skip_reason(
+                                relative_path,
+                                *file_type,
+                                data.len(),
+                            )
+                            .is_none()
+                            && crate::rayon_nest::inner_work_parallel()
+                    });
+                let member_ctx = if let Some(yara) = yara_ahead {
+                    let filters = file_type.yara_filetypes();
+                    let (ctx, scan) =
+                        rayon::join(open, || yara.scan_bytes(data, Some(filters.as_slice())));
+                    ctx.hold_yara(filters, scan);
+                    ctx
+                } else {
+                    open()
+                };
                 let stng_strings = member_ctx.text_rows();
                 crate::memory_tracker::clear_current_phase();
                 // The standalone extractor, not a member variant: payload

@@ -395,6 +395,203 @@ fn test_file_analysis(sha256: &str, file_type: &str) -> FileAnalysis {
     )
 }
 
+/// Rules as a composite's suppressors, one per condition.
+fn rules_reading(conditions: &[&str]) -> CapabilityMapper {
+    use crate::composite_rules::CompositeTrait;
+    let mut mapper = CapabilityMapper::empty();
+    for (i, condition) in conditions.iter().enumerate() {
+        let yaml = format!("id: path-rule-{i}\ndesc: Path rule\nconf: 1.0\nunless:\n{condition}");
+        mapper
+            .composite_rules
+            .push(crate::yaml::from_str::<CompositeTrait>(&yaml).expect("test composite"));
+    }
+    mapper
+}
+
+/// A report with these file paths, evaluated under `path`.
+fn report_with(sha: &str, path: &str, files: &[&str]) -> AnalysisReport {
+    let mut report = test_report(sha);
+    report.target.path = path.to_string();
+    report.files = files
+        .iter()
+        .map(|file| {
+            FileAnalysis::new(
+                0,
+                (*file).to_string(),
+                "test".to_string(),
+                sha.to_string(),
+                1,
+            )
+        })
+        .collect();
+    report
+}
+
+fn paths_of(report: &AnalysisReport) -> Vec<&str> {
+    report.files.iter().map(|f| f.path.as_str()).collect()
+}
+
+/// A named file's report moves to another path whole: its own path and the
+/// decoded children and nested members hanging off it. An archive's members
+/// are spelled from its root and stay, even one whose path begins with the
+/// archive's own.
+#[test]
+fn a_renamed_report_moves_what_hangs_off_its_path() {
+    use crate::types::core::ArchiveEntry;
+    for (from, to) in [
+        ("/downloads/installer.dmg", "/downloads/installer(1).dmg"),
+        ("/downloads/installer.dmg", "/elsewhere/vendor/renamed.bin"),
+        ("installer.dmg", "installer(1).dmg"),
+    ] {
+        let decoded = format!("{from}##base64");
+        let nested = format!("{from}!!inner/a.js");
+        let lookalike = format!("{from}.sig");
+        let files = [
+            from,
+            &decoded,
+            &nested,
+            "App.app/Contents/MacOS/app",
+            &lookalike,
+        ];
+        let mut report = report_with("renamed", from, &files);
+        report.archive_contents = files
+            .iter()
+            .map(|path| ArchiveEntry {
+                path: (*path).to_string(),
+                ..ArchiveEntry::default()
+            })
+            .collect();
+        crate::shared_resources::rename_report(&mut report, to);
+
+        let moved = [
+            to.to_string(),
+            format!("{to}##base64"),
+            format!("{to}!!inner/a.js"),
+            "App.app/Contents/MacOS/app".to_string(),
+            lookalike.clone(),
+        ];
+        assert_eq!(report.target.path, to);
+        assert_eq!(paths_of(&report), moved);
+        let entries: Vec<&str> = report
+            .archive_contents
+            .iter()
+            .map(|e| e.path.as_str())
+            .collect();
+        assert_eq!(entries, moved);
+
+        // The same path again changes nothing.
+        crate::shared_resources::rename_report(&mut report, to);
+        assert_eq!(paths_of(&report), moved);
+    }
+}
+
+/// The same bytes named for analysis share one report whatever they are
+/// called and wherever they lie: stored once under their type, it is found
+/// for a renamed copy and for a copy in another directory, moved to the
+/// path asked for with the name's own values rewritten. Another type's
+/// lookup, other bytes, and a report that names no origin find nothing.
+#[test]
+fn a_named_file_shares_its_report_with_its_copies() {
+    let sha = "7a1c0e0e22222222222222222222222222222222222222222222222222222222";
+    let opts = AnalysisOptions::default();
+    let settings = settings_of(&opts);
+    let lookup = |sha: &str, file_type: &str, path: &str| {
+        named_file_report_lookup(sha, file_type, &opts, &settings, path)
+    };
+    let first = "/t/installer.dmg";
+    assert!(lookup(sha, "dmg", first).is_none(), "nothing stored yet");
+
+    let decoded = format!("{first}##base64");
+    let mut report = report_with(sha, first, &[first, &decoded, "App.app/Info.plist"]);
+    report.values_tree = Some(Box::new(serde_json::json!({
+        "file": {"basename": "installer.dmg", "stem": "installer"},
+        "dmg": {"format": "UDIF"},
+    })));
+    report_cache_store(
+        sha,
+        "dmg",
+        &opts,
+        &settings,
+        &report,
+        ambient_traits_revision(),
+    );
+
+    for path in [
+        first,
+        "/t/installer(1).dmg",
+        "/elsewhere/vendor/renamed.dmg",
+    ] {
+        let found = lookup(sha, "dmg", path);
+        assert!(found.is_some(), "found for {path}");
+        let found = found.expect("just asserted");
+        assert_eq!(found.target.path, path);
+        assert_eq!(
+            paths_of(&found),
+            [path, &format!("{path}##base64"), "App.app/Info.plist"]
+        );
+        let values = found.values_tree.as_ref().unwrap();
+        let name = Path::new(path).file_name().unwrap().to_str();
+        let stem = Path::new(path).file_stem().unwrap().to_str();
+        assert_eq!(values["file"]["basename"].as_str(), name);
+        assert_eq!(values["file"]["stem"].as_str(), stem);
+        assert_eq!(values["dmg"]["format"], "UDIF");
+    }
+    assert!(lookup(sha, "zip", first).is_none());
+    let other = "7a1c0e0e33333333333333333333333333333333333333333333333333333333";
+    assert!(lookup(other, "dmg", first).is_none());
+
+    let mut nameless = test_report(other);
+    nameless.target.path.clear();
+    report_cache_store(
+        other,
+        "dmg",
+        &opts,
+        &settings,
+        &nameless,
+        ambient_traits_revision(),
+    );
+    assert!(lookup(other, "dmg", first).is_none());
+}
+
+/// An archive member's report stays bound to its path: a rule that reads
+/// its name or its directory refuses a twin on the other side of it, a path
+/// that does not hang off the member's refuses every other path, and where
+/// no rule tells the paths apart it is adopted and its decoded child moved.
+#[test]
+fn a_member_report_stays_bound_to_its_path() {
+    let rules = rules_reading(&[
+        "  - type: value\n    path: file.basename\n    exact: installer.dmg\n",
+        "  - type: path\n    substr: /vendor/\n",
+    ]);
+    let own = ["pkg/installer.dmg", "pkg/installer.dmg##base64"];
+    let adopted = |files: &[&str], to: &str| {
+        cached_report_under(report_with("member", files[0], files), to, Some(&rules))
+    };
+    assert!(adopted(&own, "pkg/installer(1).dmg").is_none());
+    assert!(adopted(&own, "pkg/vendor/installer.dmg").is_none());
+    assert!(adopted(&["pkg/a.js", "other/b.js"], "lib/a.js").is_none());
+    let moved = adopted(&own, "lib/installer.dmg").expect("no rule tells pkg/ from lib/");
+    assert_eq!(moved.target.path, "lib/installer.dmg");
+    assert_eq!(
+        paths_of(&moved),
+        ["lib/installer.dmg", "lib/installer.dmg##base64"]
+    );
+    // Without rules there is no telling, so only the same path is served.
+    let unruled = |to: &str| cached_report_under(report_with("member", own[0], &own), to, None);
+    assert!(unruled("lib/installer.dmg").is_none());
+    assert!(unruled(own[0]).is_some());
+
+    // A refusal leaves the report as it was.
+    let mut refused = report_with("member", own[0], &own);
+    assert!(!crate::shared_resources::adopt_report_under(
+        &mut refused,
+        "pkg/vendor/installer.dmg",
+        &rules
+    ));
+    assert_eq!(refused.target.path, own[0]);
+    assert_eq!(paths_of(&refused), own);
+}
+
 #[test]
 fn cached_negative_results_require_an_origin() {
     let mut file = test_file_analysis("path-origin", "rust");

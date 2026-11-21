@@ -931,27 +931,23 @@ impl EngineFor<'_> {
         label: &str,
         options: &AnalysisOptions,
     ) -> Option<AnalysisReport> {
-        let file_type = analyzers::detect_file_type_from_data(path, data);
-        let type_key = analysis_cache::report_type_key(file_type.label(), path);
+        let type_key = analyzers::detect_file_type_from_data(path, data).label();
         let mut report = match self {
-            Self::Given(engine) => analysis_cache::report_cache_lookup(
+            Self::Given(engine) => analysis_cache::named_file_report_lookup(
                 sha256,
-                &type_key,
+                type_key,
                 options,
                 engine.settings(),
                 label,
-                Some(engine.rules()),
             ),
-            Self::Options => analysis_cache::report_cache_lookup(
+            Self::Options => analysis_cache::named_file_report_lookup(
                 sha256,
-                &type_key,
+                type_key,
                 options,
                 &shared_resources::settings_for_options(options),
                 label,
-                shared_resources::loaded_capability_mapper().as_deref(),
             ),
         }?;
-        report.target.path = label.to_string();
         report.analysis_timestamp = Some(chrono::Utc::now());
         report.cache_hit = true;
         report.engine = Some(match self {

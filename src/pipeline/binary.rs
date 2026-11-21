@@ -27,12 +27,12 @@ fn set_phase(options: &AnalysisOptions, phase: &str) {
     }
 }
 
-/// Mach-O: structure comes from the preferred arch slice; strings, raw
-/// matching and YARA cover the whole (possibly fat) file.
-pub(super) fn analyze_macho(
-    b: BinaryInput<'_, '_>,
+/// Mach-O: structure comes from a fat file's primary slice; strings, raw
+/// matching and YARA cover the whole file. One parse of the file gives both.
+pub(super) fn analyze_macho<'d>(
+    b: BinaryInput<'_, 'd>,
     stng_strings: &[stng::ExtractedString],
-    facts_options: &filefacts::OpenOptions<'_>,
+    facts_options: &filefacts::OpenOptions<'d>,
     analysis_depth: u32,
 ) -> AnalysisReport {
     let BinaryInput {
@@ -46,46 +46,53 @@ pub(super) fn analyze_macho(
     } = b;
     set_phase(options, "macho:struct+yara");
     let rules = engine.rules();
-    // Mach-O's structural context is a per-arch slice, so it cannot
-    // self-source full-file strings the way PE/ELF do.
     let analyzer = analyzers::macho::MachOAnalyzer::new()
         .with_cancellation(options.cancellation.clone())
         .with_engine(engine.clone())
         .with_preextracted_strings(
             strings::StringExtractor::new().convert_stng_strings(stng_strings),
         );
-    // The slice table comes from the full-file parse already opened for
-    // strings, so no helper reparses the fat binary.
-    let slices = analyzers::macho::FatSlices::of(file_data, file_ctx, facts_options);
+    // One parse of the whole file serves the slice table, the structure of
+    // the image it describes (a thin binary, or a fat one's primary slice),
+    // the other slices' imports and exports, and trait evaluation: the one
+    // the pipeline opened for strings, or one opened here when it has none.
+    let opened;
+    let ctx = match file_ctx {
+        Some(ctx) => ctx,
+        None => {
+            opened = crate::analysis_context::AnalysisContext::open_with(
+                facts_options.clone(),
+                path,
+                file_data,
+            );
+            &opened
+        }
+    };
+    let slices = analyzers::macho::FatSlices::of(file_data, Some(ctx), facts_options);
     let range = analyzer.preferred_arch_range(file_data, &slices);
     let arch_data = &file_data[range.clone()];
     let labeled_ranges = analyzer.labeled_arch_ranges(file_data, &slices);
     let is_fat = labeled_ranges.len() > 1;
-    let eval_data = if is_fat { file_data } else { arch_data };
-    // Open filefacts on the preferred-arch slice so the analyzer reads dyld
-    // imports and export-trie entries from the typed view.
-    let ctx =
-        crate::analysis_context::AnalysisContext::open_with(facts_options.clone(), path, arch_data);
     let mut report =
-        analyzer.analyze_structural_with_ctx(path, arch_data, Some(sha256.to_owned()), &ctx);
+        analyzer.analyze_structural_with_ctx(path, arch_data, Some(sha256.to_owned()), ctx);
     let raw_regex =
-        rules.precompute_raw_regex_matches(eval_data, &rules.detect_file_type("macho"), false);
+        rules.precompute_raw_regex_matches(file_data, &rules.detect_file_type("macho"), false);
     report.filefacts = Some(crate::types::FilefactsView::of(
-        &ctx,
+        ctx,
         engine.compact_members(),
     ));
     report.identity = ctx.identity();
     analyzer.apply_fat_metadata(&mut report, file_data, &slices);
 
     if is_fat {
-        // The preferred slice was parsed at base 0, so its structural offsets
-        // are slice-relative. Strings, raw matching, YARA, and the hex view
-        // all use full-file coordinates; rebase before any of them run.
+        // The primary slice's symbols and load-command offsets count from
+        // the slice. Strings, raw matching, YARA, and the hex view all use
+        // full-file coordinates; rebase before any of them run.
         analyzers::macho::MachOAnalyzer::rebase_slice_offsets(&mut report, range.start as u64);
         // Union every other slice's imports/exports into the report, so
-        // malware in a non-preferred arch (a malicious x86_64 slice beside a
-        // benign arm64 one) cannot escape filefacts-derived traits.
-        analyzer.union_supplementary_arches(&mut report, file_data, range.start, &slices);
+        // malware in another arch (a malicious x86_64 slice beside a benign
+        // arm64 one) cannot escape filefacts-derived traits.
+        analyzer.union_supplementary_arches(&mut report, file_data, ctx, &slices);
     }
 
     let archive_config = analyzers::archive::ArchiveAnalyzerConfig::from_analysis_options(options)
@@ -107,8 +114,8 @@ pub(super) fn analyze_macho(
     set_phase(options, "macho:traits");
     rules.evaluate_and_merge_findings_with_precomputed(
         &mut report,
-        eval_data,
-        crate::capabilities::AnalysisBorrow::with_filefacts(None, (!is_fat).then_some(&ctx)),
+        file_data,
+        crate::capabilities::AnalysisBorrow::with_filefacts(None, Some(ctx)),
         Some(&inline_yara),
         Some(raw_regex),
         is_fat.then_some(labeled_ranges.as_slice()),
@@ -226,4 +233,88 @@ pub(super) fn analyze_pe(b: BinaryInput<'_, '_>) -> Result<AnalysisReport> {
         options.cancellation.as_deref(),
     );
     Ok(report)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+    use crate::analysis_context::AnalysisContext;
+    use crate::analyzers::AnalysisInput;
+
+    type Rows = (
+        Vec<(String, Option<String>, Option<String>)>,
+        Vec<(String, Option<String>)>,
+        Vec<(String, Option<u64>, u64)>,
+        Vec<(String, Option<String>)>,
+        Option<Vec<String>>,
+        u64,
+    );
+
+    fn rows(r: &AnalysisReport) -> Rows {
+        (
+            r.imports
+                .iter()
+                .map(|i| (i.symbol.clone(), i.library.clone(), i.offset.clone()))
+                .collect(),
+            r.exports
+                .iter()
+                .map(|e| (e.symbol.clone(), e.offset.clone()))
+                .collect(),
+            r.sections
+                .iter()
+                .map(|s| (s.name.clone(), s.offset, s.size))
+                .collect(),
+            r.functions
+                .iter()
+                .map(|f| (f.name.clone(), f.offset.clone()))
+                .collect(),
+            r.target.architectures.clone(),
+            r.target.size_bytes,
+        )
+    }
+
+    /// A Mach-O scanned as a file is analysed from the one parse the pipeline
+    /// opened for its strings, fat or thin: no slice, and no second copy of
+    /// the file, is opened. Its report holds what the archive-member path
+    /// builds from the same parse, so a binary reads the same inside an
+    /// archive and outside one.
+    #[test]
+    fn a_macho_file_is_analysed_from_the_pipelines_parse() {
+        let fat = crate::test_samples::read("testdata/xor/gapi-update.macho");
+        let thin = std::fs::read("tests/fixtures/test.macho").unwrap();
+        let engine = Engine::empty();
+        let options = AnalysisOptions::default();
+        let facts = filefacts::OpenOptions::new();
+        for (name, data) in [("gapi-update.macho", &fat), ("test.macho", &thin)] {
+            let path = Path::new(name);
+            let ctx = AnalysisContext::open_with(facts.clone(), path, data);
+            let input = |ctx| BinaryInput {
+                path,
+                data,
+                sha256: "sha",
+                ctx,
+                options: &options,
+                engine: &engine,
+                prefetched_yara: None,
+            };
+            let report = analyze_macho(input(Some(&ctx)), ctx.text_rows(), &facts, 0);
+            assert_eq!(ctx.parsed.parse_count(), 1, "{name}: one extraction");
+            assert!(!report.imports.is_empty(), "{name}");
+            assert!(!report.sections.is_empty(), "{name}");
+            assert!(report.filefacts.is_some(), "{name}");
+
+            let member = analyzers::macho::MachOAnalyzer::new()
+                .with_engine(engine.clone())
+                .analyze_input(
+                    &AnalysisInput::new(path, data, crate::FileType::MachO).with_parsed_ctx(&ctx),
+                )
+                .unwrap();
+            assert_eq!(rows(&report), rows(&member), "{name}");
+
+            // With no parse from the pipeline, one is opened here.
+            let alone = analyze_macho(input(None), ctx.text_rows(), &facts, 0);
+            assert_eq!(rows(&alone), rows(&report), "{name}");
+        }
+    }
 }

@@ -1,5 +1,6 @@
 use super::*;
 use crate::Evidence;
+use crate::types::Export;
 use std::path::PathBuf;
 
 #[test]
@@ -42,12 +43,100 @@ fn fat_slices_come_from_the_callers_parse() {
     );
     let preferred = analyzer.preferred_arch_range(&data, &slices);
     assert!(preferred.start > 0 && preferred.end <= data.len());
+    // The slice whose structure the parse reports, not one chosen here.
+    assert_eq!(
+        Some(preferred.start as u64),
+        ctx.parsed.slice_symbols().primary()
+    );
 
     // A thin binary has no table and never needs a parse.
     let thin = std::fs::read(test_macho_path()).unwrap();
     let none = FatSlices::of(&thin, None, &filefacts::OpenOptions::new());
     assert!(none.0.is_empty());
     assert_eq!(analyzer.all_arch_ranges(&thin, &none), vec![0..thin.len()]);
+}
+
+/// The primary slice's range is the one the parse names, read as filefacts
+/// read it: up to the file's end when the fat header claims more. With no
+/// primary slice (a thin binary, or a fat one with no slice that parses) the
+/// structure describes the whole file.
+#[test]
+fn preferred_range_follows_the_parses_primary_slice() {
+    let slice = |offset, size, primary| FatSlice {
+        offset,
+        size,
+        cpu_type: Some("arm64".to_string()),
+        primary,
+    };
+    let analyzer = MachOAnalyzer::new();
+    let data = vec![0u8; 0x3000];
+    let range = |slices: Vec<FatSlice>| analyzer.preferred_arch_range(&data, &FatSlices(slices));
+    assert_eq!(range(vec![]), 0..0x3000);
+    assert_eq!(
+        range(vec![
+            slice(0x1000, 0x800, false),
+            slice(0x2000, 0x800, true)
+        ]),
+        0x2000..0x2800,
+        "the primary slice, not the first or the first arm64 one"
+    );
+    assert_eq!(
+        range(vec![
+            slice(0x1000, 0x800, false),
+            slice(0x2000, 0x800, false)
+        ]),
+        0..0x3000
+    );
+    assert_eq!(range(vec![slice(0x2000, 0x9000, true)]), 0x2000..0x3000);
+    assert_eq!(range(vec![slice(0x3000, 0x100, true)]), 0..0x3000);
+    assert_eq!(range(vec![slice(usize::MAX, 2, true)]), 0..0x3000);
+}
+
+/// A thin Mach-O analysed with the caller's parse is not opened again, and
+/// reports what an analysis that opens its own does.
+#[test]
+fn a_thin_binary_is_analysed_from_the_callers_parse() {
+    let data = std::fs::read(test_macho_path()).unwrap();
+    let path = test_macho_path();
+    let ctx = crate::analysis_context::AnalysisContext::open_with(
+        filefacts::OpenOptions::new(),
+        &path,
+        &data,
+    );
+    let analyzer = MachOAnalyzer::new();
+    let threaded = AnalysisInput::new(&path, &data, crate::FileType::MachO).with_parsed_ctx(&ctx);
+    let report = analyzer.analyze_input(&threaded).unwrap();
+    assert_eq!(ctx.parsed.parse_count(), 1, "one extraction of the file");
+
+    let alone = analyzer
+        .analyze_input(&AnalysisInput::new(&path, &data, crate::FileType::MachO))
+        .unwrap();
+    let rows = |r: &AnalysisReport| {
+        (
+            r.imports
+                .iter()
+                .map(|i| (i.symbol.clone(), i.library.clone(), i.offset.clone()))
+                .collect::<Vec<_>>(),
+            r.exports
+                .iter()
+                .map(|e| (e.symbol.clone(), e.offset.clone()))
+                .collect::<Vec<_>>(),
+            r.sections
+                .iter()
+                .map(|s| (s.name.clone(), s.offset, s.size))
+                .collect::<Vec<_>>(),
+            r.functions
+                .iter()
+                .map(|f| (f.name.clone(), f.offset.clone()))
+                .collect::<Vec<_>>(),
+            r.strings.len(),
+            r.target.size_bytes,
+        )
+    };
+    assert!(!report.imports.is_empty() && !report.sections.is_empty());
+    assert!(!report.strings.is_empty());
+    assert_eq!(rows(&report), rows(&alone));
+    assert_eq!(report.target.size_bytes, data.len() as u64);
 }
 
 fn test_macho_path() -> PathBuf {
@@ -97,22 +186,129 @@ fn report_with_offsets() -> AnalysisReport {
     report
 }
 
-/// The preferred slice of a fat Mach-O is parsed at base 0, so its
-/// structural offsets are slice-relative. Rebasing adds the slice's fat
-/// offset to every *file* offset (functions, imports, exports, section
-/// offsets) while leaving virtual addresses untouched — so symbol
-/// annotations line up with the full-file hex view.
+/// The whole-file parse of a fat Mach-O reads its primary slice's symbols
+/// from the slice's own bytes, so their offsets are slice-relative. Rebasing
+/// adds the slice's fat offset to them (functions, imports, exports) so
+/// symbol annotations line up with the full-file hex view. Sections are
+/// already placed in the file by that parse, and are left alone.
 #[test]
-fn rebase_slice_offsets_shifts_file_offsets_only() {
+fn rebase_slice_offsets_shifts_symbol_offsets_only() {
     let mut report = report_with_offsets();
     MachOAnalyzer::rebase_slice_offsets(&mut report, 0x4000);
 
     assert_eq!(report.functions[0].offset.as_deref(), Some("0x5000"));
     assert_eq!(report.imports[0].offset.as_deref(), Some("0x9078"));
     assert_eq!(report.exports[0].offset.as_deref(), Some("0x6000"));
-    // File offset rebased; virtual address (vmaddr) left as-is.
-    assert_eq!(report.sections[0].offset, Some(0x8000));
+    assert_eq!(report.sections[0].offset, Some(0x4000));
     assert_eq!(report.sections[0].address, Some(0x1_0000_4000));
+}
+
+/// A fat Mach-O is parsed once. The report built from that one parse holds
+/// what parsing each slice on its own gives, at whole-file offsets: the
+/// primary slice's sections and functions, and every slice's imports and
+/// exports. Each slice used to be reopened to read them, which repeated its
+/// extraction, function recovery included.
+#[test]
+fn a_fat_binary_is_analysed_from_one_parse() {
+    use std::collections::BTreeSet;
+    let data = crate::test_samples::read("testdata/xor/gapi-update.macho");
+    let path = Path::new("gapi-update.macho");
+    let options = filefacts::OpenOptions::new;
+    let ctx = crate::analysis_context::AnalysisContext::open_with(options(), path, &data);
+    let input = AnalysisInput::new(path, &data, crate::FileType::MachO).with_parsed_ctx(&ctx);
+    let analyzer = MachOAnalyzer::new();
+    let report = analyzer.analyze_input(&input).unwrap();
+    assert_eq!(ctx.parsed.parse_count(), 1, "one extraction of the file");
+
+    let slices = FatSlices::of(&data, Some(&ctx), &options());
+    let primary = analyzer.preferred_arch_range(&data, &slices).start;
+    let (mut imports, mut exports) = (BTreeSet::new(), BTreeSet::new());
+    for range in analyzer.all_arch_ranges(&data, &slices) {
+        let at = range.start as u64;
+        let slice = crate::analysis_context::AnalysisContext::open_with(
+            options(),
+            Path::new(""),
+            &data[range],
+        );
+        let in_file = |offset: &Option<String>| {
+            let mut offset = offset.clone();
+            shift_hex_offset(&mut offset, at);
+            offset
+        };
+        // The primary slice's rows are reported first, so its offset is the
+        // one a symbol both slices share keeps.
+        if at == primary as u64 {
+            let sections: Vec<_> = slice
+                .sections_from_filefacts()
+                .into_iter()
+                .map(|s| {
+                    (
+                        s.name,
+                        s.offset.map(|o| if s.size > 0 { o + at } else { o }),
+                    )
+                })
+                .collect();
+            let reported: Vec<_> = report
+                .sections
+                .iter()
+                .map(|s| (s.name.clone(), s.offset))
+                .collect();
+            assert!(!sections.is_empty());
+            assert_eq!(reported, sections);
+            let functions: Vec<_> = slice
+                .parsed
+                .symbols()
+                .iter_kind(filefacts::SymbolKind::Function)
+                .filter_map(crate::analysis_context::project_filefacts_function)
+                .map(|f| (f.name, in_file(&f.offset)))
+                .collect();
+            let reported: Vec<_> = report
+                .functions
+                .iter()
+                .map(|f| (f.name.clone(), f.offset.clone()))
+                .collect();
+            assert!(!functions.is_empty());
+            assert_eq!(reported, functions);
+            for import in &report.imports {
+                let alone = slice.imports_from_filefacts();
+                if let Some(same) = alone.iter().find(|i| i.symbol == import.symbol) {
+                    assert_eq!(import.offset, in_file(&same.offset), "{}", import.symbol);
+                }
+            }
+        }
+        imports.extend(
+            slice
+                .imports_from_filefacts()
+                .into_iter()
+                .map(|i| (i.symbol, i.library)),
+        );
+        exports.extend(slice.exports_from_filefacts().into_iter().map(|e| e.symbol));
+    }
+    let reported: BTreeSet<_> = report
+        .imports
+        .iter()
+        .map(|i| (i.symbol.clone(), i.library.clone()))
+        .collect();
+    assert!(!imports.is_empty());
+    assert_eq!(reported, imports);
+    let reported: BTreeSet<_> = report.exports.iter().map(|e| e.symbol.clone()).collect();
+    assert_eq!(reported, exports);
+
+    // The target is the file, with every slice named, and its strings are
+    // the whole file's: some lie past the primary slice or before it.
+    assert_eq!(report.target.size_bytes, data.len() as u64);
+    assert_eq!(
+        report.target.architectures.as_ref().map(Vec::len),
+        Some(slices.0.len())
+    );
+    let range = analyzer.preferred_arch_range(&data, &slices);
+    assert!(
+        report
+            .strings
+            .iter()
+            .any(|s| !range.contains(&(s.offset.unwrap_or_default() as usize))),
+        "strings come from every slice"
+    );
 }
 
 /// A fat slice's code-signature findings (identity, signer) anchor their

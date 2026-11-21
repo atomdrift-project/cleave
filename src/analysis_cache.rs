@@ -1053,7 +1053,9 @@ fn typed_options_hash(options: &AnalysisOptions, settings: &Settings, file_type:
     hex::encode(hash)[..16].to_string()
 }
 
-/// The report cache's type key: the detected type plus the file's name.
+/// An archive member's report cache type key: the detected type plus the
+/// member's name. A file named for analysis is keyed by its type alone
+/// (see [`named_file_report_lookup`]).
 ///
 /// The table holds one row per key, and a row serves another path only when
 /// the path guard finds the two equivalent. So byte-identical files whose
@@ -1281,13 +1283,14 @@ fn memo_key(sha256: &str, opts_hash: &str, traits_revision: i64) -> String {
     format!("{sha256}:{opts_hash}:{traits_revision}")
 }
 
-/// Look up a cached toplevel analysis report for the given file hash and options.
+/// Look up an archive member's cached report for the given file hash and
+/// options.
 ///
 /// Returns `Some(report)` on cache hit, `None` on miss or if caching is unavailable.
 ///
 /// `rules` decide whether a hit cached under another path can be adopted for
 /// `path` (see [`cached_report_under`]); pass the rules this caller analyzes
-/// under, or the loaded global ones if it has not built an engine yet.
+/// under.
 pub(crate) fn report_cache_lookup(
     sha256: &str,
     file_type: &str,
@@ -1295,6 +1298,47 @@ pub(crate) fn report_cache_lookup(
     settings: &Settings,
     path: &str,
     rules: Option<&CapabilityMapper>,
+) -> Option<AnalysisReport> {
+    cached_report_under(
+        stored_report(sha256, file_type, options, settings)?,
+        path,
+        rules,
+    )
+}
+
+/// Look up the cached report of a file named for analysis, for the same
+/// bytes at `path`.
+///
+/// Such a report is keyed by its bytes and their detected type, and serves
+/// them under any name and in any directory
+/// (see [`crate::shared_resources::rename_report`]).
+pub(crate) fn named_file_report_lookup(
+    sha256: &str,
+    file_type: &str,
+    options: &AnalysisOptions,
+    settings: &Settings,
+    path: &str,
+) -> Option<AnalysisReport> {
+    let mut report = stored_report(sha256, file_type, options, settings)?;
+    // As for a member: a report that does not say what it was evaluated
+    // under is not served.
+    if report.target.path.is_empty() {
+        return None;
+    }
+    if report.target.path != path {
+        tracing::debug!(sha256, cached_path = %report.target.path, path, "report of the same bytes under another path");
+        crate::shared_resources::rename_report(&mut report, path);
+    }
+    crate::restamp_path_derived_values(&mut report, Path::new(path));
+    Some(report)
+}
+
+/// The report stored for these bytes, type and options, as it was stored.
+fn stored_report(
+    sha256: &str,
+    file_type: &str,
+    options: &AnalysisOptions,
+    settings: &Settings,
 ) -> Option<AnalysisReport> {
     if crate::validation_performance::active() {
         return None;
@@ -1307,7 +1351,7 @@ pub(crate) fn report_cache_lookup(
     if let Some(bytes) = memo::get(memo::Kind::Report, &key)
         && let Ok(report) = serde_json::from_slice::<AnalysisReport>(&bytes)
     {
-        return cached_report_under(report, path, rules);
+        return Some(report);
     }
     let bytes = with_conn(|conn| {
         cache_lookup_conn(conn, memo::Kind::Report, sha256, &opts_hash, traits_ts)
@@ -1315,7 +1359,7 @@ pub(crate) fn report_cache_lookup(
     .flatten()?;
     let report = serde_json::from_slice::<AnalysisReport>(&bytes).ok()?;
     memo::put(memo::Kind::Report, key, bytes);
-    cached_report_under(report, path, rules)
+    Some(report)
 }
 
 /// A content hit is not a verdict hit until every path input agrees. Reuse

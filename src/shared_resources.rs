@@ -80,16 +80,28 @@ pub(crate) fn adopt_report_under(
         p.strip_prefix(owner_path)
             .map(|rest| format!("{new_path}{rest}"))
     };
-    let equivalent = rules.paths_equivalent(owner_path, new_path)
-        && report
-            .files
-            .iter()
-            .all(|f| rebase(&f.path).is_some_and(|np| rules.paths_equivalent(&f.path, &np)))
-        && report
-            .archive_contents
-            .iter()
-            .all(|e| rebase(&e.path).is_some_and(|np| rules.paths_equivalent(&e.path, &np)));
-    if !equivalent {
+    let members = report
+        .files
+        .iter()
+        .map(|f| f.path.as_str())
+        .chain(report.archive_contents.iter().map(|e| e.path.as_str()));
+    // The first path a rule reads differently once rebased, or that does
+    // not hang off the owner's at all.
+    let refused = std::iter::once((owner_path, Some(new_path.to_string())))
+        .chain(members.map(|path| (path, rebase(path))))
+        .find(|(path, rebased)| {
+            !rebased
+                .as_deref()
+                .is_some_and(|rebased| rules.paths_equivalent(path, rebased))
+        });
+    if let Some((path, rebased)) = refused {
+        tracing::debug!(
+            cached_path = owner_path,
+            new_path,
+            path,
+            differing = ?rebased.map(|rebased| rules.paths_inequivalent_inputs(path, &rebased)),
+            "cached report not adopted: a rule reads a path differently, or a path is not under the report's"
+        );
         return false;
     }
     for f in &mut report.files {
@@ -104,6 +116,45 @@ pub(crate) fn adopt_report_under(
     }
     report.target.path = new_path.to_string();
     true
+}
+
+/// Give `report`, the analysis of a file named for analysis, to the same
+/// bytes at `new_path`.
+///
+/// Such a file's analysis belongs to its content: the same bytes under
+/// another name or in another directory share it, so a download saved twice
+/// (`installer.dmg`, `installer(1).dmg`) is analysed once. Rules that read
+/// the name of the file they are given are rare and discouraged, and what
+/// one of them found under the first name is kept. An archive member is
+/// bound to its path instead; see [`adopt_report_under`].
+///
+/// The report's own path moves, and with it the decoded children and nested
+/// members whose paths hang off it (`<path>##base64`, `<path>!!member`). An
+/// archive's members are spelled from its root and stay as they are.
+pub(crate) fn rename_report(report: &mut crate::types::core::AnalysisReport, new_path: &str) {
+    use crate::types::file_analysis::{ARCHIVE_DELIMITER, ENCODING_DELIMITER};
+
+    if report.target.path == new_path {
+        return;
+    }
+    let owner_path = std::mem::replace(&mut report.target.path, new_path.to_string());
+    let moved = |path: &str| -> Option<String> {
+        let rest = path.strip_prefix(owner_path.as_str())?;
+        (rest.is_empty()
+            || rest.starts_with(ENCODING_DELIMITER)
+            || rest.starts_with(ARCHIVE_DELIMITER))
+        .then(|| format!("{new_path}{rest}"))
+    };
+    for f in &mut report.files {
+        if let Some(path) = moved(&f.path) {
+            f.path = path;
+        }
+    }
+    for e in &mut report.archive_contents {
+        if let Some(path) = moved(&e.path) {
+            e.path = path;
+        }
+    }
 }
 
 /// The global CapabilityMapper if one is already loaded, else `None`.

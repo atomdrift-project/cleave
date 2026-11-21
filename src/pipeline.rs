@@ -629,25 +629,21 @@ pub(crate) fn encoded_payloads(
 /// members.
 fn cached_report(
     sha256: &str,
-    report_type_key: &str,
     file_type_key: &str,
     options: &AnalysisOptions,
     engine: &Engine,
     path: &Path,
 ) -> Option<AnalysisReport> {
     let path_string = path.display().to_string();
-    if let Some(mut report) = analysis_cache::report_cache_lookup(
+    if let Some(mut report) = analysis_cache::named_file_report_lookup(
         sha256,
-        report_type_key,
+        file_type_key,
         options,
         engine.settings(),
         &path_string,
-        Some(engine.rules().as_ref()),
     ) {
-        report.target.path = path_string;
         report.analysis_timestamp = Some(chrono::Utc::now());
         report.cache_hit = true;
-        restamp_path_derived_values(&mut report, path);
         tracing::debug!(sha256, "analysis cache hit (report)");
         return Some(report);
     }
@@ -734,7 +730,6 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     tracing::debug!("Detecting file type for: {}", path.display());
     let file_type = analyzers::detect_file_type_from_data(path, file_data);
     let file_type_key = file_type.label();
-    let report_type_key = analysis_cache::report_type_key(file_type_key, path);
     tracing::debug!(
         "Detected file type: {:?} for: {}",
         file_type,
@@ -779,14 +774,7 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     }
 
     set_phase("cleave:cache_lookup");
-    if let Some(report) = cached_report(
-        &sha256_hex,
-        &report_type_key,
-        file_type_key,
-        options,
-        engine,
-        path,
-    ) {
+    if let Some(report) = cached_report(&sha256_hex, file_type_key, options, engine, path) {
         memory_tracker::log_after_file_processing(path_label, file_size, analysis_start.elapsed());
         return Ok(report);
     }
@@ -797,7 +785,7 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     let flight = loop {
         let flight = analysis_cache::acquire_report_flight(
             &sha256_hex,
-            &report_type_key,
+            file_type_key,
             options,
             engine.settings(),
         );
@@ -805,17 +793,9 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             break Some(flight);
         }
         if let Some(mut report) = flight.wait() {
-            // A report with path-derived findings or decoded children is
-            // bound to the path it was evaluated under (same guard as the
-            // archive-member flight); fall through to a fresh analysis.
-            let path_string = path.display().to_string();
-            if !shared_resources::adopt_report_under(&mut report, &path_string, engine.rules()) {
-                tracing::debug!(
-                    sha256 = %sha256_hex,
-                    "Analysis single-flight hit is path-bound; analyzing independently"
-                );
-                break None;
-            }
+            // The same bytes, analysed at once under another path: one
+            // analysis serves both (see `shared_resources::rename_report`).
+            shared_resources::rename_report(&mut report, &path.display().to_string());
             report.analysis_timestamp = Some(chrono::Utc::now());
             restamp_path_derived_values(&mut report, path);
             tracing::debug!(sha256 = %sha256_hex, "Analysis single-flight hit");
@@ -839,14 +819,7 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
 
     // Recheck persistent caches after becoming owner. A non-overlapping
     // caller may have completed between the first lookup and acquisition.
-    if let Some(report) = cached_report(
-        &sha256_hex,
-        &report_type_key,
-        file_type_key,
-        options,
-        engine,
-        path,
-    ) {
+    if let Some(report) = cached_report(&sha256_hex, file_type_key, options, engine, path) {
         if let Some(flight) = flight {
             flight.complete(None);
         }
@@ -1340,13 +1313,12 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // traits scan: a reload (`/reload`, scan's renewal task) can have replaced
     // the latter while this file was being analyzed.
     //
-    // A decoded payload (depth > 0) is analyzed from a temporary file whose
-    // random name is part of the report key, so its row could never be hit;
-    // the per-file store above, keyed without the name, is what it reuses.
+    // A decoded payload (depth > 0) is reused through the per-file store
+    // above; its whole report would only repeat what its parent's holds.
     if analysis_depth == 0 {
         analysis_cache::report_cache_store(
             &sha256_hex,
-            &report_type_key,
+            file_type_key,
             options,
             engine.settings(),
             &report,

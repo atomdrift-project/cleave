@@ -27,10 +27,9 @@
 //! call and keeps the newer one.
 
 use std::cell::RefCell;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
-use parking_lot::Mutex;
 use regex_automata::meta;
 use rustc_hash::FxBuildHasher;
 
@@ -169,7 +168,7 @@ fn admit(id: u64, bytes: usize) -> bool {
     if bytes > global_budget_bytes() / GLOBAL_SHARDS {
         return false;
     }
-    let retired = shard_for(id).lock().pop_lru();
+    let retired = lock(shard_for(id)).pop_lru();
     if let Some((_, entries)) = retired {
         release_cached(entries.iter().map(|e| e.size).sum());
         reserve_cached(bytes)
@@ -190,7 +189,8 @@ fn release_counter(counter: &AtomicUsize, bytes: usize) {
     debug_assert!(previous >= bytes, "regex scratch byte accounting underflow");
 }
 
-type Shard = Mutex<lru::LruCache<u64, smallvec::SmallVec<[Box<Entry>; 1]>, FxBuildHasher>>;
+type Parked = lru::LruCache<u64, smallvec::SmallVec<[Box<Entry>; 1]>, FxBuildHasher>;
+type Shard = Mutex<Parked>;
 
 fn shards() -> &'static [Shard; GLOBAL_SHARDS] {
     static SHARDS: OnceLock<[Shard; GLOBAL_SHARDS]> = OnceLock::new();
@@ -199,6 +199,16 @@ fn shards() -> &'static [Shard; GLOBAL_SHARDS] {
             Mutex::new(lru::LruCache::unbounded_with_hasher(Default::default()))
         })
     })
+}
+
+/// Lock a shard, with the standard mutex and not parking_lot's: a contended
+/// parking_lot lock yields the processor before it sleeps, and on a busy
+/// pool a yield hands the core to whatever else is runnable. Every regex
+/// switch takes two of these locks, so sixteen workers spent 4.7% of their
+/// time inside that yield on a folder scan; the standard mutex sleeps until
+/// it is woken, which halved the scan's involuntary context switches.
+fn lock(shard: &Shard) -> MutexGuard<'_, Parked> {
+    shard.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[allow(clippy::cast_possible_truncation)]
@@ -211,7 +221,7 @@ fn global_take(id: u64) -> Option<Box<Entry>> {
     // A checked-out entry keeps its byte reservation, so the common
     // take/search/return path does not bounce the process-wide counter's cache
     // line between every Rayon worker.
-    let mut shard = shard_for(id).lock();
+    let mut shard = lock(shard_for(id));
     let stack = shard.get_mut(&id)?;
     let entry = stack.pop();
     if stack.is_empty() {
@@ -233,7 +243,7 @@ fn global_take(id: u64) -> Option<Box<Entry>> {
 pub(crate) fn forget(id: u64) {
     // Deallocate outside the shard lock: other threads may be searching
     // unrelated engines in this shard while a retired engine releases bytes.
-    let removed = shard_for(id).lock().pop(&id);
+    let removed = lock(shard_for(id)).pop(&id);
     let parked_bytes = removed
         .as_ref()
         .map_or(0, |stack| stack.iter().map(|e| e.size).sum::<usize>());
@@ -258,7 +268,7 @@ pub(crate) fn forget(id: u64) {
 /// can reject it here.
 fn global_park(id: u64, entry: Box<Entry>) {
     let size = entry.size;
-    let mut shard = shard_for(id).lock();
+    let mut shard = lock(shard_for(id));
     let stack = shard.get_or_insert_mut(id, Default::default);
     let parked = stack.len() < PER_REGEX_CAP;
     if parked {
@@ -276,7 +286,7 @@ fn global_park(id: u64, entry: Box<Entry>) {
 pub(crate) fn clear_parked() {
     let mut freed = 0usize;
     for shard in shards() {
-        let mut shard = shard.lock();
+        let mut shard = lock(shard);
         for (_, entries) in shard.iter() {
             freed = freed.saturating_add(entries.iter().map(|entry| entry.size).sum::<usize>());
         }
@@ -523,10 +533,10 @@ mod tests {
         });
         // Switching engines parks the original cache for later reuse.
         with_cache(next_regex_id(), &engine("literal"), |_| {});
-        assert!(shard_for(id).lock().contains(&id));
+        assert!(lock(shard_for(id)).contains(&id));
         drop(re);
         assert!(
-            !shard_for(id).lock().contains(&id),
+            !lock(shard_for(id)).contains(&id),
             "the dead engine's ID can never retrieve this parked cache",
         );
     }

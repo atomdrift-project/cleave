@@ -21,20 +21,28 @@
 //! it ever saw.
 
 use std::fmt;
-use std::sync::Arc;
+use std::hash::BuildHasher as _;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxBuildHasher, FxHashSet};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// The pool never sweeps below this many entries. Distinct trait ids and
-/// static descriptions number in the low tens of thousands, so a healthy
-/// steady state never sweeps at all.
-const SWEEP_THRESHOLD: usize = 262_144;
+/// Shards of the pool. A string's hash picks its shard, so workers interning
+/// different strings do not share a lock. Under one lock for the whole pool
+/// every worker reading a cached report or folding findings waited on the
+/// rest: on a 16-thread scan whose analyses were all cached, 89% of the time
+/// in `intern` was the wait for that lock.
+const SHARDS: usize = 64;
 
-/// The dedup pool, and the size at which it next sweeps.
+/// A shard never sweeps below this many entries. Distinct trait ids and
+/// static descriptions number in the low tens of thousands across all the
+/// shards, so a healthy steady state never sweeps at all.
+const SWEEP_THRESHOLD: usize = 262_144 / SHARDS;
+
+/// One shard of the dedup pool, and the size at which it next sweeps.
 ///
-/// A sweep walks every entry under the process-wide lock, so it must stay
-/// rare however many strings remain live. `sweep_at` doubles from what the
+/// A sweep walks every entry under the shard's lock, so it must stay rare
+/// however many strings remain live. `sweep_at` doubles from what the
 /// last sweep kept, which bounds sweeping to amortized O(1) per intern. A
 /// fixed threshold did not: once more strings than that stayed live, every
 /// miss swept the whole pool. Measured on a 128-thread worker
@@ -89,10 +97,21 @@ impl Pool {
     }
 }
 
+/// The shard `s` is interned in. Its table indexes by the low bits of the
+/// same hash and tags by the top seven; the bits between pick the shard, so
+/// a shard's strings still spread over its table.
+#[allow(clippy::cast_possible_truncation)]
+fn shard_of(s: &str) -> usize {
+    (FxBuildHasher.hash_one(s) >> 32) as usize % SHARDS
+}
+
 fn intern(s: &str) -> Arc<str> {
-    static POOL: std::sync::OnceLock<parking_lot::Mutex<Pool>> = std::sync::OnceLock::new();
-    POOL.get_or_init(|| parking_lot::Mutex::new(Pool::new()))
+    // The standard mutex, for the reason `regex_scratch::lock` gives.
+    static POOL: OnceLock<[Mutex<Pool>; SHARDS]> = OnceLock::new();
+    let pool = POOL.get_or_init(|| std::array::from_fn(|_| Mutex::new(Pool::new())));
+    pool[shard_of(s)]
         .lock()
+        .unwrap_or_else(PoisonError::into_inner)
         .intern(s)
 }
 
@@ -116,7 +135,7 @@ impl Istr {
 
 impl Default for Istr {
     fn default() -> Self {
-        static EMPTY: std::sync::OnceLock<Arc<str>> = std::sync::OnceLock::new();
+        static EMPTY: OnceLock<Arc<str>> = OnceLock::new();
         Self(Arc::clone(EMPTY.get_or_init(|| Arc::from(""))))
     }
 }
@@ -264,6 +283,37 @@ mod tests {
         assert_eq!(json, "\"net/socket\"");
         let back: Istr = serde_json::from_str(&json).unwrap();
         assert!(Arc::ptr_eq(&a.0, &back.0), "deserialize must intern");
+    }
+
+    /// Strings spread over the shards: ids that differ only in their tail,
+    /// as trait ids do, must not pile into a few of them.
+    #[test]
+    fn strings_spread_over_the_shards() {
+        let mut used = [0_usize; SHARDS];
+        for i in 0..SHARDS * 64 {
+            used[shard_of(&format!("objectives/execution/shell::rule-{i}"))] += 1;
+        }
+        let (least, most) = (used.iter().min().unwrap(), used.iter().max().unwrap());
+        assert!(*least >= 16 && *most <= 256, "uneven shards: {used:?}");
+    }
+
+    /// Threads interning the same strings at once all get the one allocation.
+    #[test]
+    fn concurrent_interning_shares_backing_storage() {
+        let ids: Vec<String> = (0..512)
+            .map(|i| format!("concurrent/intern::{i}"))
+            .collect();
+        let held: Vec<Vec<Istr>> = std::thread::scope(|scope| {
+            let threads: Vec<_> = (0..8)
+                .map(|_| scope.spawn(|| ids.iter().map(Istr::from).collect()))
+                .collect();
+            threads.into_iter().map(|t| t.join().unwrap()).collect()
+        });
+        for other in &held[1..] {
+            for (a, b) in held[0].iter().zip(other) {
+                assert!(Arc::ptr_eq(&a.0, &b.0));
+            }
+        }
     }
 
     /// A sweep drops pool-only entries, keeps live ones, and re-arms at the

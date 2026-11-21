@@ -10,9 +10,7 @@
 
 use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::strings::StringExtractor;
-use crate::types::{
-    AnalysisReport, Criticality, Export, Finding, FindingKind, StringInfo, TargetInfo,
-};
+use crate::types::{AnalysisReport, Criticality, Finding, FindingKind, StringInfo, TargetInfo};
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::Path;
@@ -261,14 +259,7 @@ impl MachOAnalyzer {
         precomputed_sha256: Option<String>,
         ctx: &Ctx<'a>,
     ) -> AnalysisReport {
-        self.analyze_structural_with_strings(
-            file_path,
-            file_path,
-            data,
-            None,
-            precomputed_sha256,
-            ctx,
-        )
+        self.analyze_structural_with_strings(file_path, data, None, precomputed_sha256, ctx)
     }
 
     /// Structural analysis with optional pre-extracted strings.
@@ -280,7 +271,6 @@ impl MachOAnalyzer {
     fn analyze_structural_with_strings<'a>(
         &self,
         logical_path: &Path,
-        analysis_path: &Path,
         data: &'a [u8],
         stng_strings: Option<&[stng::ExtractedString]>,
         precomputed_sha256: Option<String>,
@@ -384,8 +374,9 @@ impl MachOAnalyzer {
         } else if let Some(ref strings) = self.preextracted_strings {
             report.strings = strings.clone();
         } else {
-            // No pre-extracted strings supplied: source them from filefacts.
-            report.strings = crate::strings::strings_from_filefacts(analysis_path, data);
+            // No pre-extracted strings supplied: source them from the parse
+            // already open, whose strings are at whole-file offsets.
+            report.strings = crate::strings::strings_from_context(ctx);
         }
         let strings_ms = _t.elapsed().as_millis();
 
@@ -684,6 +675,9 @@ struct FatSlice {
     offset: usize,
     size: usize,
     cpu_type: Option<String>,
+    /// The slice the whole-file parse describes at its top level: its
+    /// sections, symbols, functions and `macho.*` values.
+    primary: bool,
 }
 
 impl FatSlices {
@@ -715,12 +709,15 @@ impl FatSlices {
         else {
             return Self::default();
         };
+        let primary = parsed.slice_symbols().primary();
         Self(
             entries
                 .iter()
                 .filter_map(|s| {
+                    let offset = s.get("file_offset")?.as_u64()?;
                     Some(FatSlice {
-                        offset: s.get("file_offset")?.as_u64()? as usize,
+                        offset: offset as usize,
+                        primary: primary == Some(offset),
                         size: s.get("file_size")?.as_u64()? as usize,
                         cpu_type: s
                             .get("cpu_type")
@@ -750,44 +747,40 @@ impl Default for MachOAnalyzer {
 }
 
 impl MachOAnalyzer {
-    /// Returns the byte range of the preferred architecture slice
-    /// within a fat binary, or `0..data.len()` for thin binaries.
-    /// Reads slice extents from filefacts's `macho.slices[]` instead of
-    /// re-parsing the fat wrapper through goblin. Prefers arm64; falls
-    /// back to the first slice when arm64 isn't present.
+    /// The byte range of a fat binary's primary slice, or `0..data.len()`
+    /// for a thin binary. The primary slice is the one the whole-file parse
+    /// describes at its top level, so the structure read from that parse and
+    /// the bytes at this range are the same image. filefacts chooses it: the
+    /// slice this machine runs, when the file has one.
+    // TODO: report each slice of a universal binary as a member of the file,
+    // analysed on its own, so nothing here has to choose one.
     pub(crate) fn preferred_arch_range(
         &self,
         data: &[u8],
         slices: &FatSlices,
     ) -> std::ops::Range<usize> {
-        let pick = slices
-            .0
-            .iter()
-            .find(|s| s.cpu_type.as_deref() == Some("arm64"))
-            .or_else(|| slices.0.first());
-        if let Some(slice) = pick
-            && slice.size > 0
-            && slice.offset.saturating_add(slice.size) <= data.len()
-        {
-            return slice.offset..slice.offset.saturating_add(slice.size);
+        match slices.0.iter().find(|s| s.primary) {
+            // filefacts reads a slice the file cuts short up to the file's end.
+            Some(slice) if slice.offset < data.len() => {
+                slice.offset..slice.offset.saturating_add(slice.size).min(data.len())
+            }
+            _ => 0..data.len(),
         }
-        0..data.len()
     }
 
-    /// Rebase a fat slice's structural file offsets into full-file
-    /// coordinates by adding `delta` (the slice's byte offset within the
-    /// fat wrapper).
+    /// Rebase what the whole-file parse of a fat binary reports from its
+    /// primary slice's start into full-file coordinates, by adding `delta`
+    /// (the slice's byte offset within the fat wrapper).
     ///
-    /// filefacts parses each slice from its own bytes at base 0, so every
-    /// import, export, function, and section *file* offset it reports is
-    /// slice-relative. The rest of the pipeline — extracted strings, raw
-    /// pattern matching, YARA, and the hex/context view — all operate on
-    /// the full file. Without this shift a fat binary's symbol annotations
-    /// land `delta` bytes early in the hex view, and `section:`- and
-    /// `near_bytes:`-bounded trait searches target the wrong region.
+    /// filefacts reads the primary slice's imports, exports, functions and
+    /// load-command offsets from the slice's own bytes, so they count from
+    /// the slice. The rest of the pipeline — extracted strings, raw pattern
+    /// matching, YARA, and the hex/context view — works on the full file.
+    /// Without this shift a fat binary's symbol annotations land `delta`
+    /// bytes early in the hex view.
     ///
-    /// A section's `address` is a virtual (vm) address, not a file offset,
-    /// so it is deliberately left untouched.
+    /// Sections are left alone: the whole-file parse already places them in
+    /// the file, and a section's `address` is a virtual address.
     pub(crate) fn rebase_slice_offsets(report: &mut AnalysisReport, delta: u64) {
         if delta == 0 {
             return;
@@ -800,9 +793,6 @@ impl MachOAnalyzer {
         }
         for export in &mut report.exports {
             shift_hex_offset(&mut export.offset, delta);
-        }
-        for section in &mut report.sections {
-            section.offset = section.offset.map(|o| o.saturating_add(delta));
         }
         // Structural findings emitted by this analyzer (code-signature
         // identity, signer, entitlements) anchor their evidence at
@@ -874,29 +864,26 @@ impl MachOAnalyzer {
         vec![0..data.len()]
     }
 
-    /// Parse every non-preferred arch slice of a fat Mach-O and union its imports
-    /// and exports into the report, running capability lookups on each new import
-    /// so rules matching on filefacts-derived imports still fire for malware hidden
-    /// in a non-preferred arch.
+    /// Union what every other slice of a fat Mach-O imports and exports into
+    /// the report, so rules matching on imports still fire for malware hidden
+    /// in a slice that is not the primary one.
     ///
-    /// Preferred arch has already been parsed by the main structural pass, so
-    /// imports/exports already present are skipped (deduped by normalized symbol
-    /// name + library for imports; by symbol name for exports).
+    /// `whole` is the parse of the whole file. Its one extraction walked every
+    /// slice and kept each one's imports and exports, so no slice is parsed
+    /// here: reopening them repeated the extraction, function recovery
+    /// included, once per slice (measured: 10 s for the x86-64 slice of a
+    /// 307 MB universal binary, after 11 s for the file and 8 s for the
+    /// primary slice).
     ///
-    /// Each non-preferred slice is opened as its own [`AnalysisContext`],
-    /// so the slice's bytes flow through the same filefacts pipeline as
-    /// the preferred slice did. Slices that filefacts can't open are
-    /// skipped silently — fat binaries with one bad slice are rare
-    /// enough that surfacing the failure as a finding adds noise.
+    /// Imports and exports the primary slice already gave are skipped
+    /// (deduped by symbol and library for imports; by symbol for exports).
     ///
     /// Only runs on fat binaries; caller is expected to check.
-    ///
-    /// [`AnalysisContext`]: crate::analysis_context::AnalysisContext
     pub(crate) fn union_supplementary_arches(
         &self,
         report: &mut AnalysisReport,
         data: &[u8],
-        preferred_offset: usize,
+        whole: &Ctx<'_>,
         slices: &FatSlices,
     ) {
         use std::collections::HashSet;
@@ -911,56 +898,37 @@ impl MachOAnalyzer {
             report.exports.iter().map(|e| e.symbol.clone()).collect();
         let baseline_imports = report.imports.len();
         let baseline_exports = report.exports.len();
-        let mut arches_parsed = 0usize;
 
-        // The same slice table the range helpers read; each non-preferred
-        // slice is parsed on its own, under this analyzer's engine.
-        let dummy_path = Path::new("");
-        for &FatSlice { offset, size, .. } in &slices.0 {
-            if offset == preferred_offset {
-                continue;
+        let logical_path = std::path::PathBuf::from(&report.target.path);
+        for slice in slices.0.iter().filter(|s| !s.primary && s.size > 0) {
+            let end = slice.offset.saturating_add(slice.size);
+            if let Some(slice_bytes) = data.get(slice.offset..end) {
+                self.analyze_integer_table_scripts(&logical_path, slice_bytes, report);
             }
-            if size == 0 {
-                continue;
-            }
-            let Some(slice_bytes) = data.get(offset..offset.saturating_add(size)) else {
-                continue;
-            };
-            let slice_ctx = crate::analysis_context::AnalysisContext::open_with(
-                self.engine.filefacts_options(),
-                dummy_path,
-                slice_bytes,
-            );
-            arches_parsed = arches_parsed.saturating_add(1);
-            let logical_path = report.target.path.clone();
-            self.analyze_integer_table_scripts(Path::new(&logical_path), slice_bytes, report);
-
-            for mut imp in slice_ctx.imports_from_filefacts() {
-                let key = (imp.symbol.clone(), imp.library.clone());
-                if !seen_imports.insert(key) {
-                    continue;
+        }
+        for (at, symbols) in whole.parsed.slice_symbols().others() {
+            // The slice's offsets count from its start; rebase them into
+            // full-file coordinates, matching the primary slice (rebased by
+            // `rebase_slice_offsets`).
+            for mut import in crate::analysis_context::imports_of(symbols) {
+                if seen_imports.insert((import.symbol.clone(), import.library.clone())) {
+                    shift_hex_offset(&mut import.offset, at);
+                    report.imports.push(import);
                 }
-                // This slice was parsed at base 0; rebase its offsets into
-                // full-file coordinates by the slice's fat offset, matching
-                // the preferred slice (rebased by `rebase_slice_offsets`).
-                shift_hex_offset(&mut imp.offset, offset as u64);
-                report.imports.push(crate::types::Import { ..imp });
             }
-
-            for mut exp in slice_ctx.exports_from_filefacts() {
-                if !seen_exports.insert(exp.symbol.clone()) {
-                    continue;
+            for mut export in crate::analysis_context::exports_of(symbols) {
+                if seen_exports.insert(export.symbol.clone()) {
+                    shift_hex_offset(&mut export.offset, at);
+                    report.exports.push(export);
                 }
-                shift_hex_offset(&mut exp.offset, offset as u64);
-                report.exports.push(Export { ..exp });
             }
         }
 
         let extra_imports = report.imports.len().saturating_sub(baseline_imports);
         let extra_exports = report.exports.len().saturating_sub(baseline_exports);
-        if arches_parsed > 0 && (extra_imports > 0 || extra_exports > 0) {
+        if extra_imports > 0 || extra_exports > 0 {
             tracing::debug!(
-                arches_parsed,
+                path = %report.target.path,
                 extra_imports,
                 extra_exports,
                 "fat mach-O supplementary arch union"
@@ -1035,90 +1003,41 @@ impl MachOAnalyzer {
 
 impl Analyzer for MachOAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
-        // A fat binary needs one parse of the whole file: its slice table,
-        // and the full-file evaluation below. Reuse the caller's when it
-        // threaded one in; open it once otherwise.
-        let opened_full_ctx = (is_fat_macho(input.data) && input.parsed_ctx.is_none())
-            .then(|| input.open_ctx_with(self.engine.filefacts_options()));
-        let full_ctx = input.parsed_ctx.or(opened_full_ctx.as_ref());
-        let slices = FatSlices::of(input.data, full_ctx, &self.engine.filefacts_options());
-
-        // Get all architecture slices (for FAT binaries) or the single slice (for thin binaries)
-        let arch_ranges = self.all_arch_ranges(input.data, &slices);
-
-        // Use preferred arch for structural analysis (imports, exports, strings, etc.)
+        // One parse of the whole file serves everything below: a fat binary's
+        // slice table, the structure of the image it describes (a thin
+        // binary, or a fat one's primary slice), what the other slices import
+        // and export, and trait evaluation. Reuse the caller's when it
+        // threaded one in. Opening a slice on its own repeats the extraction
+        // the whole-file parse already ran on it, recovery included.
+        let opened;
+        let ctx = match input.parsed_ctx {
+            Some(ctx) => ctx,
+            None => {
+                opened = input.open_ctx_with(self.engine.filefacts_options());
+                &opened
+            }
+        };
+        let slices = FatSlices::of(input.data, Some(ctx), &self.engine.filefacts_options());
+        let is_fat = self.all_arch_ranges(input.data, &slices).len() > 1;
         let preferred_range = self.preferred_arch_range(input.data, &slices);
-        let preferred_range_start = preferred_range.start;
-        let preferred_is_full_file =
-            preferred_range.start == 0 && preferred_range.end == input.data.len();
+        let preferred_offset = preferred_range.start;
         // `preferred_arch_range` returns an in-bounds slice range or the whole file.
         let preferred_data = input.data.get(preferred_range).unwrap_or(input.data);
-        let strings = if input.strings.is_empty() {
-            None
-        } else {
-            Some(input.strings)
-        };
-        // Open filefacts-side parse so downstream helpers source structural
-        // data from filefacts's typed views. When filefacts can't open the
-        // bytes the fallback path (recovery-based metrics + malformed
-        // signal) is taken by `analyze_structural_with_strings` via
-        // `analyze_structural` synthesising a fresh ctx; either way
-        // we never re-walk with goblin from here.
-        // Archive and unified entry points already opened a context over the
-        // full member. A thin Mach-O's preferred slice is that exact member,
-        // so reuse it; reopening used to repeat every filefacts pass,
-        // recovery included. Fat slices still need their own slice-relative
-        // context so offsets can be rebased correctly below.
-        let opened_preferred_ctx = if preferred_is_full_file && input.parsed_ctx.is_some() {
-            None
-        } else {
-            let options = self.engine.filefacts_options();
-            Some(crate::analysis_context::AnalysisContext::open_with(
-                options,
-                input.path,
-                preferred_data,
-            ))
-        };
-        let preferred_ctx = if preferred_is_full_file {
-            input.parsed_ctx.or(opened_preferred_ctx.as_ref())
-        } else {
-            opened_preferred_ctx.as_ref()
-        };
-        let mut report = if let Some(ctx) = preferred_ctx {
-            self.analyze_structural_with_strings(
-                input.path,
-                input.backing_path(),
-                preferred_data,
-                strings,
-                input.sha256.clone(),
-                ctx,
-            )
-        } else {
-            let sha256 = input
-                .sha256
-                .clone()
-                .unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(preferred_data));
-            self.analyze_macho_fallback(
-                input.path,
-                preferred_data,
-                sha256,
-                Some("filefacts open failed".to_string()),
-            )
-        };
+        // For a fat binary the caller's strings come from the full file, so
+        // they are already at file offsets.
+        let strings = (!input.strings.is_empty()).then_some(input.strings);
+        let mut report = self.analyze_structural_with_strings(
+            input.path,
+            preferred_data,
+            strings,
+            input.sha256.clone(),
+            ctx,
+        );
         self.apply_fat_metadata(&mut report, input.data, &slices);
 
-        // For FAT binaries, strings should already be file-relative from input.strings
-        // (extracted from the full file by the entry point)
-        let is_fat = arch_ranges.len() > 1;
-
         if is_fat {
-            let preferred_offset = preferred_range_start;
-            // The preferred slice was parsed at base 0; rebase its
-            // structural offsets into full-file coordinates so symbol
-            // annotations and section/proximity searches line up with the
-            // full-file strings, raw matches, and hex view.
             Self::rebase_slice_offsets(&mut report, preferred_offset as u64);
-            self.union_supplementary_arches(&mut report, input.data, preferred_offset, &slices);
+            self.union_supplementary_arches(&mut report, input.data, ctx, &slices);
         }
 
         let archive_config = crate::analyzers::archive::ArchiveAnalyzerConfig::default()
@@ -1127,41 +1046,23 @@ impl Analyzer for MachOAnalyzer {
         self.analyze_python_bundle_payload(
             input.path,
             preferred_data,
-            preferred_ctx.map(|ctx| ctx.parsed.values()),
+            Some(ctx.parsed.values()),
             &mut report,
             &archive_config,
             None,
         );
 
-        // Direct calls also serve archive and decoded children. Scan full-file
-        // bytes before traits, including every FAT slice.
-        // Evaluate traits against binary data.
-        // For FAT binaries, evaluate against the full file since strings have file-relative offsets.
-        // For thin binaries, evaluate against the single slice (same as full file).
-        if is_fat {
-            // Full file evaluation - strings and offsets are file-relative.
-            // The full-file parse opened above, so the mapper does not reopen filefacts.
-            self.engine.evaluate_and_merge_findings_with_precomputed(
-                &mut report,
-                input.data,
-                crate::capabilities::AnalysisBorrow::with_filefacts(None, full_ctx),
-                None,
-                None,
-                None,
-                None,
-            );
-        } else {
-            // Thin binary - single slice is the whole file.
-            self.engine.evaluate_and_merge_findings_with_precomputed(
-                &mut report,
-                preferred_data,
-                crate::capabilities::AnalysisBorrow::with_filefacts(None, preferred_ctx),
-                None,
-                None,
-                None,
-                None,
-            );
-        }
+        // Traits are evaluated against the whole file: a fat binary's strings
+        // and offsets are file-relative, and a thin binary is its one image.
+        self.engine.evaluate_and_merge_findings_with_precomputed(
+            &mut report,
+            input.data,
+            crate::capabilities::AnalysisBorrow::with_filefacts(None, Some(ctx)),
+            None,
+            None,
+            None,
+            None,
+        );
 
         Ok(report)
     }

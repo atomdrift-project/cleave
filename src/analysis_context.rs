@@ -87,7 +87,21 @@ pub struct AnalysisContext<'a> {
     pub content: &'a [u8],
     /// Single-pass projection of `content` by filefacts.
     pub parsed: filefacts::ParsedFile<'a>,
+    /// A YARA scan of `content` run beside the parse, until the engine takes
+    /// it.
+    yara_ahead: std::sync::Mutex<Option<YaraAhead>>,
 }
+
+/// A YARA scan and the file-type buckets it ran over.
+#[derive(Debug)]
+struct YaraAhead {
+    filters: Vec<&'static str>,
+    scan: anyhow::Result<crate::yara_engine::YaraScan>,
+}
+
+/// The size from which a native binary counts as large: its parse is timed
+/// in the log, and inside an archive YARA scans it beside the parse.
+pub(crate) const LARGE_NATIVE_BYTES: usize = 16 * 1024 * 1024;
 
 impl<'a> AnalysisContext<'a> {
     /// Open `content` through filefacts under `options`, identifying it from
@@ -101,7 +115,7 @@ impl<'a> AnalysisContext<'a> {
         path: &'a Path,
         content: &'a [u8],
     ) -> Self {
-        let timing = content.len() >= 16 * 1024 * 1024;
+        let timing = content.len() >= LARGE_NATIVE_BYTES;
         let started = std::time::Instant::now();
         if timing {
             tracing::info!(target: "cleave::native_timing", path = %path.display(), bytes = content.len(), "context open begin");
@@ -110,7 +124,7 @@ impl<'a> AnalysisContext<'a> {
         if timing {
             tracing::info!(target: "cleave::native_timing", path = %path.display(), kind = ?parsed.fileid().file_type(), ms = started.elapsed().as_millis() as u64, "context identified");
         }
-        if content.len() >= 16 * 1024 * 1024
+        if content.len() >= LARGE_NATIVE_BYTES
             && matches!(
                 parsed.fileid().file_type(),
                 filefacts::FileType::Pe | filefacts::FileType::Elf | filefacts::FileType::MachO
@@ -130,7 +144,42 @@ impl<'a> AnalysisContext<'a> {
             path,
             content,
             parsed,
+            yara_ahead: std::sync::Mutex::new(None),
         }
+    }
+
+    /// Hold a YARA `scan` of this context's bytes over the `filters` buckets,
+    /// run beside the parse, for the engine to take in place of its own.
+    pub(crate) fn hold_yara(
+        &self,
+        filters: Vec<&'static str>,
+        scan: anyhow::Result<crate::yara_engine::YaraScan>,
+    ) {
+        *self
+            .yara_ahead
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(YaraAhead { filters, scan });
+    }
+
+    /// The scan held for `data` over `filters`: `None` unless `data` is this
+    /// context's bytes and the buckets are the ones scanned, since the scan
+    /// of other bytes or other rules is another scan. Taken once.
+    pub(crate) fn take_yara(
+        &self,
+        data: &[u8],
+        filters: &[&str],
+    ) -> Option<anyhow::Result<crate::yara_engine::YaraScan>> {
+        if !std::ptr::eq(data, self.content) {
+            return None;
+        }
+        let mut held = self
+            .yara_ahead
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if held.as_ref()?.filters != filters {
+            return None;
+        }
+        held.take().map(|ahead| ahead.scan)
     }
 
     /// Open with filefacts' defaults: the disk cache as
@@ -219,55 +268,13 @@ impl<'a> AnalysisContext<'a> {
     /// Project filefacts Import symbols into cleave's import representation.
     #[must_use]
     pub fn imports_from_filefacts(&self) -> Vec<Import> {
-        let mut imports = Vec::new();
-        for sym in self
-            .parsed
-            .symbols()
-            .iter_kind(filefacts::SymbolKind::Import)
-        {
-            let Some(import) = (match sym {
-                filefacts::Symbol::Import {
-                    name,
-                    library,
-                    offset,
-                    alias,
-                    ..
-                } => Some(project_filefacts_import(
-                    name,
-                    library,
-                    *offset,
-                    alias.clone(),
-                )),
-                _ => None,
-            }) else {
-                continue;
-            };
-            extend_with_owner_qualified_import(&mut imports, &import);
-            imports.push(import);
-        }
-        imports
+        imports_of(self.parsed.symbols())
     }
 
     /// Project filefacts Export symbols into cleave's export representation.
     #[must_use]
     pub fn exports_from_filefacts(&self) -> Vec<Export> {
-        self.parsed
-            .symbols()
-            .iter_kind(filefacts::SymbolKind::Export)
-            .filter_map(|s| match s {
-                filefacts::Symbol::Export {
-                    name,
-                    offset,
-                    forward_to,
-                    ..
-                } => {
-                    let mut out = Export::new(name, offset.map(hex_offset));
-                    out.forward_to = forward_to.clone();
-                    Some(out)
-                }
-                _ => None,
-            })
-            .collect()
+        exports_of(self.parsed.symbols())
     }
 
     /// Project filefacts sections into cleave's section representation.
@@ -298,6 +305,48 @@ impl<'a> AnalysisContext<'a> {
             .filter_map(project_filefacts_function)
             .collect()
     }
+}
+
+/// The imports among `symbols`, as cleave reports them. `symbols` is a file's
+/// own, or one slice's of a universal Mach-O.
+pub(crate) fn imports_of(symbols: &filefacts::Symbols) -> Vec<Import> {
+    let mut imports = Vec::new();
+    for sym in symbols.iter_kind(filefacts::SymbolKind::Import) {
+        let filefacts::Symbol::Import {
+            name,
+            library,
+            offset,
+            alias,
+            ..
+        } = sym
+        else {
+            continue;
+        };
+        let import = project_filefacts_import(name, library, *offset, alias.clone());
+        extend_with_owner_qualified_import(&mut imports, &import);
+        imports.push(import);
+    }
+    imports
+}
+
+/// The exports among `symbols`, as cleave reports them.
+pub(crate) fn exports_of(symbols: &filefacts::Symbols) -> Vec<Export> {
+    symbols
+        .iter_kind(filefacts::SymbolKind::Export)
+        .filter_map(|s| match s {
+            filefacts::Symbol::Export {
+                name,
+                offset,
+                forward_to,
+                ..
+            } => {
+                let mut out = Export::new(name, offset.map(hex_offset));
+                out.forward_to = forward_to.clone();
+                Some(out)
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 fn project_filefacts_import(

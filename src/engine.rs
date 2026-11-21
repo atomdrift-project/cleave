@@ -127,8 +127,9 @@ impl Engine {
 
     /// Evaluate one layer, ensuring YARA evidence is available before traits.
     /// A supplied map reuses the caller's prefetch, including an empty result;
-    /// otherwise this engine scans this layer's bytes. Format analyzers cannot
-    /// accidentally omit inline results when entering through this method.
+    /// otherwise this engine scans this layer's bytes, or takes the scan of
+    /// them its context holds. Format analyzers cannot accidentally omit
+    /// inline results when entering through this method.
     pub(crate) fn evaluate_and_merge_findings_with_precomputed(
         &self,
         report: &mut AnalysisReport,
@@ -159,11 +160,12 @@ impl Engine {
             if !skipped && let Some(yara) = self.yara().filter(|yara| yara.is_loaded()) {
                 let filters = file_type.map(|ft| ft.yara_filetypes()).unwrap_or_default();
                 let yara_started = std::time::Instant::now();
-                generated = crate::process_yara_result(
-                    report,
-                    Some(yara.scan_bytes(data, Some(filters.as_slice()))),
-                    Some(yara),
-                );
+                // The scan run beside this layer's parse, when there was one.
+                let scan = analysis
+                    .filefacts
+                    .and_then(|ctx| ctx.take_yara(data, &filters))
+                    .unwrap_or_else(|| yara.scan_bytes(data, Some(filters.as_slice())));
+                generated = crate::process_yara_result(report, Some(scan), Some(yara));
                 if yara_started.elapsed() > std::time::Duration::from_secs(4) {
                     tracing::warn!(path = %report.target.path,
                         elapsed_ms = yara_started.elapsed().as_millis() as u64,

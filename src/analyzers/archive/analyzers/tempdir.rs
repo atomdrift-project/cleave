@@ -597,9 +597,6 @@ impl ArchiveAnalyzer {
         let total_files = files.len();
         debug!("Found {} files to analyze", total_files);
 
-        // Stream results into the accumulator in bounded, ordered windows.
-        let mut acc = MemberAccumulator::default();
-
         // Analyze files in parallel — no shared Mutexes. Nested rayon calls
         // (analyze_extracted_member → rayon::join, scan_bytes → par_iter) are
         // handled by work-stealing; the outer worker participates in inner tasks.
@@ -608,11 +605,24 @@ impl ArchiveAnalyzer {
             on_rayon_thread = rayon::current_thread_index().is_some(),
             "Starting parallel archive member analysis"
         );
-        par_filter_fold_members(
+        let parallel = self.members_run_parallel(files.len());
+        let early = if parallel {
+            early_starts(
+                files
+                    .iter()
+                    .map(|entry| entry.metadata().map_or(0, |m| m.len())),
+            )
+        } else {
+            Vec::new()
+        };
+        // Results stream into the accumulator in walk order, in bounded
+        // windows.
+        let mut acc = fold_members_with_early_starts(
             &files,
-            self.members_run_parallel(files.len()),
-            |_| None,
-            |entry| {
+            &early,
+            parallel,
+            &self.engine,
+            |entry: &walkdir::DirEntry| {
                 let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard;
                 if self.is_cancelled() {
                     return None;
@@ -729,10 +739,6 @@ impl ArchiveAnalyzer {
                     report,
                 })
             },
-            |result| {
-                let _aggregate = crate::mem_profile::phase(crate::mem_profile::Phase::Aggregate);
-                acc.fold(result, &self.engine);
-            },
         );
 
         // Surface the most severe members first under a hard ceiling, then drain
@@ -755,6 +761,111 @@ impl ArchiveAnalyzer {
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
         report.metadata.tools_used = vec!["archive_analyzer".to_string(), "walkdir".to_string()];
     }
+}
+
+/// A member this large is analysed for seconds, most of them on one thread.
+const EARLY_START_MIN_BYTES: u64 = 16 * 1024 * 1024;
+
+/// How many members of one archive start early. Each holds its mapped file
+/// and working set for the whole walk, and its report until the walk reaches
+/// it.
+const EARLY_STARTS: usize = 4;
+
+/// The members that start as the walk does, by index into `sizes` in
+/// ascending order: the largest of those at least
+/// [`EARLY_START_MIN_BYTES`], [`EARLY_STARTS`] at most, the earlier of equals.
+fn early_starts(sizes: impl Iterator<Item = u64>) -> Vec<usize> {
+    let mut large: Vec<(std::cmp::Reverse<u64>, usize)> = sizes
+        .enumerate()
+        .filter(|&(_, size)| size >= EARLY_START_MIN_BYTES)
+        .map(|(index, size)| (std::cmp::Reverse(size), index))
+        .collect();
+    large.sort_unstable();
+    large.truncate(EARLY_STARTS);
+    let mut early: Vec<usize> = large.into_iter().map(|(_, index)| index).collect();
+    early.sort_unstable();
+    early
+}
+
+/// Analyze `items` and fold every result in item order, with the members at
+/// the `early` indices (ascending) started at once on a pool of their own,
+/// beside the walk of the rest.
+///
+/// Results fold in order, so one member analysed for a long time holds back
+/// every member after it: the walk analyses a window past it and then waits.
+/// An app bundle's main binary did that to the 5,300 files behind it for 9 s
+/// of a 35 s scan. Holding the finished reports instead costs their memory
+/// (+0.9 GB for those files). So the members between two early ones fold into
+/// an accumulator of their own as they finish, and the accumulators are
+/// joined around the early members' results in item order
+/// ([`MemberAccumulator::absorb`] keeps a fold's order), which is the result
+/// of folding every member in turn.
+///
+/// An early member is the scan's longest chain of work, and on the walk's
+/// pool the two bury each other: a worker waiting on one of the member's
+/// joins steals a file of the walk and returns late, and the walk's own
+/// thread steals seconds of the member's function recovery and holds its
+/// window open while every other worker idles. On a pool of their own
+/// ([`with_isolated_leaf_pool`](crate::rayon_nest::with_isolated_leaf_pool)),
+/// half the size of the walk's, the early members' joins are served by
+/// threads that have nothing else to run.
+fn fold_members_with_early_starts<T: Sync>(
+    items: &[T],
+    early: &[usize],
+    parallel: bool,
+    engine: &crate::Engine,
+    analyze: impl Fn(&T) -> Option<MemberAnalysisResult> + Sync + Send,
+) -> MemberAccumulator {
+    let rest: Vec<(usize, &T)> = items
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| early.binary_search(index).is_err())
+        .collect();
+    let mut between: Vec<MemberAccumulator> = (0..=early.len())
+        .map(|_| MemberAccumulator::default())
+        .collect();
+    let analyze = &analyze;
+    let early_results: Vec<Option<MemberAnalysisResult>> = std::thread::scope(|scope| {
+        let started = (!early.is_empty()).then(|| {
+            let threads = (rayon::current_num_threads() / 2).max(1);
+            scope.spawn(move || {
+                crate::rayon_nest::with_isolated_leaf_pool(threads, || {
+                    early
+                        .par_iter()
+                        .with_max_len(1)
+                        .map(|&index| analyze(&items[index]))
+                        .collect()
+                })
+            })
+        });
+        par_filter_fold_members(
+            &rest,
+            parallel,
+            |_| None,
+            |&(index, item)| analyze(item).map(|result| (index, result)),
+            |(index, result)| {
+                let _aggregate = crate::mem_profile::phase(crate::mem_profile::Phase::Aggregate);
+                // The members before the first early one, or after the last
+                // early one before this member.
+                between[early.partition_point(|&e| e < index)].fold(result, engine);
+            },
+        );
+        started.map_or_else(Vec::new, |members| {
+            members
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+        })
+    });
+    let mut between = between.into_iter();
+    let mut acc = between.next().unwrap_or_default();
+    for (result, after) in early_results.into_iter().zip(between) {
+        if let Some(result) = result {
+            let _aggregate = crate::mem_profile::phase(crate::mem_profile::Phase::Aggregate);
+            acc.fold(result, engine);
+        }
+        acc.absorb(after);
+    }
+    acc
 }
 
 /// The regular files extracted under `temp_dir`, at most
@@ -811,4 +922,201 @@ pub(super) fn extracted_files(
         }
     }
     files
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod early_start_tests {
+    use super::*;
+    use crate::types::{Criticality, Evidence, Finding, FindingKind, TargetInfo, YaraMatch};
+
+    const MIB: u64 = 1024 * 1024;
+
+    /// The largest members at or above the floor start early, a bounded
+    /// number of them, named in walk order.
+    #[test]
+    fn early_starts_are_the_largest_members_over_the_floor() {
+        let pick = |sizes: &[u64]| early_starts(sizes.iter().copied());
+        assert!(pick(&[]).is_empty());
+        assert!(pick(&[0, 4096, 16 * MIB - 1]).is_empty());
+        assert_eq!(pick(&[1, 16 * MIB, 2, 300 * MIB]), [1, 3]);
+        // Five over the floor: the four largest, and the earlier of equals.
+        let sizes = [
+            40 * MIB,
+            17 * MIB,
+            90 * MIB,
+            17 * MIB,
+            3,
+            20 * MIB,
+            64 * MIB,
+        ];
+        assert_eq!(pick(&sizes), [0, 2, 5, 6]);
+        assert_eq!(pick(&[32 * MIB; 6]), [0, 1, 2, 3]);
+    }
+
+    /// One member's result: findings whose rollup ties and wins depend on
+    /// fold order, a YARA match several members share, a Go source and an
+    /// archive entry. Member 7 yields nothing, as a member that fails to read.
+    fn member(index: usize) -> Option<MemberAnalysisResult> {
+        if index == 7 {
+            return None;
+        }
+        let path = format!("m{index:02}");
+        let mut report = AnalysisReport::new(TargetInfo {
+            path: path.clone(),
+            file_type: "shell".to_string(),
+            size_bytes: 1,
+            sha256: format!("{index:064x}"),
+            architectures: None,
+        });
+        let finding = |id: &str, crit, conf: f32| Finding {
+            precomputed_spans: None,
+            src: None,
+            id: id.to_string().into(),
+            kind: FindingKind::Structural,
+            desc: format!("from {path}").into(),
+            conf,
+            crit,
+            mbc: None,
+            attack: None,
+            trait_refs: vec![],
+            evidence: vec![Evidence {
+                method: "test".to_string(),
+                source: path.clone(),
+                value: path.clone(),
+                ..Default::default()
+            }],
+            match_count: 1,
+            source_file: None,
+            downgraded: false,
+        };
+        // Every member ties on this one: the first in order is kept.
+        report
+            .findings
+            .push(finding("t/tied", Criticality::Notable, 0.5));
+        // Later members out-rank earlier ones in steps, with ties between.
+        let step = [
+            Criticality::Baseline,
+            Criticality::Notable,
+            Criticality::Suspicious,
+        ];
+        report.findings.push(finding(
+            "t/rising",
+            step[index / 14],
+            (index % 5) as f32 / 10.0,
+        ));
+        report.findings.push(finding(
+            &format!("t/own-{index}"),
+            Criticality::Notable,
+            0.9,
+        ));
+        report.yara_matches.push(YaraMatch {
+            rule: format!("rule{}", index % 6),
+            namespace: path.clone(),
+            crit: Criticality::Notable,
+            desc: String::new(),
+            matched_strings: vec![],
+            is_capability: false,
+            mbc: None,
+            attack: None,
+            arch_context: None,
+            trait_id: None,
+        });
+        Some(MemberAnalysisResult {
+            go_source: index.is_multiple_of(9).then(|| format!("package m{index}")),
+            entry_path: path.clone(),
+            archive_location: format!("archive:{path}"),
+            entry_metadata: ArchiveEntry {
+                path,
+                ..ArchiveEntry::default()
+            },
+            report: Some(report),
+        })
+    }
+
+    /// What an accumulator holds, in the order it holds it.
+    fn held(acc: MemberAccumulator) -> impl PartialEq + std::fmt::Debug {
+        let mut traits: Vec<_> = acc
+            .collected_traits
+            .into_iter()
+            .map(|(id, f)| (id, f.crit, f.conf.to_bits(), f.desc.to_string(), f.evidence))
+            .map(|(id, crit, conf, desc, evidence)| {
+                let from: Vec<_> = evidence.into_iter().map(|e| e.location).collect();
+                (id, crit, conf, desc, from)
+            })
+            .collect();
+        traits.sort();
+        let mut ids: Vec<_> = acc.distinct_finding_ids.into_iter().collect();
+        ids.sort();
+        let files: Vec<_> = acc.collected_files.into_iter().map(|f| f.path).collect();
+        let entries: Vec<_> = acc
+            .collected_archive_entries
+            .into_iter()
+            .map(|e| e.path)
+            .collect();
+        let yara: Vec<_> = acc
+            .collected_yara
+            .into_iter()
+            .map(|m| (m.rule, m.namespace))
+            .collect();
+        (
+            traits,
+            ids,
+            files,
+            entries,
+            yara,
+            acc.go_sources,
+            acc.go_incomplete,
+            acc.files_analyzed,
+        )
+    }
+
+    /// Members started early are folded where the walk has them: whichever
+    /// members start early, and however late they finish, the accumulator
+    /// holds what folding every member in turn gives. Rollup ties, the YARA
+    /// match kept for a rule, and the order of files, entries and Go sources
+    /// all follow fold order, so each would show a member folded out of turn.
+    #[test]
+    fn early_members_fold_in_walk_order() {
+        let engine = crate::Engine::empty();
+        let items: Vec<usize> = (0..42).collect();
+        let mut in_turn = MemberAccumulator::default();
+        for &index in &items {
+            if let Some(result) = member(index) {
+                in_turn.fold(result, &engine);
+            }
+        }
+        let in_turn = held(in_turn);
+
+        for early in [
+            vec![],
+            vec![0],
+            vec![41],
+            vec![7],
+            vec![3, 17, 30],
+            vec![0, 1, 40, 41],
+        ] {
+            for parallel in [true, false] {
+                let acc = fold_members_with_early_starts(
+                    &items,
+                    &early,
+                    parallel,
+                    &engine,
+                    |&index: &usize| {
+                        // An early member is the slow one: it finishes after
+                        // the members behind it.
+                        if early.contains(&index) {
+                            std::thread::sleep(std::time::Duration::from_millis(40));
+                        }
+                        member(index)
+                    },
+                );
+                assert_eq!(
+                    format!("{:?}", held(acc)),
+                    format!("{in_turn:?}"),
+                    "early {early:?}, parallel {parallel}"
+                );
+            }
+        }
+    }
 }

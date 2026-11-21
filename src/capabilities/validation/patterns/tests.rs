@@ -375,3 +375,18 @@ fn regex_perf_flags_unanchored_broad_scans_only_when_too_loose() {
 
     assert!(issues(r".*BackdoorConfig", "raw").is_empty());
 }
+
+#[test]
+fn min_literals_skip_group_prefixes_and_weigh_bytes() {
+    use super::count_regex_min_literals as n;
+    assert_eq!(n("abc"), 3);
+    assert_eq!(n("(?:ab)c"), n("(ab)c"));
+    assert_eq!(
+        n("^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}$"),
+        n("^([0-9]{1,3}\\.){3}[0-9]{1,3}$")
+    );
+    assert_eq!(n("(?P<x>ab)c"), 3);
+    // UTF-8 bytes, as a substr counts them; a quantifier takes back one char.
+    assert_eq!(n("木马"), "木马".len());
+    assert_eq!(n("木马?"), "木".len());
+}

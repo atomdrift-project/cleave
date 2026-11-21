@@ -7,6 +7,7 @@ use std::sync::Arc;
 mod validate;
 #[cfg(feature = "lint")]
 pub(crate) use validate::begin_regex_compile_checks;
+#[cfg(feature = "lint")]
 pub(crate) use validate::find_backtrack_issue;
 #[allow(clippy::wildcard_imports)]
 use validate::*;
@@ -1009,6 +1010,23 @@ pub(crate) struct KvQuery {
 }
 
 impl Condition {
+    /// The condition's `is:` validator, on the types that take one.
+    #[cfg(feature = "lint")]
+    #[must_use]
+    pub(crate) fn is_check(&self) -> Option<StringValidator> {
+        match self {
+            Condition::Text(TextQuery { is_check, .. })
+            | Condition::Raw(RawQuery { is_check, .. })
+            | Condition::Encoded(EncodedQuery { is_check, .. })
+            | Condition::Comment(CommentQuery { is_check, .. })
+            | Condition::Literal(LiteralQuery { is_check, .. })
+            | Condition::Kv(KvQuery { is_check, .. })
+            | Condition::Path(PathQuery { is_check, .. })
+            | Condition::Symbol(SymbolQuery { is_check, .. }) => *is_check,
+            _ => None,
+        }
+    }
+
     /// Rewrite the pre-filefacts call-target spelling in YAML conditions.
     ///
     /// Older filefacts versions represented a chained call such as

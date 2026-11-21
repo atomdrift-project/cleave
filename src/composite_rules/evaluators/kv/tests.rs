@@ -2732,3 +2732,36 @@ fn integration_wheel_filename_matches_metadata_no_match() {
     let cond = kv_ne("whl.filename.name_prefix", "METADATA::Name");
     assert!(evaluate_kv(&cond, &ctx).is_none());
 }
+
+#[test]
+fn validator_judges_the_first_group_else_the_match() {
+    let json_content = br#"{"name":"p","repository":"http://45.33.32.156/a?mirror=10.0.0.1"}"#;
+    let build = |substr: Option<&str>, regex: Option<&str>| {
+        Condition::Kv(KvQuery {
+            match_mode: Default::default(),
+            path: "repository".to_string(),
+            exact: None,
+            substr: substr.map(str::to_string),
+            regex: regex.map(str::to_string),
+            eq: None,
+            ne: None,
+            case_insensitive: false,
+            exists: None,
+            length_min: None,
+            length_max: None,
+            is_check: Some(crate::composite_rules::condition::StringValidator::ExternalIp),
+            not: None,
+        })
+    };
+    let path = Path::new("package.json");
+    let matches =
+        |substr, regex| evaluate_kv_test(&build(substr, regex), json_content, path).is_some();
+    // With no matcher the whole value is judged.
+    assert!(matches(None, None));
+    // A substr's match is its needle.
+    assert!(!matches(Some("http://"), None));
+    // A group names the value; without one the whole match is judged.
+    assert!(matches(None, Some(r"^https?://([0-9.]+)/")));
+    assert!(!matches(None, Some(r"mirror=([0-9.]+)")));
+    assert!(matches(None, Some(r"^https?://[0-9.]+")));
+}

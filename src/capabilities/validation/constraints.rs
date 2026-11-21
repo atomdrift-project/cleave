@@ -34,6 +34,9 @@ pub(crate) use references::*;
 mod dead_exceptions;
 pub(crate) use dead_exceptions::find_dead_regex_exceptions;
 
+mod is_subjects;
+pub(crate) use is_subjects::find_ambiguous_is_subjects;
+
 /// Compare two slices of strings in a case-insensitive, order-independent way.
 fn vec_values_equal(a: &[String], b: &[String]) -> bool {
     if a.len() != b.len() {

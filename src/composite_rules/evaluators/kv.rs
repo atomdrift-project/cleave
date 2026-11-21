@@ -161,9 +161,7 @@ impl KvMatcher {
             return false;
         };
         let subject = match &self.regex {
-            Some(re) if self.exact.is_none() && self.substr.is_none() => {
-                re.is_subject(&s, matched)
-            }
+            Some(re) if self.exact.is_none() && self.substr.is_none() => re.is_subject(&s, matched),
             _ => matched,
         };
         crate::composite_rules::evaluators::symbol_string::validate_match(subject, self.is_check)

@@ -263,19 +263,39 @@ fn text_not_judges_only_the_matched_substr() {
 }
 
 #[test]
-fn text_substr_validator_still_judges_the_whole_string() {
+fn text_validator_judges_the_first_group_else_the_match() {
     let report = report_with(vec![
         string("connect to 192.168.1.1:8080", Some(0x1000)),
         string("connect to 45.33.32.156:53", Some(0x2000)),
     ]);
     let ctx = EvaluationContext::test_only_new(&report, &[], FileType::All);
+    // A substr's match is its needle, which never holds an IP.
     let needle = "connect to".to_string();
-    let mut params = params(&needle);
-    params.is_check = Some(StringValidator::ExternalIp);
-    let result = eval_text(&params, None, &ctx, None);
-    assert_eq!(result.match_count, 1);
-    assert_eq!(result.evidence[0].value, "connect to");
-    assert_eq!(result.evidence[0].byte_offset(), Some(0x2000));
+    let mut substr = params(&needle);
+    substr.is_check = Some(StringValidator::ExternalIp);
+    assert!(!eval_text(&substr, None, &ctx, None).matched);
+    // A group names the value; without one the whole match is judged.
+    for pattern in [r"connect to (\S+)", r"connect to \S+"] {
+        let pattern = pattern.to_string();
+        let regex = StringParams {
+            substr: None,
+            regex: Some(&pattern),
+            is_check: Some(StringValidator::ExternalIp),
+            ..params(&needle)
+        };
+        let result = eval_text(&regex, None, &ctx, None);
+        assert_eq!(result.match_count, 1, "{pattern}");
+        assert_eq!(result.evidence[0].byte_offset(), Some(0x2000), "{pattern}");
+    }
+    // The first group is judged even when a later one holds an external IP.
+    let pattern = r"connect to (\d+)\.(\S+)".to_string();
+    let first = StringParams {
+        substr: None,
+        regex: Some(&pattern),
+        is_check: Some(StringValidator::ExternalIp),
+        ..params(&needle)
+    };
+    assert!(!eval_text(&first, None, &ctx, None).matched);
 }
 
 #[test]
@@ -518,16 +538,30 @@ fn raw_not_judges_only_the_matched_substr_on_every_scan() {
 }
 
 #[test]
-fn raw_substr_validator_still_judges_the_surrounding_window() {
+fn raw_validator_judges_the_first_group_else_the_match() {
     for needle in ["connect", "déjà"] {
-        let near = format!("{needle} 45.33.32.156 done");
+        let content = format!("{needle} 45.33.32.156 done");
+        // The bare needle holds no IP, whatever sits beside it.
         assert!(
-            raw(near.as_bytes(), needle, false, true, None).matched,
+            !raw(content.as_bytes(), needle, false, true, None).matched,
             "{needle}"
         );
-        let far = format!("{needle} {} 45.33.32.156", "x".repeat(80));
+        // ASCII and Unicode patterns take the byte and codepoint engines.
+        for pattern in [format!(r"{needle} ([0-9.]+)"), format!(r"{needle} [0-9.]+")] {
+            assert!(
+                raw_regex(content.as_bytes(), &pattern, true, None).matched,
+                "{pattern}"
+            );
+        }
+        let private = format!("{needle} 10.0.0.1 then 45.33.32.156");
         assert!(
-            !raw(far.as_bytes(), needle, false, true, None).matched,
+            !raw_regex(
+                private.as_bytes(),
+                &format!(r"{needle} ([0-9.]+)"),
+                true,
+                None
+            )
+            .matched,
             "{needle}"
         );
     }
@@ -535,16 +569,45 @@ fn raw_substr_validator_still_judges_the_surrounding_window() {
 
 #[test]
 fn raw_not_and_validator_combine_per_hit() {
-    // First hit: no IP nearby (rejected by `is:`); second: IP nearby. The
-    // `not:` names the first hit's neighborhood, which is never judged.
+    // First hit: its group is absent, so the bare match is judged and has no
+    // IP; second: the group holds one. The `not:` names text beside the first
+    // hit, which is never judged.
     let content = format!("blocked token {} token 45.33.32.156", "x".repeat(120));
     let exceptions = not(serde_json::json!("blocked"));
-    let result = raw(content.as_bytes(), "token", false, true, Some(&exceptions));
+    let result = raw_regex(
+        content.as_bytes(),
+        r"token ([0-9.]+)?",
+        true,
+        Some(&exceptions),
+    );
     assert_eq!(result.match_count, 1);
     assert_eq!(
         result.evidence[0].offsets[0],
         content.rfind("token").unwrap() as u64
     );
+}
+
+fn raw_regex(
+    content: &[u8],
+    pattern: &str,
+    external_ip: bool,
+    exceptions: Option<&Vec<NotException>>,
+) -> crate::composite_rules::context::ConditionResult {
+    let report = report_with(Vec::new());
+    let ctx = EvaluationContext::test_only_new(&report, content, FileType::All);
+    let pattern = pattern.to_string();
+    eval_raw(
+        TextPattern {
+            regex: Some(&pattern),
+            ..TextPattern::default()
+        },
+        (None, None),
+        external_ip.then_some(StringValidator::ExternalIp),
+        exceptions,
+        &ContentLocationParams::default(),
+        &ctx,
+        None,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -623,13 +686,31 @@ fn encoded_regex_not_judges_only_the_match() {
 }
 
 #[test]
-fn encoded_substr_validator_still_judges_the_whole_string() {
-    let strings = vec![
-        decoded("connect to 192.168.1.1", 0x100, "base64"),
-        decoded("connect to 45.33.32.156", 0x200, "base64"),
-    ];
-    let result = encoded(strings, "connect to", false, true, None);
-    assert_eq!(result.match_count, 1);
+fn encoded_validator_judges_the_first_group_else_the_match() {
+    let strings = || {
+        vec![
+            decoded("connect to 192.168.1.1", 0x100, "base64"),
+            decoded("connect to 45.33.32.156", 0x200, "base64"),
+        ]
+    };
+    assert!(!encoded(strings(), "connect to", false, true, None).matched);
+    let report = report_with(strings());
+    let ctx = EvaluationContext::test_only_new(&report, &[], FileType::All);
+    for pattern in [r"connect to (\S+)", r"connect to \S+"] {
+        let pattern = pattern.to_string();
+        let result = eval_encoded(
+            None,
+            TextPattern {
+                regex: Some(&pattern),
+                ..TextPattern::default()
+            },
+            &ContentLocationParams::default(),
+            Some(StringValidator::ExternalIp),
+            None,
+            &ctx,
+        );
+        assert_eq!(result.match_count, 1, "{pattern}");
+    }
 }
 
 #[test]

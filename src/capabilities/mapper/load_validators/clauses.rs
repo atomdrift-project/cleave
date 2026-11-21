@@ -956,6 +956,19 @@ pub(super) fn dead_regex_exceptions<'a>(input: &'a ValidationInput<'a>) -> Repor
     })
 }
 
+/// Validate: every `is:` judges one varying subject.
+pub(super) fn ambiguous_is_subjects<'a>(input: &'a ValidationInput<'a>) -> Report<'a> {
+    let found = crate::capabilities::validation::find_ambiguous_is_subjects(
+        input.trait_definitions,
+        input.composite_rules,
+    );
+    report(move |warnings| {
+        for message in &found {
+            warnings.push_id("ambiguous-is-subject", message.clone());
+        }
+    })
+}
+
 /// Validate: `not:` only used with `regex:` patterns
 pub(super) fn invalid_not_usage<'a>(input: &'a ValidationInput<'a>) -> Report<'a> {
     let invalid_not = find_invalid_not_usage(input.trait_definitions);

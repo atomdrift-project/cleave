@@ -32,6 +32,7 @@ use crate::composite_rules::condition::NotExceptionStructured;
 use regex_automata::dfa::dense;
 use regex_automata::nfa::thompson;
 use regex_syntax::hir::{Capture, Hir, HirKind, Look, Repetition};
+use std::path::Path;
 
 /// One finding: the rule it is in, and what is wrong.
 pub(crate) struct DeadException {
@@ -47,29 +48,7 @@ pub(crate) fn find_dead_regex_exceptions(
     traits: &[TraitDefinition],
     composites: &[CompositeTrait],
 ) -> Vec<DeadException> {
-    let mut targets = Vec::new();
-    for t in traits {
-        let rule = (t.id.as_str(), t.defined_in.as_path());
-        // A trait-level `not:` filters what the `if:` matched, alongside the
-        // condition's own.
-        targets.push((rule, &t.r#if, t.not.as_deref()));
-        for condition in t.unless.iter().flatten() {
-            targets.push((rule, condition, None));
-        }
-        for condition in downgrade_conditions(t.downgrade.as_ref()) {
-            targets.push((rule, condition, None));
-        }
-    }
-    for c in composites {
-        let rule = (c.id.as_str(), c.defined_in.as_path());
-        for condition in [&c.all, &c.any, &c.unless].into_iter().flatten().flatten() {
-            targets.push((rule, condition, None));
-        }
-        for condition in downgrade_conditions(c.downgrade.as_ref()) {
-            targets.push((rule, condition, None));
-        }
-    }
-    targets
+    rule_conditions(traits, composites)
         .par_iter()
         .flat_map_iter(|&((id, file), condition, rule_not)| {
             let problems = matcher(condition)
@@ -89,6 +68,43 @@ pub(crate) fn find_dead_regex_exceptions(
             })
         })
         .collect()
+}
+
+/// A rule's `(id, file)`, one condition it lists, and the trait-level `not:`
+/// that filters it (only a trait's `if:` has one).
+pub(super) type RuleCondition<'a> = (
+    (&'a str, &'a Path),
+    &'a Condition,
+    Option<&'a [NotException]>,
+);
+
+/// Every condition a trait or composite lists: `if:`, `unless:`, composite
+/// legs and `downgrade:` legs.
+pub(super) fn rule_conditions<'a>(
+    traits: &'a [TraitDefinition],
+    composites: &'a [CompositeTrait],
+) -> Vec<RuleCondition<'a>> {
+    let mut targets = Vec::new();
+    for t in traits {
+        let rule = (t.id.as_str(), t.defined_in.as_path());
+        targets.push((rule, &t.r#if, t.not.as_deref()));
+        for condition in t.unless.iter().flatten() {
+            targets.push((rule, condition, None));
+        }
+        for condition in downgrade_conditions(t.downgrade.as_ref()) {
+            targets.push((rule, condition, None));
+        }
+    }
+    for c in composites {
+        let rule = (c.id.as_str(), c.defined_in.as_path());
+        for condition in [&c.all, &c.any, &c.unless].into_iter().flatten().flatten() {
+            targets.push((rule, condition, None));
+        }
+        for condition in downgrade_conditions(c.downgrade.as_ref()) {
+            targets.push((rule, condition, None));
+        }
+    }
+    targets
 }
 
 fn downgrade_conditions(

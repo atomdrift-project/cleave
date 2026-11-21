@@ -211,7 +211,7 @@ pub(crate) use constraints::{
     LegRole, MAX_AGGREGATE_SUPPRESSIONS, MAX_NOTABLE_DOWNGRADE_DIRECT,
     MAX_NOTABLE_DOWNGRADE_EXPANDED, MAX_OWN_SUPPRESSIONS, MISFILED_SIGNATURE_CLAIM,
     MISSING_CONDITIONS, UNPROVEN_SIGNER_SUPPRESSOR, UNVERIFIED_SIGNATURE_SUPPRESSOR,
-    find_broad_notable_downgrades, find_container_name_convictions,
+    find_ambiguous_is_subjects, find_broad_notable_downgrades, find_container_name_convictions,
     find_convictions_without_content, find_dangling_directory_refs, find_dead_any_alternatives,
     find_dead_composites, find_dead_downgrades, find_dead_regex_exceptions,
     find_directory_shadowed_refs, find_empty_condition_clauses, find_excessive_file_types,

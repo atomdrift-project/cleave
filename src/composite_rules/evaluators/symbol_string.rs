@@ -422,7 +422,10 @@ pub(crate) fn eval_symbol<'a>(
                 .map(|exceptions| exceptions.iter().any(|exc| exc.matches(span)))
                 .unwrap_or(false);
             let excluded_by_is = is_check.is_some()
-                && !validate_match(symbol_is_subject(hit, span, effective_regex, pattern), is_check);
+                && !validate_match(
+                    symbol_is_subject(hit, span, effective_regex, pattern),
+                    is_check,
+                );
 
             if !excluded_by_not && !excluded_by_is {
                 match_count += 1;
@@ -905,7 +908,9 @@ pub(crate) fn eval_comment<'a, 'b>(
         } else if let Some(re) = regex.as_ref().or(word_regex.as_ref()) {
             re.find(v).map(|m| {
                 if params.is_check.is_some() {
-                    subject = Some(crate::composite_rules::condition::facade_is_subject(re, v, m));
+                    subject = Some(crate::composite_rules::condition::facade_is_subject(
+                        re, v, m,
+                    ));
                 }
                 m.as_str()
             })
@@ -1195,9 +1200,7 @@ pub(crate) fn eval_text<'a, 'b>(
                     .map(|exceptions| exceptions.iter().any(|exc| exc.matches(match_value)))
                     .unwrap_or(false);
                 let excluded_by_is = !validate_match(
-                    matcher
-                        .matcher
-                        .is_subject(&string_info.value, match_value),
+                    matcher.matcher.is_subject(&string_info.value, match_value),
                     params.is_check,
                 );
 
@@ -1348,9 +1351,7 @@ fn eval_text_encoded<'a, 'b>(
                 .map(|exceptions| exceptions.iter().any(|exc| exc.matches(match_value)))
                 .unwrap_or(false);
             let excluded_by_is = !validate_match(
-                matcher
-                    .matcher
-                    .is_subject(&string_info.value, match_value),
+                matcher.matcher.is_subject(&string_info.value, match_value),
                 params.is_check,
             );
             if excluded_by_not || excluded_by_is {
@@ -1485,9 +1486,7 @@ pub(crate) fn eval_string_literal_with_options<'a, 'b>(
                     .map(|exceptions| exceptions.iter().any(|exc| exc.matches(match_value)))
                     .unwrap_or(false);
                 let excluded_by_is = !validate_match(
-                    matcher
-                        .matcher
-                        .is_subject(&string_info.value, match_value),
+                    matcher.matcher.is_subject(&string_info.value, match_value),
                     params.is_check,
                 );
 

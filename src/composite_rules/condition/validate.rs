@@ -997,6 +997,7 @@ pub(super) fn normalize_legacy_call_regex(pattern: &mut String) {
 /// - Unbounded wildcard:  `.*` or `.+`
 /// - Negated char class:  `[^x]+` (matches almost anything, equivalent to `.+`)
 /// - Nested quantifiers:  `(\w+)+` or `(.+)+` (exponential backtracking)
+#[cfg(any(feature = "lint", test))]
 pub(crate) fn find_backtrack_issue(regex: &str) -> Option<&'static str> {
     let chars: Vec<char> = regex.chars().collect();
     let len = chars.len();

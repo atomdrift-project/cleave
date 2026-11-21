@@ -2417,7 +2417,7 @@ fn test_eval_encoded_external_ip_filter() {
     let result = eval_encoded(
         encoding.as_ref(),
         TextPattern {
-            substr: Some(&"connect".to_string()),
+            regex: Some(&r"connect (\S+)".to_string()),
             ..TextPattern::default()
         },
         &location,
@@ -2537,7 +2537,7 @@ fn test_eval_string_external_ip_filters_private() {
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
-    let substr = "connect to".to_string();
+    let pattern = r"connect to (\S+)".to_string();
     let params = StringParams {
         encoding: None,
         length_min: None,
@@ -2545,8 +2545,8 @@ fn test_eval_string_external_ip_filters_private() {
         exclude_html_comments: false,
         exclude_comments: false,
         exact: None,
-        substr: Some(&substr),
-        regex: None,
+        substr: None,
+        regex: Some(&pattern),
         word: None,
         case_insensitive: false,
         is_check: Some(crate::composite_rules::condition::StringValidator::ExternalIp),
@@ -2610,7 +2610,7 @@ fn test_eval_raw_external_ip_keeps_external() {
     let location = ContentLocationParams::default();
     let result = eval_raw(
         TextPattern {
-            substr: Some(&"connect".to_string()),
+            regex: Some(&r"connect (\S+)".to_string()),
             ..TextPattern::default()
         },
         true,
@@ -3859,14 +3859,14 @@ fn binding_shape_and_identifier_regex_schema_reject_ignored_filters() {
 /// hit must be mapped back before the context window is cut from the
 /// original: the drifted offset split an `İ` and panicked.
 #[test]
-fn raw_unicode_substr_validator_window_uses_original_offsets() {
+fn raw_unicode_validator_group_uses_original_offsets() {
     let report = create_test_report();
     let content = format!("{} DÉJÀ 45.33.32.156", "İ".repeat(30));
     let ctx = create_test_context(&report, content.as_bytes());
-    let pattern = "déjà".to_string();
+    let pattern = "déjà ([0-9.]+)".to_string();
     let result = eval_raw(
         TextPattern {
-            substr: Some(&pattern),
+            regex: Some(&pattern),
             case_insensitive: true,
             ..TextPattern::default()
         },
@@ -3876,10 +3876,7 @@ fn raw_unicode_substr_validator_window_uses_original_offsets() {
         &ctx,
         None,
     );
-    assert!(
-        result.matched,
-        "the external IP sits inside the match window"
-    );
+    assert!(result.matched, "the external IP is the match's first group");
     let offsets: Vec<u64> = result
         .evidence
         .iter()
@@ -4010,61 +4007,48 @@ fn raw_literal_boolean_preserves_first_evidence_and_count_consumers() {
 #[test]
 fn raw_literal_boolean_continues_past_rejected_hits() {
     let report = create_test_report();
-    let exceptions = vec![
-        serde_json::from_value::<NotException>(serde_json::json!({"substr":"blocked"})).unwrap(),
-    ];
     for needle in ["token", "déjà"] {
+        let upper = needle.to_uppercase();
+        // `not:` judges each hit's own text, so a case-sensitive exception on
+        // one casing rejects the first hit and keeps the others.
+        let exceptions = vec![
+            serde_json::from_value::<NotException>(serde_json::json!({ "exact": upper })).unwrap(),
+        ];
+        let content = format!(
+            "blocked {upper} {} {needle} 45.33.32.156 {} {needle} 45.33.32.156",
+            "x".repeat(200),
+            "x".repeat(200)
+        );
+        let ctx = create_test_context(&report, content.as_bytes());
         let needle = needle.to_string();
-        for case_insensitive in [false, true] {
-            let value = if case_insensitive {
-                needle.to_uppercase()
-            } else {
-                needle.clone()
-            };
-            let content = format!(
-                "blocked {value} {} {value} 45.33.32.156 {} {value} 45.33.32.156",
-                "x".repeat(200),
-                "x".repeat(200)
-            );
-            let ctx = create_test_context(&report, content.as_bytes());
-            for external_ip in [false, true] {
-                let run = || {
-                    eval_raw(
-                        TextPattern {
-                            substr: Some(&needle),
-                            case_insensitive,
-                            ..TextPattern::default()
-                        },
-                        external_ip,
-                        Some(&exceptions),
-                        &ContentLocationParams::default(),
-                        &ctx,
-                        None,
-                    )
-                };
-                let full = {
-                    let _count = MatchCountGuard::set(true);
-                    run()
-                };
-                // `not: blocked` judges only the matched needle, so it never
-                // applies; `is: external_ip` judges the text around each hit
-                // and rejects the first, which has no IP nearby.
-                assert_eq!(full.match_count, if external_ip { 2 } else { 3 });
-                let _boolean = MatchCountGuard::set(false);
-                let boolean = run();
-                assert!(boolean.matched);
-                assert_eq!(boolean.match_count, 1);
-                assert_eq!(
-                    serde_json::to_value(&boolean.evidence).unwrap(),
-                    serde_json::to_value(&full.evidence).unwrap()
-                );
-                assert_eq!(
-                    boolean.evidence[0].offsets[0] > 200,
-                    external_ip,
-                    "{needle}/{case_insensitive}/{external_ip}"
-                );
-            }
-        }
+        let run = || {
+            eval_raw(
+                TextPattern {
+                    substr: Some(&needle),
+                    case_insensitive: true,
+                    ..TextPattern::default()
+                },
+                false,
+                Some(&exceptions),
+                &ContentLocationParams::default(),
+                &ctx,
+                None,
+            )
+        };
+        let full = {
+            let _count = MatchCountGuard::set(true);
+            run()
+        };
+        assert_eq!(full.match_count, 2, "{needle}");
+        let _boolean = MatchCountGuard::set(false);
+        let boolean = run();
+        assert!(boolean.matched);
+        assert_eq!(boolean.match_count, 1);
+        assert_eq!(
+            serde_json::to_value(&boolean.evidence).unwrap(),
+            serde_json::to_value(&full.evidence).unwrap()
+        );
+        assert!(boolean.evidence[0].offsets[0] > 200, "{needle}");
     }
 }
 

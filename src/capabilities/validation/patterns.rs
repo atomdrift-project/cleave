@@ -62,10 +62,12 @@ fn substr_regex_fields(
     }
 }
 
-/// Count the minimum number of literal characters that MUST match in a regex pattern.
+/// Count the minimum number of literal bytes that MUST match in a regex pattern.
 ///
 /// This counts characters that are not optional or quantified, helping identify
-/// patterns that are too loose and likely to produce false positives.
+/// patterns that are too loose and likely to produce false positives. A literal
+/// counts its UTF-8 length, as a `substr:` does, so `木马` weighs the same in
+/// either. A group's `?:` or `?P<name>` prefix is syntax, not content.
 ///
 /// # Examples
 ///
@@ -73,8 +75,11 @@ fn substr_regex_fields(
 /// - `a.b` → 2 (the dot matches anything)
 /// - `a*bc` → 2 (the `a` is optional)
 /// - `[abc]def` → 4 (character class counts as 1)
+/// - `(?:ab)c` → 3 (same as `(ab)c`)
 fn count_regex_min_literals(pattern: &str) -> usize {
     let mut count: usize = 0;
+    // The width of the last counted atom, which a quantifier takes back.
+    let mut last: usize = 1;
     let mut chars = pattern.chars().peekable();
     let mut in_bracket = false; // Track character classes [...]
     let mut bracket_depth: usize = 0;
@@ -92,6 +97,7 @@ fn count_regex_min_literals(pattern: &str) -> usize {
                     ) {
                         // \n, \t, \x.., \u.., etc. are literals
                         count += 1;
+                        last = 1;
                         // For \x.. and similar, consume additional hex digits
                         if next == 'x' {
                             // Consume up to 2 hex digits
@@ -109,6 +115,7 @@ fn count_regex_min_literals(pattern: &str) -> usize {
                 bracket_depth += 1;
                 // Character class counts as 1 potential character
                 count += 1;
+                last = 1;
             }
             ']' if in_bracket => {
                 bracket_depth = bracket_depth.saturating_sub(1);
@@ -119,7 +126,27 @@ fn count_regex_min_literals(pattern: &str) -> usize {
             }
             '*' | '?' if !in_bracket => {
                 // Quantifiers * and ? make the previous character optional; + keeps at least 1.
-                count = count.saturating_sub(1);
+                count = count.saturating_sub(last);
+            }
+            '(' if !in_bracket
+                && chars.peek() == Some(&'?')
+                && chars
+                    .clone()
+                    .nth(1)
+                    .is_some_and(|c| matches!(c, ':' | 'P' | '<')) =>
+            {
+                // A non-capturing or named group's prefix (`(?:`, `(?P<name>`,
+                // `(?<name>`) is syntax: the group counts as a plain `(`.
+                let close = if chars.clone().nth(1) == Some(':') {
+                    ':'
+                } else {
+                    '>'
+                };
+                for c in chars.by_ref() {
+                    if c == close {
+                        break;
+                    }
+                }
             }
             '+' | '(' | ')' | '|' | '^' | '$' | '.' if !in_bracket => {
                 // '+' keeps at least 1 of the previous — no adjustment to count.
@@ -134,11 +161,12 @@ fn count_regex_min_literals(pattern: &str) -> usize {
                     }
                 }
                 // Quantifiers can make previous optional
-                count = count.saturating_sub(1);
+                count = count.saturating_sub(last);
             }
             _ if !in_bracket => {
                 // Regular literal character
-                count += 1;
+                count += ch.len_utf8();
+                last = ch.len_utf8();
             }
             _ => {
                 // Inside character class, don't count individual chars
@@ -491,12 +519,14 @@ pub(crate) fn find_short_pattern_warnings(
 
 /// Detect regex patterns that use non-capturing groups `(?:...)`.
 ///
-/// Non-capturing groups are unnecessary in cleave because we preserve the entire
-/// matched line for evidence, not individual capture groups. Using `(?:` adds
-/// syntactic noise without benefit and may indicate copy-pasted patterns that
-/// weren't adapted for this codebase.
+/// Evidence is the whole match, so a non-capturing group is noise, except under
+/// `is:`, which validates the first capture group: there every other group
+/// must be `(?:...)`.
 pub(crate) fn find_non_capturing_groups(traits: &[TraitDefinition], warnings: &mut Vec<String>) {
     for trait_def in traits {
+        if trait_def.r#if.is_check().is_some() {
+            continue;
+        }
         let pattern_opt = substr_regex_fields(&trait_def.r#if).and_then(|(_, r, _)| r);
 
         if let Some(pattern) = pattern_opt

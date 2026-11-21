@@ -1189,6 +1189,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Add metadata/signature/verified/ to all:, or cite metadata/signature/verified/signer::<name>.",
     },
     ValidatorSpec {
+        id: "ambiguous-is-subject",
+        category: ValidatorCategory::Quality,
+        display_id: "is-subject",
+        description: "An `is:` validator judges fixed text (`exact:`/`substr:`/`word:`), or a regex with several capture groups, where only the first is judged.",
+        fix: "`is:` judges a regex's first capture group, else its match. Match the value with a regex, and make every group but the one to judge non-capturing `(?:...)`.",
+    },
+    ValidatorSpec {
         id: "dead-exception",
         category: ValidatorCategory::Quality,
         display_id: "dead-not",

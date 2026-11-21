@@ -68,6 +68,19 @@ fn test_regular_group_no_warning() {
 }
 
 #[test]
+fn test_non_capturing_group_allowed_under_is() {
+    // `is:` validates the first capture group, so the others must be `(?:...)`.
+    let mut t = create_raw_regex_trait("test-is", r"(?:curl|wget) ([0-9.]+)");
+    if let Condition::Raw(q) = &mut t.r#if {
+        q.is_check = Some(crate::composite_rules::condition::StringValidator::ExternalIp);
+    }
+    let mut warnings = Vec::new();
+    find_non_capturing_groups(&[t], &mut warnings);
+
+    assert!(warnings.is_empty(), "{warnings:?}");
+}
+
+#[test]
 fn test_no_group_no_warning() {
     let traits = vec![create_raw_regex_trait("test-nogroup", r"foobarbaz")];
     let mut warnings = Vec::new();

@@ -292,6 +292,7 @@ const VALIDATORS: &[(&str, Check)] = &[
     ("alternation-merge-candidates", clauses::alternation_merge_candidates),
     ("impossible-needs", clauses::impossible_needs),
     ("dead-regex-exceptions", clauses::dead_regex_exceptions),
+    ("ambiguous-is-subjects", clauses::ambiguous_is_subjects),
     ("impossible-size-constraints", clauses::impossible_size_constraints),
     ("impossible-count-constraints", clauses::impossible_count_constraints),
     ("empty-condition-clauses", clauses::empty_condition_clauses),

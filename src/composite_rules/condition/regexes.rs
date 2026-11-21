@@ -333,7 +333,10 @@ pub(crate) fn first_group_span(
 /// group took part, otherwise the whole match.
 pub(crate) fn is_subject<'h>(pattern: &str, haystack: &'h str, matched: &'h str) -> &'h str {
     let start = (matched.as_ptr() as usize).wrapping_sub(haystack.as_ptr() as usize);
-    if start.checked_add(matched.len()).is_none_or(|end| end > haystack.len()) {
+    if start
+        .checked_add(matched.len())
+        .is_none_or(|end| end > haystack.len())
+    {
         return matched;
     }
     first_group_span(pattern, haystack.as_bytes(), start..start + matched.len())
@@ -351,9 +354,12 @@ fn group_engine(pattern: &str) -> Option<Arc<regex_automata::meta::Regex>> {
     if let Some(found) = ENGINES.read().ok()?.get(pattern) {
         return found.clone();
     }
-    let has_group = regex_syntax::parse(pattern)
-        .is_ok_and(|hir| hir.properties().explicit_captures_len() > 0);
-    let engine = has_group.then(|| compile_with_groups(pattern)).flatten().map(Arc::new);
+    let has_group =
+        regex_syntax::parse(pattern).is_ok_and(|hir| hir.properties().explicit_captures_len() > 0);
+    let engine = has_group
+        .then(|| compile_with_groups(pattern))
+        .flatten()
+        .map(Arc::new);
     ENGINES
         .write()
         .ok()?

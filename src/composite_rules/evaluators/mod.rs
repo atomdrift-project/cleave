@@ -711,84 +711,137 @@ fn hir_is_whitespace_atom(hir: &regex_syntax::hir::Hir) -> bool {
     }
 }
 
+/// How far a match can reach from any byte in it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Reach {
+    /// What its bounded parts can consume in total, whitespace repetitions
+    /// counted at [`UNBOUNDED_WS_CAP`].
+    pub(crate) bytes: usize,
+    /// Its unbounded repetitions that cannot consume a newline. Each ends on
+    /// the line it began on, however long that line is.
+    pub(crate) line_runs: usize,
+}
+
+/// A match with more line-bound repetitions than this is not windowed: every
+/// one widens the window by a line and by [`Reach::bytes`] again.
+const MAX_LINE_RUNS: usize = 4;
+
+/// The [`Reach`] of `pattern`. `None` when a repetition is unbounded and can
+/// cross lines through more than whitespace (`[\s\S]*`, `(?s).*`, `[^"]*`),
+/// or a bound exceeds [`MAX_WINDOW_RADIUS`] or [`MAX_LINE_RUNS`].
+/// ASCII-class assumption: each `Class` is one byte (the `compile_bytes_regex`
+/// path).
+fn match_reach(hir: &regex_syntax::hir::Hir) -> Option<Reach> {
+    use regex_syntax::hir::HirKind;
+    let bounded = |bytes: usize, line_runs: usize| {
+        (bytes <= MAX_WINDOW_RADIUS && line_runs <= MAX_LINE_RUNS)
+            .then_some(Reach { bytes, line_runs })
+    };
+    match hir.kind() {
+        HirKind::Empty | HirKind::Look(_) => bounded(0, 0),
+        HirKind::Literal(lit) => bounded(lit.0.len(), 0),
+        HirKind::Class(_) => bounded(1, 0),
+        HirKind::Capture(c) => match_reach(&c.sub),
+        HirKind::Concat(subs) => subs.iter().try_fold(
+            Reach {
+                bytes: 0,
+                line_runs: 0,
+            },
+            |sum, s| {
+                let part = match_reach(s)?;
+                bounded(
+                    sum.bytes.checked_add(part.bytes)?,
+                    sum.line_runs + part.line_runs,
+                )
+            },
+        ),
+        HirKind::Alternation(subs) => subs.iter().try_fold(
+            Reach {
+                bytes: 0,
+                line_runs: 0,
+            },
+            |max, s| {
+                let part = match_reach(s)?;
+                bounded(max.bytes.max(part.bytes), max.line_runs.max(part.line_runs))
+            },
+        ),
+        HirKind::Repetition(r) => match r.max {
+            Some(max) => {
+                let part = match_reach(&r.sub)?;
+                let max = max as usize;
+                bounded(
+                    part.bytes.checked_mul(max)?,
+                    part.line_runs.checked_mul(max)?,
+                )
+            }
+            None if hir_is_whitespace_atom(&r.sub) => {
+                bounded(match_reach(&r.sub)?.bytes.checked_mul(UNBOUNDED_WS_CAP)?, 0)
+            }
+            None if !hir_can_match_newline(&r.sub) => bounded(0, 1),
+            None => None,
+        },
+    }
+}
+
 /// Upper bound on bytes a match can consume. `None` if any repetition is
 /// unbounded (except whitespace `\s*` / `[ \t]*`, capped at
 /// [`UNBOUNDED_WS_CAP`]) or the bound exceeds [`MAX_WINDOW_RADIUS`].
-/// ASCII-class assumption: each `Class` is one byte (the `compile_bytes_regex`
-/// path).
+#[cfg(test)]
 pub(crate) fn bounded_consumed_bytes(pattern: &str) -> Option<usize> {
-    fn walk(hir: &regex_syntax::hir::Hir) -> Option<usize> {
-        use regex_syntax::hir::HirKind;
-        match hir.kind() {
-            HirKind::Empty | HirKind::Look(_) => Some(0),
-            HirKind::Literal(lit) => Some(lit.0.len()),
-            HirKind::Class(_) => Some(1),
-            HirKind::Capture(c) => walk(&c.sub),
-            HirKind::Concat(subs) => {
-                let mut n = 0usize;
-                for s in subs {
-                    n = n.checked_add(walk(s)?)?;
-                    if n > MAX_WINDOW_RADIUS {
-                        return None;
-                    }
-                }
-                Some(n)
-            }
-            HirKind::Alternation(subs) => {
-                let mut m = 0usize;
-                for s in subs {
-                    m = m.max(walk(s)?);
-                }
-                (m <= MAX_WINDOW_RADIUS).then_some(m)
-            }
-            HirKind::Repetition(r) => {
-                let max = match r.max {
-                    Some(m) => m,
-                    None => {
-                        if !hir_is_whitespace_atom(&r.sub) {
-                            return None;
-                        }
-                        UNBOUNDED_WS_CAP as u32
-                    }
-                };
-                let sub = walk(&r.sub)?;
-                let n = sub.checked_mul(max as usize)?;
-                (n <= MAX_WINDOW_RADIUS).then_some(n)
-            }
-        }
-    }
-    walk(&parse_hir_like_engine(pattern)?)
+    match_reach(&parse_hir_like_engine(pattern)?)
+        .filter(|reach| reach.line_runs == 0)
+        .map(|reach| reach.bytes)
 }
 
-/// Pattern-only part of [`windows_from_atom_hits`]: `(line_local, any_look,
-/// radius)`, or `None` when the pattern must not be windowed. Memoized by
-/// pattern — the derivation parses the regex to HIR, and it used to run on
-/// every evaluation of every windowable rule (0.8 s of pool time on one
-/// 37 MB archive). Patterns are rule-derived, so the map is bounded by the
-/// rule set.
-fn window_shape(pattern: &str) -> Option<(bool, bool, usize)> {
+/// How to window one pattern around its atom hits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct WindowShape {
+    /// Widen each window to whole lines: the pattern has a line anchor, or
+    /// cannot leave the line its atom is on.
+    pub(crate) line: bool,
+    /// A look-around reads one byte beyond the match.
+    pub(crate) any_look: bool,
+    /// See [`Reach::bytes`].
+    pub(crate) radius: usize,
+    /// See [`Reach::line_runs`].
+    pub(crate) line_runs: usize,
+}
+
+/// Pattern-only part of [`windows_from_atom_hits`], or `None` when the
+/// pattern must not be windowed. Memoized by pattern — the derivation parses
+/// the regex to HIR, and it used to run on every evaluation of every
+/// windowable rule (0.8 s of pool time on one 37 MB archive). Patterns are
+/// rule-derived, so the map is bounded by the rule set.
+fn window_shape(pattern: &str) -> Option<WindowShape> {
     use std::sync::RwLock;
-    static MEMO: std::sync::LazyLock<
-        RwLock<rustc_hash::FxHashMap<Box<str>, Option<(bool, bool, usize)>>>,
-    > = std::sync::LazyLock::new(|| RwLock::new(rustc_hash::FxHashMap::default()));
+    static MEMO: std::sync::LazyLock<RwLock<rustc_hash::FxHashMap<Box<str>, Option<WindowShape>>>> =
+        std::sync::LazyLock::new(|| RwLock::new(rustc_hash::FxHashMap::default()));
     if let Some(hit) = MEMO.read().ok().and_then(|m| m.get(pattern).copied()) {
         return hit;
     }
     let computed = (|| {
         let hir = parse_hir_like_engine(pattern)?;
-        let (abs, mut line, any_look) = look_info(&hir);
+        let (abs, line, any_look) = look_info(&hir);
         if abs {
             return None;
         }
-        let radius = match bounded_consumed_bytes(pattern) {
-            Some(r) => r,
-            None if unbounded_reps_are_line_local(&hir) => {
-                line = true;
-                0
-            }
-            None => return None,
-        };
-        Some((line, any_look, radius))
+        // A pattern that cannot consume a newline never leaves its atom's
+        // line, whatever its repetitions: that line is the whole window.
+        if unbounded_reps_are_line_local(&hir) {
+            return Some(WindowShape {
+                line: true,
+                any_look,
+                radius: 0,
+                line_runs: 0,
+            });
+        }
+        let reach = match_reach(&hir)?;
+        Some(WindowShape {
+            line,
+            any_look,
+            radius: reach.bytes,
+            line_runs: reach.line_runs,
+        })
     })();
     if let Ok(mut m) = MEMO.write() {
         m.insert(Box::from(pattern), computed);
@@ -894,8 +947,14 @@ pub(crate) fn hits_are_pattern_atoms(haystack: &[u8], hits: &[u32], pattern: &st
     })
 }
 
-/// Windows around gate-supplied atom hits for a bounded pattern, or for
-/// line-local unbounded `.*` / `[^\n]*` (snap to the atom's line; no byte cap).
+/// Windows around gate-supplied atom hits, each holding every match that
+/// contains its hit.
+///
+/// A match reaches at most [`Reach::bytes`] from its atom through its bounded
+/// parts, and each of its [`Reach::line_runs`] carries it no further than the
+/// end of a line. So the window grows by the bytes, then to the line's end,
+/// once per run, and by the bytes once more; a line-anchored or line-bound
+/// pattern is widened to whole lines.
 ///
 /// `hits` are absolute starts in `haystack` (the file the gate already
 /// scanned). Returns `None` when windowing is unsound or not profitable —
@@ -911,57 +970,82 @@ pub(crate) fn windows_from_atom_hits(
     if search_len < MIN_HAYSTACK_TO_WINDOW || hits.is_empty() {
         return None;
     }
-    let (line, any_look, radius) = window_shape(pattern)?;
-    let pad = usize::from(any_look);
-    let mut spans = Vec::with_capacity(hits.len());
+    let shape = window_shape(pattern)?;
+    let step = shape.radius + usize::from(shape.any_look);
+    let mut spans: Vec<(usize, usize)> = Vec::new();
     let mut covered = 0usize;
-    // Line-local windows: hits arrive sorted, so a hit inside the previous
-    // window's line reuses it, and the search for the line start is bounded
-    // by the previous line's end instead of running back to the file start
-    // — on a minified bundle (lines of 5–100 KB, hundreds of hits per line)
-    // the unbounded `memrchr` per hit was quadratic (+9 s on one corpus).
-    let mut last_line: Option<(usize, usize)> = None;
+    // Hits arrive sorted, which bounds both line searches: forward, every
+    // position from where the last search began to the line end it found
+    // shares that end; backward, a window that reaches the previous one joins
+    // it, so nothing before that window's end is searched. On a minified
+    // bundle (lines of 5–100 KB, hundreds of hits per line) an unbounded
+    // search per hit was quadratic (+9 s on one corpus).
+    let mut known_end = (0usize, 0usize);
+    let mut previous_hit = 0usize;
+    let mut sorted = true;
     for &hit in hits {
         let hit = hit as usize;
         if hit < search_start || hit >= search_end {
             continue;
         }
-        let mut lo = hit
-            .saturating_sub(radius)
-            .saturating_sub(pad)
-            .max(search_start);
-        let mut hi = hit
-            .saturating_add(radius)
-            .saturating_add(pad)
-            .min(search_end);
-        if line {
-            match last_line {
-                Some((l, h)) if hit >= l && hit < h => {
-                    // Same line as the previous hit: the span is already
-                    // counted, and counting it again per hit made every
-                    // hit-dense line look like more than half the file
-                    // and forced the full scan this window exists to avoid.
-                    spans.push((l, h));
-                    continue;
-                }
-                _ => {
-                    let floor = last_line.map_or(search_start, |(_, h)| h.max(search_start));
-                    let from = lo.max(floor);
-                    lo = memchr::memrchr(b'\n', &haystack[floor..from])
-                        .map_or(floor, |n| floor + n + 1);
-                    hi = memchr::memchr(b'\n', &haystack[hi..search_end])
-                        .map_or(search_end, |n| (hi + n + 1).min(search_end));
-                    last_line = Some((lo, hi));
-                }
+        let in_order = hit >= previous_hit;
+        sorted &= in_order;
+        previous_hit = hit;
+        let mut line_end = |from: usize| {
+            if from >= search_end {
+                return search_end;
+            }
+            if known_end.0 > from || from >= known_end.1 {
+                let end = memchr::memchr(b'\n', &haystack[from..search_end])
+                    .map_or(search_end, |n| from + n + 1);
+                known_end = (from, end);
+            }
+            known_end.1
+        };
+        let mut hi = hit;
+        for _ in 0..shape.line_runs {
+            hi = line_end(hi.saturating_add(step).min(search_end));
+        }
+        hi = hi.saturating_add(step).min(search_end);
+        if shape.line {
+            hi = line_end(hi);
+        }
+        let floor = match spans.last() {
+            Some(&(_, end)) if in_order => end.max(search_start),
+            _ => search_start,
+        };
+        let line_start = |before: usize| {
+            if before <= floor {
+                return floor;
+            }
+            memchr::memrchr(b'\n', &haystack[floor..before]).map_or(floor, |n| floor + n + 1)
+        };
+        let mut lo = hit;
+        for _ in 0..shape.line_runs {
+            lo = line_start(lo.saturating_sub(step).max(search_start));
+        }
+        lo = lo.saturating_sub(step).max(search_start);
+        if shape.line {
+            lo = line_start(lo);
+        }
+        match spans.last_mut() {
+            Some((_, end)) if in_order && lo <= *end => {
+                covered += hi.saturating_sub(*end);
+                *end = hi.max(*end);
+            }
+            _ => {
+                covered += hi.saturating_sub(lo);
+                spans.push((lo, hi));
             }
         }
-        covered = covered.saturating_add(hi.saturating_sub(lo));
-        spans.push((lo, hi));
+        if covered > search_len / 2 {
+            return None;
+        }
     }
-    if spans.is_empty() || covered > search_len / 2 {
+    if spans.is_empty() {
         return None;
     }
-    Some(merge_spans(spans))
+    Some(if sorted { spans } else { merge_spans(spans) })
 }
 
 /// Coverage counters for `eval_raw`'s hit-window confirmation: how many

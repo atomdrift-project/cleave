@@ -3,15 +3,53 @@
 use crate::composite_rules::{Condition, TraitDefinition};
 use regex_syntax::hir::{Hir, HirKind};
 
+/// The grams of a text: its bytes, pairs and trigrams, ASCII letters
+/// lowercased, each hashed to a bit.
 #[derive(Debug)]
-pub(super) struct Signature([u64; 1024]);
+pub(super) struct Signature {
+    bits: [u64; 1024],
+    /// Whether the text is all ASCII. In other text, Unicode case folding
+    /// can make an ASCII letter of a character whose bytes hold none.
+    ascii: bool,
+}
 
+/// What a match must leave in the text it is found in: every clause holds,
+/// and a clause holds when the text has any one of its grams.
 #[derive(Clone, Copy, Default, Debug)]
 pub(super) struct RequiredGrams {
-    bits: [u16; 12],
-    len: u8,
-    /// Each bit represents a possible prefix when the branches have no common gram.
-    alternatives: bool,
+    /// Gram ids, clause after clause.
+    grams: [u16; MAX_GRAMS],
+    /// Where each clause ends in `grams`.
+    ends: [u8; MAX_CLAUSES],
+    clauses: u8,
+    /// The condition folds case as Unicode does, so only all-ASCII text can
+    /// be turned away. A regex folds within ASCII alone and needs no such care.
+    unicode_folding: bool,
+}
+
+/// The most text a signature is taken of.
+const MAX_TEXT_BYTES: usize = 4 * 1024 * 1024;
+
+const MAX_GRAMS: usize = 16;
+const MAX_CLAUSES: usize = 8;
+
+/// The most strings, and the most bytes in them, that a sub-pattern's matches
+/// are enumerated to. Past either, only grams are kept.
+const MAX_EXACT: usize = 16;
+const MAX_EXACT_BYTES: usize = 256;
+
+/// The grams one long literal contributes, spread evenly along it.
+const MAX_GRAMS_PER_LITERAL: usize = 6;
+
+/// Lowercased strings of one to three bytes, any one of which a match holds.
+type Clause = Vec<Vec<u8>>;
+
+/// What is known of the text a sub-pattern matches.
+enum Shape {
+    /// Every match, lowercased, is one of these strings.
+    Exact(Vec<Vec<u8>>),
+    /// Every match satisfies each of these clauses. None says nothing.
+    Loose(Vec<Clause>),
 }
 
 fn pair(a: u8, b: u8) -> u16 {
@@ -59,6 +97,8 @@ impl Requirement {
                     q.case_insensitive,
                 ))
             }
+            // An AST condition reads the source its tree was parsed from.
+            Condition::TreeSitter(q) => Self::Content(RequiredGrams::of_ast(q)),
             Condition::Path(q) => Self::Path(RequiredGrams::required(
                 &q.exact,
                 &q.substr,
@@ -93,40 +133,58 @@ impl Signature {
         };
         let mut folded = bytes.iter().map(u8::to_ascii_lowercase);
         let Some(mut a) = folded.next() else { return };
-        mark(&mut self.0, u16::from(a));
+        mark(&mut self.bits, u16::from(a));
         let Some(mut b) = folded.next() else { return };
-        mark(&mut self.0, u16::from(b));
-        mark(&mut self.0, pair(a, b));
+        mark(&mut self.bits, u16::from(b));
+        mark(&mut self.bits, pair(a, b));
         for c in folded {
-            mark(&mut self.0, u16::from(c));
-            mark(&mut self.0, pair(b, c));
-            mark(&mut self.0, trigram(a, b, c));
+            mark(&mut self.bits, u16::from(c));
+            mark(&mut self.bits, pair(b, c));
+            mark(&mut self.bits, trigram(a, b, c));
             (a, b) = (b, c);
         }
     }
 
     fn accepts(&self, required: &RequiredGrams) -> bool {
+        if required.unicode_folding && !self.ascii {
+            return true;
+        }
         let contains = |&id: &u16| {
             let i = usize::from(id);
-            self.0[i / 64] & (1 << (i % 64)) != 0
+            self.bits[i / 64] & (1 << (i % 64)) != 0
         };
-        if required.alternatives {
-            required.slice().iter().any(contains)
-        } else {
-            required.slice().iter().all(contains)
-        }
+        let mut start = 0;
+        required.ends[..usize::from(required.clauses)]
+            .iter()
+            .all(|&end| {
+                let clause = &required.grams[start..usize::from(end)];
+                start = usize::from(end);
+                clause.iter().any(contains)
+            })
     }
 
+    /// The grams of a file's text and of the strings decoded from it, when
+    /// the file is UTF-8: text conditions search that text byte for byte.
+    /// Other bytes are searched through a view that replaces what is not
+    /// UTF-8, which the file's own grams do not describe.
     pub(super) fn source(data: &[u8], report: &crate::types::AnalysisReport) -> Option<Self> {
-        let mut signature = Self::ascii(data)?;
+        if data.len() > MAX_TEXT_BYTES || std::str::from_utf8(data).is_err() {
+            return None;
+        }
+        let mut signature = Self {
+            bits: [0; 1024],
+            ascii: data.is_ascii(),
+        };
+        signature.add_text(data);
         for s in report
             .strings
             .iter()
             .filter(|s| !s.encoding_chain.is_empty())
         {
-            if !s.value.is_ascii() || s.value.len() > 1024 * 1024 {
+            if s.value.len() > 1024 * 1024 {
                 return None;
             }
+            signature.ascii &= s.value.is_ascii();
             signature.add_text(s.value.as_bytes());
         }
         Some(signature)
@@ -137,8 +195,11 @@ impl Signature {
     pub(super) fn literals(
         ctx: &crate::composite_rules::context::EvaluationContext<'_>,
     ) -> Option<Self> {
-        let mut sig = Self([0; 1024]);
-        let mut remaining: usize = 4 * 1024 * 1024;
+        let mut sig = Self {
+            bits: [0; 1024],
+            ascii: true,
+        };
+        let mut remaining: usize = MAX_TEXT_BYTES;
         for &index in ctx.literal_strings() {
             let bytes = ctx.report.strings[index as usize].value.as_bytes();
             remaining = remaining.checked_sub(bytes.len())?;
@@ -151,57 +212,322 @@ impl Signature {
     }
 
     pub(super) fn ascii(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() > 4 * 1024 * 1024 || !bytes.is_ascii() {
+        if bytes.len() > MAX_TEXT_BYTES || !bytes.is_ascii() {
             return None;
         }
-        let mut signature = Self([0; 1024]);
+        let mut signature = Self {
+            bits: [0; 1024],
+            ascii: true,
+        };
         signature.add_text(bytes);
         Some(signature)
     }
 }
 
-impl RequiredGrams {
-    fn slice(&self) -> &[u16] {
-        &self.bits[..usize::from(self.len)]
+/// The id a [`Signature`] files a lowercased string of one to three bytes under.
+fn gram_id(gram: &[u8]) -> Option<u16> {
+    match *gram {
+        [a] => Some(u16::from(a)),
+        [a, b] => Some(pair(a, b)),
+        [a, b, c] => Some(trigram(a, b, c)),
+        _ => None,
     }
+}
 
-    fn insert(&mut self, id: u16) {
-        if usize::from(self.len) < self.bits.len() && !self.slice().contains(&id) {
-            self.bits[usize::from(self.len)] = id;
-            self.len += 1;
+/// Clauses that hold for any text containing one of `strings`. A set with the
+/// empty string, or with no string at all, says nothing.
+fn clauses_of(strings: &[Vec<u8>]) -> Vec<Clause> {
+    if strings.is_empty() || strings.iter().any(Vec::is_empty) {
+        return Vec::new();
+    }
+    if let [only] = strings {
+        if only.len() <= 3 {
+            return vec![vec![only.clone()]];
+        }
+        let stride = (only.len() - 2).div_ceil(MAX_GRAMS_PER_LITERAL);
+        return only
+            .windows(3)
+            .step_by(stride)
+            .map(|gram| vec![gram.to_vec()])
+            .collect();
+    }
+    // Whichever string it is, the text has its first bytes and its last.
+    let ends = |pick: fn(&[u8]) -> &[u8]| {
+        let mut clause: Clause = strings.iter().map(|s| pick(s).to_vec()).collect();
+        clause.sort_unstable();
+        clause.dedup();
+        clause
+    };
+    let heads = ends(|s| &s[..s.len().min(3)]);
+    let tails = ends(|s| &s[s.len().saturating_sub(3)..]);
+    if heads == tails {
+        vec![heads]
+    } else {
+        vec![heads, tails]
+    }
+}
+
+/// How readily a clause holds by chance: a lone byte is in most files, a
+/// trigram in few, and every further gram is another way to hold.
+fn chance(clause: &Clause) -> usize {
+    clause
+        .iter()
+        .map(|gram| match gram.len() {
+            1 => 16,
+            2 => 4,
+            _ => 1,
+        })
+        .sum()
+}
+
+/// Every string of `left` followed by every string of `right`, while that
+/// stays within [`MAX_EXACT`] and [`MAX_EXACT_BYTES`].
+fn joined(left: &[Vec<u8>], right: &[Vec<u8>]) -> Option<Vec<Vec<u8>>> {
+    if left.len() * right.len() > MAX_EXACT {
+        return None;
+    }
+    let mut all: Vec<Vec<u8>> = left
+        .iter()
+        .flat_map(|a| {
+            right
+                .iter()
+                .map(move |b| [a.as_slice(), b.as_slice()].concat())
+        })
+        .collect();
+    all.sort_unstable();
+    all.dedup();
+    (all.iter().map(Vec::len).sum::<usize>() <= MAX_EXACT_BYTES).then_some(all)
+}
+
+/// What holds whichever branch matched: the surest clause of each, joined
+/// into one. A branch that promises nothing leaves nothing to promise.
+fn any_branch(branches: impl Iterator<Item = Vec<Clause>>) -> Vec<Clause> {
+    let mut either = Clause::new();
+    for clauses in branches {
+        let Some(surest) = clauses.into_iter().min_by_key(chance) else {
+            return Vec::new();
+        };
+        either.extend(surest);
+    }
+    either.sort_unstable();
+    either.dedup();
+    if either.is_empty() {
+        Vec::new()
+    } else {
+        vec![either]
+    }
+}
+
+impl Shape {
+    fn into_clauses(self) -> Vec<Clause> {
+        match self {
+            Shape::Exact(strings) => clauses_of(&strings),
+            Shape::Loose(clauses) => clauses,
         }
     }
 
-    fn add_text(&mut self, bytes: &[u8]) {
-        match bytes {
-            [a] => self.insert(u16::from(a.to_ascii_lowercase())),
-            [a, b] => self.insert(pair(a.to_ascii_lowercase(), b.to_ascii_lowercase())),
-            _ => {}
-        }
-        let count = bytes.len().saturating_sub(2);
-        let stride = count.div_ceil(self.bits.len()).max(1);
-        for bytes in bytes.windows(3).step_by(stride) {
-            self.insert(trigram(
-                bytes[0].to_ascii_lowercase(),
-                bytes[1].to_ascii_lowercase(),
-                bytes[2].to_ascii_lowercase(),
-            ));
-        }
-    }
-
-    fn folded_byte(hir: &Hir) -> Option<u8> {
+    fn of(hir: &Hir) -> Shape {
         match hir.kind() {
-            HirKind::Literal(lit) if lit.0.len() == 1 => Some(lit.0[0].to_ascii_lowercase()),
+            HirKind::Empty | HirKind::Look(_) => Shape::Exact(vec![Vec::new()]),
+            HirKind::Literal(lit) => Shape::Exact(vec![lit.0.to_ascii_lowercase()]),
             HirKind::Class(regex_syntax::hir::Class::Bytes(class)) => {
-                let first = class.ranges().first()?.start().to_ascii_lowercase();
-                class
+                let size: usize = class
                     .ranges()
                     .iter()
-                    .all(|r| r.start() == r.end() && r.start().to_ascii_lowercase() == first)
-                    .then_some(first)
+                    .map(regex_syntax::hir::ClassBytesRange::len)
+                    .sum();
+                if size > MAX_EXACT {
+                    return Shape::Loose(Vec::new());
+                }
+                let mut bytes: Vec<Vec<u8>> = class
+                    .ranges()
+                    .iter()
+                    .flat_map(|r| r.start()..=r.end())
+                    .map(|b| vec![b.to_ascii_lowercase()])
+                    .collect();
+                bytes.sort_unstable();
+                bytes.dedup();
+                Shape::Exact(bytes)
             }
-            _ => None,
+            HirKind::Class(regex_syntax::hir::Class::Unicode(_)) => Shape::Loose(Vec::new()),
+            HirKind::Capture(cap) => Shape::of(&cap.sub),
+            HirKind::Repetition(rep) => match (rep.min, rep.max, Shape::of(&rep.sub)) {
+                (0, Some(1), Shape::Exact(mut strings)) => {
+                    strings.push(Vec::new());
+                    strings.sort_unstable();
+                    strings.dedup();
+                    Shape::Exact(strings)
+                }
+                (0, _, _) => Shape::Loose(Vec::new()),
+                (_, _, Shape::Loose(clauses)) => Shape::Loose(clauses),
+                (min, max, Shape::Exact(strings)) => {
+                    // A match opens with `min` copies in a row; three of them
+                    // already make a trigram of a single byte.
+                    let mut run = strings.clone();
+                    let mut copies = 1;
+                    while copies < min.min(3)
+                        && let Some(longer) = joined(&run, &strings)
+                    {
+                        run = longer;
+                        copies += 1;
+                    }
+                    if max == Some(min) && copies == min {
+                        Shape::Exact(run)
+                    } else {
+                        Shape::Loose(clauses_of(&run))
+                    }
+                }
+            },
+            HirKind::Concat(terms) => {
+                // `run` is what the terms since the last gap can spell, end
+                // to end; a gap, or a run grown too large, banks its clauses.
+                let mut run = vec![Vec::new()];
+                let mut clauses = Vec::new();
+                let mut exact = true;
+                for term in terms {
+                    match Shape::of(term) {
+                        Shape::Exact(strings) => match joined(&run, &strings) {
+                            Some(longer) => run = longer,
+                            None => {
+                                clauses.extend(clauses_of(&run));
+                                exact = false;
+                                run = strings;
+                            }
+                        },
+                        Shape::Loose(more) => {
+                            clauses.extend(clauses_of(&run));
+                            clauses.extend(more);
+                            exact = false;
+                            run = vec![Vec::new()];
+                        }
+                    }
+                }
+                if exact {
+                    return Shape::Exact(run);
+                }
+                clauses.extend(clauses_of(&run));
+                Shape::Loose(clauses)
+            }
+            HirKind::Alternation(terms) => {
+                let shapes: Vec<Shape> = terms.iter().map(Shape::of).collect();
+                let mut all = Vec::new();
+                let mut exact = true;
+                for shape in &shapes {
+                    match shape {
+                        Shape::Exact(strings) => all.extend(strings.iter().cloned()),
+                        Shape::Loose(_) => exact = false,
+                    }
+                }
+                all.sort_unstable();
+                all.dedup();
+                if exact
+                    && all.len() <= MAX_EXACT
+                    && all.iter().map(Vec::len).sum::<usize>() <= MAX_EXACT_BYTES
+                {
+                    return Shape::Exact(all);
+                }
+                Shape::Loose(any_branch(shapes.into_iter().map(Shape::into_clauses)))
+            }
         }
+    }
+}
+
+/// Whether `pattern` is searched by the engine that folds case as Unicode
+/// does: the raw matcher sends a pattern with a `\u` or `\p` escape there.
+fn unicode_engine(pattern: &str) -> bool {
+    !crate::composite_rules::evaluators::can_use_byte_matching(pattern)
+}
+
+impl RequiredGrams {
+    /// Keep the clauses least likely to hold by chance, as many as fit. A
+    /// clause is kept whole or not at all: it promises one of its grams, so
+    /// dropping a gram would reject text that has only that one.
+    fn of(mut clauses: Vec<Clause>) -> Self {
+        clauses.sort_by_key(chance);
+        clauses.dedup();
+        let mut kept = Self::default();
+        let mut used = 0;
+        for clause in &clauses {
+            let Some(ids) = clause
+                .iter()
+                .map(|gram| gram_id(gram))
+                .collect::<Option<Vec<u16>>>()
+            else {
+                continue;
+            };
+            let clause_count = usize::from(kept.clauses);
+            if ids.is_empty() || clause_count == MAX_CLAUSES || used + ids.len() > MAX_GRAMS {
+                continue;
+            }
+            kept.grams[used..used + ids.len()].copy_from_slice(&ids);
+            used += ids.len();
+            kept.ends[clause_count] = used as u8;
+            kept.clauses += 1;
+        }
+        kept
+    }
+
+    /// What a match of an AST condition leaves in the source.
+    ///
+    /// A query's literals are those an earlier process recorded when it
+    /// compiled the query; until one has, nothing is required. Simple mode
+    /// tests a node's text, which may be cut short with `...`, or a callee
+    /// name joined from the source's identifiers with `.`, so only what lies
+    /// between dots is sure to be in the source as written.
+    fn of_ast(q: &crate::composite_rules::condition::TreeSitterQuery) -> Self {
+        if let Some(query) = &q.query {
+            return crate::capabilities::derivation_memo::with_ast_literals(query, |patterns| {
+                let mut patterns = patterns.iter().map(|requirements| {
+                    requirements
+                        .iter()
+                        .flat_map(|any| {
+                            let literals: Vec<Vec<u8>> =
+                                any.iter().map(|(l, _)| l.to_ascii_lowercase()).collect();
+                            clauses_of(&literals)
+                        })
+                        .collect::<Vec<Clause>>()
+                });
+                match (patterns.next(), patterns.len()) {
+                    (Some(only), 0) => only,
+                    (Some(first), _) => any_branch(std::iter::once(first).chain(patterns)),
+                    (None, _) => Vec::new(),
+                }
+            })
+            .map(Self::of)
+            .unwrap_or_default();
+        }
+        let dotless = |clause: &Clause| clause.iter().all(|gram| !gram.contains(&b'.'));
+        let clauses = match (&q.exact, &q.substr, &q.regex) {
+            (Some(literal), _, _) | (None, Some(literal), _) if literal.is_ascii() => {
+                return Self {
+                    unicode_folding: q.case_insensitive,
+                    ..Self::of(
+                        literal
+                            .split('.')
+                            .flat_map(|piece| clauses_of(&[piece.as_bytes().to_ascii_lowercase()]))
+                            .collect(),
+                    )
+                };
+            }
+            (None, None, Some(pattern)) if pattern.is_ascii() => {
+                let mut clauses = regex_syntax::ParserBuilder::new()
+                    .unicode(false)
+                    .utf8(false)
+                    .case_insensitive(q.case_insensitive)
+                    .multi_line(true)
+                    .build()
+                    .parse(pattern)
+                    .map(|hir| Shape::of(&hir).into_clauses())
+                    .unwrap_or_default();
+                clauses.retain(dotless);
+                return Self {
+                    unicode_folding: unicode_engine(pattern),
+                    ..Self::of(clauses)
+                };
+            }
+            _ => Vec::new(),
+        };
+        Self::of(clauses)
     }
 
     fn required(
@@ -223,102 +549,31 @@ impl RequiredGrams {
             if !pattern.is_ascii() {
                 return Self::default();
             }
-            return regex_syntax::ParserBuilder::new()
+            let clauses = regex_syntax::ParserBuilder::new()
                 .unicode(false)
                 .utf8(false)
                 .case_insensitive(ci)
                 .build()
                 .parse(pattern)
-                .map(|hir| Self::for_regex(&hir))
+                .map(|hir| Shape::of(&hir).into_clauses())
                 .unwrap_or_default();
-        }
-        let mut signature = Self::default();
-        if let Some(lit) = exact.as_ref().or(substr.as_ref()).or(word.as_ref())
-            && lit.is_ascii()
-        {
-            signature.add_text(lit.as_bytes());
-        }
-        signature
-    }
-
-    fn for_regex(hir: &Hir) -> Self {
-        let mut result = Self::hir(hir);
-        if result.len != 0 {
-            return result;
-        }
-        // If branches have no common gram, a complete set of possible
-        // prefixes can still reject a source that contains none of them.
-        let seq = regex_syntax::hir::literal::Extractor::new()
-            .limit_total(32)
-            .limit_literal_len(3)
-            .extract(hir);
-        let Some(literals) = seq.literals() else {
-            return result;
-        };
-        for lit in literals {
-            let [a, b, c, ..] = lit.as_bytes() else {
-                return Self::default();
+            return Self {
+                unicode_folding: unicode_engine(pattern),
+                ..Self::of(clauses)
             };
-            let id = trigram(
-                a.to_ascii_lowercase(),
-                b.to_ascii_lowercase(),
-                c.to_ascii_lowercase(),
-            );
-            if usize::from(result.len) == result.bits.len() && !result.slice().contains(&id) {
-                return Self::default();
-            }
-            result.insert(id);
         }
-        result.alternatives = result.len != 0;
-        result
-    }
-
-    fn hir(hir: &Hir) -> Self {
-        let mut result = Self::default();
-        match hir.kind() {
-            HirKind::Literal(lit) => result.add_text(&lit.0),
-            HirKind::Capture(cap) => return Self::hir(&cap.sub),
-            HirKind::Repetition(rep) if rep.min > 0 => return Self::hir(&rep.sub),
-            HirKind::Concat(terms) => {
-                // Adjacent single-byte classes such as [aA][bB][cC] have one
-                // spelling after folding. Optional or unknown terms break the run.
-                let (mut first, mut second) = (None, None);
-                for term in terms {
-                    if let Some(byte) = Self::folded_byte(term) {
-                        if let (Some(a), Some(b)) = (first, second) {
-                            result.insert(trigram(a, b, byte));
-                        }
-                        (first, second) = (second, Some(byte));
-                    } else {
-                        (first, second) = (None, None);
-                        for &id in Self::hir(term).slice() {
-                            result.insert(id);
-                        }
-                    }
-                }
-            }
-            HirKind::Alternation(terms) => {
-                let mut children = terms.iter().map(Self::hir);
-                if let Some(first) = children.next() {
-                    result = first;
-                    for child in children {
-                        let previous = result;
-                        result = Self::default();
-                        for &id in previous.slice() {
-                            if child.slice().contains(&id) {
-                                result.insert(id);
-                            }
-                        }
-                    }
-                }
-            }
-            _ => {}
+        match exact.as_ref().or(substr.as_ref()).or(word.as_ref()) {
+            Some(lit) if lit.is_ascii() => Self {
+                unicode_folding: ci,
+                ..Self::of(clauses_of(&[lit.as_bytes().to_ascii_lowercase()]))
+            },
+            _ => Self::default(),
         }
-        result
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, reason = "a probe given a bad file should say so")]
 mod tests {
     use super::*;
     use crate::types::AnalysisReport;
@@ -343,6 +598,204 @@ mod tests {
         }
         let rule = RequiredGrams::required(&None, &Some("powershell".into()), &None, &None, false);
         assert!(Signature::ascii(b"xyz").is_some_and(|s| !s.accepts(&rule)));
+    }
+
+    /// Offline screen of the gate against real patterns and files: how often
+    /// it spares a search, and that it never rejects a file the pattern
+    /// matches. Run with:
+    /// `PROBE_PATTERNS=<file> PROBE_DIR=<dir> cargo test -p cleave --release --lib gram_gate_probe -- --ignored --nocapture`
+    #[test]
+    #[ignore = "offline probe: set PROBE_PATTERNS and PROBE_DIR"]
+    fn gram_gate_probe() {
+        let (Ok(patterns), Ok(dir)) = (
+            std::env::var("PROBE_PATTERNS").map(std::fs::read_to_string),
+            std::env::var("PROBE_DIR"),
+        ) else {
+            return;
+        };
+        let patterns = patterns.expect("PROBE_PATTERNS names a readable file");
+        let files: Vec<(Vec<u8>, Signature)> = walkdir::WalkDir::new(dir)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_file())
+            .filter_map(|entry| std::fs::read(entry.path()).ok())
+            .filter_map(|bytes| {
+                Signature::source(&bytes, &AnalysisReport::new(Default::default()))
+                    .map(|signature| (bytes, signature))
+            })
+            .collect();
+        let (mut pairs, mut spared, mut ungated) = (0usize, 0usize, 0usize);
+        // Bytes searched and bytes spared, by file size: under 64 KiB, under
+        // 1 MiB, and the rest.
+        let mut bytes_by_size = [(0usize, 0usize); 3];
+        let size_class = |len: usize| usize::from(len >= 64 << 10) + usize::from(len >= 1 << 20);
+        for pattern in patterns.lines() {
+            let rule = RequiredGrams::required(&None, &None, &None, &Some(pattern.into()), false);
+            // The raw matcher's byte engine; the other one is not screened.
+            if unicode_engine(pattern) {
+                continue;
+            }
+            let Ok(regex) = regex::bytes::RegexBuilder::new(pattern)
+                .unicode(false)
+                .multi_line(true)
+                .build()
+            else {
+                continue;
+            };
+            let rejected = files
+                .iter()
+                .filter(|(bytes, signature)| {
+                    let reject = !signature.accepts(&rule);
+                    assert!(
+                        !(reject && regex.is_match(bytes)),
+                        "{pattern} matches a file its grams reject"
+                    );
+                    let (searched, skipped) = &mut bytes_by_size[size_class(bytes.len())];
+                    *searched += bytes.len();
+                    *skipped += if reject { bytes.len() } else { 0 };
+                    reject
+                })
+                .count();
+            pairs += files.len();
+            spared += rejected;
+            ungated += usize::from(rule.clauses == 0);
+            println!("{rejected}\t{}\t{pattern}", rule.clauses);
+        }
+        println!(
+            "SUMMARY files={} pairs={pairs} spared={spared} ungated_patterns={ungated}",
+            files.len()
+        );
+        for (label, (searched, skipped)) in ["<64K", "<1M", ">=1M"].iter().zip(bytes_by_size) {
+            println!(
+                "BYTES {label} searched_mb={} spared_mb={}",
+                searched >> 20,
+                skipped >> 20
+            );
+        }
+    }
+
+    /// Text a pattern cannot match is turned away by what its branches,
+    /// short literals, small classes and counted repetitions have in common;
+    /// text it does match never is.
+    #[test]
+    fn short_literals_classes_and_branches_reject_text_that_cannot_match() {
+        let possible = |pattern: &str, input: &str| {
+            let rule = RequiredGrams::required(&None, &None, &None, &Some(pattern.into()), false);
+            Signature::ascii(input.as_bytes()).is_none_or(|s| s.accepts(&rule))
+        };
+        for (pattern, matching, impossible) in [
+            // Branches of different lengths share no gram, yet one must occur.
+            (
+                r"\b(nc|ncat|netcat)\b\s+\S+\s*\|\s*(ba)?sh\b",
+                "nc host | bash",
+                "import os\nprint(1)",
+            ),
+            // A two-byte literal and a lone byte are grams too.
+            (r"(?i)\b7z[ar]?(\.exe)?\s+x\b", "7Z.EXE x", "tar xf archive"),
+            (r"\w+\s*\^=\s*\w+", "key ^= pad", "key = pad"),
+            // A counted repetition of one byte is a run of it.
+            (r"_{10,50}=", "____________=1", "__init__ = 1"),
+            // A small class spells out its members.
+            (
+                r"(?i)[\\/](Temp|Tmp)[\\/]",
+                r"C:\TEMP\x",
+                "attempt/template",
+            ),
+            (r"%0[3-8]d|:0>[3-8]\}", "{:0>5}", "x = 100 % 3"),
+            // Optional parts are skipped, not required.
+            (r"colou?r:\s*red", "color: red", "colder"),
+            (r#"(?i)(%22|")\s*(%5D|\])"#, "%22%5d", "plain"),
+        ] {
+            assert!(
+                possible(pattern, matching),
+                "{pattern} must admit {matching:?}"
+            );
+            assert!(
+                !possible(pattern, impossible),
+                "{pattern} should reject {impossible:?}"
+            );
+        }
+        // Nothing is required of a pattern that can match with no fixed text.
+        for pattern in [r"[A-Za-z0-9+/]{200,}={0,2}", r"\w+\W\w+", r"(a|\w)*", r"x?"] {
+            assert!(possible(pattern, ""), "{pattern}");
+        }
+    }
+
+    /// An AST condition is turned away by what its matches must leave in the
+    /// source, and only by text that is in the source as written: a callee
+    /// name is joined from identifiers the source may spread over lines.
+    #[test]
+    fn ast_conditions_require_only_what_the_source_spells() {
+        use crate::composite_rules::condition::TreeSitterQuery;
+        let possible = |q: &TreeSitterQuery, source: &str| {
+            let rule = RequiredGrams::of_ast(q);
+            Signature::ascii(source.as_bytes()).is_none_or(|s| s.accepts(&rule))
+        };
+        let simple =
+            |exact: Option<&str>, substr: Option<&str>, regex: Option<&str>| TreeSitterQuery {
+                kind: Some("call".into()),
+                exact: exact.map(Into::into),
+                substr: substr.map(Into::into),
+                regex: regex.map(Into::into),
+                ..Default::default()
+            };
+        let exact = simple(Some("os.system"), None, None);
+        assert!(possible(&exact, "import os\nos.system('id')"));
+        assert!(
+            possible(&exact, "os \\n  .system('id')"),
+            "a callee joined across lines"
+        );
+        assert!(!possible(&exact, "import os\nos.getcwd()"));
+
+        let substr = simple(None, Some("urlretrieve"), None);
+        assert!(possible(&substr, "urllib.request.urlretrieve(u, p)"));
+        assert!(!possible(&substr, "urllib.request.urlopen(u)"));
+
+        let regex = simple(None, None, Some(r"subprocess\.(run|call|Popen)\("));
+        assert!(
+            possible(&regex, "subprocess\n.Popen(cmd)"),
+            "a callee joined across lines"
+        );
+        assert!(!possible(&regex, "os.system(cmd)"));
+        // All this pattern spells crosses a dot, which the source need not.
+        let dotted = simple(None, None, Some(r"^a\.b$"));
+        assert!(possible(&dotted, "a\n.b()"));
+
+        // A query requires nothing until a process that compiled it has
+        // recorded its literals. The memo outlives the process in the test
+        // cache, so the query that shows this is one nothing ever records.
+        let query = |name: &str| TreeSitterQuery {
+            query: Some(format!(r#"((identifier) @n (#eq? @n "{name}"))"#)),
+            ..Default::default()
+        };
+        assert!(possible(&query("zzgramnever"), "print(1)"));
+        // These are the literals this query derives.
+        let query = query("zzgramprobe");
+        crate::capabilities::derivation_memo::record_ast_literals(
+            query.query.as_deref().unwrap_or_default(),
+            vec![vec![vec![(b"zzgramprobe".to_vec(), false)]]],
+        );
+        assert!(possible(&query, "zzgramprobe = 1"));
+        assert!(!possible(&query, "print(1)"));
+    }
+
+    /// A clause promises one of its grams, so it is kept whole or dropped:
+    /// trimming it to fit would reject text that has only a trimmed gram.
+    #[test]
+    fn a_clause_too_large_to_keep_is_dropped_whole() {
+        let words: Vec<String> = (b'a'..=b'z')
+            .map(|c| format!("{0}{0}{0}", c as char))
+            .collect();
+        let pattern = format!(r"({})\s+end", words.join("|"));
+        let rule = RequiredGrams::required(&None, &None, &None, &Some(pattern), false);
+        for word in &words {
+            let text = format!("{word} end");
+            assert!(
+                Signature::ascii(text.as_bytes()).is_some_and(|s| s.accepts(&rule)),
+                "{word}"
+            );
+        }
+        assert!(Signature::ascii(b"zzz stop").is_some_and(|s| !s.accepts(&rule)));
     }
 
     #[test]
@@ -404,6 +857,18 @@ mod tests {
         assert!(Signature::source(b"dW5pcXVl", &report).is_some_and(|s| s.accepts(&rule)));
         let folded = RequiredGrams::required(&Some("K".into()), &None, &None, &None, true);
         assert!(Signature::ascii(b"k").is_some_and(|s| s.accepts(&folded)));
-        assert!(Signature::source("é".as_bytes(), &report).is_none());
+        // The Kelvin sign lowercases to `k`, which its bytes do not hold:
+        // text that is not ASCII never turns away a condition that folds
+        // case as Unicode does. A regex folds within ASCII alone.
+        let kelvin = Signature::source("\u{212A}".as_bytes(), &report);
+        assert!(kelvin.as_ref().is_some_and(|s| s.accepts(&folded)));
+        let regex = RequiredGrams::required(&None, &None, &None, &Some("(?i)kelvin".into()), false);
+        assert!(kelvin.is_some_and(|s| !s.accepts(&regex)));
+        assert!(
+            Signature::source("caf\u{e9} KELVIN".as_bytes(), &report)
+                .is_some_and(|s| s.accepts(&regex))
+        );
+        // Bytes that are not UTF-8 are searched through a view with other bytes.
+        assert!(Signature::source(b"kelvin \xff", &report).is_none());
     }
 }

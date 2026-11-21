@@ -16,9 +16,12 @@ fn classify_patterns() {
             continue;
         }
         match super::window_shape(&raw) {
-            Some((line, look, radius)) => {
+            Some(shape) => {
                 windowed += 1;
-                println!("W\tline={line}\tlook={look}\tr={radius}\t{pat}");
+                println!(
+                    "W\tline={}\tlook={}\tr={}\truns={}\t{pat}",
+                    shape.line, shape.any_look, shape.radius, shape.line_runs
+                );
             }
             None => {
                 unbounded += 1;

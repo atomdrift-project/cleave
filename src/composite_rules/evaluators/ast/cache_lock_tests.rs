@@ -23,6 +23,7 @@ fn ast_cache_hit_does_not_wait_for_compiler() {
         deferred: DeferredPredicates::of(&query, pattern),
         root_kinds: per_root_kinds(&language, &query, pattern),
         anchors: None,
+        multi_wildcard: false,
         query,
     });
     QUERY_CACHE

@@ -6,10 +6,14 @@ use super::{
 use std::sync::atomic::AtomicUsize;
 use std::sync::mpsc::{self, SyncSender};
 
-/// Serialized bytes the writer may have queued before further stores are
-/// dropped. Checked before an item is admitted, so the backlog overshoots it
-/// by at most that one item.
+/// Compressed bytes the writer may have queued before further stores are
+/// dropped. Checked before an item is compressed, so the backlog overshoots
+/// it by at most the items being compressed at that moment.
 const MAX_BYTES: usize = 32 * 1024 * 1024;
+/// Entries the writer may have queued. Each is already compressed, so the
+/// byte bound above is what limits memory; this only keeps a burst of small
+/// members from being dropped while one transaction commits.
+const MAX_ENTRIES: usize = 4096;
 /// The largest analysis kept. The reports that cost the most to recompute are
 /// the largest ones: a native binary's runs to tens of megabytes of JSON and a
 /// whole archive's to hundreds, and both compress about tenfold.
@@ -21,7 +25,8 @@ struct Entry {
     sha: String,
     options: String,
     revision: i64,
-    json: Vec<u8>,
+    /// The analysis as zstd-compressed JSON.
+    payload: Vec<u8>,
 }
 struct Writer {
     tx: SyncSender<Entry>,
@@ -29,7 +34,7 @@ struct Writer {
 }
 impl Writer {
     fn start(path: PathBuf) -> Option<Self> {
-        let (tx, rx) = mpsc::sync_channel::<Entry>(128);
+        let (tx, rx) = mpsc::sync_channel::<Entry>(MAX_ENTRIES);
         let pending_bytes = Arc::new(AtomicUsize::new(0));
         let pending = Arc::clone(&pending_bytes);
         std::thread::Builder::new()
@@ -39,15 +44,7 @@ impl Writer {
                 while let Ok(first) = rx.recv() {
                     let mut entries = vec![first];
                     entries.extend(rx.try_iter().take(31));
-                    let bytes: usize = entries.iter().map(|e| e.json.len()).sum();
-                    // Compress before acquiring SQLite's single writer lock.
-                    let compressed: Vec<_> = entries
-                        .into_iter()
-                        .filter_map(|entry| {
-                            let payload = zstd::encode_all(entry.json.as_slice(), 3).ok()?;
-                            Some((entry, payload))
-                        })
-                        .collect();
+                    let bytes: usize = entries.iter().map(|e| e.payload.len()).sum();
                     if conn.is_none() {
                         conn = open_connection(&path).ok();
                         if let Some(c) = &conn {
@@ -55,7 +52,7 @@ impl Writer {
                         }
                     }
                     if let Some(c) = &conn {
-                        persist(c, &compressed);
+                        persist(c, &entries);
                     }
                     pending.fetch_sub(bytes, Ordering::Release);
                 }
@@ -64,34 +61,35 @@ impl Writer {
         Some(Self { tx, pending_bytes })
     }
 
-    fn enqueue(&self, entry: Entry) {
-        let bytes = entry.json.len();
-        if bytes > MAX_ITEM_BYTES {
-            tracing::debug!(sha256 = %entry.sha, bytes, limit = MAX_ITEM_BYTES, "analysis too large to cache");
+    /// Queue `json` to be stored. It is compressed here, on the thread that
+    /// produced it: one writer thread compressing for a dozen analysis
+    /// threads fell behind, and what it could not take was dropped, so the
+    /// next scan of the same bytes analyzed them again.
+    fn enqueue(&self, kind: memo::Kind, sha: &str, options: &str, revision: i64, json: &[u8]) {
+        if json.len() > MAX_ITEM_BYTES {
+            tracing::debug!(sha256 = %sha, bytes = json.len(), limit = MAX_ITEM_BYTES, "analysis too large to cache");
             return;
         }
-        let mut pending = self.pending_bytes.load(Ordering::Acquire);
-        loop {
-            if pending > MAX_BYTES {
-                tracing::debug!(sha256 = %entry.sha, bytes, pending, limit = MAX_BYTES, "cache writer backlogged; analysis not cached");
-                return;
-            }
-            let next = pending.saturating_add(bytes);
-            match self.pending_bytes.compare_exchange_weak(
-                pending,
-                next,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => break,
-                Err(current) => pending = current,
-            }
+        let pending = self.pending_bytes.load(Ordering::Acquire);
+        if pending > MAX_BYTES {
+            tracing::debug!(sha256 = %sha, bytes = json.len(), pending, limit = MAX_BYTES, "cache writer backlogged; analysis not cached");
+            return;
         }
-        if let Err(refused) = self.tx.try_send(entry) {
+        let Ok(payload) = zstd::encode_all(json, 3) else {
+            return;
+        };
+        let bytes = payload.len();
+        self.pending_bytes.fetch_add(bytes, Ordering::AcqRel);
+        let entry = Entry {
+            kind,
+            sha: sha.into(),
+            options: options.into(),
+            revision,
+            payload,
+        };
+        if self.tx.try_send(entry).is_err() {
             self.pending_bytes.fetch_sub(bytes, Ordering::Release);
-            let (mpsc::TrySendError::Full(entry) | mpsc::TrySendError::Disconnected(entry)) =
-                refused;
-            tracing::debug!(sha256 = %entry.sha, bytes, "cache writer queue full; analysis not cached");
+            tracing::debug!(sha256 = %sha, bytes, "cache writer queue full; analysis not cached");
         }
     }
 }
@@ -110,12 +108,12 @@ pub(super) fn flush() {
     }
 }
 
-fn persist(conn: &Connection, entries: &[(Entry, Vec<u8>)]) {
+fn persist(conn: &Connection, entries: &[Entry]) {
     let Ok(tx) = conn.unchecked_transaction() else {
         return;
     };
     let now = unix_timestamp();
-    for (entry, payload) in entries {
+    for entry in entries {
         let [_, _, sql] = table_sql(entry.kind);
         if tx
             .prepare_cached(sql)
@@ -124,7 +122,7 @@ fn persist(conn: &Connection, entries: &[(Entry, Vec<u8>)]) {
                     entry.sha,
                     entry.options,
                     entry.revision,
-                    payload,
+                    entry.payload,
                     now
                 ])
             })
@@ -142,16 +140,10 @@ pub(super) fn store(
     sha: &str,
     options: &str,
     revision: i64,
-    json: Vec<u8>,
+    json: &[u8],
 ) {
     if let Some(writer) = WRITER.get_or_init(|| Writer::start(path.to_owned())) {
-        writer.enqueue(Entry {
-            kind,
-            sha: sha.into(),
-            options: options.into(),
-            revision,
-            json,
-        });
+        writer.enqueue(kind, sha, options, revision, json);
     }
 }
 
@@ -173,13 +165,7 @@ mod tests {
         let writer = Writer::start(path.clone()).unwrap();
         let start = std::time::Instant::now();
         for kind in [memo::Kind::Report, memo::Kind::FileAnalysis] {
-            writer.enqueue(Entry {
-                kind,
-                sha: "sample".into(),
-                options: "opts".into(),
-                revision: 42,
-                json: b"{}".to_vec(),
-            });
+            writer.enqueue(kind, "sample", "opts", 42, b"{}");
         }
         assert!(start.elapsed() < std::time::Duration::from_millis(100));
         let reader = open_connection(&path).unwrap();
@@ -208,13 +194,7 @@ mod tests {
         let path = dir.path().join("cache.db");
         let writer = Writer::start(path.clone()).unwrap();
         let json = vec![b' '; MAX_BYTES + 1];
-        writer.enqueue(Entry {
-            kind: memo::Kind::Report,
-            sha: "whole-archive".into(),
-            options: "opts".into(),
-            revision: 1,
-            json: json.clone(),
-        });
+        writer.enqueue(memo::Kind::Report, "whole-archive", "opts", 1, &json);
         // Behind it the backlog is over its bound, so the next store is dropped
         // rather than queued; once it drains, stores are admitted again.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
@@ -232,13 +212,55 @@ mod tests {
     fn oversized_entries_do_not_consume_the_queue_budget() {
         let dir = tempfile::tempdir().unwrap();
         let writer = Writer::start(dir.path().join("cache.db")).unwrap();
-        writer.enqueue(Entry {
-            kind: memo::Kind::Report,
-            sha: "large".into(),
-            options: "opts".into(),
-            revision: 1,
-            json: vec![0; MAX_ITEM_BYTES + 1],
-        });
+        writer.enqueue(
+            memo::Kind::Report,
+            "large",
+            "opts",
+            1,
+            &vec![0; MAX_ITEM_BYTES + 1],
+        );
         assert_eq!(writer.pending_bytes.load(Ordering::Acquire), 0);
+    }
+
+    /// A dozen analysis threads finish members faster than one thread could
+    /// compress them: what the writer could not take was dropped, and a
+    /// second copy of the same archive was analyzed again. A burst several
+    /// times the old bounds (128 entries, 32 MiB of JSON) is all kept.
+    #[test]
+    fn a_burst_of_analyses_is_all_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.db");
+        let writer = Writer::start(path.clone()).unwrap();
+        let json = format!(
+            "{{\"strings\":[{}\"end\"]}}",
+            "\"import os\",".repeat(10_000)
+        );
+        let count = 1_000;
+        assert!(json.len() * count > 3 * MAX_BYTES);
+        for i in 0..count {
+            writer.enqueue(
+                memo::Kind::FileAnalysis,
+                &format!("member-{i}"),
+                "opts",
+                1,
+                json.as_bytes(),
+            );
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while writer.pending_bytes.load(Ordering::Acquire) != 0 {
+            assert!(std::time::Instant::now() < deadline, "writer never drained");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let reader = open_connection(&path).unwrap();
+        for i in 0..count {
+            let stored = cache_lookup_conn(
+                &reader,
+                memo::Kind::FileAnalysis,
+                &format!("member-{i}"),
+                "opts",
+                1,
+            );
+            assert_eq!(stored.as_deref(), Some(json.as_bytes()), "member {i}");
+        }
     }
 }

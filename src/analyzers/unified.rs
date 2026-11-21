@@ -1140,7 +1140,7 @@ impl UnifiedSourceAnalyzer {
                     source,
                     report,
                     seen_strings,
-                    self.config.name == "python" && is_python_docstring_literal(&node),
+                    self.config.name == "python" && is_python_docstring_literal(cursor),
                 );
             } else if is_numeric_node_kind(kind) {
                 if let Ok(text) = node.utf8_text(source)
@@ -1378,14 +1378,16 @@ impl UnifiedSourceAnalyzer {
 /// Return whether a Python string node belongs to the module, class, or
 /// function docstring: a standalone string expression in the first statement
 /// slot of that scope. Nested literals in a call in that slot are not docs.
-fn is_python_docstring_literal(node: &tree_sitter::Node<'_>) -> bool {
-    let mut expression = *node;
-    while expression.kind() != "expression_statement" {
-        let Some(parent) = expression.parent() else {
+fn is_python_docstring_literal(at: &tree_sitter::TreeCursor<'_>) -> bool {
+    // A copy of the walk's cursor climbs in constant time per step, where
+    // `Node::parent` descends from the root each time it is asked.
+    let mut up = at.clone();
+    while up.node().kind() != "expression_statement" {
+        if !up.goto_parent() {
             return false;
-        };
-        expression = parent;
+        }
     }
+    let expression = up.node();
 
     let Some(expr_value) = expression.named_child(0) else {
         return false;
@@ -1393,15 +1395,15 @@ fn is_python_docstring_literal(node: &tree_sitter::Node<'_>) -> bool {
     if !matches!(expr_value.kind(), "string" | "concatenated_string") {
         return false;
     }
-    let Some(scope_body) = expression.parent() else {
+    if !up.goto_parent() {
         return false;
-    };
+    }
+    let scope_body = up.node();
     let scope_body_kind = scope_body.kind();
     if scope_body_kind != "module"
         && !(scope_body_kind == "block"
-            && scope_body.parent().is_some_and(|parent| {
-                matches!(parent.kind(), "function_definition" | "class_definition")
-            }))
+            && up.goto_parent()
+            && matches!(up.node().kind(), "function_definition" | "class_definition"))
     {
         return false;
     }

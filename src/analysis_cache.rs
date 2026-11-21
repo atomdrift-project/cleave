@@ -1452,7 +1452,7 @@ pub(crate) fn report_cache_store(
             sha256,
             &opts_hash,
             traits_revision,
-            json.clone(),
+            &json,
         );
         REPORT_BYTES_UNCHECKED.fetch_add(json.len() as u64, Ordering::Relaxed);
         let count = REPORT_STORE_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -1557,7 +1557,7 @@ pub(crate) fn file_analysis_cache_store(
             sha256,
             &opts_hash,
             traits_revision,
-            json.clone(),
+            &json,
         );
         FILE_ANALYSIS_BYTES_UNCHECKED.fetch_add(json.len() as u64, Ordering::Relaxed);
         let count = FILE_ANALYSIS_STORE_COUNT.fetch_add(1, Ordering::Relaxed);

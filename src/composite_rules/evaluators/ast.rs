@@ -8,7 +8,7 @@
 use super::ast_gate::{
     Anchors, DeferredPredicates, NodeTextIndex, RequiredLiterals, RequiredNodes, RequiredSubqueries,
 };
-use super::{build_regex, truncate_evidence};
+use super::truncate_evidence;
 use crate::analyzers::ast_walker::{AST_QUERY_CPU_BUDGET, thread_cpu_time};
 use crate::composite_rules::ast_kinds::map_kind_to_node_types;
 use crate::composite_rules::context::{AnalysisWarning, ConditionResult, EvaluationContext};
@@ -114,6 +114,8 @@ struct CompiledAstQuery {
     /// Where every pattern's matches must be rooted, read from a capture
     /// whose predicate requires a literal (see [`super::ast_gate::Anchors`]).
     anchors: Option<Anchors>,
+    /// Runs alone under its own budget (see [`batch_leaves_out_by_design`]).
+    multi_wildcard: bool,
 }
 
 impl CompiledAstQuery {
@@ -312,7 +314,7 @@ pub(crate) fn eval_ast<'a>(
         // The regex LRU probe (lock + key alloc + clone) and the pattern
         // lowercasing are hoisted out of the per-node calls.
         let compiled = matches!(match_mode, MatchMode::Regex)
-            .then(|| build_regex(pattern, case_insensitive).ok())
+            .then(|| node_regex(pattern, case_insensitive))
             .flatten();
         let pattern_lower = (matches!(match_mode, MatchMode::Substr) && case_insensitive)
             .then(|| pattern.to_lowercase());
@@ -394,6 +396,21 @@ pub(crate) fn eval_ast<'a>(
     )
 }
 
+/// The matcher of a simple-mode `regex:`, multi-line so `^` and `$` anchor at
+/// each line of a node's text.
+///
+/// It is the trait-regex store's engine, whose scratch is leased from the
+/// shared pool: the lazy DFA one file warmed serves the next. A private copy
+/// per evaluation rebuilt that DFA for every file, a quarter of the time
+/// spent on AST conditions across a 17,949-file Python wheel.
+fn node_regex(
+    pattern: &str,
+    case_insensitive: bool,
+) -> Option<std::sync::Arc<crate::composite_rules::condition::TraitRegex>> {
+    let flags = if case_insensitive { "(?im)" } else { "(?m)" };
+    crate::composite_rules::condition::cached_regex(&format!("{flags}{pattern}"))
+}
+
 /// Whether a simple-mode pattern could match some node of `source`.
 ///
 /// Every string a node is tested against comes from the source: its text,
@@ -448,9 +465,9 @@ fn eval_ast_pattern_multi(
 
     // Build the pattern matcher based on match mode
     let matcher: Box<dyn Fn(&str) -> bool> = match match_mode {
-        MatchMode::Regex => match build_regex(pattern, case_insensitive) {
-            Ok(re) => Box::new(move |s: &str| re.is_match(s)),
-            Err(_) => return ConditionResult::no_match(),
+        MatchMode::Regex => match node_regex(pattern, case_insensitive) {
+            Some(re) => Box::new(move |s: &str| re.is_match(s)),
+            None => return ConditionResult::no_match(),
         },
         MatchMode::Exact => {
             let pattern_owned = pattern.to_string();
@@ -1085,6 +1102,7 @@ fn cached_ast_query_for_source(
             has_match_predicates: query_str.contains("match?"),
             root_kinds,
             anchors,
+            multi_wildcard: count_unbounded_any_wildcards(query_str) >= 2,
         })
     });
     if let Some(started) = compile_started {
@@ -1229,9 +1247,13 @@ pub(crate) fn batch_ast_queries_with_index(
         let lang = &*tree.language();
         let candidates = query_strs
             .iter()
-            .filter(|q| batch_leaves_out_by_design(q) && count_unbounded_any_wildcards(q) < 2)
+            .filter(|q| q.contains("cleave.ignore-comments"))
             .filter_map(|q| cached_ast_query(lang, file_type, q))
-            .filter(|compiled| compiled.ignore_comments && compiled.may_match(source.as_bytes()))
+            .filter(|compiled| {
+                compiled.ignore_comments
+                    && !compiled.multi_wildcard
+                    && compiled.may_match(source.as_bytes())
+            })
             .take(2)
             .count();
         if candidates >= 2
@@ -1355,7 +1377,7 @@ fn batch_ast_bank(
             if !possible {
                 out.insert(q.to_string(), ConditionResult::no_match());
             }
-            if count_unbounded_any_wildcards(q) >= 2 {
+            if compiled.multi_wildcard {
                 continue;
             }
             // A query anchored on its literals (see `Anchors`) sits out the
@@ -1454,6 +1476,7 @@ fn batch_ast_bank(
     // literal gates only disable patterns on a private copy; they must not
     // create another expensive ts_query_new for each surviving subset, or
     // mutate the shared query observed by concurrent archive workers.
+    // The copy shares the bank's compiled predicates, so it is cheap.
     // The shared walk's patterns: those that can match and are not anchored.
     let pattern_walked: Vec<bool> = pattern_active
         .iter()
@@ -1557,13 +1580,10 @@ fn batch_ast_bank(
     // CPU-s, identical findings). The sum is capped so a pathological tree
     // cannot hold a worker for minutes before the fallback; above the cap
     // the standalone walks were going to cost more than the cap anyway.
-    let per_query_budget = compiling
-        .iter()
-        .map(|(query, _)| ast_query_cpu_budget(query, deadline))
-        .min()
-        .unwrap_or(AST_QUERY_CPU_BUDGET);
+    // Every query here has the ordinary budget: a multi-wildcard one, with
+    // its shorter budget, never joins a bank.
     let active_queries = active.iter().filter(|&&enabled| enabled).count();
-    let default_cpu_budget = per_query_budget.saturating_mul(
+    let default_cpu_budget = AST_QUERY_CPU_BUDGET.saturating_mul(
         u32::try_from(active_queries.clamp(1, BATCH_CPU_BUDGET_MAX_QUERIES)).unwrap_or(1),
     );
     // Diagnostic override for measuring the cost of repeated standalone

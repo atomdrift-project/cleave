@@ -264,6 +264,52 @@ fn os_env_meaning_homes_are_valid_and_old_homes_are_retired() {
 }
 
 #[test]
+fn fs_path_credential_homes_are_valid_and_old_homes_are_retired() {
+    let temp = TempDir::new().unwrap();
+    for home in [
+        "credential/collection",
+        "credential/private-key",
+        "credential/wallet",
+        "credential/password-store",
+        "credential/cookie",
+        "credential/account-db",
+        "credential/ssh",
+        "credential/cloud",
+        "credential/container",
+        "credential/registry",
+        "credential/vcs",
+        "credential/ai-agent",
+        "credential/database",
+        "credential/application",
+        "credential/generic-basename",
+        "public-key",
+        "home/prefix",
+        "config/app",
+    ] {
+        std::fs::create_dir_all(temp.path().join("micro-behaviors/fs/path").join(home)).unwrap();
+    }
+    let result = validate_directory_structure(temp.path());
+    assert!(
+        result.is_ok(),
+        "fs/path credential homes should pass: {result:?}"
+    );
+
+    for old in [
+        "secret-config",
+        "token",
+        "private-key",
+        "config/ssh",
+        "home/credential",
+    ] {
+        let dir = format!("micro-behaviors/fs/path/{old}");
+        std::fs::create_dir_all(temp.path().join(&dir)).unwrap();
+        let errors = validate_directory_structure(temp.path()).unwrap_err();
+        assert!(errors.iter().any(|e| e.contains(&dir)), "{dir}: {errors:?}");
+        std::fs::remove_dir_all(temp.path().join(&dir)).unwrap();
+    }
+}
+
+#[test]
 fn retired_process_subtrees_are_rejected_and_resource_homes_are_allowed() {
     for retired in RETIRED_PROCESS_PATHS {
         let temp = TempDir::new().unwrap();

@@ -562,6 +562,27 @@ const RETIRED_TAXONOMY_PATHS: &[&str] = &[
     "micro-behaviors/crypto/hash/crc32",
     "micro-behaviors/crypto/hash/fnv",
     "micro-behaviors/crypto/symmetric/aes/decrypt",
+    // fs/path files anything that holds a secret under credential/<kind or
+    // service>: key material, wallets, password stores, cookies and account
+    // databases by kind, other credential files by the service they unlock;
+    // credentials are not config. 2026-11-20 consolidation.
+    "micro-behaviors/fs/path/account-db",
+    "micro-behaviors/fs/path/agent-auth",
+    "micro-behaviors/fs/path/config/accounts",
+    "micro-behaviors/fs/path/config/cloud",
+    "micro-behaviors/fs/path/config/credentials",
+    "micro-behaviors/fs/path/config/ssh",
+    "micro-behaviors/fs/path/cookie",
+    "micro-behaviors/fs/path/developer-credential",
+    "micro-behaviors/fs/path/filename-credential",
+    "micro-behaviors/fs/path/home/credential",
+    "micro-behaviors/fs/path/password-store",
+    "micro-behaviors/fs/path/private-key",
+    "micro-behaviors/fs/path/secret-config",
+    "micro-behaviors/fs/path/secret-store",
+    "micro-behaviors/fs/path/sensitive",
+    "micro-behaviors/fs/path/token",
+    "micro-behaviors/fs/path/wallet",
     // os/env files by variable meaning first (secret/<service>, config/<service>,
     // path, runtime, system-info, user-info), then by operation (read, write,
     // test, enumerate/<kind>); 2026-11-20 reorganization.

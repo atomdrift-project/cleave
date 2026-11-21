@@ -1890,7 +1890,7 @@ checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 [[package]]
 name = "filefacts"
 version = "3.0.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#7f3b6db730eca5b6705847e52fb0695e7222d7e5"
+source = "git+https://github.com/atomdrift-project/filefacts.git#deff28934a84439a36f66e84b57546a9c67e9ca4"
 dependencies = [
  "aes 0.9.4",
  "aho-corasick",
@@ -4997,7 +4997,7 @@ dependencies = [
 [[package]]
 name = "stng"
 version = "3.0.0"
-source = "git+https://github.com/atomdrift-project/stng.git#968cbc3b4bd7cf1c576676e2cb373bda3f6f8b43"
+source = "git+https://github.com/atomdrift-project/stng.git#0efde693f32b540a558b29fd3b822a55d51d6a26"
 dependencies = [
  "aho-corasick",
  "base64 0.22.1",
@@ -5559,7 +5559,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://github.com/atomdrift-project/filefacts.git#7f3b6db730eca5b6705847e52fb0695e7222d7e5"
+source = "git+https://github.com/atomdrift-project/filefacts.git#deff28934a84439a36f66e84b57546a9c67e9ca4"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -5977,9 +5977,9 @@ dependencies = [
 
 [[package]]
 name = "walkdir"
-version = "2.5.0"
+version = "2.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29790946404f91d9c5d06f9874efddea1dc06c5efe94541a7d6863108e3a5e4b"
+checksum = "b42e295b7452c4604982280d8586001fcad9b8b201cac67bca9771e7a7475403"
 dependencies = [
  "same-file",
  "winapi-util",

@@ -62,6 +62,11 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // Cryptographic vocabulary (ciphertext, shared secret, key-material labels)
     // appears in crypto implementations of every language.
     "text:micro-behaviors/crypto/",
+    // A shell pipeline hidden by an encoding (base64/hex/xor) is a concealed
+    // stage in whichever language carries the encoded constant: C# and JVM
+    // loaders hand it to /bin/sh just as scripts do. The hiding encoding is
+    // what keeps these low-FP, not the carrier language.
+    "encoded:micro-behaviors/process/create/shell/pipeline/",
 ];
 
 /// Reviewed directory contracts where OS-independent evidence may declare

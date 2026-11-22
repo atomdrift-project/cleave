@@ -10,7 +10,7 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-use super::dead_exceptions::rule_conditions;
+use super::dead_exceptions::rules;
 use crate::composite_rules::CommentQuery;
 
 /// `rule 'id' in file: problem` for every condition whose `is:` subject is
@@ -20,11 +20,17 @@ pub(crate) fn find_ambiguous_is_subjects(
     traits: &[TraitDefinition],
     composites: &[CompositeTrait],
 ) -> Vec<String> {
-    rule_conditions(traits, composites)
-        .into_iter()
-        .filter_map(|((id, file), condition, _)| {
-            let problem = is_subject_problem(condition)?;
-            Some(format!("rule '{id}' in {}: {problem}", file.display()))
+    rules(traits, composites)
+        .iter()
+        .flat_map(|rule| {
+            rule.conditions.iter().filter_map(|condition| {
+                let problem = is_subject_problem(condition)?;
+                Some(format!(
+                    "rule '{}' in {}: {problem}",
+                    rule.id,
+                    rule.file.display()
+                ))
+            })
         })
         .collect()
 }

@@ -1178,9 +1178,9 @@ pub(super) fn validate_location_constraints(
 /// `receiver.from`).
 pub(super) fn validate_origin(origin: &FlowOriginFilter) -> Result<()> {
     let has_call = !origin.call.trim().is_empty();
-    if usize::from(has_call)
+    // `member:` with `call:` is one selector: a member read of that call's result.
+    if usize::from(has_call || origin.member.is_some())
         + usize::from(origin.value.is_some())
-        + usize::from(origin.member.is_some())
         + usize::from(origin.whole_value.is_some())
         + usize::from(origin.whole_number.is_some())
         + usize::from(origin.field_exists)
@@ -1190,7 +1190,7 @@ pub(super) fn validate_origin(origin: &FlowOriginFilter) -> Result<()> {
         || origin.through.len() > 32
     {
         return Err(anyhow::anyhow!(
-            "provenance requires exactly one of call/value/member/whole_value/whole_number/field_exists/field_absent and at most 32 transfer models"
+            "provenance requires exactly one of call (optionally with member)/value/member/whole_value/whole_number/field_exists/field_absent and at most 32 transfer models"
         ));
     }
     if (origin.field_exists || origin.field_absent)

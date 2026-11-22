@@ -53,6 +53,31 @@ fn positioned_value_literals_are_bounded_but_raw_and_recursive_queries_are_not()
     );
 }
 
+#[test]
+fn a_value_at_a_fixed_path_is_positioned() {
+    let short = |path: &str| TraitDefinition {
+        id: "value".into(),
+        r#for: vec![FileType::Zip, FileType::Tar, FileType::Jar, FileType::Npm],
+        r#if: Condition::Kv(KvQuery {
+            path: path.into(),
+            regex: Some("[^/ ]+$".into()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    assert!(
+        find_short_pattern_warnings(&[short("archive_guard.symlink_escapes")], &HashMap::new())
+            .is_empty()
+    );
+    for path in ["archive.members[*].path", "$..strings"] {
+        assert_eq!(
+            find_short_pattern_warnings(&[short(path)], &HashMap::new()).len(),
+            1,
+            "{path}"
+        );
+    }
+}
+
 fn ast_query(query: &str, language: Option<&str>) -> Condition {
     Condition::TreeSitter(TreeSitterQuery {
         query: Some(query.to_string()),
@@ -386,6 +411,24 @@ fn min_literals_skip_group_prefixes_and_weigh_bytes() {
         n("^([0-9]{1,3}\\.){3}[0-9]{1,3}$")
     );
     assert_eq!(n("(?P<x>ab)c"), 3);
+    // Flags are syntax, set alone or scoped to a group.
+    assert_eq!(n("(?i)abc"), 3);
+    assert_eq!(n("(?im)^ab$"), 2);
+    assert_eq!(n("(?-u)ab"), 2);
+    assert_eq!(n("(?i:ab)c"), n("(ab)c"));
+    // A counted repetition requires its minimum; an uncounted atom (`\d`,
+    // `.`) leaves the literal before it alone.
+    assert_eq!(n("0x[a-f0-9]{40}"), 42);
+    assert_eq!(n("ab{0,2}"), 1);
+    assert_eq!(n("ab\\d{1,3}"), 2);
+    assert_eq!(n("ab.{0,2}"), 2);
+    // A quantifier after a group weighs the whole group.
+    assert_eq!(n("(ab){3}"), 6);
+    assert_eq!(n("x(ab)?"), 1);
+    assert_eq!(n("(?:ab){2}"), 4);
+    // A Unicode class is one character.
+    assert_eq!(n("\\p{Han}{3,}"), 3);
+    assert_eq!(n("\\pLx"), 2);
     // UTF-8 bytes, as a substr counts them; a quantifier takes back one char.
     assert_eq!(n("木马"), "木马".len());
     assert_eq!(n("木马?"), "木".len());

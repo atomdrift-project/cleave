@@ -42,69 +42,61 @@ pub(crate) struct DeadException {
 }
 
 /// Every regex or `word:` condition, wherever it sits, whose `not:`
-/// exceptions are dead or exclude every match.
+/// exceptions are dead or exclude every match, and every rule-level `not:`
+/// that applies to none of its rule's matches.
 #[must_use]
 pub(crate) fn find_dead_regex_exceptions(
     traits: &[TraitDefinition],
     composites: &[CompositeTrait],
 ) -> Vec<DeadException> {
-    rule_conditions(traits, composites)
+    rules(traits, composites)
         .par_iter()
-        .flat_map_iter(|&((id, file), condition, rule_not)| {
-            let problems = matcher(condition)
-                .map(|(pattern, own_not)| {
-                    let exceptions: Vec<&NotException> = own_not
-                        .into_iter()
-                        .flatten()
-                        .chain(rule_not.into_iter().flatten())
-                        .collect();
-                    exception_problems(&pattern, &exceptions)
+        .flat_map_iter(|rule| {
+            rule_problems(rule)
+                .into_iter()
+                .map(|problem| DeadException {
+                    rule: rule.id.to_owned(),
+                    file: rule.file.display().to_string(),
+                    problem,
                 })
-                .unwrap_or_default();
-            problems.into_iter().map(move |problem| DeadException {
-                rule: id.to_owned(),
-                file: file.display().to_string(),
-                problem,
-            })
         })
         .collect()
 }
 
-/// A rule's `(id, file)`, one condition it lists, and the trait-level `not:`
-/// that filters it (only a trait's `if:` has one).
-pub(super) type RuleCondition<'a> = (
-    (&'a str, &'a Path),
-    &'a Condition,
-    Option<&'a [NotException]>,
-);
+/// A rule, every condition it lists (`if:`, `unless:`, composite legs and
+/// `downgrade:` legs), and its rule-level `not:`.
+pub(super) struct RuleConditions<'a> {
+    pub(super) id: &'a str,
+    pub(super) file: &'a Path,
+    pub(super) conditions: Vec<&'a Condition>,
+    pub(super) not: Option<&'a [NotException]>,
+}
 
-/// Every condition a trait or composite lists: `if:`, `unless:`, composite
-/// legs and `downgrade:` legs.
-pub(super) fn rule_conditions<'a>(
+pub(super) fn rules<'a>(
     traits: &'a [TraitDefinition],
     composites: &'a [CompositeTrait],
-) -> Vec<RuleCondition<'a>> {
-    let mut targets = Vec::new();
-    for t in traits {
-        let rule = (t.id.as_str(), t.defined_in.as_path());
-        targets.push((rule, &t.r#if, t.not.as_deref()));
-        for condition in t.unless.iter().flatten() {
-            targets.push((rule, condition, None));
-        }
-        for condition in downgrade_conditions(t.downgrade.as_ref()) {
-            targets.push((rule, condition, None));
-        }
-    }
-    for c in composites {
-        let rule = (c.id.as_str(), c.defined_in.as_path());
-        for condition in [&c.all, &c.any, &c.unless].into_iter().flatten().flatten() {
-            targets.push((rule, condition, None));
-        }
-        for condition in downgrade_conditions(c.downgrade.as_ref()) {
-            targets.push((rule, condition, None));
-        }
-    }
-    targets
+) -> Vec<RuleConditions<'a>> {
+    let traits = traits.iter().map(|t| RuleConditions {
+        id: &t.id,
+        file: &t.defined_in,
+        conditions: std::iter::once(&t.r#if)
+            .chain(t.unless.iter().flatten())
+            .chain(downgrade_conditions(t.downgrade.as_ref()))
+            .collect(),
+        not: t.not.as_deref(),
+    });
+    let composites = composites.iter().map(|c| RuleConditions {
+        id: &c.id,
+        file: &c.defined_in,
+        conditions: [&c.all, &c.any, &c.unless]
+            .into_iter()
+            .flatten()
+            .flatten()
+            .chain(downgrade_conditions(c.downgrade.as_ref()))
+            .collect(),
+        not: c.not.as_deref(),
+    });
+    traits.chain(composites).collect()
 }
 
 fn downgrade_conditions(
@@ -113,6 +105,96 @@ fn downgrade_conditions(
     downgrade
         .into_iter()
         .flat_map(|d| d.any.iter().chain(&d.all).flatten())
+}
+
+/// Whether evaluation merges the rule-level `not:` into this condition's own
+/// (see `eval_condition`): `id:` references and structural conditions do not.
+fn takes_rule_not(condition: &Condition) -> bool {
+    matches!(
+        condition,
+        Condition::Text(_)
+            | Condition::Raw(_)
+            | Condition::Encoded(_)
+            | Condition::Comment(_)
+            | Condition::Literal(_)
+            | Condition::Kv(_)
+            | Condition::Symbol(_)
+            | Condition::Hex(_)
+    )
+}
+
+/// What is wrong with one rule's exceptions. A condition's own `not:` is
+/// judged against that condition's matches; a rule-level `not:` applies to
+/// every leg that takes it, so it is dead only when it can apply to none.
+fn rule_problems(rule: &RuleConditions<'_>) -> Vec<String> {
+    let rule_not: Vec<&NotException> = rule.not.into_iter().flatten().collect();
+    // Per rule-level exception: `Some(false)` while no leg it applies to was
+    // found to admit it, `Some(true)` once one does, `None` when some leg
+    // could not be settled.
+    let mut applies: Vec<Option<bool>> = vec![Some(false); rule_not.len()];
+    let mut judged_against = Vec::new();
+    let mut problems = Vec::new();
+    for &condition in &rule.conditions {
+        let inherited: &[&NotException] = if takes_rule_not(condition) {
+            &rule_not
+        } else {
+            &[]
+        };
+        let analyzed = matcher(condition).and_then(|(pattern, own)| {
+            let own: Vec<&NotException> = own.into_iter().flatten().collect();
+            if own.is_empty() && inherited.is_empty() {
+                return Some(());
+            }
+            let matched = match_language(&pattern)?;
+            problems.extend(leg_problems(&pattern, &matched, &own, inherited));
+            for (state, exception) in applies.iter_mut().zip(inherited) {
+                if *state == Some(false) {
+                    *state = can_apply(&matched, exception);
+                }
+            }
+            if !inherited.is_empty() {
+                judged_against.push(pattern);
+            }
+            Some(())
+        });
+        if analyzed.is_none() && !inherited.is_empty() {
+            applies.fill(None);
+        }
+    }
+    for (exception, state) in rule_not.iter().zip(applies) {
+        if state != Some(false) {
+            continue;
+        }
+        problems.push(match judged_against.as_slice() {
+            [] => format!(
+                "rule-level not: exception {} applies to none of its conditions ({}) - only text, raw, encoded, comment, string_literal, value, symbol and hex conditions take it; put it on the leg it is meant for, or use unless:",
+                exception.shown(),
+                condition_types(&rule.conditions)
+            ),
+            [pattern] => dead_message(exception, pattern),
+            patterns => format!(
+                "rule-level not: exception {} can never apply to what any of the {} conditions it filters match - a not: judges only the matched text, not the text around it",
+                exception.shown(),
+                patterns.len()
+            ),
+        });
+    }
+    problems
+}
+
+/// `text, trait` - the distinct `type:`s of `conditions`, for messages.
+fn condition_types(conditions: &[&Condition]) -> String {
+    let mut types: Vec<&str> = conditions.iter().map(|c| c.type_name()).collect();
+    types.sort_unstable();
+    types.dedup();
+    types.join(", ")
+}
+
+fn dead_message(exception: &NotException, pattern: &str) -> String {
+    format!(
+        "not: exception {} can never apply to what regex '{pattern}' matches - a not: judges only the matched text, not the text around it; take the context into the regex as an optional group, or use unless:",
+        exception.shown()
+    )
 }
 
 /// The condition's match, as the regex the engine compiles for it, and its
@@ -178,39 +260,45 @@ fn matcher(condition: &Condition) -> Option<(String, Option<&Vec<NotException>>)
     Some((format!("{flags}{body}"), not.as_ref()))
 }
 
-/// What is wrong with `exceptions` on a condition matching `pattern`.
-fn exception_problems(pattern: &str, exceptions: &[&NotException]) -> Vec<String> {
-    if exceptions.is_empty() {
-        return Vec::new();
+/// What is wrong with one condition's exceptions: each of its `own` that can
+/// never apply, or, when none is dead, `own` and `inherited` together
+/// excluding every match.
+fn leg_problems(
+    pattern: &str,
+    matched: &ValueSetDfa,
+    own: &[&NotException],
+    inherited: &[&NotException],
+) -> Vec<String> {
+    let problems: Vec<String> = own
+        .iter()
+        .filter(|exception| can_apply(matched, exception) == Some(false))
+        .map(|exception| dead_message(exception, pattern))
+        .collect();
+    if !problems.is_empty() {
+        return problems;
     }
-    let Some(matched) = match_language(pattern) else {
-        return Vec::new();
-    };
-    let mut problems = Vec::new();
-    let mut alternatives = Vec::new();
-    for exception in exceptions {
-        let Some(regex) = exception_regex(exception) else {
-            continue;
-        };
-        if let Some(contains) = containing(&regex)
-            && product_walk(&matched, &contains, true, |m, x| m && x, false) == Some(false)
-        {
-            problems.push(format!(
-                "not: exception {} can never apply to what regex '{pattern}' matches - a not: judges only the matched text, not the text around it; take the context into the regex as an optional group, or use unless:",
-                exception.shown()
-            ));
-        }
-        alternatives.push(format!("(?:{regex})"));
-    }
-    if problems.is_empty()
+    let alternatives: Vec<String> = own
+        .iter()
+        .chain(inherited)
+        .filter_map(|exception| exception_regex(exception))
+        .map(|regex| format!("(?:{regex})"))
+        .collect();
+    if !alternatives.is_empty()
         && let Some(contains) = containing(&alternatives.join("|"))
-        && product_walk(&matched, &contains, true, |m, x| m && !x, false) == Some(false)
+        && product_walk(matched, &contains, true, |m, x| m && !x, false) == Some(false)
     {
-        problems.push(format!(
+        return vec![format!(
             "not: exceptions exclude every match of regex '{pattern}', so it can never fire"
-        ));
+        )];
     }
-    problems
+    Vec::new()
+}
+
+/// Whether `exception` applies to some string in `matched`; `None` when the
+/// automata cannot settle it.
+fn can_apply(matched: &ValueSetDfa, exception: &NotException) -> Option<bool> {
+    let contains = containing(&exception_regex(exception)?)?;
+    product_walk(matched, &contains, true, |m, x| m && x, false)
 }
 
 /// An exception as the regex its `matches` applies to the matched span.

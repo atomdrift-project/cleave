@@ -1486,6 +1486,49 @@ regex: '^node\s+\S+\.[a-z]+$'
     );
 }
 
+/// A trait-level `not:` filters an encoded match like every other matcher's.
+/// The encoded arm once passed only the condition's own exceptions, so a
+/// rule excusing `www.w3.org` still fired on it.
+#[test]
+fn test_trait_level_not_filters_encoded_matches() {
+    let condition: Condition = crate::yaml::from_str(
+        r#"
+type: encoded
+regex: 'https://[a-z0-9.-]+/'
+"#,
+    )
+    .unwrap();
+    let eval = |decoded: &str, not: Option<Vec<NotException>>| {
+        let mut trait_def = create_test_trait("test/encoded::trait-level-not", condition.clone());
+        trait_def.not = not;
+        assert!(trait_def.precompile_regexes().is_ok());
+        let mut report = create_report_with_size(64);
+        report.strings = vec![crate::types::StringInfo {
+            value: decoded.to_string().into(),
+            offset: Some(0),
+            encoding: "utf8".to_string(),
+            string_type: None,
+            section: None,
+            encoding_chain: vec!["base64".to_string()],
+            fragments: None,
+        }];
+        trait_def
+            .evaluate(&create_test_context(report, vec![]))
+            .is_some()
+    };
+    let exclude_w3 = || Some(vec![NotException::Shorthand("www.w3.org".to_string())]);
+
+    assert!(
+        eval("https://www.w3.org/2000/svg", None),
+        "control: fires without not:"
+    );
+    assert!(
+        !eval("https://www.w3.org/2000/svg", exclude_w3()),
+        "trait-level not: must filter the encoded match"
+    );
+    assert!(eval("https://collector.example-c2.net/x", exclude_w3()));
+}
+
 #[test]
 fn test_s390_does_not_match_x86_64_trait() {
     let condition = Condition::Symbol(SymbolQuery {

@@ -510,8 +510,11 @@ pub(crate) struct FlowOriginFilter {
     /// A field is absent from a concrete source keyword/attribute map.
     #[serde(default)]
     pub field_absent: bool,
-    /// Alternatively, select an actual member-read origin by canonical path.
-    /// A string or identifier merely spelling this path is not a member read.
+    /// Alternatively, select an actual member-read origin by canonical path
+    /// (`el.value`, or `.value` off a computed object). A string or identifier
+    /// merely spelling this path is not a member read. With `call:` as well,
+    /// the read must be of what that call returned: `member: '\.value$'` with
+    /// `call: querySelector` is a field's value, not the element.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub member: Option<String>,
     /// Position of the source call's literal argument to match (default zero).

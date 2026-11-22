@@ -25,7 +25,27 @@ fn exact(text: &str) -> NotException {
 }
 
 fn problems(pattern: &str, exceptions: &[NotException]) -> Vec<String> {
-    exception_problems(pattern, &exceptions.iter().collect::<Vec<_>>())
+    let own: Vec<&NotException> = exceptions.iter().collect();
+    match_language(pattern)
+        .map(|matched| leg_problems(pattern, &matched, &own, &[]))
+        .unwrap_or_default()
+}
+
+fn condition(json: serde_json::Value) -> Condition {
+    serde_json::from_value(json).unwrap()
+}
+
+fn composite_problems(legs: Vec<serde_json::Value>, not: Vec<NotException>) -> Vec<String> {
+    let rule = CompositeTrait {
+        id: "combo".to_owned(),
+        any: Some(legs.into_iter().map(condition).collect()),
+        not: Some(not),
+        ..Default::default()
+    };
+    find_dead_regex_exceptions(&[], &[rule])
+        .into_iter()
+        .map(|d| d.problem)
+        .collect()
 }
 
 #[test]
@@ -69,7 +89,6 @@ fn exact_exceptions_must_equal_a_whole_match() {
 
 #[test]
 fn every_condition_location_is_checked() {
-    let condition = |json| serde_json::from_value::<Condition>(json).unwrap();
     let url = TraitDefinition {
         id: "url".to_owned(),
         r#if: condition(serde_json::json!({
@@ -94,4 +113,57 @@ fn every_condition_location_is_checked() {
         .collect();
     found.sort();
     assert_eq!(found, ["combo", "url", "url"]);
+}
+
+#[test]
+fn a_rule_level_not_is_judged_against_every_leg_it_filters() {
+    let text = |regex: &str| serde_json::json!({"type": "text", "regex": regex});
+    // Alive on one leg is enough: the other leg's matches are simply kept.
+    assert!(
+        composite_problems(
+            vec![text("^curl "), text("wget https?://[a-z.]+")],
+            vec![shorthand("localhost")]
+        )
+        .is_empty()
+    );
+    let found = composite_problems(
+        vec![text("^curl "), text("^wget ")],
+        vec![shorthand("localhost")],
+    );
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("any of the 2 conditions"), "{found:?}");
+    // Together with a leg's own exceptions it can exclude every match.
+    let found = composite_problems(
+        vec![
+            serde_json::json!({"type": "text", "regex": "^(cd|pushd) ", "not": [{"regex": "^cd "}]}),
+        ],
+        vec![regex("^pushd ")],
+    );
+    assert!(found[0].contains("can never fire"), "{found:?}");
+}
+
+#[test]
+fn a_rule_level_not_reaching_no_leg_is_dead() {
+    let found = composite_problems(
+        vec![
+            serde_json::json!({"id": "a/b::c"}),
+            serde_json::json!({"type": "basename", "regex": "^x"}),
+        ],
+        vec![shorthand("x")],
+    );
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(
+        found[0].contains("applies to none of its conditions"),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn an_unsettled_leg_keeps_a_rule_level_not_alive() {
+    // A substr leg is not analyzed here, so the exception may apply to it.
+    let legs = vec![
+        serde_json::json!({"type": "text", "regex": "^curl "}),
+        serde_json::json!({"type": "text", "substr": "wget localhost"}),
+    ];
+    assert!(composite_problems(legs, vec![shorthand("localhost")]).is_empty());
 }

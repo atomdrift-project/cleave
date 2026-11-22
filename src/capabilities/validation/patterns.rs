@@ -83,6 +83,9 @@ fn count_regex_min_literals(pattern: &str) -> usize {
     let mut chars = pattern.chars().peekable();
     let mut in_bracket = false; // Track character classes [...]
     let mut bracket_depth: usize = 0;
+    // The count at each open group, so a quantifier after `)` weighs the
+    // whole group.
+    let mut groups: Vec<usize> = Vec::new();
 
     while let Some(ch) = chars.next() {
         match ch {
@@ -91,10 +94,27 @@ fn count_regex_min_literals(pattern: &str) -> usize {
                 if let Some(&next) = chars.peek() {
                     chars.next(); // Consume the next character
                     // Special escape sequences that match variable content don't count as literals
-                    if !matches!(
+                    if matches!(
                         next,
                         'w' | 'W' | 'd' | 'D' | 's' | 'S' | 'b' | 'B' | 'A' | 'Z'
                     ) {
+                        // A quantifier after one takes back nothing counted.
+                        last = 0;
+                    } else if matches!(next, 'p' | 'P') {
+                        // A Unicode class (`\p{Han}`, `\pL`) is one character,
+                        // like `[...]`.
+                        if chars.next_if_eq(&'{').is_some() {
+                            for c in chars.by_ref() {
+                                if c == '}' {
+                                    break;
+                                }
+                            }
+                        } else {
+                            chars.next();
+                        }
+                        count += 1;
+                        last = 1;
+                    } else {
                         // \n, \t, \x.., \u.., etc. are literals
                         count += 1;
                         last = 1;
@@ -128,40 +148,50 @@ fn count_regex_min_literals(pattern: &str) -> usize {
                 // Quantifiers * and ? make the previous character optional; + keeps at least 1.
                 count = count.saturating_sub(last);
             }
-            '(' if !in_bracket
-                && chars.peek() == Some(&'?')
-                && chars
-                    .clone()
-                    .nth(1)
-                    .is_some_and(|c| matches!(c, ':' | 'P' | '<')) =>
-            {
-                // A non-capturing or named group's prefix (`(?:`, `(?P<name>`,
-                // `(?<name>`) is syntax: the group counts as a plain `(`.
-                let close = if chars.clone().nth(1) == Some(':') {
-                    ':'
-                } else {
-                    '>'
-                };
+            '(' if !in_bracket && chars.peek() == Some(&'?') => {
+                // A group prefix is syntax: a non-capturing or named group
+                // (`(?:`, `(?P<name>`, `(?<name>`) or a scoped flag group
+                // (`(?i:`) counts as a plain `(`, and a flag setting (`(?i)`,
+                // `(?-u)`) as nothing.
+                chars.next();
+                let named = chars.peek().is_some_and(|&c| c == 'P' || c == '<');
                 for c in chars.by_ref() {
-                    if c == close {
+                    if (named && c == '>') || (!named && c == ':') {
+                        groups.push(count);
+                        break;
+                    }
+                    if !named && c == ')' {
                         break;
                     }
                 }
             }
-            '+' | '(' | ')' | '|' | '^' | '$' | '.' if !in_bracket => {
+            '.' if !in_bracket => {
+                // '.' matches any char but isn't counted as a specific literal.
+                last = 0;
+            }
+            '(' if !in_bracket => groups.push(count),
+            ')' if !in_bracket => {
+                last = count - groups.pop().unwrap_or(0).min(count);
+            }
+            '+' | '|' | '^' | '$' if !in_bracket => {
                 // '+' keeps at least 1 of the previous — no adjustment to count.
                 // Other metacharacters don't contribute literal content.
-                // '.' matches any char but isn't counted as a specific literal.
             }
             '{' if !in_bracket => {
-                // Quantifier like {n,m} - skip until closing }
+                // {n}, {n,} or {n,m}: the previous atom appears at least n times.
+                let mut bounds = String::new();
                 for c in chars.by_ref() {
                     if c == '}' {
                         break;
                     }
+                    bounds.push(c);
                 }
-                // Quantifiers can make previous optional
-                count = count.saturating_sub(last);
+                let min = bounds
+                    .split(',')
+                    .next()
+                    .and_then(|n| n.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                count = count.saturating_sub(last) + last.saturating_mul(min);
             }
             _ if !in_bracket => {
                 // Regular literal character
@@ -438,6 +468,10 @@ pub(crate) fn find_short_pattern_warnings(
                         || offset_range.is_some()
                         || section_offset.is_some()
                         || section_offset_range.is_some()
+                }
+                // A value at a fixed path reads one field, not the file.
+                Condition::Kv(kv) => {
+                    !kv.path.is_empty() && !kv.path.contains('*') && !kv.path.contains("..")
                 }
                 _ => false,
             }

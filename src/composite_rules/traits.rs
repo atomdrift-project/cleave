@@ -615,7 +615,7 @@ fn eval_condition(
                     },
                     &location,
                     *is_check,
-                    not.as_ref(),
+                    merge_not_exceptions(not.as_ref(), rule.not).as_ref(),
                     ctx,
                 )
             )

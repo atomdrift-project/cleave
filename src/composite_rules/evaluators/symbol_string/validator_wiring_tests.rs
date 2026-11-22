@@ -102,7 +102,8 @@ fn cfml_member_origin_matches_values_not_spelling_or_adjacent_attributes() {
         ("{member: '^form\\.job$'}", true),
         ("{member: ''}", false),
         ("{member: '['}", false),
-        ("{member: x, call: f}", false),
+        ("{member: x, call: f}", true),
+        ("{member: x, call: f, literal: y}", true),
         ("{member: x, value: x}", false),
         ("{member: x, literal: x}", false),
         ("{member: x, argument: 1}", false),
@@ -112,6 +113,75 @@ fn cfml_member_origin_matches_values_not_spelling_or_adjacent_attributes() {
         ))
         .unwrap();
         assert_eq!(condition.validate().is_ok(), valid, "{selection}");
+    }
+}
+
+#[test]
+fn js_member_origin_with_a_call_reads_that_call_result() {
+    use crate::composite_rules::condition::ArgFilter;
+    use crate::composite_rules::{context::EvaluationContext, types::FileType};
+    use crate::types::{AnalysisReport, FilefactsView, TargetInfo};
+    let filter: ArgFilter = crate::yaml::from_str(
+        "index: 1\nfrom:\n  field: body\n  member: '\\.value$'\n  call: ^document\\.querySelector$\n  literal: password\n  through:\n    - call: ^JSON\\.stringify$\n      arguments: [0]\n",
+    )
+    .unwrap();
+    let pw = "document.querySelector('input[type=password]')";
+    let mail = "document.querySelector('input[type=email]')";
+    for (source, expected) in [
+        (
+            format!("const p = {pw};\nfetch(u, {{body: JSON.stringify({{p: p.value}})}});"),
+            true,
+        ),
+        (
+            format!("fetch(u, {{body: JSON.stringify({{p: {pw}.value}})}});"),
+            true,
+        ),
+        // The element itself, beside another field's value.
+        (
+            format!(
+                "const m = {mail}.value;\nconst p = {pw};\nfetch(u, {{body: JSON.stringify({{m, p}})}});"
+            ),
+            false,
+        ),
+        // A value, but of a different field.
+        (
+            format!("const m = {mail};\nfetch(u, {{body: JSON.stringify({{m: m.value}})}});"),
+            false,
+        ),
+    ] {
+        let parsed = filefacts::OpenOptions::new()
+            .path(std::path::Path::new("a.js"))
+            .open(source.as_bytes());
+        let mut report = AnalysisReport::new(TargetInfo {
+            path: "a.js".into(),
+            file_type: "javascript".into(),
+            size_bytes: source.len() as u64,
+            sha256: String::new(),
+            architectures: None,
+        });
+        report.filefacts = Some(FilefactsView {
+            flow: parsed.flow().cloned(),
+            symbols: parsed.symbols().iter().cloned().collect(),
+            ..Default::default()
+        });
+        let ctx = EvaluationContext::new(
+            &report,
+            source.as_bytes(),
+            FileType::JavaScript,
+            &[],
+            None,
+            None,
+        );
+        let result = super::eval_call(
+            Some(&"fetch".into()),
+            None,
+            None,
+            Some(&filter),
+            None,
+            super::CallSite::default(),
+            &ctx,
+        );
+        assert_eq!(result.matched, expected, "{source}");
     }
 }
 

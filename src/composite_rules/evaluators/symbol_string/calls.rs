@@ -635,25 +635,55 @@ pub(super) fn origin_matches(
             gaps.record(AnalysisGap::FlowFieldUnavailable);
         }
     }
+    // The selected source call, with its literal argument when one is named.
+    let is_source = |observation: &filefacts::FlowOrigin| {
+        let Some(value) = flow.values.get(observation.value) else {
+            return false;
+        };
+        if value.kind != filefacts::FlowKind::Call
+            || !value
+                .target
+                .as_ref()
+                .is_some_and(|t| source_pattern.as_ref().is_some_and(|p| p.is_match(t)))
+        {
+            return false;
+        }
+        let Some(literal_pattern) = &origin.literal else {
+            return true;
+        };
+        let Some(pattern) = crate::composite_rules::condition::cached_regex(literal_pattern) else {
+            return false;
+        };
+        let arguments = flow.argument_origins(observation, origin.argument, &models, 10_000);
+        if arguments.incomplete {
+            gaps.record(AnalysisGap::FlowQueryIncomplete);
+        }
+        arguments.values.iter().any(|id| {
+            flow.values.get(id.value).and_then(|v| v.literal.as_ref())
+                .is_some_and(|a| matches!(a, filefacts::Arg::String { value } | filefacts::Arg::Template { value } if pattern.is_match(value)))
+        })
+    };
     found.values.iter().any(|observation| {
         let Some(value) = flow.values.get(observation.value) else { return false };
         if let Some(pattern) = &member_pattern {
-            return value.kind == filefacts::FlowKind::Member
-                && value.target.as_ref().is_some_and(|path| pattern.is_match(path));
+            if value.kind != filefacts::FlowKind::Member
+                || !value.target.as_ref().is_some_and(|path| pattern.is_match(path))
+            {
+                return false;
+            }
+            // With a source call too: a member read of what that call returned.
+            if source_pattern.is_none() {
+                return true;
+            }
+            let objects = flow.origins(observation.value, &models, 10_000);
+            if objects.incomplete { gaps.record(AnalysisGap::FlowQueryIncomplete); }
+            return objects.values.iter().any(&is_source);
         }
         if let Some(pattern) = &value_pattern {
             return value.literal.as_ref().is_some_and(|a| matches!(a,
                 filefacts::Arg::String { value } | filefacts::Arg::Template { value } if pattern.is_match(value)));
         }
-        if value.kind != filefacts::FlowKind::Call || !value.target.as_ref().is_some_and(|t| source_pattern.as_ref().is_some_and(|p| p.is_match(t))) { return false; }
-        let Some(literal_pattern) = &origin.literal else { return true };
-        let Some(pattern) = crate::composite_rules::condition::cached_regex(literal_pattern) else { return false };
-        let arguments = flow.argument_origins(observation, origin.argument, &models, 10_000);
-        if arguments.incomplete { gaps.record(AnalysisGap::FlowQueryIncomplete); }
-        arguments.values.iter().any(|id| {
-            flow.values.get(id.value).and_then(|v| v.literal.as_ref())
-                .is_some_and(|a| matches!(a, filefacts::Arg::String { value } | filefacts::Arg::Template { value } if pattern.is_match(value)))
-        })
+        is_source(observation)
     })
 }
 

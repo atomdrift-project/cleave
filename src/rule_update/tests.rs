@@ -61,6 +61,54 @@ fn packed_install_keeps_rule_bytes_out_of_plain_files() {
     );
 }
 
+/// The commit time is the newest entry mtime, as `git archive` stamps every
+/// entry with it; compiled rules, which are never installed, do not count.
+#[test]
+fn a_bundle_reports_when_its_commit_was_made() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut builder = tar::Builder::new(Vec::new());
+    for (path, mtime) in [
+        ("metadata/a.yaml", 1_763_500_000),
+        ("metadata/b.yaml", 1_763_456_789),
+        ("third-party/compiled/php.yrc", 1_999_999_999),
+    ] {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(1);
+        header.set_mode(0o644);
+        header.set_mtime(mtime);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, path, b"x".as_slice())
+            .unwrap();
+    }
+    let archive = builder.into_inner().unwrap();
+    let committed = unpack_bundle(Cursor::new(archive), tmp.path(), false).unwrap();
+    assert_eq!(committed, Some(1_763_500_000));
+}
+
+/// An older sidecar, with only a date, answers with that day's last second.
+#[test]
+fn a_dated_sidecar_is_committed_by_the_end_of_its_day() {
+    assert_eq!(end_of_day("1970-01-01"), Some(86_399));
+    assert_eq!(end_of_day("2026-11-18"), Some(1_795_046_399));
+    assert_eq!(end_of_day("2024-02-29"), Some(1_709_251_199));
+    assert_eq!(end_of_day("2026-13-01"), None);
+    assert_eq!(end_of_day("soon"), None);
+
+    let tmp = tempfile::tempdir().unwrap();
+    assert_eq!(committed_at(tmp.path()), None, "no sidecar, no time");
+    let mut meta = Installed {
+        commit: "deed861c72b71abcd1803ad685496e377ca52c2e".into(),
+        date: "2026-11-18".into(),
+        ..Installed::default()
+    };
+    std::fs::write(tmp.path().join(SIDECAR), toml::to_string(&meta).unwrap()).unwrap();
+    assert_eq!(committed_at(tmp.path()), Some(1_795_046_399));
+    meta.committed = Some(1_795_000_000);
+    std::fs::write(tmp.path().join(SIDECAR), toml::to_string(&meta).unwrap()).unwrap();
+    assert_eq!(committed_at(tmp.path()), Some(1_795_000_000));
+}
+
 #[test]
 fn bundle_rejects_links_before_the_sidecar_write_can_follow_them() {
     let tmp = tempfile::tempdir().unwrap();

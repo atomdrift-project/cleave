@@ -243,7 +243,11 @@ fn tiny_view_carries_the_full_identity_block() {
         "setup.exe",
         5,
         vec![finding_with("t/one", Criticality::Notable)],
-        vec![],
+        vec![ctx_line(
+            1,
+            "MZ",
+            Some(ctx_note("t/one", Criticality::Notable, 1)),
+        )],
     );
     file.file_type = "pe".to_string();
     file.identity = Some(identity(serde_json::json!({
@@ -262,7 +266,7 @@ fn tiny_view_carries_the_full_identity_block() {
 /// The terminal view keeps the header to what a human scans: no severity
 /// tally, no `claims`/`ids` identity lines, and no file-level observation
 /// without a location unless it is suspicious or worse. The tiny view keeps
-/// all of them.
+/// the identity lines for a file it renders, but draws no location-less note.
 #[test]
 fn terminal_view_trims_counts_claims_ids_and_locationless_notables() {
     let mut file = src_file(
@@ -272,8 +276,13 @@ fn terminal_view_trims_counts_claims_ids_and_locationless_notables() {
         vec![
             finding_with("t/notable-note", Criticality::Notable),
             finding_with("t/suspicious-note", Criticality::Suspicious),
+            finding_with("t/windowed", Criticality::Notable),
         ],
-        vec![],
+        vec![ctx_line(
+            1,
+            "WINDOWED_BYTES",
+            Some(ctx_note("t/windowed", Criticality::Notable, 1)),
+        )],
     );
     file.file_type = "macho".to_string();
     file.identity = Some(identity(serde_json::json!({
@@ -296,7 +305,9 @@ fn terminal_view_trims_counts_claims_ids_and_locationless_notables() {
     let tiny = format_context(&report, &TinyOpts::tiny());
     assert!(tiny.contains("claims"), "{tiny}");
     assert!(tiny.contains("cdhash"), "{tiny}");
-    assert!(tiny.contains("t/notable-note"), "{tiny}");
+    assert!(tiny.contains("t/windowed"), "{tiny}");
+    assert!(!tiny.contains("t/notable-note"), "{tiny}");
+    assert!(!tiny.contains("t/suspicious-note"), "{tiny}");
 }
 
 #[test]
@@ -344,7 +355,11 @@ fn dedup_does_not_cross_a_fetched_artifact_boundary() {
         "wrapper.tgz!!lib/a.js",
         4,
         vec![finding_with(shared, Criticality::Suspicious)],
-        vec![],
+        vec![ctx_line(
+            1,
+            "install()",
+            Some(ctx_note(shared, Criticality::Suspicious, 1)),
+        )],
     );
     member.depth = 1;
     member.parent_id = Some(0);
@@ -365,7 +380,11 @@ fn dedup_does_not_cross_a_fetched_artifact_boundary() {
         "pkg:npm/evil@1.0.0!!index.js",
         3,
         vec![finding_with(shared, Criticality::Hostile)],
-        vec![],
+        vec![ctx_line(
+            1,
+            "install()",
+            Some(ctx_note(shared, Criticality::Hostile, 1)),
+        )],
     );
     dep_member.depth = 2;
     dep_member.parent_id = Some(2);
@@ -1120,8 +1139,8 @@ fn undetected_file_renders_low_tier_in_tiny_but_not_terminal() {
 #[test]
 fn tiny_caps_context_to_top_five_scoring_files() {
     // Six source files, descending score. The top five draw their source
-    // context (the hit line's code shows); the sixth is past the cap, so its
-    // notable finding still surfaces as a bare note but its code never does.
+    // context (the hit line's code shows); the sixth is past the cap, so it
+    // renders nothing at all: an annotation without its code is noise.
     let files: Vec<FileAnalysis> = (0..6)
         .map(|i| {
             let id = format!("cat/trait::n{i}");
@@ -1151,15 +1170,70 @@ fn tiny_caps_context_to_top_five_scoring_files() {
             "file {i} (top-5) should show context\n{output}"
         );
     }
-    // ...the sixth does not, but its finding is not lost — it shows as a note.
+    // ...the sixth renders neither its code nor a bare note, nor a header.
     assert!(
         !output.contains("CODELINE_5"),
         "file 5 is past the context cap; no window\n{output}"
     );
     assert!(
-        output.contains("finding desc 5"),
-        "file 5's finding still surfaces as a bare note\n{output}"
+        !output.contains("finding desc 5") && !output.contains("f5.py"),
+        "file 5 is past the cap and must not render\n{output}"
     );
+}
+
+/// A file with no captured window cannot show code, so it never takes one of
+/// the five slots; a file carrying a suspicious composite's evidence outranks
+/// a higher-scored file that carries none.
+#[test]
+fn tiny_context_slots_go_to_windowed_files_evidence_first() {
+    let windowed = |i: u32, score: u32| {
+        let id = format!("cat/trait::n{i}");
+        let note = ctx_note(&id, Criticality::Notable, 1);
+        src_file(
+            i,
+            &format!("/f{i}.py"),
+            score,
+            vec![finding_with(&id, Criticality::Notable)],
+            vec![ctx_line(
+                1,
+                &format!("CODELINE_{i} = real_work()"),
+                Some(note),
+            )],
+        )
+    };
+    // Top score, but nothing to draw.
+    let bare = src_file(
+        0,
+        "/bare.py",
+        1000,
+        vec![Finding {
+            desc: "bare finding".into(),
+            ..finding_with("cat/trait::bare", Criticality::Notable)
+        }],
+        vec![],
+    );
+    let mut files: Vec<FileAnalysis> = vec![bare];
+    files.extend((1..6).map(|i| windowed(i, 100 - i)));
+    // Lowest score, but it holds a suspicious composite's leg.
+    let leg = "cat/trait::leg";
+    let mut composite = finding_with("objectives/exec::chain", Criticality::Suspicious);
+    composite.trait_refs = vec![leg.to_string().into()];
+    let note = ctx_note(leg, Criticality::Notable, 1);
+    files.push(src_file(
+        6,
+        "/legs.py",
+        1,
+        vec![composite, finding_with(leg, Criticality::Notable)],
+        vec![ctx_line(1, "LEGLINE = run()", Some(note))],
+    ));
+    let output = format_tiny(&report_with_files(files));
+
+    assert!(!output.contains("bare"), "{output}");
+    assert!(output.contains("LEGLINE"), "{output}");
+    for i in 1..5 {
+        assert!(output.contains(&format!("CODELINE_{i}")), "{output}");
+    }
+    assert!(!output.contains("CODELINE_5"), "{output}");
 }
 
 /// Capture keeps only the strongest note on an overlapping span, so a
@@ -1342,7 +1416,18 @@ fn tiny_resolves_nested_composites_to_their_atoms() {
             finding_with(label, Criticality::Component),
             finding_with(post, Criticality::Baseline),
         ],
-        vec![],
+        vec![
+            ctx_line(
+                1,
+                "showMnemonic()",
+                Some(ctx_note(label, Criticality::Component, 1)),
+            ),
+            ctx_line(
+                3,
+                "post(url)",
+                Some(ctx_note(post, Criticality::Baseline, 3)),
+            ),
+        ],
     );
     let tiny = format_tiny(&report_with_files(vec![file]));
     assert!(tiny.contains(&format!("({label})")), "{tiny}");
@@ -1399,7 +1484,11 @@ fn tiny_places_cross_member_legs_in_their_members() {
             &format!("/s/ext.zip!!{name}"),
             10,
             vec![finding_with(leg, Criticality::Component)],
-            vec![],
+            vec![ctx_line(
+                1,
+                "handle(input)",
+                Some(ctx_note(leg, Criticality::Component, 1)),
+            )],
         );
         m.depth = 1;
         m.parent_id = Some(0);
@@ -1434,7 +1523,8 @@ fn mentions_id_matches_whole_ids_only() {
 /// A composite's note covers the one leg it was anchored on. Its other
 /// legs match elsewhere, so handing them the note would label a line with
 /// a trait that is not its evidence (a paste-site leg once annotated a
-/// tunnel URL line); they stay location-less instead.
+/// tunnel URL line). With no window of their own they have no code to sit
+/// beside, so the LLM view does not list them at all.
 #[test]
 fn tiny_relabel_hands_a_composite_note_only_to_legs_it_covers() {
     let a = "micro/tunnel::quick-service";
@@ -1472,7 +1562,10 @@ fn tiny_relabel_hands_a_composite_note_only_to_legs_it_covers() {
         !tiny.contains(&format!("12:1 {b}")),
         "the uncovered leg is not labeled onto the anchor line: {tiny}"
     );
-    assert!(tiny.contains(b), "the uncovered leg still lists: {tiny}");
+    assert!(
+        !tiny.contains(b),
+        "an uncovered leg with no window renders no bare note: {tiny}"
+    );
     assert!(
         !tiny.contains("rendezvous"),
         "the composite stays withheld: {tiny}"
@@ -1523,10 +1616,10 @@ fn tiny_labels_each_leg_of_a_withheld_composite_at_its_own_column() {
     assert!(!tiny.contains(comp), "{tiny}");
 }
 
-/// A window the per-file cap declines to draw must not take its finding
-/// with it: the finding lists as a location-less note instead.
+/// A window the per-file cap declines to draw takes its annotation with it:
+/// the LLM view draws no annotation without its code.
 #[test]
-fn tiny_window_cap_keeps_capped_findings_as_notes() {
+fn tiny_window_cap_drops_capped_annotations() {
     let ctx = |i: u64, id: &str| {
         ctx_line(
             i * 100,
@@ -1558,13 +1651,17 @@ fn tiny_window_cap_keeps_capped_findings_as_notes() {
         1,
         "one window drawn: {tiny}"
     );
-    for id in ["t/one", "t/two", "t/three"] {
-        assert!(tiny.contains(id), "{id} must still be listed: {tiny}");
+    assert!(
+        tiny.contains("t/one"),
+        "the strongest window is drawn: {tiny}"
+    );
+    for id in ["t/two", "t/three"] {
+        assert!(!tiny.contains(id), "{id} has no window, so no note: {tiny}");
     }
 }
 
-/// The byte budget keeps the strongest windows that fit and lists the rest
-/// as notes; a weaker window that still fits is not skipped.
+/// The byte budget keeps the strongest windows that fit and drops the rest,
+/// annotations included; a weaker window that still fits is not skipped.
 #[test]
 fn tiny_window_byte_budget_keeps_strongest_that_fit() {
     let big = "x".repeat(300);
@@ -1613,8 +1710,8 @@ fn tiny_window_byte_budget_keeps_strongest_that_fit() {
         "a weaker window that fits is drawn: {tiny}"
     );
     assert!(
-        tiny.contains("t/mid"),
-        "the budgeted-out finding is still listed: {tiny}"
+        !tiny.contains("t/mid"),
+        "the budgeted-out finding renders no bare note: {tiny}"
     );
 }
 
@@ -1720,8 +1817,8 @@ fn tiny_window_pick_spreads_across_families() {
         "repeat family skipped: {tiny}"
     );
     assert!(
-        tiny.contains("micro-behaviors/net/http::b"),
-        "the skipped finding still lists: {tiny}"
+        !tiny.contains("micro-behaviors/net/http::b"),
+        "the skipped finding renders no bare note: {tiny}"
     );
 }
 
@@ -1790,7 +1887,7 @@ fn tiny_window_pick_ranks_legs_by_their_withheld_composite() {
 }
 
 /// An import note no composite draws on earns no window on a budgeted
-/// file, however confident, and still lists as a location-less note.
+/// file, however confident, and so no annotation either.
 #[test]
 fn tiny_window_pick_skips_metadata_only_windows() {
     let import = "metadata/import/python/subprocess::subprocess";
@@ -1821,7 +1918,7 @@ fn tiny_window_pick_skips_metadata_only_windows() {
     );
     assert!(tiny.contains("requests.get(url)"), "behavior drawn: {tiny}");
     assert!(tiny.contains("open(p, 'w')"), "behavior drawn: {tiny}");
-    assert!(tiny.contains(import), "import still lists: {tiny}");
+    assert!(!tiny.contains(import), "no windowless import note: {tiny}");
 }
 
 /// Equal candidates across families and tiers render identically run to
@@ -2251,7 +2348,15 @@ fn tiny_lists_no_capabilities_for_a_quiet_platform_signed_file() {
             "micro-behaviors/fs/file::position-api",
             Criticality::Notable,
         )],
-        vec![],
+        vec![ctx_line(
+            1,
+            "SetFilePointerEx",
+            Some(ctx_note(
+                "micro-behaviors/fs/file::position-api",
+                Criticality::Notable,
+                1,
+            )),
+        )],
     );
     runtime.identity = Some(runtime_identity.clone());
     let tiny = format_context(&report_with_files(vec![runtime.clone()]), &TinyOpts::tiny());
@@ -2262,10 +2367,18 @@ fn tiny_lists_no_capabilities_for_a_quiet_platform_signed_file() {
     assert!(!tiny.contains("position-api"), "no capability list: {tiny}");
 
     // Anything suspicious on a signed file is still shown.
-    runtime.findings.push(finding_with(
-        "objectives/evasion/process/injection::remote-thread",
-        Criticality::Suspicious,
-    ));
+    annotate(
+        &mut runtime,
+        vec![ctx_line(
+            3,
+            "CreateRemoteThread",
+            Some(ctx_note(
+                "objectives/evasion/process/injection::remote-thread",
+                Criticality::Suspicious,
+                3,
+            )),
+        )],
+    );
     let tiny = format_context(&report_with_files(vec![runtime]), &TinyOpts::tiny());
     assert!(
         tiny.contains("remote-thread") || tiny.contains("evasion/process"),
@@ -2277,7 +2390,17 @@ fn tiny_lists_no_capabilities_for_a_quiet_platform_signed_file() {
 fn tiny_gap_lines_name_the_file_not_its_directories() {
     // The directories above a sample are the operator's filing (`hostile/`,
     // `benign/`); the LLM view names only the file, like its headers do.
-    let mut file = src_file(0, "/corpus/samples/hostile/x.py", 50, vec![], vec![]);
+    let mut file = src_file(
+        0,
+        "/corpus/samples/hostile/x.py",
+        50,
+        vec![],
+        vec![ctx_line(
+            1,
+            "run()",
+            Some(ctx_note("t/one", Criticality::Notable, 1)),
+        )],
+    );
     file.analysis_gaps = vec![crate::types::AnalysisGap::FlowGraphLimited].into();
     let report = report_with_files(vec![file]);
 
@@ -2478,7 +2601,7 @@ fn test_aggregate_findings_same_directory_keeps_highest_confidence() {
 }
 
 #[test]
-fn test_format_tiny_renders_location_less_finding_as_annotation() {
+fn test_format_tiny_omits_location_less_finding() {
     let findings = vec![Finding {
         precomputed_spans: None,
         src: None,
@@ -2507,13 +2630,13 @@ fn test_format_tiny_renders_location_less_finding_as_annotation() {
 
     let output = format_tiny(&report);
 
-    // No capture pass ran here, so the finding has no context window and
-    // renders as a location-less annotation line: the comment marker, the
-    // severity letter, then the description (no LINE, since it anchored
-    // nowhere). Notable+ no-anchor noise is dropped, so the fixture is
-    // Suspicious. The tiny view shows the basename, not the full `/test/` path.
-    assert!(output.contains("sample.bin\tELF 12KB"));
-    assert!(output.contains("// S Execute shell commands"));
+    // No capture pass ran here, so the finding has no context window. The
+    // LLM view draws annotations only beside code, so the file renders
+    // nothing; the terminal view still lists it as a location-less note.
+    assert!(!output.contains("Execute shell commands"), "{output}");
+    assert!(!output.contains("sample.bin"), "{output}");
+    let term = format_context(&report, &TinyOpts::terminal());
+    assert!(term.contains("Execute shell commands"), "{term}");
 }
 
 #[test]
@@ -2868,15 +2991,9 @@ fn test_format_tiny_does_not_resurrect_dominated_finding_location_less() {
     );
     let output = format_tiny(&report);
     assert!(output.contains("// H 7:1 a/win desc"), "{output:?}");
-    // A suspicious atom is evidence the tiny view owes its reader, so it
-    // is exempt from dominance there: named once, location-less.
-    assert_eq!(
-        output
-            .matches("// S b/dominated desc (b/dominated)")
-            .count(),
-        1,
-        "{output:?}"
-    );
+    // The tiny view draws no annotation without its code, so the dominated
+    // finding, which lost its window, is not resurrected as a bare note.
+    assert!(!output.contains("b/dominated"), "{output:?}");
 
     // Same rule for the terminal view: a dominated finding is suppressed
     // everywhere, never resurrected as a location-less gutter note.

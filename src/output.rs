@@ -400,6 +400,58 @@ pub struct HeaderBadge<'a> {
 /// only its top-scoring files.
 const MAX_CONTEXT_FILES: usize = 5;
 
+/// `Analysis incomplete` lines for the files `keep` admits, plus the report's
+/// own gaps when it has no files at all.
+///
+/// Reported independently of finding/severity focus: incomplete analysis must
+/// remain visible even when no malware trait matched. The LLM view admits only
+/// the files it renders; a gap line about a file the grader cannot see is a
+/// comment without code.
+fn gap_lines(
+    report: &AnalysisReport,
+    opts: &TinyOpts,
+    keep: impl Fn(&FileAnalysis) -> bool,
+) -> String {
+    const MAX_FILES: usize = 200;
+    let mut gaps = String::new();
+    let affected: Vec<_> = report
+        .files
+        .iter()
+        .filter(|f| !f.analysis_gaps.is_empty() && keep(f))
+        .collect();
+    for file in affected.iter().take(MAX_FILES) {
+        let reasons = file
+            .analysis_gaps
+            .iter()
+            .map(AnalysisGap::label)
+            .collect::<Vec<_>>()
+            .join(", ");
+        gaps.push_str(&format!(
+            "Analysis incomplete for {:?}: {reasons}\n",
+            tiny_path(&file.path, opts.basename_root)
+        ));
+    }
+    if affected.len() > MAX_FILES {
+        gaps.push_str(&format!(
+            "Analysis incomplete for {} additional files; see JSON analysis_gaps.\n",
+            affected.len() - MAX_FILES
+        ));
+    }
+    if report.files.is_empty() && !report.analysis_gaps.is_empty() {
+        let reasons = report
+            .analysis_gaps
+            .iter()
+            .map(AnalysisGap::label)
+            .collect::<Vec<_>>()
+            .join(", ");
+        gaps.push_str(&format!(
+            "Analysis incomplete for {:?}: {reasons}\n",
+            tiny_path(&report.target.path, opts.basename_root)
+        ));
+    }
+    gaps
+}
+
 /// Render the report as a colored, context-centric view per `opts`. Color is
 /// auto-disabled when stdout isn't a terminal (so `… | llm` stays plain text);
 /// that plain mode renders each source line unaltered, preceding any line that
@@ -418,44 +470,6 @@ pub fn format_context_badged(
     opts: &TinyOpts,
     badge: HeaderBadge<'_>,
 ) -> String {
-    // Report analysis gaps independently of finding/severity focus. Incomplete
-    // analysis must remain visible even when no malware trait matched.
-    let mut gaps = String::new();
-    let affected: Vec<_> = report
-        .files
-        .iter()
-        .filter(|f| !f.analysis_gaps.is_empty())
-        .collect();
-    for file in affected.iter().take(200) {
-        let reasons = file
-            .analysis_gaps
-            .iter()
-            .map(AnalysisGap::label)
-            .collect::<Vec<_>>()
-            .join(", ");
-        gaps.push_str(&format!(
-            "Analysis incomplete for {:?}: {reasons}\n",
-            tiny_path(&file.path, opts.basename_root)
-        ));
-    }
-    if affected.len() > 200 {
-        gaps.push_str(&format!(
-            "Analysis incomplete for {} additional files; see JSON analysis_gaps.\n",
-            affected.len() - 200
-        ));
-    }
-    if report.files.is_empty() && !report.analysis_gaps.is_empty() {
-        let reasons = report
-            .analysis_gaps
-            .iter()
-            .map(AnalysisGap::label)
-            .collect::<Vec<_>>()
-            .join(", ");
-        gaps.push_str(&format!(
-            "Analysis incomplete for {:?}: {reasons}\n",
-            tiny_path(&report.target.path, opts.basename_root)
-        ));
-    }
     // The LLM/tiny view withholds composites; this is the evidence it owes
     // the reader in their place, per file (see `evidence_legs`).
     let minimal = matches!(opts.header, HeaderStyle::Minimal);
@@ -470,6 +484,7 @@ pub fn format_context_badged(
         .filter(|f| file_has_output(f, opts) || f.identity.is_some() || legs.contains_key(&f.id))
         .collect();
     if files.is_empty() {
+        let gaps = gap_lines(report, opts, |_| !minimal);
         return sanitize_terminal_output(&gaps).into_owned();
     }
     let colorize = opts.color && colored::control::SHOULD_COLORIZE.should_colorize();
@@ -509,7 +524,6 @@ pub fn format_context_badged(
         None
     }
 
-    let mut out = gaps;
     let mut emitted = false;
     // The machine/LLM view shows each distinct finding once across the whole
     // sample: an identical finding repeated across many archive members (product
@@ -518,19 +532,23 @@ pub fn format_context_badged(
     // members then collapse. The terminal view keeps per-member detail.
     let dedup_across_files = minimal;
 
-    // The LLM/tiny view spends its context budget on only the highest-scoring
-    // files: those render full source/hex windows (and surface every component
-    // line — see `select_ids`), while the long tail still lists its notable+
-    // findings as bare notes but draws no windows. Containers have no content
-    // view of their own (their bytes are packed member data), so they don't
-    // compete for a slot. The terminal view caps nothing.
+    // The LLM/tiny view renders only its highest-ranked files, and only as
+    // code: source/hex windows with the annotations they carry. A file past
+    // the cap renders nothing at all — a long tail of headers and bare notes
+    // is comment without code, and on a large benign archive it buried the
+    // handful of windows under hundreds of lines a grader can read nothing
+    // from. Only files that captured context compete for a slot (a file with
+    // no window could only spend it on bare notes), and never a container:
+    // its bytes are packed member data. A file holding the evidence a hostile or
+    // suspicious composite rests on ranks first, so that evidence is drawn.
+    // The terminal view caps nothing.
     let context_file_ids: HashSet<u32> = if minimal {
         let mut ranked: Vec<&FileAnalysis> = files
             .iter()
             .copied()
-            .filter(|f| !container_paths.contains(f.path.as_str()))
+            .filter(|f| !f.context.is_empty() && !container_paths.contains(f.path.as_str()))
             .collect();
-        ranked.sort_by_key(|f| std::cmp::Reverse(f.score));
+        ranked.sort_by_key(|f| std::cmp::Reverse((legs.contains_key(&f.id), f.score)));
         ranked
             .iter()
             .take(MAX_CONTEXT_FILES)
@@ -539,6 +557,9 @@ pub fn format_context_badged(
     } else {
         HashSet::new()
     };
+    let mut out = gap_lines(report, opts, |f| {
+        !minimal || context_file_ids.contains(&f.id)
+    });
 
     // Which artifact each file belongs to: the id of the fetched-subtree root
     // above it, or None for the sample's own files. A fetched payload is a
@@ -558,16 +579,13 @@ pub fn format_context_badged(
     // finding from the block of the artifact that actually carried it.
     let mut seen_by_artifact: HashMap<Option<u32>, HashSet<&str>> = HashMap::new();
     for &file in &files {
-        // Highest-scoring files (and every file in the terminal view) draw
-        // context windows; the tiny view's long tail lists findings without them.
-        // Only those context files earn the low-tier fill — the long tail and
-        // the terminal view (fill 0) keep the strict selection.
-        let shows_context = !minimal || context_file_ids.contains(&file.id);
-        let fill = if minimal && shows_context {
-            opts.low_tier_fill
-        } else {
-            0
-        };
+        // The tiny view renders its context files and nothing else; those earn
+        // the low-tier fill, while the terminal view (fill 0) keeps the strict
+        // selection.
+        if minimal && !context_file_ids.contains(&file.id) {
+            continue;
+        }
+        let fill = if minimal { opts.low_tier_fill } else { 0 };
         // A platform-signed file that raised nothing above notable is told by
         // its header and identity lines alone in the LLM view.
         let mut selected = if minimal && vouched_and_quiet(file) {
@@ -636,7 +654,14 @@ pub fn format_context_badged(
         // Collapse findings already shown by an earlier file in the LLM view.
         // Done after container filtering so the surviving, container-specific
         // ids are what register as seen.
-        if dedup_across_files {
+        //
+        // A decoded layer is exempt. Its host matches the decoded fragments
+        // back onto the encoded bytes and renders first, so the host's copy —
+        // annotating an unreadable run of char codes or hex — would win, and
+        // the layer, the one place that finding reads as code, would be left
+        // with nothing to draw.
+        let decoded_layer = file.path.contains(crate::types::ENCODING_DELIMITER);
+        if dedup_across_files && !decoded_layer {
             let seen = seen_by_artifact
                 .entry(artifact_of.get(&file.id).copied().flatten())
                 .or_default();
@@ -669,11 +694,7 @@ pub fn format_context_badged(
         // for genuine atomic matches on the container's own bytes, never a
         // cross-file composite that merely landed a stray offset. Composites
         // still render as location-less notes. Ordinary files window everything.
-        let context_selected: Vec<&str> = if !shows_context {
-            // A long-tail file past the context cap: no windows. Its findings
-            // still surface as bare notes (see `render_no_anchor`).
-            Vec::new()
-        } else if is_container {
+        let context_selected: Vec<&str> = if is_container {
             selected
                 .iter()
                 .copied()
@@ -693,7 +714,7 @@ pub fn format_context_badged(
         // bare note (an agent skill's `curl --data-binary @file` line never
         // reached the grader). Hand such notes to the omitted legs instead.
         let notes = crate::context::notes(&file.findings, &file.context);
-        let relabeled = if minimal && shows_context {
+        let relabeled = if minimal {
             relabel_composite_notes(file, &notes, &context_selected)
         } else {
             None
@@ -747,22 +768,25 @@ pub fn format_context_badged(
                 .map(|(c, _)| (c.loc, c.loc + c.data.len() as u64))
                 .collect()
         };
-        render_no_anchor(
-            &mut body,
-            file,
-            &selected,
-            &ContextCoverage {
-                notes: &notes,
-                windowed: &windowed,
-                capped: &capped,
-                drawn: &drawn,
-                shown: shows_context,
-            },
-            &owed,
-            &id_to_file,
-            opts,
-            colorize,
-        );
+        // The LLM view draws annotations only beside the code they describe:
+        // a location-less note or a withheld-pattern line has no code under it.
+        if !minimal {
+            render_no_anchor(
+                &mut body,
+                file,
+                &selected,
+                &ContextCoverage {
+                    notes: &notes,
+                    windowed: &windowed,
+                    capped: &capped,
+                    drawn: &drawn,
+                },
+                &owed,
+                &id_to_file,
+                opts,
+                colorize,
+            );
+        }
         render_context(
             &mut body,
             file,

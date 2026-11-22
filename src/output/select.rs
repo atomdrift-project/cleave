@@ -623,12 +623,13 @@ pub(super) fn is_terminal_view(opts: &TinyOpts) -> bool {
 /// The single gate every skip path consults, so a file can never be dropped
 /// from the view for having nothing but withheld traits to report.
 ///
-/// cleave's terminal view draws none: a human reading a verdict wants the
-/// evidence, not the engine's internal second-guessing, and the trailing block
-/// routinely ran longer than the findings above it. Every other view keeps
-/// them — there the withheld half is signal a grader can weigh.
+/// Only the card layout draws them. cleave's terminal view draws none: a human
+/// reading a verdict wants the evidence, not the engine's internal
+/// second-guessing, and the trailing block routinely ran longer than the
+/// findings above it. The LLM view draws none either: it shows annotations
+/// only beside the code they describe, and a withheld pattern has no code.
 pub(super) fn has_shown_suppressions(file: &FileAnalysis, opts: &TinyOpts) -> bool {
-    !is_terminal_view(opts) && file.suppressions.iter().any(|s| s.crit >= opts.min_crit)
+    opts.card && file.suppressions.iter().any(|s| s.crit >= opts.min_crit)
 }
 
 /// The top-`n` finding ids to show, ranked by `crit × conf` (highest first) and

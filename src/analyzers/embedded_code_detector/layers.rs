@@ -258,6 +258,25 @@ pub(super) fn decode_variation_selector_payload(content: &str) -> Option<(String
     Some((text, offset))
 }
 
+/// Capture render context on a decoded layer's own text.
+///
+/// A decoded layer is analyzed in isolation, outside the archive and pipeline
+/// orchestration that normally runs capture, so without this its findings
+/// carry no windows: the decoded payload — often the one place the real
+/// behavior is readable — reached the report as bare notes, and a view that
+/// draws only code (the LLM render) dropped it entirely. Mirrors the
+/// embedded-binary path in `analyzers::utils`.
+fn capture_layer_context(
+    report: &mut crate::types::AnalysisReport,
+    decoded: &[u8],
+    file_type: FileType,
+    engine: &crate::Engine,
+) {
+    report.dedupe_findings();
+    let doomed = engine.rules().doomed_low_value_ids(&report.findings);
+    crate::context::capture(report, decoded, file_type, &doomed);
+}
+
 /// Analyze a stng-decoded script payload as its own source layer.
 pub(crate) fn analyze_decoded_script_layer(
     parent_path: &str,
@@ -309,6 +328,7 @@ pub(crate) fn analyze_decoded_script_layer(
             offset,
         ));
     }
+    capture_layer_context(&mut report, decoded.as_bytes(), file_type, engine);
 
     let (mut entry, _, _) = report.into_file_analysis(0, engine);
     entry.path = virtual_path;
@@ -431,7 +451,14 @@ pub(crate) fn analyze_batch_expansion_layer(
     let virtual_path = encode_decoded_path(parent_path, &encoding_chain, result.offset);
     let analyzer =
         super::super::generic::GenericAnalyzer::new(FileType::Batch).with_engine(engine.clone());
-    let report = analyzer.analyze_source_as_configured(Path::new(&virtual_path), &result.decoded);
+    let mut report =
+        analyzer.analyze_source_as_configured(Path::new(&virtual_path), &result.decoded);
+    capture_layer_context(
+        &mut report,
+        result.decoded.as_bytes(),
+        FileType::Batch,
+        engine,
+    );
     let (mut entry, _, _) = report.into_file_analysis(0, engine);
     entry.path = virtual_path;
     entry.depth = 1;

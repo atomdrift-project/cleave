@@ -16,8 +16,6 @@ pub(super) struct ContextCoverage<'a> {
     pub(super) capped: &'a HashSet<&'a str>,
     /// Byte ranges of the source windows drawn.
     pub(super) drawn: &'a [(u64, u64)],
-    /// Any context is drawn at all.
-    pub(super) shown: bool,
 }
 
 /// Emit selected findings that have *no anchorable location of their own* — once
@@ -45,7 +43,6 @@ pub(super) fn render_no_anchor(
         windowed,
         capped,
         drawn,
-        shown: context_shown,
     } = *coverage;
     let sel: HashSet<&str> = selected.iter().copied().collect();
 
@@ -70,12 +67,7 @@ pub(super) fn render_no_anchor(
     // that note covers the leg's own evidence). A finding whose evidence sits
     // inside a `drawn` source window is already on screen, whatever note that
     // window carries, so it is not listed again.
-    //
-    // A file past the context cap (`context_shown` false) drew no windows even
-    // though it captured context, so the dominance argument doesn't apply: this
-    // block is the only place its findings can surface. Treat it as uncaptured,
-    // and lower the floor to notable so no real detection is lost to the cap.
-    let captured = context_shown && !file.context.is_empty();
+    let captured = !file.context.is_empty();
 
     // A location-less finding has no honest byte chunk, so this is its only
     // output surface. Keep notable+ regardless of whether other findings in the

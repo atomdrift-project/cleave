@@ -28,6 +28,7 @@ mod cpio_members;
 mod cpio_rpm;
 mod declared_sources;
 mod decoded_evidence_provenance;
+mod decoded_layer_context;
 mod diff_test;
 mod directory_scan_test;
 mod directory_selector_threshold;

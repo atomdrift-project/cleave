@@ -152,6 +152,10 @@ pub struct Installed {
     pub commit: String,
     /// Committer date of that commit (`YYYY-MM-DD`).
     pub date: String,
+    /// Commit time of that commit, Unix seconds: the mtime `git archive`
+    /// stamps on every entry. Absent from sidecars written before it was kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub committed: Option<u64>,
     /// `stable:<version>`, `latest`, or `pin:<key>` — how the pointer was resolved.
     pub source: String,
     /// The cleave version that performed the install.
@@ -166,6 +170,36 @@ pub struct Installed {
 pub fn installed(dir: &Path) -> Option<Installed> {
     let text = std::fs::read_to_string(dir.join(SIDECAR)).ok()?;
     toml::from_str(&text).ok()
+}
+
+/// When the traits installed at `dir` were committed, Unix seconds. A sidecar
+/// written before the commit time was kept answers with the last second of
+/// its commit date, so a verdict from that day never counts as newer. `None`
+/// without a sidecar: a git checkout, whose working tree may be newer than
+/// any commit.
+#[must_use]
+pub fn committed_at(dir: &Path) -> Option<u64> {
+    let installed = installed(dir)?;
+    installed.committed.or_else(|| end_of_day(&installed.date))
+}
+
+/// The last second of the UTC day `date` (`YYYY-MM-DD`), Unix seconds.
+fn end_of_day(date: &str) -> Option<u64> {
+    let mut parts = date.splitn(3, '-').map(str::parse::<i64>);
+    let (Some(Ok(y)), Some(Ok(m)), Some(Ok(d))) = (parts.next(), parts.next(), parts.next()) else {
+        return None;
+    };
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    // Days from 1970-01-01 to y-m-d (Howard Hinnant's days_from_civil).
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (m + if m > 2 { -3 } else { 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    u64::try_from((days + 1) * 86_400 - 1).ok()
 }
 
 /// True if the dir is a git checkout (or symlinked to one) — a dev tree we must
@@ -869,12 +903,13 @@ fn install(dir: &Path, artifact: &Artifact, source: &str, channel: &Channel) -> 
 
     let decoder = zstd::stream::read::Decoder::new(Cursor::new(&bytes))
         .map_err(|e| format!("opening zstd stream: {e}"))?;
-    unpack_bundle(decoder, &staging, cfg!(windows))
+    let committed = unpack_bundle(decoder, &staging, cfg!(windows))
         .map_err(|e| format!("extracting {}: {e}", artifact.file))?;
 
     let meta = Installed {
         commit: artifact.commit.clone(),
         date: artifact.date.clone(),
+        committed,
         source: source.to_string(),
         version: our_version().to_string(),
         packed_rules: cfg!(windows),
@@ -895,7 +930,14 @@ fn install(dir: &Path, artifact: &Artifact, source: &str, channel: &Channel) -> 
 /// a PAX global metadata header (`pax_global_header`), which is not a file to
 /// extract. Consume and skip that valid header so the archive is handled like
 /// the one produced by `git archive --format=tar`.
-fn unpack_bundle<R: Read>(reader: R, staging: &Path, pack_rules: bool) -> Result<(), String> {
+///
+/// Returns the commit time: the newest mtime of any entry, which `git archive`
+/// (and pulsar's deterministic re-pack) sets to the commit's own.
+fn unpack_bundle<R: Read>(
+    reader: R,
+    staging: &Path,
+    pack_rules: bool,
+) -> Result<Option<u64>, String> {
     let mut archive = tar::Archive::new(reader);
     // `git archive` writes group-writable modes (its default `tar.umask` is
     // 0002), and tar applies them as given: on a host whose users share a
@@ -903,6 +945,7 @@ fn unpack_bundle<R: Read>(reader: R, staging: &Path, pack_rules: bool) -> Result
     archive.set_mask(0o022);
     let mut written = std::collections::HashSet::new();
     let mut unpacked = 0u64;
+    let mut committed: Option<u64> = None;
     let entries = archive
         .entries()
         .map_err(|e| format!("reading tar entries: {e}"))?;
@@ -929,6 +972,9 @@ fn unpack_bundle<R: Read>(reader: R, staging: &Path, pack_rules: bool) -> Result
         // bundle's are never installed, whatever an older publisher shipped.
         if path.starts_with("third-party/compiled") {
             continue;
+        }
+        if let Ok(mtime) = entry.header().mtime() {
+            committed = committed.max(Some(mtime));
         }
         // A `.git` would mark the installed tree as a checkout, and every later
         // update — the one that would replace a bad bundle — leaves those alone.
@@ -1002,7 +1048,7 @@ fn unpack_bundle<R: Read>(reader: R, staging: &Path, pack_rules: bool) -> Result
             ));
         }
     }
-    Ok(())
+    Ok(committed)
 }
 
 /// Replace `dir` with `staging`, keeping a rollback copy at `backup`.

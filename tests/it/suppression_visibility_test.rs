@@ -1,5 +1,7 @@
-//! Regression guard: the tiny view (the payload `scan --format interpret`
-//! prints verbatim) must show what the analysis decided *not* to report.
+//! Regression guard: the card view (scan's compact terminal render) must show
+//! what the analysis decided *not* to report. The tiny view (the payload
+//! `scan --format interpret` prints verbatim) does not: it draws annotations
+//! only beside the code they describe, and a withheld pattern has none.
 //!
 //! A reader that only sees the findings cannot tell a clean file from a
 //! suppressed one, and the suppressor is the interesting half — a credential
@@ -61,11 +63,16 @@ fn tiny_output_reports_what_was_withheld_and_why() -> anyhow::Result<()> {
         );
     }
 
-    // The rendered payload must actually say so.
-    let rendered = cleave::output::format_tiny(&report);
+    // The card view must actually say so; the LLM view must not.
+    let tiny = cleave::output::format_tiny(&report);
+    assert!(
+        !tiny.contains("withheld") && !tiny.contains("downgraded"),
+        "the tiny payload draws no annotation without code; got:\n{tiny}",
+    );
+    let rendered = cleave::output::format_context(&report, &card());
     assert!(
         rendered.contains("withheld") || rendered.contains("downgraded"),
-        "the tiny payload must surface suppressions; got:\n{rendered}",
+        "the card view must surface suppressions; got:\n{rendered}",
     );
     let named = file
         .suppressions
@@ -117,6 +124,14 @@ fn suppressions_stay_proportionate_to_the_file() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The card layout, the one view that draws suppressions.
+fn card() -> cleave::output::TinyOpts {
+    cleave::output::TinyOpts {
+        card: true,
+        ..cleave::output::TinyOpts::terminal()
+    }
+}
+
 /// Build a report whose only content is the given suppressions, through the
 /// real `finalize()` path that moves them onto `files[0]`.
 fn report_with_only_suppressions(
@@ -134,8 +149,8 @@ fn report_with_only_suppressions(
     report
 }
 
-/// Every recorded suppression must reach the interpret payload, including on a
-/// file that has nothing else to show.
+/// Every recorded suppression must reach the card view, including on a file
+/// that has nothing else to show.
 ///
 /// The tiny view is a budget: it drops files with no selected findings, filters
 /// by criticality, caps findings per file, and in focused mode skips files
@@ -146,7 +161,7 @@ fn report_with_only_suppressions(
 ///
 /// cleave's own terminal view is the exception: a human reading a verdict is
 /// spending screen height, and the withheld block routinely ran longer than the
-/// findings above it. The machine views — which this payload is — keep it.
+/// findings above it. The card view keeps it.
 #[test]
 fn a_file_with_only_suppressions_still_reaches_the_payload() {
     use cleave::output::TinyOpts;
@@ -162,14 +177,16 @@ fn a_file_with_only_suppressions_still_reaches_the_payload() {
         }],
     }]);
 
-    let rendered = cleave::output::format_context(&report, &TinyOpts::tiny());
+    let tiny = cleave::output::format_context(&report, &TinyOpts::tiny());
+    assert!(!tiny.contains("withheld"), "{tiny}");
+    let rendered = cleave::output::format_context(&report, &card());
     assert!(
         rendered.contains("objectives/exfiltration/messaging/webhook::generic-webhook-url"),
-        "tiny view dropped a file whose only content was a suppression; got:\n{rendered}",
+        "card view dropped a file whose only content was a suppression; got:\n{rendered}",
     );
     assert!(
         rendered.contains("metadata/package/testing/harness/runtime::is-test"),
-        "tiny view lost the leg that did the withholding; got:\n{rendered}",
+        "card view lost the leg that did the withholding; got:\n{rendered}",
     );
 
     let terminal = cleave::output::format_context(&report, &TinyOpts::terminal());
@@ -184,7 +201,6 @@ fn a_file_with_only_suppressions_still_reaches_the_payload() {
 /// saw all of them.
 #[test]
 fn suppressions_past_the_cap_are_counted_not_dropped() {
-    use cleave::output::TinyOpts;
     use cleave::types::{Criticality, Suppression, SuppressionKind, SuppressionLeg};
 
     let report = report_with_only_suppressions(
@@ -201,8 +217,8 @@ fn suppressions_past_the_cap_are_counted_not_dropped() {
             .collect(),
     );
 
-    let rendered = cleave::output::format_context(&report, &TinyOpts::tiny());
-    let listed = rendered.matches("withheld test/withheld::trait-").count();
+    let rendered = cleave::output::format_context(&report, &card());
+    let listed = rendered.matches(" test/withheld::trait-").count();
     assert!(listed > 0, "nothing listed; got:\n{rendered}");
     assert!(
         listed == 40 || rendered.contains("more suppressed"),

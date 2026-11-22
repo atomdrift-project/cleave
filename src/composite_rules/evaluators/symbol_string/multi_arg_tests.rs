@@ -338,7 +338,8 @@ fn flow_gaps_survive_negative_matches_folding_cache_and_compact_output() {
         );
         let mut display = base.clone();
         display.files = vec![file];
-        let rendered = crate::output::format_context(&display, &crate::output::TinyOpts::tiny());
+        let rendered =
+            crate::output::format_context(&display, &crate::output::TinyOpts::terminal());
         assert!(rendered.contains("Analysis incomplete") && rendered.contains(expected));
     }
     assert!(

@@ -2,6 +2,37 @@
 
 All notable changes to cleave. Versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.1.0 (2026-11-22)
+
+### Features
+
+- Flag `.pth` startup hooks that import a native extension or sourceless bytecode shipped in the same package.
+- Add `validate --dupes` to list atomic traits that consistently match the same bytes.
+- Reject `not:` exceptions that can never apply, or that together exclude every match.
+- Reject `is:` validators on fixed-text matchers and on regexes with more than one capture group.
+- Let `member:` combine with call: to select a field read from that call's result.
+
+### Fixes
+
+- Stop deadlocking on archives that nest an xz tarball on every pool worker.
+- Unpack FreeBSD packages whose members are rooted at `/` instead of rejecting them as traversal.
+- Decode every member of a concatenated gzip stream, not just the first.
+- Unpack cabinets hidden behind a fake PNG prefix, which filefacts now recognizes.
+- Treat base64-encoded RAR and 7z payloads as archives, as ZIP already was.
+- Route xlsx and other Office variants to the OOXML YARA rules instead of the untyped scan.
+- Count a unicode-escape regex match only when it overlaps a decoded escape, not verbatim text.
+- Stop placing evidence without source bytes on line 1 when judging nearness.
+
+### Optimizations
+
+- Decode xz and bzip2 tarballs ahead of analysis, cutting large toolchain scans by about a tenth.
+- Start an archive's largest native members first, so one big binary no longer runs alone at the end.
+- Run YARA beside the parse for large native archive members, as lone binaries already did.
+- Skip regexes that cannot match a newline when every line is shorter than their shortest match.
+- Cache tree-sitter query analysis, so warm runs skip most of the cost of compiling queries.
+- Measure cache table size every few megabytes stored, not every eviction, saving ~37 core-seconds per cold scan.
+- Halve `validate` memory and wall time by dropping reports early and starting the largest fixture first.
+
 ## 3.0.0 (2026-11-17)
 
 ### Security

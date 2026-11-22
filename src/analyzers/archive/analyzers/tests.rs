@@ -661,3 +661,41 @@ fn extracted_files_records_entries_past_the_depth_limit() {
     );
     assert!(!report.analysis_gaps.is_empty());
 }
+
+/// Members finish in any order, but their results fold in item order, each
+/// exactly once, filtered ones skipped — however the hand-over races. Uneven
+/// member costs make later items finish first, which is the case where a
+/// worker hands its result in while another is folding.
+#[test]
+fn members_fold_in_item_order_however_they_finish() {
+    let items: Vec<u32> = (0..3000).collect();
+    for _ in 0..4 {
+        let mut folded = Vec::new();
+        super::par_filter_fold_members(
+            &items,
+            true,
+            |_| None,
+            |&i| {
+                // Early items are slow, so later ones overtake them.
+                let spin = u64::from((3000 - i) % 97) * 200;
+                let mut x = 0u64;
+                for k in 0..spin {
+                    x = std::hint::black_box(x.wrapping_add(k));
+                }
+                std::hint::black_box(x);
+                (i % 7 != 3).then_some(i)
+            },
+            |i| {
+                // A fold that takes a while, so hand-overs overlap with it.
+                let mut x = 0u64;
+                for k in 0..500u64 {
+                    x = std::hint::black_box(x.wrapping_add(k));
+                }
+                std::hint::black_box(x);
+                folded.push(i);
+            },
+        );
+        let want: Vec<u32> = items.iter().copied().filter(|i| i % 7 != 3).collect();
+        assert_eq!(folded, want);
+    }
+}

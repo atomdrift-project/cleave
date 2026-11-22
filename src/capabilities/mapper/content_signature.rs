@@ -1,5 +1,7 @@
 //! Short ASCII byte sequences used to reject impossible raw, text, path and literal matches.
-//! Hash collisions only admit extra candidates for the full matcher.
+//! Hash collisions only admit extra candidates for the full matcher. A pattern
+//! that cannot match a newline is also turned away from text whose lines are
+//! all shorter than its shortest match.
 use crate::composite_rules::{Condition, TraitDefinition};
 use regex_syntax::hir::{Hir, HirKind};
 
@@ -11,6 +13,8 @@ pub(super) struct Signature {
     /// Whether the text is all ASCII. In other text, Unicode case folding
     /// can make an ASCII letter of a character whose bytes hold none.
     ascii: bool,
+    /// The longest run of bytes without a newline, in any text added.
+    longest_line: usize,
 }
 
 /// What a match must leave in the text it is found in: every clause holds,
@@ -25,6 +29,9 @@ pub(super) struct RequiredGrams {
     /// The condition folds case as Unicode does, so only all-ASCII text can
     /// be turned away. A regex folds within ASCII alone and needs no such care.
     unicode_folding: bool,
+    /// The shortest line a match fits in: its shortest length, for a pattern
+    /// that cannot match a newline, else 0.
+    line_min: u32,
 }
 
 /// The most text a signature is taken of.
@@ -131,6 +138,10 @@ impl Signature {
             let i = usize::from(id);
             bits[i / 64] |= 1 << (i % 64);
         };
+        self.longest_line = bytes
+            .split(|&b| b == b'\n')
+            .map(<[u8]>::len)
+            .fold(self.longest_line, usize::max);
         let mut folded = bytes.iter().map(u8::to_ascii_lowercase);
         let Some(mut a) = folded.next() else { return };
         mark(&mut self.bits, u16::from(a));
@@ -146,6 +157,9 @@ impl Signature {
     }
 
     fn accepts(&self, required: &RequiredGrams) -> bool {
+        if usize::try_from(required.line_min).is_ok_and(|min| min > self.longest_line) {
+            return false;
+        }
         if required.unicode_folding && !self.ascii {
             return true;
         }
@@ -174,6 +188,7 @@ impl Signature {
         let mut signature = Self {
             bits: [0; 1024],
             ascii: data.is_ascii(),
+            longest_line: 0,
         };
         signature.add_text(data);
         for s in report
@@ -198,6 +213,7 @@ impl Signature {
         let mut sig = Self {
             bits: [0; 1024],
             ascii: true,
+            longest_line: 0,
         };
         let mut remaining: usize = MAX_TEXT_BYTES;
         for &index in ctx.literal_strings() {
@@ -218,6 +234,7 @@ impl Signature {
         let mut signature = Self {
             bits: [0; 1024],
             ascii: true,
+            longest_line: 0,
         };
         signature.add_text(bytes);
         Some(signature)
@@ -432,6 +449,35 @@ impl Shape {
     }
 }
 
+/// The shortest line a match of `hir` fits in: its shortest length when no
+/// part of it can match a newline, else 0, which turns nothing away.
+fn line_min(hir: &Hir) -> u32 {
+    fn spans_lines(hir: &Hir) -> bool {
+        match hir.kind() {
+            HirKind::Empty | HirKind::Look(_) => false,
+            HirKind::Literal(lit) => lit.0.contains(&b'\n'),
+            HirKind::Class(regex_syntax::hir::Class::Bytes(class)) => class
+                .ranges()
+                .iter()
+                .any(|r| (r.start()..=r.end()).contains(&b'\n')),
+            HirKind::Class(regex_syntax::hir::Class::Unicode(class)) => class
+                .ranges()
+                .iter()
+                .any(|r| (r.start()..=r.end()).contains(&'\n')),
+            HirKind::Capture(cap) => spans_lines(&cap.sub),
+            HirKind::Repetition(rep) => spans_lines(&rep.sub),
+            HirKind::Concat(terms) | HirKind::Alternation(terms) => terms.iter().any(spans_lines),
+        }
+    }
+    if spans_lines(hir) {
+        return 0;
+    }
+    hir.properties()
+        .minimum_len()
+        .and_then(|len| u32::try_from(len).ok())
+        .unwrap_or(0)
+}
+
 /// Whether `pattern` is searched by the engine that folds case as Unicode
 /// does: the raw matcher sends a pattern with a `\u` or `\p` escape there.
 fn unicode_engine(pattern: &str) -> bool {
@@ -549,17 +595,19 @@ impl RequiredGrams {
             if !pattern.is_ascii() {
                 return Self::default();
             }
-            let clauses = regex_syntax::ParserBuilder::new()
+            let Ok(hir) = regex_syntax::ParserBuilder::new()
                 .unicode(false)
                 .utf8(false)
                 .case_insensitive(ci)
                 .build()
                 .parse(pattern)
-                .map(|hir| Shape::of(&hir).into_clauses())
-                .unwrap_or_default();
+            else {
+                return Self::default();
+            };
             return Self {
                 unicode_folding: unicode_engine(pattern),
-                ..Self::of(clauses)
+                line_min: line_min(&hir),
+                ..Self::of(Shape::of(&hir).into_clauses())
             };
         }
         match exact.as_ref().or(substr.as_ref()).or(word.as_ref()) {
@@ -598,6 +646,45 @@ mod tests {
         }
         let rule = RequiredGrams::required(&None, &Some("powershell".into()), &None, &None, false);
         assert!(Signature::ascii(b"xyz").is_some_and(|s| !s.accepts(&rule)));
+    }
+
+    /// A pattern that cannot match a newline needs a line at least as long as
+    /// its shortest match; one that can, or whose length is open, needs none.
+    #[test]
+    fn a_match_needs_a_line_as_long_as_it() {
+        let rule = |pattern: &str| {
+            RequiredGrams::required(&None, &None, &None, &Some(pattern.into()), false)
+        };
+        let run = "ab".repeat(150);
+        let one_line = format!("x = 1\ny = \"{run}\"\n");
+        let broken = run
+            .as_bytes()
+            .chunks(100)
+            .map(|c| String::from_utf8_lossy(c))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for (pattern, line_min) in [
+            ("^[a-z]{200,}$", 200),
+            ("[A-Za-z0-9+/]{2048,}={0,2}", 2048),
+            ("(?i)[0-9a-f]{8}-[0-9a-f]{4}", 13),
+            (r"\s{200,}", 0),
+            ("[^x]{200,}", 0),
+            ("(?s)a.{200,}", 0),
+            ("a\nb{200}", 0),
+            ("ab*", 1),
+        ] {
+            assert_eq!(rule(pattern).line_min, line_min, "{pattern}");
+        }
+        let long = rule("[a-z]{250,}");
+        assert!(Signature::ascii(one_line.as_bytes()).is_some_and(|s| s.accepts(&long)));
+        assert!(Signature::ascii(broken.as_bytes()).is_some_and(|s| !s.accepts(&long)));
+        // A newline-crossing pattern is never turned away for its length.
+        let crossing = rule(r"[a-z\s]{250,}");
+        assert!(Signature::ascii(broken.as_bytes()).is_some_and(|s| s.accepts(&crossing)));
+        // Lines are measured in each text on its own: two texts do not join.
+        let mut two = Signature::ascii(&run.as_bytes()[..200]).expect("ascii");
+        two.add_text(&run.as_bytes()[..200]);
+        assert!(!two.accepts(&long));
     }
 
     /// Offline screen of the gate against real patterns and files: how often
@@ -715,9 +802,11 @@ mod tests {
                 "{pattern} should reject {impossible:?}"
             );
         }
-        // Nothing is required of a pattern that can match with no fixed text.
+        // No gram is required of a pattern that can match with no fixed text:
+        // any line long enough to hold a match is admitted.
+        let line = " ".repeat(300);
         for pattern in [r"[A-Za-z0-9+/]{200,}={0,2}", r"\w+\W\w+", r"(a|\w)*", r"x?"] {
-            assert!(possible(pattern, ""), "{pattern}");
+            assert!(possible(pattern, &line), "{pattern}");
         }
     }
 

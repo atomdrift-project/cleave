@@ -83,8 +83,10 @@ impl Counts {
 
 /// Co-location counts gathered across every analyzed file.
 pub(super) struct Tally {
-    /// Every atomic trait: its criticality and defining file.
-    atomic: HashMap<String, (Criticality, String)>,
+    /// Every atomic trait: its criticality, defining file, and the file
+    /// types its `for:` resolves to (groups expanded, exclusions applied,
+    /// file defaults inherited; empty for every type).
+    atomic: HashMap<String, (Criticality, String, Vec<String>)>,
     /// The traits directory as resolved and as canonicalized (they differ
     /// through a symlink), stripped from displayed paths.
     roots: Vec<String>,
@@ -119,7 +121,14 @@ impl Tally {
             .rule_shapes()
             .into_iter()
             .filter(|(_, s)| s.atomic)
-            .map(|(id, s)| (id, (s.crit, s.defined_in)))
+            .map(|(id, s)| {
+                let types = if s.r#for == "all" {
+                    Vec::new()
+                } else {
+                    s.r#for.split(',').map(str::to_owned).collect()
+                };
+                (id, (s.crit, s.defined_in, types))
+            })
             .collect();
         Self {
             atomic,
@@ -250,12 +259,30 @@ impl Tally {
                 .unwrap_or(path)
                 .to_owned()
         };
-        let side = |id: &Istr| {
-            let (crit, defined_in) = &self.atomic[id.as_str()];
+        // Types `of` runs on that `other` does not; `None` when `other`
+        // runs on every type `of` does.
+        let extra = |of: &Istr, other: &Istr| -> Option<Vec<String>> {
+            let (mine, theirs) = (&self.atomic[of.as_str()].2, &self.atomic[other.as_str()].2);
+            if theirs.is_empty() {
+                return None;
+            }
+            if mine.is_empty() {
+                return Some(vec!["all".to_owned()]);
+            }
+            let only: Vec<String> = mine
+                .iter()
+                .filter(|t| !theirs.contains(t))
+                .cloned()
+                .collect();
+            (!only.is_empty()).then_some(only)
+        };
+        let side = |id: &Istr, other: &Istr| {
+            let (crit, defined_in, _) = &self.atomic[id.as_str()];
             Side {
                 id: id.to_string(),
                 crit: format!("{crit:?}").to_lowercase(),
                 defined_in: relative(defined_in),
+                only_for: extra(id, other),
             }
         };
         let fires = |id: &Istr| counts.fires.get(id).copied().unwrap_or(0);
@@ -270,8 +297,8 @@ impl Tally {
                 Dupe {
                     files: p.files,
                     identical: p.identical,
-                    a: side(a),
-                    b: side(b),
+                    a: side(a, b),
+                    b: side(b, a),
                     example: relative(&example),
                     offset,
                 }
@@ -326,6 +353,12 @@ pub(super) struct Side {
     pub(super) id: String,
     pub(super) crit: String,
     pub(super) defined_in: String,
+    /// Resolved file types this trait runs on and the other does not
+    /// (`["all"]` for an unrestricted trait beside a restricted one).
+    /// Absent when the other trait covers every type this one does: this
+    /// one is the one to drop, or either is when both are absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) only_for: Option<Vec<String>>,
 }
 
 impl Audit {
@@ -344,9 +377,14 @@ impl Audit {
             let width = p.a.id.len().max(p.b.id.len());
             out.push('\n');
             for s in [&p.a, &p.b] {
+                let only = s
+                    .only_for
+                    .as_ref()
+                    .map(|t| format!(" (only it: {})", t.join(",")))
+                    .unwrap_or_default();
                 let _ = writeln!(
                     out,
-                    "  {:width$}  {:10} {}",
+                    "  {:width$}  {:10} {}{only}",
                     s.id,
                     s.crit,
                     esc(&s.defined_in)
@@ -378,7 +416,7 @@ mod tests {
                 .map(|id| {
                     (
                         (*id).to_owned(),
-                        (Criticality::Notable, format!("{id}.yaml")),
+                        (Criticality::Notable, format!("{id}.yaml"), Vec::new()),
                     )
                 })
                 .collect(),
@@ -415,6 +453,34 @@ mod tests {
             .into_iter()
             .map(|p| (p.a.id, p.b.id, p.files, p.identical))
             .collect()
+    }
+
+    #[test]
+    fn pairs_name_the_file_types_only_one_side_covers() {
+        let mut t = tally(&["narrow", "wide", "all"]);
+        let types = |l: &[&str]| l.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        t.atomic.get_mut("narrow").unwrap().2 = types(&["python"]);
+        t.atomic.get_mut("wide").unwrap().2 = types(&["python", "shell"]);
+        t.add_files(&files(3, || {
+            ["narrow", "wide", "all"]
+                .into_iter()
+                .map(|id| hit(id, "exec", &[10]))
+                .collect()
+        }));
+        let audit = t.audit();
+        let only = |a: &str, b: &str| {
+            let p = audit
+                .pairs
+                .iter()
+                .find(|p| p.a.id == a && p.b.id == b)
+                .unwrap();
+            (p.a.only_for.clone(), p.b.only_for.clone())
+        };
+        // `narrow` adds nothing to `wide`; `wide` adds shell.
+        assert_eq!(only("narrow", "wide"), (None, Some(types(&["shell"]))));
+        // An unrestricted trait covers every restricted one.
+        assert_eq!(only("all", "wide"), (Some(types(&["all"])), None));
+        assert_eq!(only("all", "narrow"), (Some(types(&["all"])), None));
     }
 
     #[test]
@@ -543,7 +609,11 @@ mod tests {
         t.roots = vec!["/traits/".to_owned()];
         t.atomic.insert(
             "a".to_owned(),
-            (Criticality::Suspicious, "/traits/x/a.yaml".to_owned()),
+            (
+                Criticality::Suspicious,
+                "/traits/x/a.yaml".to_owned(),
+                Vec::new(),
+            ),
         );
         let copies: Vec<FileAnalysis> = (0..3)
             .map(|i| FileAnalysis {

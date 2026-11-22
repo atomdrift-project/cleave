@@ -433,3 +433,31 @@ fn min_literals_skip_group_prefixes_and_weigh_bytes() {
     assert_eq!(n("木马"), "木马".len());
     assert_eq!(n("木马?"), "木".len());
 }
+
+#[test]
+fn ast_query_compile_names_a_shell_style_comment() {
+    // `#` comments are a syntax error; the message says what to use instead.
+    let trait_def = TraitDefinition {
+        id: "t".to_string(),
+        r#for: vec![FileType::Ruby],
+        r#if: ast_query(
+            "((call method: (identifier) @m) @c\n  # keeps setpgrp\n  (#not-match? @m \"x\"))",
+            None,
+        ),
+        ..Default::default()
+    };
+    let mut warnings = Vec::new();
+    find_uncompilable_ast_queries(&[trait_def], &[], &mut warnings);
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0].contains("Line 2 starts with `#`"),
+        "{warnings:?}"
+    );
+    // Predicates, on their own line or not, are not comments.
+    assert_eq!(
+        super::shell_style_comment("((x) @a\n  #eq? @a \"y\")"),
+        None
+    );
+    assert_eq!(super::shell_style_comment("((x) @a (#set! k v))"), None);
+    assert_eq!(super::shell_style_comment("(x)\n#\n"), Some(2));
+}

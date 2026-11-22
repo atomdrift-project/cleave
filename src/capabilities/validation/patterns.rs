@@ -1450,6 +1450,22 @@ pub(crate) fn find_brittle_path_patterns(traits: &[TraitDefinition], warnings: &
     }
 }
 
+/// The 1-based line of the first `#` line that is not a predicate (`#eq?`,
+/// `#set!`): a shell- or YAML-style comment, which a query cannot contain.
+fn shell_style_comment(query: &str) -> Option<usize> {
+    query
+        .lines()
+        .position(|line| {
+            line.trim_start().strip_prefix('#').is_some_and(|rest| {
+                let name = rest
+                    .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+                    .map_or(rest, |end| &rest[..end]);
+                name.is_empty() || !rest[name.len()..].starts_with(['?', '!'])
+            })
+        })
+        .map(|index| index + 1)
+}
+
 /// Top-level predicates compile as empty patterns and never constrain the
 /// structural pattern beside them. Quoted strings and comments are opaque.
 fn has_detached_ast_predicate(query: &str) -> bool {
@@ -1705,10 +1721,16 @@ fn find_uncompilable_ast_queries_with_parallel(
         } else {
             "compiles against no grammar at all"
         };
+        let hint = shell_style_comment(query).map_or_else(String::new, |line| {
+            format!(
+                " Line {line} starts with `#`: tree-sitter query comments start with `;`, \
+                 and `#` only opens a predicate inside parentheses."
+            )
+        });
         warnings.push(format!(
             "AST query: {kind} '{id}' in {location} has a `query:` that {scope} — evaluation \
              caches the compile failure and the rule silently never matches on those types. \
-             Errors: {}",
+             Errors: {}.{hint}",
             failures.join("; ")
         ));
     };

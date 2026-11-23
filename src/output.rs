@@ -567,7 +567,9 @@ pub fn format_context_badged(
             .filter(|f| !f.path.contains(crate::types::ENCODING_DELIMITER))
             .map(|f| (f.path.clone(), f.score))
             .collect();
-        let decoded_hosts: HashSet<String> = files.iter().filter_map(|f| host_of(f)).collect();
+        // Only a layer that can take the slot (it captured windows) displaces
+        // its host; otherwise the host's slot would go to some unrelated file.
+        let decoded_hosts: HashSet<String> = ranked.iter().filter_map(|f| host_of(f)).collect();
         let rank_score = |f: &FileAnalysis| match host_of(f) {
             Some(host) => f.score.max(host_score.get(&host).copied().unwrap_or(0)),
             None => f.score,

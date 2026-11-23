@@ -132,7 +132,9 @@ pub(crate) fn extract_payloads(
     let max_size = MAX_EMBEDDED_EXECUTABLE_SIZE.min(data.len() as u64);
     let mut executables = find_embedded_executables(&mut comp, &entries, max_size);
     let room = MAX_EMBEDDED_EXECUTABLES.saturating_sub(executables.len());
-    executables.extend(find_serialized_payloads(&mut comp, &entries, max_size, room));
+    executables.extend(find_serialized_payloads(
+        &mut comp, &entries, max_size, room,
+    ));
     for payload in located {
         if executables.len() >= MAX_EMBEDDED_EXECUTABLES {
             break;
@@ -202,14 +204,21 @@ fn find_serialized_payloads(
         let Some(at) = memchr::memmem::find(&data, BINARY_FORMATTER_BASE64) else {
             continue;
         };
-        let run = data[at..]
+        let Some(tail) = data.get(at..) else {
+            continue;
+        };
+        let run = tail
             .iter()
             .take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'='))
             .count();
-        let encoded = &data[at..at + run];
+        let Some(encoded) = tail.get(..run) else {
+            continue;
+        };
         let Ok(decoded) = base64::engine::general_purpose::STANDARD
             .decode(encoded)
-            .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(encoded.trim_ascii_end()))
+            .or_else(|_| {
+                base64::engine::general_purpose::STANDARD_NO_PAD.decode(encoded.trim_ascii_end())
+            })
         else {
             continue;
         };

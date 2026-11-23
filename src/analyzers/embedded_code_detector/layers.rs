@@ -110,6 +110,10 @@ pub(super) fn host_may_contain_script_obfuscation(content: &str) -> bool {
         "eval(",
         "String.fromCharCode",
         "zlib.decompress",
+        // Aliased imports (`import zlib as _z`) hide the module name.
+        "decompress(",
+        "b85decode",
+        "a85decode",
         "fromhex",
         "codecs.decode",
         "marshal.loads",
@@ -426,6 +430,27 @@ pub(crate) fn analyze_script_deobfuscation_layers(
         )
     {
         layers.push(layer);
+    }
+
+    // Python "armor": each module a loader that decodes, XORs with a key in
+    // plain sight, and zlib-decompresses its body before exec. The file itself
+    // shows only the loader; the body is the program.
+    for payload in unpack::python_keyed_armor::decode(content) {
+        if cancelled.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+            break;
+        }
+        if let Some(layer) = analyze_decoded_script_layer(
+            parent_path,
+            &payload.source,
+            payload.offset as u64,
+            FileType::Python,
+            vec!["python-keyed-xor-zlib".to_string()],
+            engine,
+            current_depth,
+            false,
+        ) {
+            layers.push(layer);
+        }
     }
 
     layers

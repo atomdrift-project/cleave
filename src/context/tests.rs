@@ -679,3 +679,50 @@ fn binary_atomic_leg_reserves_stronger_composites_window() {
         r.context
     );
 }
+
+/// An ELF-ish byte buffer with `host` XOR'd under `key` at offset 64, and a
+/// finding whose evidence recorded `value` for that span, as the `encoded`
+/// matcher does.
+fn xor_capture(key: u8, value: &str) -> AnalysisReport {
+    let host = b"devs.homelabnode.qzz.io";
+    let mut data = vec![0xc8u8; 192];
+    for (i, b) in host.iter().enumerate() {
+        data[64 + i] = b ^ key;
+    }
+    let mut f = Finding::new(
+        "lang/encoding/xor::wordlike".to_string(),
+        FindingKind::Capability,
+        "XOR decoding yields wordlike text".to_string(),
+        0.9,
+    );
+    f.crit = Criticality::Notable;
+    let mut e = Evidence::new("encoded_string", "encoding_chain:xor", value);
+    e.location = Some("0x40".to_string());
+    f.evidence = vec![e];
+    let mut r = report(vec![f]);
+    capture(&mut r, &data, FileType::Elf, &FxHashSet::default());
+    r
+}
+
+#[test]
+fn a_binary_window_shows_a_verified_xor_decode() {
+    let r = xor_capture(0x26, "devs.homelabnode.qzz.io");
+    let shown: Vec<u8> = r.context.iter().flat_map(|c| c.data.clone()).collect();
+    assert!(
+        shown.windows(23).any(|w| w == b"devs.homelabnode.qzz.io"),
+        "{:?}",
+        String::from_utf8_lossy(&shown)
+    );
+}
+
+#[test]
+fn a_window_stays_raw_when_the_value_does_not_decode() {
+    // One letter off: no single key turns the raw bytes into this value.
+    let r = xor_capture(0x26, "devs.homelabnode.qzz.iX");
+    let shown: Vec<u8> = r.context.iter().flat_map(|c| c.data.clone()).collect();
+    assert!(
+        !shown.windows(4).any(|w| w == b"devs"),
+        "{:?}",
+        String::from_utf8_lossy(&shown)
+    );
+}

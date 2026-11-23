@@ -54,6 +54,8 @@ pub(crate) enum EmbeddedExecKind {
     Vbs,
     Python,
     JavaScript,
+    /// A .NET `BinaryFormatter` payload, decoded from base64 when stored so.
+    DotNetSerialized,
 }
 
 /// Embedded executable extracted from an OLE2 stream.
@@ -129,6 +131,8 @@ pub(crate) fn extract_payloads(
     // file holding it, so the input's size caps every allocation below.
     let max_size = MAX_EMBEDDED_EXECUTABLE_SIZE.min(data.len() as u64);
     let mut executables = find_embedded_executables(&mut comp, &entries, max_size);
+    let room = MAX_EMBEDDED_EXECUTABLES.saturating_sub(executables.len());
+    executables.extend(find_serialized_payloads(&mut comp, &entries, max_size, room));
     for payload in located {
         if executables.len() >= MAX_EMBEDDED_EXECUTABLES {
             break;
@@ -148,6 +152,76 @@ pub(crate) fn extract_payloads(
         executables,
         msg_attachments,
     })
+}
+
+/// The .NET `BinaryFormatter` record header (`SerializedStreamHeader`).
+const BINARY_FORMATTER_HEADER: &[u8] = &[0x00, 0x01, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF];
+/// That header in base64, as `TypeConfuseDelegate`-style gadgets embed it in a
+/// string field.
+const BINARY_FORMATTER_BASE64: &[u8] = b"AAEAAAD/////";
+
+/// `.NET` `BinaryFormatter` payloads in the compound file's streams, raw or
+/// base64-encoded, for sub-analysis.
+///
+/// A Visual Studio `.suo` (or any compound file a tool deserializes) can carry
+/// a gadget chain that runs a command the moment the file is opened. A
+/// compound file scatters each stream across sectors, so analysis of the file
+/// as a whole sees the base64 split at every sector boundary and decodes only
+/// its first fragment; the stream read contiguously holds the whole payload.
+/// A base64 run is accepted only when it decodes to the format's header.
+fn find_serialized_payloads(
+    comp: &mut cfb::CompoundFile<Cursor<&[u8]>>,
+    entries: &[(String, u64, bool)],
+    max_size: u64,
+    room: usize,
+) -> Vec<EmbeddedExecutable> {
+    use base64::Engine as _;
+    let mut found = Vec::new();
+    for (path, size, is_stream) in entries {
+        if found.len() >= room {
+            break;
+        }
+        if !*is_stream || *size < BINARY_FORMATTER_HEADER.len() as u64 || *size > max_size {
+            continue;
+        }
+        let Ok(mut stream) = comp.open_stream(path) else {
+            continue;
+        };
+        let mut data = Vec::with_capacity(*size as usize);
+        if stream.read_to_end(&mut data).is_err() {
+            continue;
+        }
+        if data.starts_with(BINARY_FORMATTER_HEADER) {
+            found.push(EmbeddedExecutable {
+                stream_path: path.clone(),
+                kind: EmbeddedExecKind::DotNetSerialized,
+                data,
+            });
+            continue;
+        }
+        let Some(at) = memchr::memmem::find(&data, BINARY_FORMATTER_BASE64) else {
+            continue;
+        };
+        let run = data[at..]
+            .iter()
+            .take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'='))
+            .count();
+        let encoded = &data[at..at + run];
+        let Ok(decoded) = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(encoded.trim_ascii_end()))
+        else {
+            continue;
+        };
+        if decoded.starts_with(BINARY_FORMATTER_HEADER) {
+            found.push(EmbeddedExecutable {
+                stream_path: format!("{path}##base64@{at}"),
+                kind: EmbeddedExecKind::DotNetSerialized,
+                data: decoded,
+            });
+        }
+    }
+    found
 }
 
 /// The `payload` bytes of its stream, named for the packaged file beside it

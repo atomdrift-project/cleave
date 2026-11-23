@@ -404,9 +404,11 @@ const MAX_CONTEXT_FILES: usize = 5;
 /// own gaps when it has no files at all.
 ///
 /// Reported independently of finding/severity focus: incomplete analysis must
-/// remain visible even when no malware trait matched. The LLM view admits only
-/// the files it renders; a gap line about a file the grader cannot see is a
-/// comment without code.
+/// remain visible even when no malware trait matched. The LLM view admits no
+/// file: `flow-graph-limited` tells a reader deciding whether to trust silence
+/// something, but a grader can act on none of it, and on a large source tree
+/// the lines ran to hundreds. A report with no files at all keeps its own gap
+/// (an archive cleave could not open), the one thing it can say.
 fn gap_lines(
     report: &AnalysisReport,
     opts: &TinyOpts,
@@ -541,25 +543,56 @@ pub fn format_context_badged(
     // no window could only spend it on bare notes), and never a container:
     // its bytes are packed member data. A file holding the evidence a hostile or
     // suspicious composite rests on ranks first, so that evidence is drawn.
-    // The terminal view caps nothing.
+    // Byte-identical copies take one slot between them: a package that ships
+    // its modules twice (`pkg/` and a vendored alias) would otherwise spend
+    // the cap on the same code. A decoded layer stands in for its host: the
+    // host matches the decoded fragments back onto its encoded bytes and so
+    // outscores the layer, but its windows show the encoding (a loader stub, a
+    // char-code array) and the layer's show the program. The layer ranks at
+    // its host's score and the host after every other file. The terminal view
+    // caps nothing.
     let context_file_ids: HashSet<u32> = if minimal {
         let mut ranked: Vec<&FileAnalysis> = files
             .iter()
             .copied()
             .filter(|f| !f.context.is_empty() && !container_paths.contains(f.path.as_str()))
             .collect();
-        ranked.sort_by_key(|f| std::cmp::Reverse((legs.contains_key(&f.id), f.score)));
+        let host_of = |f: &FileAnalysis| {
+            f.path
+                .split_once(crate::types::ENCODING_DELIMITER)
+                .map(|(host, _)| host.to_string())
+        };
+        let host_score: HashMap<String, u32> = files
+            .iter()
+            .filter(|f| !f.path.contains(crate::types::ENCODING_DELIMITER))
+            .map(|f| (f.path.clone(), f.score))
+            .collect();
+        let decoded_hosts: HashSet<String> = files.iter().filter_map(|f| host_of(f)).collect();
+        let rank_score = |f: &FileAnalysis| match host_of(f) {
+            Some(host) => f.score.max(host_score.get(&host).copied().unwrap_or(0)),
+            None => f.score,
+        };
+        // A host cedes to its layer even when it holds a composite's legs:
+        // those legs matched the decoded fragments, which the layer shows as
+        // code.
+        ranked.sort_by_key(|f| {
+            std::cmp::Reverse((
+                !decoded_hosts.contains(&f.path),
+                legs.contains_key(&f.id),
+                rank_score(f),
+            ))
+        });
+        let mut seen_sha = HashSet::new();
         ranked
             .iter()
+            .filter(|f| f.sha256.is_empty() || seen_sha.insert(f.sha256.as_str()))
             .take(MAX_CONTEXT_FILES)
             .map(|f| f.id)
             .collect()
     } else {
         HashSet::new()
     };
-    let mut out = gap_lines(report, opts, |f| {
-        !minimal || context_file_ids.contains(&f.id)
-    });
+    let mut out = gap_lines(report, opts, |_| !minimal);
 
     // Which artifact each file belongs to: the id of the fetched-subtree root
     // above it, or None for the sample's own files. A fetched payload is a
@@ -578,17 +611,27 @@ pub fn format_context_badged(
     // the dependency's copy that got dropped. That silently deleted a hostile
     // finding from the block of the artifact that actually carried it.
     let mut seen_by_artifact: HashMap<Option<u32>, HashSet<&str>> = HashMap::new();
+    // The subject's root: the shallowest files of the view.
+    let root_depth = files.iter().map(|f| f.depth).min().unwrap_or(0);
     for &file in &files {
         // The tiny view renders its context files and nothing else; those earn
         // the low-tier fill, while the terminal view (fill 0) keeps the strict
-        // selection.
-        if minimal && !context_file_ids.contains(&file.id) {
+        // selection. One exception: the subject's root keeps its header and
+        // identity lines without a slot. What a package says it is (a wheel's
+        // description, a binary's signer) is no annotation, and it is what
+        // behavior is weighed against; a wheel's root is a container with no
+        // window, so the code-only rule would otherwise drop it.
+        let identity_only = minimal
+            && !context_file_ids.contains(&file.id)
+            && file.depth == root_depth
+            && file.identity.is_some();
+        if minimal && !context_file_ids.contains(&file.id) && !identity_only {
             continue;
         }
         let fill = if minimal { opts.low_tier_fill } else { 0 };
         // A platform-signed file that raised nothing above notable is told by
         // its header and identity lines alone in the LLM view.
-        let mut selected = if minimal && vouched_and_quiet(file) {
+        let mut selected = if identity_only || (minimal && vouched_and_quiet(file)) {
             Vec::new()
         } else {
             select_ids(file, opts, fill)

@@ -291,6 +291,7 @@ impl OfficeAnalyzer {
                 ole2::EmbeddedExecKind::Vbs => (FileType::Vbs, "vbs"),
                 ole2::EmbeddedExecKind::Python => (FileType::Python, "python"),
                 ole2::EmbeddedExecKind::JavaScript => (FileType::JavaScript, "javascript"),
+                ole2::EmbeddedExecKind::DotNetSerialized => (FileType::Data, "data"),
             };
 
             let Some(analyzer) = super::subfile::pick_analyzer(file_type, &self.engine) else {

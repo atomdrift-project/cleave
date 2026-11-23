@@ -83,20 +83,70 @@ pub(crate) fn capture(
         .collect();
 
     let lines = textual.then(|| LineIndex::new(data));
+    let plaintexts = if textual {
+        Vec::new()
+    } else {
+        xor_plaintexts(&shown, data)
+    };
     report.context = merge(windows)
         .into_iter()
         .filter(|&(lo, hi)| lo < hi)
         .filter_map(|(lo, hi)| {
-            let data = data.get(usize::try_from(lo).ok()?..usize::try_from(hi).ok()?)?;
+            let (lo_at, hi_at) = (usize::try_from(lo).ok()?, usize::try_from(hi).ok()?);
+            let mut bytes = data.get(lo_at..hi_at)?.to_vec();
+            for (at, plain) in &plaintexts {
+                if *at >= lo_at && at + plain.len() <= hi_at {
+                    bytes[at - lo_at..at - lo_at + plain.len()].copy_from_slice(plain);
+                }
+            }
             let (line, col) = lines.as_ref().map(|l| l.position(lo)).unzip();
             Some(ContextLine {
                 loc: lo,
                 line,
                 col,
-                data: data.to_vec(),
+                data: bytes,
             })
         })
         .collect();
+}
+
+/// The plaintext of each span a shown finding matched through single-byte XOR
+/// decoding, as `(offset, plaintext)`, for a binary window to show in place of
+/// the encoded bytes.
+///
+/// A window over an XOR string table shows bytes nobody can read: Mirai's C2
+/// host renders as `BCPU.NIKCJGDHIBC`, so the grader saw the annotation
+/// "XOR decoding yields wordlike text" over noise and never the host. A
+/// single-byte XOR decode is the same length as its source, so the plaintext
+/// drops into the window at the same offsets and every note still lines up.
+///
+/// Each span is verified rather than trusted: one key must turn every raw
+/// byte into the recorded value, which must be whole (not the truncated
+/// preview evidence keeps for long strings). A span that fails stays raw, so
+/// a window never shows text the file does not decode to.
+fn xor_plaintexts(shown: &[&Finding], data: &[u8]) -> Vec<(usize, Vec<u8>)> {
+    let mut out = Vec::new();
+    for evidence in shown.iter().flat_map(|f| &f.evidence) {
+        if evidence.method != "encoded_string"
+            || evidence.source != "encoding_chain:xor"
+            || evidence.value.is_empty()
+            || evidence.value.ends_with("...")
+        {
+            continue;
+        }
+        let plain = evidence.value.as_bytes();
+        let Some(at) = evidence.byte_offset().and_then(|o| usize::try_from(o).ok()) else {
+            continue;
+        };
+        let Some(raw) = data.get(at..at + plain.len()) else {
+            continue;
+        };
+        let key = raw[0] ^ plain[0];
+        if key != 0 && raw.iter().zip(plain).all(|(r, p)| r ^ key == *p) {
+            out.push((at, plain.to_vec()));
+        }
+    }
+    out
 }
 
 /// The notes on each of a file's context windows, indexed like `context`.

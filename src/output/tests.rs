@@ -2387,9 +2387,10 @@ fn tiny_lists_no_capabilities_for_a_quiet_platform_signed_file() {
 }
 
 #[test]
-fn tiny_gap_lines_name_the_file_not_its_directories() {
-    // The directories above a sample are the operator's filing (`hostile/`,
-    // `benign/`); the LLM view names only the file, like its headers do.
+fn tiny_omits_file_gap_lines_and_directories() {
+    // A per-file analysis gap is for a reader deciding whether to trust
+    // silence; the LLM view drops it. Nor does it name the directories above
+    // a sample, the operator's filing (`hostile/`, `benign/`).
     let mut file = src_file(
         0,
         "/corpus/samples/hostile/x.py",
@@ -2405,12 +2406,17 @@ fn tiny_gap_lines_name_the_file_not_its_directories() {
     let report = report_with_files(vec![file]);
 
     let tiny = format_context(&report, &TinyOpts::tiny());
-    assert!(tiny.contains("Analysis incomplete for \"x.py\""), "{tiny}");
+    assert!(!tiny.contains("Analysis incomplete"), "{tiny}");
+    assert!(tiny.contains("run()"), "{tiny}");
     assert!(!tiny.contains("samples/hostile"), "{tiny}");
 
-    // The terminal view keeps the full path for the human who filed it.
+    // The terminal view keeps the gap, with the full path for the human who
+    // filed it.
     let term = format_context(&report, &TinyOpts::terminal());
-    assert!(term.contains("/corpus/samples/hostile/x.py"), "{term}");
+    assert!(
+        term.contains("Analysis incomplete for \"/corpus/samples/hostile/x.py\""),
+        "{term}"
+    );
 }
 
 fn create_test_report(findings: Vec<Finding>, yara_matches: Vec<YaraMatch>) -> AnalysisReport {

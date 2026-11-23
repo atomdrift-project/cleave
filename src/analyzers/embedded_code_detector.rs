@@ -488,10 +488,14 @@ fn looks_like_ansi_color_helper(value: &str) -> bool {
 }
 
 fn looks_like_cli_help_snippet(value: &str) -> bool {
+    // A script that names its shell is a script, whatever options it passes.
+    if starts_with_shell_shebang(value) {
+        return false;
+    }
     let long_option_count = value.match_indices("--").count();
 
     long_option_count >= 2
-        && (value.contains('<')
+        && (has_angle_placeholder(value)
             || value.contains("option")
             || value.contains("options")
             || value.contains("curl --help")
@@ -499,6 +503,36 @@ fn looks_like_cli_help_snippet(value: &str) -> bool {
             || value.contains("Use ")
             || value.contains("Consider ")
             || value.contains("Failed to "))
+}
+
+/// `#!/bin/sh`, `#!/usr/bin/env bash`, ...: the first line names a POSIX shell.
+fn starts_with_shell_shebang(value: &str) -> bool {
+    let Some(rest) = value.strip_prefix("#!") else {
+        return false;
+    };
+    let line = rest.lines().next().unwrap_or("");
+    let mut words = line.split_ascii_whitespace();
+    let Some(mut program) = words.next().and_then(|path| path.rsplit('/').next()) else {
+        return false;
+    };
+    if program == "env" {
+        program = words.find(|word| !word.starts_with('-')).unwrap_or("");
+    }
+    matches!(program, "sh" | "bash" | "dash" | "ash" | "ksh" | "zsh" | "busybox")
+}
+
+/// A usage placeholder such as `<FILE>` or `<url>`. Heredocs (`<<EOF`) and
+/// redirections (`< in`, `2>&1`) are shell syntax, not help text.
+fn has_angle_placeholder(value: &str) -> bool {
+    value.match_indices('<').any(|(at, _)| {
+        let rest = &value[at + 1..];
+        rest.starts_with(|c: char| c.is_ascii_alphabetic())
+            && rest
+                .char_indices()
+                .take(41)
+                .find(|&(_, c)| matches!(c, '<' | '>' | '\n'))
+                .is_some_and(|(_, c)| c == '>')
+    })
 }
 
 /// Additional heuristic to filter out false positive shell detection (like foreign languages)

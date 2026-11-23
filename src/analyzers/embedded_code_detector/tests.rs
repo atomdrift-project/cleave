@@ -829,6 +829,19 @@ fn test_is_real_shell_rejects_cli_help_snippet() {
     assert!(!is_real_shell(s));
 }
 
+/// A dropped installer passes long options and uses heredocs and redirects;
+/// none of that makes it help text.
+#[test]
+fn test_is_real_shell_accepts_script_with_long_options_and_heredoc() {
+    let script = "#!/bin/sh\nset -u\nD=/etc/agent; mkdir -p \"$D\" 2>/dev/null || exit 0\n\
+        cat > /etc/systemd/system/a.service <<S\n[Service]\nExecStart=/usr/bin/a\nS\n\
+        systemctl enable --now a.service >/dev/null 2>&1\n\
+        systemctl enable --now a.timer >/dev/null 2>&1\n";
+    assert!(is_real_shell(script));
+    // Without the shebang the heredoc and redirects still are not placeholders.
+    assert!(is_real_shell(script.trim_start_matches("#!/bin/sh\n")));
+}
+
 /// A command word inside a sentence is an instruction to a reader, not a
 /// command: the error text below once became a shell layer, and the host's
 /// basename then satisfied shell-only rules.

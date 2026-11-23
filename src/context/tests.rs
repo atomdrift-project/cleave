@@ -726,3 +726,76 @@ fn a_window_stays_raw_when_the_value_does_not_decode() {
         String::from_utf8_lossy(&shown)
     );
 }
+
+/// A leading comment long enough to say something.
+const DOC: &str = "# Post-install: run install.sh as the console user in their GUI session so the\n# tray launches and its onboarding wizard appears; never block the install.\n";
+
+#[test]
+fn leading_comment_spans_shebang_comments_and_blank_lines() {
+    let src = format!("#!/bin/bash\n{DOC}\n# more\nset -e\nrm -rf /tmp/x\n");
+    let end = leading_comment_end(src.as_bytes());
+    assert_eq!(&src[..end], format!("#!/bin/bash\n{DOC}\n# more\n"));
+}
+
+#[test]
+fn leading_comment_covers_block_comments_and_docstrings() {
+    let js = format!(
+        "/**\n * {}\n */\n(function () {{}})();\n",
+        DOC.replace('\n', " ")
+    );
+    assert_eq!(
+        leading_comment_end(js.as_bytes()),
+        js.find("(function").expect("code line")
+    );
+    let py = format!("\"\"\"\n{DOC}\"\"\"\nimport os\n");
+    assert_eq!(
+        leading_comment_end(py.as_bytes()),
+        py.find("import").expect("code line")
+    );
+}
+
+#[test]
+fn no_leading_comment_when_code_comes_first_or_it_is_thin() {
+    assert_eq!(
+        leading_comment_end(format!("import os\n{DOC}").as_bytes()),
+        0
+    );
+    assert_eq!(leading_comment_end(b"// @ts-check\nconst a = 1;\n"), 0);
+    assert_eq!(leading_comment_end(b"#!/bin/sh\nexec ./run\n"), 0);
+}
+
+#[test]
+fn leading_comment_stops_before_a_line_the_cap_cuts() {
+    let line = "# a comment line of exactly sixty-four bytes, padded out to it.\n";
+    let src = line.repeat(LEADING_COMMENT_MAX_BYTES / line.len() + 4) + "code\n";
+    let end = leading_comment_end(src.as_bytes());
+    assert!(end <= LEADING_COMMENT_MAX_BYTES);
+    assert_eq!(end % line.len(), 0, "ends on a line boundary");
+}
+
+#[test]
+fn capture_adds_the_leading_comment_of_a_large_text_file() {
+    // Past `SMALL_TEXT_WHOLE_BYTES`, with the only finding far from the top.
+    let mut src = format!("#!/bin/bash\n{DOC}set -e\n");
+    src.push_str(&"echo filler line\n".repeat(200));
+    let hit = src.len();
+    src.push_str("curl -X POST https://example.invalid\n");
+    let mut r = report(vec![finding(
+        "net/post",
+        Criticality::Notable,
+        &[hit as u64],
+    )]);
+    capture(
+        &mut r,
+        src.as_bytes(),
+        FileType::Shell,
+        &FxHashSet::default(),
+    );
+    let first = r.context.first().expect("leading comment window");
+    assert_eq!((first.loc, first.line), (0, Some(1)));
+    assert!(first.data.starts_with(b"#!/bin/bash\n# Post-install"));
+    assert!(
+        block_for(&r, "net/post").is_some(),
+        "finding window still captured"
+    );
+}

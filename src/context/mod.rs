@@ -34,6 +34,16 @@ const MAX_NOTE_LEN: u64 = 512;
 /// docstring is often the one place that says what the code is for.
 const SMALL_TEXT_WHOLE_BYTES: u64 = 2048;
 
+/// A larger text file still has its leading comment block captured, up to
+/// this many bytes: a benign installer script or extension explaining what it
+/// does (and why it touches passwords or LaunchAgents) was graded hostile
+/// from its matched lines alone.
+const LEADING_COMMENT_MAX_BYTES: usize = 2048;
+
+/// A leading comment with less text than this says nothing worth a window
+/// (a license tag, a lone `// @ts-check`).
+const LEADING_COMMENT_MIN_TEXT: usize = 120;
+
 /// Slice `report.context` out of `data`: one window per shown finding's
 /// placement, sized by criticality, overlapping windows merged.
 ///
@@ -70,7 +80,7 @@ pub(crate) fn capture(
     let textual =
         file_type.is_source_code() || (!file_type.is_executable_code() && looks_textual(data));
     let whole = textual && total <= SMALL_TEXT_WHOLE_BYTES;
-    let windows = place(&shown, &by_id, &Ranker::new(&shown))
+    let mut windows: Vec<(u64, u64)> = place(&shown, &by_id, &Ranker::new(&shown))
         .into_iter()
         .map(|(note, sizing)| {
             if whole {
@@ -81,6 +91,12 @@ pub(crate) fn capture(
             (note.off.saturating_sub(before), end.min(total))
         })
         .collect();
+    if textual && !whole {
+        let end = leading_comment_end(data);
+        if end > 0 {
+            windows.push((0, end as u64));
+        }
+    }
 
     let lines = textual.then(|| LineIndex::new(data));
     let plaintexts = if textual {
@@ -641,3 +657,48 @@ fn looks_textual(data: &[u8]) -> bool {
 #[cfg(test)]
 #[allow(clippy::panic, clippy::expect_used)]
 mod tests;
+
+/// The end of `data`'s leading comment block — after an optional shebang,
+/// blank lines and whole lines of `#`, `//`, `--`, `;` or `*` comments, `/* */`
+/// blocks and `"""`/`'''` docstrings — or 0 when the file opens with code or
+/// the block holds under [`LEADING_COMMENT_MIN_TEXT`] bytes of text. Never past
+/// [`LEADING_COMMENT_MAX_BYTES`], and never inside a line the cap cuts.
+fn leading_comment_end(data: &[u8]) -> usize {
+    const LINE_MARKERS: [&[u8]; 6] = [b"#", b"//", b"--", b";", b"*", b"<!--"];
+    let head = data
+        .get(..data.len().min(LEADING_COMMENT_MAX_BYTES))
+        .unwrap_or(data);
+    let contains = |hay: &[u8], needle: &[u8]| memchr::memmem::find(hay, needle).is_some();
+    let (mut pos, mut end, mut text) = (0usize, 0usize, 0usize);
+    let mut open: Option<&[u8]> = None; // the closer an open block awaits
+    for (i, line) in head.split_inclusive(|&b| b == b'\n').enumerate() {
+        if !line.ends_with(b"\n") && head.len() < data.len() {
+            break; // cut by the cap
+        }
+        let t = line.trim_ascii();
+        pos += line.len();
+        if let Some(closer) = open {
+            if contains(t, closer) {
+                open = None;
+            }
+        } else if t.is_empty() || (i == 0 && t.starts_with(b"#!")) {
+            continue;
+        } else if t.starts_with(b"/*") {
+            open = (!contains(t.get(2..).unwrap_or_default(), b"*/")).then_some(b"*/");
+        } else if let Some(quote) = [&b"\"\"\""[..], b"\'\'\'"]
+            .into_iter()
+            .find(|q| t.starts_with(q))
+        {
+            open = (!contains(t.get(3..).unwrap_or_default(), quote)).then_some(quote);
+        } else if !LINE_MARKERS.iter().any(|m| t.starts_with(m)) {
+            break;
+        }
+        text += t.len();
+        end = pos;
+    }
+    if text < LEADING_COMMENT_MIN_TEXT {
+        0
+    } else {
+        end
+    }
+}

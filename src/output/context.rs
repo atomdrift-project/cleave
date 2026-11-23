@@ -578,7 +578,9 @@ pub(super) const HEX_MARGIN_HOSTILE: usize = 2;
 pub(super) const SRC_COMMENT_BUDGET: usize = 56;
 /// Source content window for the machine/LLM (Minimal-header) view, where there
 /// is no terminal width to fit. Wide enough that a minified line's match keeps
-/// real surrounding context, while still bounding token cost per line.
+/// real surrounding context, while still bounding token cost per line. A
+/// 200-column window, centred on the match, flipped a benign extension in
+/// scan's 72 LLM fixtures to hostile (2026-11-23).
 pub(super) const SRC_LLM_WIDTH: usize = 512;
 /// Fixed columns ahead of a row's hex cells: the 1-char gutter, a space, the
 /// offset, and a two-space separator.
@@ -837,6 +839,7 @@ pub(super) fn render_source_line(out: &mut String, row: &SourceRow<'_>, layout: 
             announced.push(n);
         }
     }
+    let announced_none = announced.is_empty();
     for n in announced {
         out.push_str(marker);
         out.push(' ');
@@ -856,6 +859,12 @@ pub(super) fn render_source_line(out: &mut String, row: &SourceRow<'_>, layout: 
 
     let (b0, b1, win_lead, win_trail) = source_window(&display, content_width, match_disp);
     let (lead, trail) = (win_lead || cut_left, win_trail || cut_right);
+    // A bare context row that starts mid-line (a slice of an ultra-long line)
+    // is a fragment with neither a finding nor the line's start; dropping
+    // these cut the LLM prompt ~12% with every fixture grade unchanged.
+    if lead && announced_none {
+        return;
+    }
     let slice = display.get(b0..b1).unwrap_or("");
     if lead {
         out.push_str("...");

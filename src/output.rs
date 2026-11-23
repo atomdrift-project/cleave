@@ -397,8 +397,39 @@ pub struct HeaderBadge<'a> {
 /// Max files that draw source/hex context in the LLM/tiny view, highest score
 /// first. The long tail still lists its findings as bare notes, but spends no
 /// budget on context windows — mirroring a report viewer, which renders content for
-/// only its top-scoring files.
+/// only its top-scoring files. Four lost two benign samples on scan's LLM
+/// fixtures once rendered for real (2026-11-23).
 const MAX_CONTEXT_FILES: usize = 5;
+
+/// Hook scripts a package installer runs on its own at install, upgrade or
+/// removal (macOS pkg `preinstall`/`postinstall`, Debian maintainer scripts,
+/// RPM-style `pre`/`postremove`). What an installer does to the machine is in
+/// them, beside the bulk of payload binaries that outscore them on breadth.
+const INSTALL_HOOKS: [&str; 12] = [
+    "preinstall",
+    "postinstall",
+    "preupgrade",
+    "postupgrade",
+    "preflight",
+    "postflight",
+    "preinst",
+    "postinst",
+    "prerm",
+    "postrm",
+    "preremove",
+    "postremove",
+];
+
+/// A path's last component, past both `/` and the archive delimiter.
+fn base_name(path: &str) -> &str {
+    path.rsplit(['/', '!']).next().unwrap_or(path)
+}
+
+/// Whether `path` names an installer hook script ([`INSTALL_HOOKS`]).
+fn is_install_hook(path: &str) -> bool {
+    let name = base_name(path);
+    INSTALL_HOOKS.iter().any(|h| name.eq_ignore_ascii_case(h))
+}
 
 /// `Analysis incomplete` lines for the files `keep` admits, plus the report's
 /// own gaps when it has no files at all.
@@ -576,18 +607,28 @@ pub fn format_context_badged(
         };
         // A host cedes to its layer even when it holds a composite's legs:
         // those legs matched the decoded fragments, which the layer shows as
-        // code.
+        // code. An installer's hook scripts come next: what it does to the
+        // machine is there, and payload binaries outscore them on breadth.
         ranked.sort_by_key(|f| {
             std::cmp::Reverse((
                 !decoded_hosts.contains(&f.path),
                 legs.contains_key(&f.id),
+                is_install_hook(&f.path),
                 rank_score(f),
             ))
         });
+        // One slot per executable name: a package's per-architecture builds
+        // of one program (`x64/zalocli`, `arm64/zalocli`) differ in SHA-256
+        // but show the same code.
         let mut seen_sha = HashSet::new();
+        let mut seen_executable: HashSet<&str> = HashSet::new();
         ranked
             .iter()
             .filter(|f| f.sha256.is_empty() || seen_sha.insert(f.sha256.as_str()))
+            .filter(|f| {
+                !matches!(f.file_type.as_str(), "macho" | "elf" | "pe")
+                    || seen_executable.insert(base_name(&f.path))
+            })
             .take(MAX_CONTEXT_FILES)
             .map(|f| f.id)
             .collect()

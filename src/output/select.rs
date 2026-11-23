@@ -277,6 +277,20 @@ pub(super) fn window_plan<'a>(
             ids: (!ids.is_empty()).then_some(ids),
         });
     }
+    // A text file's leading comment (`context::capture` takes it alongside
+    // the finding windows) carries no note, but it is what the file says it
+    // is for: it is drawn, and no window budget sheds it.
+    if let (Some(first), Some(line)) = (plan.first_mut(), file.context.first())
+        && first.ids.is_none()
+        && line.loc == 0
+        && first.notes.is_empty()
+        && line.line.is_some()
+    {
+        first.ids = Some(HashSet::new());
+    }
+    let doc_window = plan
+        .first()
+        .is_some_and(|w| w.ids.as_ref().is_some_and(HashSet::is_empty));
     let windows = plan.iter().filter(|w| w.ids.is_some()).count();
     let bytes: usize = plan
         .iter()
@@ -288,8 +302,8 @@ pub(super) fn window_plan<'a>(
     let budgeted = opts.window_bytes > 0 && bytes > opts.window_bytes;
     if capped || budgeted {
         let kept = pick_windows(file, &plan, &sel, opts);
-        for (w, keep) in plan.iter_mut().zip(kept) {
-            if !keep {
+        for (i, (w, keep)) in plan.iter_mut().zip(kept).enumerate() {
+            if !keep && !(doc_window && i == 0) {
                 w.ids = None;
             }
         }

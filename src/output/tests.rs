@@ -3156,3 +3156,110 @@ fn test_format_tiny_long_line_slice_shows_line_col() {
         "leading ellipsis marks the clip: {output:?}"
     );
 }
+
+/// A file's leading comment window: offset 0, no notes.
+fn leading_comment(text: &str) -> Win {
+    Win {
+        line: crate::types::ContextLine {
+            loc: 0,
+            line: Some(1),
+            col: Some(1),
+            data: text.as_bytes().to_vec(),
+        },
+        notes: vec![],
+    }
+}
+
+/// A one-finding source file whose window shows `code`.
+fn hit_file(id: u32, path: &str, score: u32, code: &str) -> FileAnalysis {
+    let tid = format!("cat/trait::n{id}");
+    src_file(
+        id,
+        path,
+        score,
+        vec![finding_with(&tid, Criticality::Notable)],
+        vec![ctx_line(
+            9,
+            code,
+            Some(ctx_note(&tid, Criticality::Notable, 9)),
+        )],
+    )
+}
+
+#[test]
+fn tiny_draws_a_files_leading_comment_without_a_finding() {
+    // What the file says it is for reaches the grader beside the matched
+    // lines, even though no finding falls in it.
+    let mut file = hit_file(1, "/guard.js", 10, "SALT_KEY = 'pw_salt'");
+    file.context.insert(
+        0,
+        leading_comment("/** Password Guard: keeps only a salted hash locally. */\n").line,
+    );
+    let output = format_tiny(&report_with_files(vec![file]));
+    assert!(
+        output.contains("Password Guard: keeps only a salted hash locally"),
+        "{output}"
+    );
+    assert!(output.contains("SALT_KEY"), "{output}");
+}
+
+#[test]
+fn tiny_context_slots_put_installer_hooks_before_higher_scored_payload() {
+    // Five payload files outscore the hook script, which still takes a slot.
+    let mut files: Vec<FileAnalysis> = (1..=5)
+        .map(|i| {
+            hit_file(
+                i,
+                &format!("/pkg/Payload/lib{i}.py"),
+                100 - i,
+                &format!("CODELINE_{i} = 1"),
+            )
+        })
+        .collect();
+    files.push(hit_file(
+        6,
+        "/pkg.pkg!!Scripts!!postinstall",
+        3,
+        "HOOKLINE = launchctl()",
+    ));
+    let output = format_tiny(&report_with_files(files));
+    assert!(output.contains("HOOKLINE"), "{output}");
+    assert!(
+        !output.contains("CODELINE_5"),
+        "the lowest payload file yields its slot\n{output}"
+    );
+}
+
+#[test]
+fn tiny_context_slots_take_one_build_of_a_same_named_executable() {
+    let exe = |id: u32, path: &str, score: u32| {
+        let mut f = bin_file(id, score, vec![], vec![]);
+        f.path = path.to_string();
+        f.file_type = "macho".to_string();
+        f
+    };
+    let mut x64 = exe(1, "/seed/x64/zalocli", 100);
+    let mut arm = exe(2, "/seed/arm64/zalocli", 99);
+    for f in [&mut x64, &mut arm] {
+        let id = format!("cat/trait::b{}", f.id);
+        f.findings.push(finding_with(&id, Criticality::Notable));
+        annotate(
+            f,
+            vec![ctx_line(
+                1,
+                "ZALO",
+                Some(ctx_note(&id, Criticality::Notable, 1)),
+            )],
+        );
+    }
+    let output = format_tiny(&report_with_files(vec![x64, arm]));
+    assert_eq!(
+        output.matches("zalocli\t").count(),
+        1,
+        "one block for both builds\n{output}"
+    );
+    assert!(
+        output.contains("b1 desc") && !output.contains("b2 desc"),
+        "the higher-scored build\n{output}"
+    );
+}

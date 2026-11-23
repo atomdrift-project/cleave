@@ -518,7 +518,10 @@ fn starts_with_shell_shebang(value: &str) -> bool {
     if program == "env" {
         program = words.find(|word| !word.starts_with('-')).unwrap_or("");
     }
-    matches!(program, "sh" | "bash" | "dash" | "ash" | "ksh" | "zsh" | "busybox")
+    matches!(
+        program,
+        "sh" | "bash" | "dash" | "ash" | "ksh" | "zsh" | "busybox"
+    )
 }
 
 /// A usage placeholder such as `<FILE>` or `<url>`. Heredocs (`<<EOF`) and

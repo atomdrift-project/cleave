@@ -1067,9 +1067,6 @@ pub(crate) struct StringParams<'a> {
     pub arch_clamp: Option<(usize, usize)>,
 }
 
-/// Return a same-length copy with HTML and ASP.NET server-side comments
-/// replaced by spaces, preserving line endings and all source offsets. Files
-/// without either opener return `None` and allocate nothing.
 /// `source` with every span's bytes blanked to spaces, keeping line breaks so
 /// line-based matching and evidence lines are unchanged. `None` when there is
 /// nothing to mask; spans past the end are clipped.
@@ -1089,7 +1086,31 @@ fn mask_spans(source: &[u8], spans: &[(usize, usize)]) -> Option<Vec<u8>> {
     Some(masked)
 }
 
+/// Elements whose contents the HTML tokenizer reads as raw text, so a `<!--`
+/// inside them is content rather than a comment.
+const RAW_TEXT_ELEMENTS: [&[u8]; 9] = [
+    b"script",
+    b"style",
+    b"textarea",
+    b"title",
+    b"xmp",
+    b"iframe",
+    b"noembed",
+    b"noframes",
+    b"plaintext",
+];
+
+/// Return a same-length copy with HTML and ASP.NET server-side comments
+/// replaced by spaces, preserving line endings and all source offsets. Files
+/// without either opener return `None` and allocate nothing.
+///
+/// Runs in time linear in `source`: every scan either advances past what it
+/// read or ends the walk. Text such as `<-- E` repeated across a 70 MB
+/// simulation log with no `>` anywhere once made this quadratic — a closing
+/// `>` was sought from every `<` — and held one analysis for hours.
 fn mask_markup_comments(source: &[u8]) -> Option<Vec<u8>> {
+    /// End of the tag whose attributes start at `at`: just past the first
+    /// `>` outside quotes, or `None` when the tag runs to end of input.
     fn tag_end(source: &[u8], mut at: usize) -> Option<usize> {
         let mut quote = None;
         while at < source.len() {
@@ -1105,27 +1126,20 @@ fn mask_markup_comments(source: &[u8]) -> Option<Vec<u8>> {
         None
     }
 
-    fn parse_tag(source: &[u8], at: usize) -> Option<(&[u8], usize, bool)> {
-        if source.get(at) != Some(&b'<') {
-            return None;
-        }
-        let mut pos = at + 1;
-        let closing = source.get(pos) == Some(&b'/');
-        if closing {
-            pos += 1;
-        }
-        let start = pos;
-        while source
-            .get(pos)
-            .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'-' || *b == b':')
-        {
-            pos += 1;
-        }
-        if pos == start {
-            return None;
-        }
-        let end = tag_end(source, pos)?;
-        Some((&source[start..pos], end, closing))
+    /// The raw-text element whose start tag opens at the `<` at `at`, and
+    /// where its name ends. Only the name is read: whether the tag is closed
+    /// is decided once, and only for these elements.
+    fn raw_text_open(source: &[u8], at: usize) -> Option<(&'static [u8], usize)> {
+        let start = at + 1;
+        let len = source[start..]
+            .iter()
+            .take_while(|b| b.is_ascii_alphanumeric() || matches!(**b, b'-' | b':'))
+            .count();
+        let name = &source[start..start + len];
+        RAW_TEXT_ELEMENTS
+            .into_iter()
+            .find(|raw| name.eq_ignore_ascii_case(raw))
+            .map(|raw| (raw, start + len))
     }
 
     fn raw_text_close(source: &[u8], mut at: usize, name: &[u8]) -> Option<usize> {
@@ -1149,7 +1163,9 @@ fn mask_markup_comments(source: &[u8]) -> Option<Vec<u8>> {
 
     let mut source_pos = 0usize;
     let mut output: Option<Vec<u8>> = None;
-    while source_pos < source.len() {
+    // Everything below starts at a `<`; skip straight to the next one.
+    while let Some(rel) = memchr::memchr(b'<', &source[source_pos..]) {
+        source_pos += rel;
         if source[source_pos..].starts_with(b"<!--") {
             let body_start = source_pos + 4;
             let body_end = memchr::memmem::find(&source[body_start..], b"-->")
@@ -1176,27 +1192,19 @@ fn mask_markup_comments(source: &[u8]) -> Option<Vec<u8>> {
             source_pos = body_end;
             continue;
         }
-        if source[source_pos] == b'<'
-            && let Some((name, end, false)) = parse_tag(source, source_pos)
-            && [
-                b"script".as_slice(),
-                b"style",
-                b"textarea",
-                b"title",
-                b"xmp",
-                b"iframe",
-                b"noembed",
-                b"noframes",
-                b"plaintext",
-            ]
-            .iter()
-            .any(|raw| name.eq_ignore_ascii_case(raw))
-        {
-            source_pos = if name.eq_ignore_ascii_case(b"plaintext") {
-                source.len()
-            } else {
-                raw_text_close(source, end, name).unwrap_or(source.len())
+        if let Some((name, name_end)) = raw_text_open(source, source_pos) {
+            // A start tag left open swallows the rest of the input, as in the
+            // HTML tokenizer, so nothing after it can be a comment.
+            let Some(end) = tag_end(source, name_end) else {
+                break;
             };
+            if name == b"plaintext" {
+                break;
+            }
+            match raw_text_close(source, end, name) {
+                Some(close) => source_pos = close,
+                None => break,
+            }
             continue;
         }
         source_pos += 1;

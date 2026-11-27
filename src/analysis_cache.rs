@@ -1312,6 +1312,15 @@ pub(crate) fn report_cache_lookup(
 /// Such a report is keyed by its bytes and their detected type, and serves
 /// them under any name and in any directory
 /// (see [`crate::shared_resources::rename_report`]).
+///
+/// This is intentional. Path-derived values are restamped, but findings from
+/// basename, dirname and path rules keep the decision made under the stored
+/// name: re-evaluating every rule for a direct copy would forfeit the cache
+/// for nearly every rename, since common PE rules read `file.basename`. The
+/// same binary is rarely scanned under two names in contexts that call for
+/// different detections, and filename rules are reserved for cases where the
+/// name itself is the signal. Archive members, whose paths carry more
+/// context, are checked against the rules instead (see [`cached_report_under`]).
 pub(crate) fn named_file_report_lookup(
     sha256: &str,
     file_type: &str,

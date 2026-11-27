@@ -13,10 +13,10 @@ use super::filefacts_view::FilefactsView;
 use super::traits_findings::{ContextLine, Finding, StructuralFeature, Trait};
 
 /// Path delimiter for archive members (e.g., "archive.zip!!inner/file.py")
-pub(crate) const ARCHIVE_DELIMITER: &str = "!!";
+pub const ARCHIVE_DELIMITER: &str = "!!";
 
 /// Path delimiter for decoded content (e.g., "file.py##base64+gzip@1234")
-pub(crate) const ENCODING_DELIMITER: &str = "##";
+pub const ENCODING_DELIMITER: &str = "##";
 
 /// One member that a cross-file composite drew a component from. Ties the
 /// composite to the file it was based on, with the component's location when a

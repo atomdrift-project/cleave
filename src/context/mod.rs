@@ -36,7 +36,7 @@ const SMALL_TEXT_WHOLE_BYTES: u64 = 2048;
 
 /// A larger text file still has its leading comment block captured, up to
 /// this many bytes: a benign installer script or extension explaining what it
-/// does (and why it touches passwords or LaunchAgents) was graded hostile
+/// does (and why it touches passwords or LaunchAgents) reads as hostile
 /// from its matched lines alone.
 const LEADING_COMMENT_MAX_BYTES: usize = 2048;
 
@@ -131,7 +131,7 @@ pub(crate) fn capture(
 /// the encoded bytes.
 ///
 /// A window over an XOR string table shows bytes nobody can read: Mirai's C2
-/// host renders as `BCPU.NIKCJGDHIBC`, so the grader saw the annotation
+/// host renders as `BCPU.NIKCJGDHIBC`, so a reader saw the annotation
 /// "XOR decoding yields wordlike text" over noise and never the host. A
 /// single-byte XOR decode is the same length as its source, so the plaintext
 /// drops into the window at the same offsets and every note still lines up.

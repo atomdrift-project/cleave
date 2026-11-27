@@ -3,7 +3,6 @@
 //! - `--format annotate` (default): source context around each finding
 //!   ([`format_context`] with [`TinyOpts::terminal`])
 //! - `--format index`: an index of findings per file ([`format_index`])
-//! - [`TinyOpts::tiny`]: the plain LLM view an embedding host prints
 
 mod index;
 
@@ -13,7 +12,7 @@ use crate::types::{
     AnalysisGap, AnalysisReport, ContextLine, Criticality, FileAnalysis, Finding, Note,
 };
 use colored::Colorize;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
 mod notes;
@@ -34,7 +33,7 @@ pub(crate) use identity::*;
 
 mod select;
 #[allow(clippy::wildcard_imports)]
-pub use select::*;
+pub(crate) use select::*;
 
 /// Aggregated finding for a directory path
 #[derive(Clone)]
@@ -141,11 +140,10 @@ fn display_description(desc: &str) -> String {
     sample_text(desc).trim().to_string()
 }
 
-/// Append the trait/finding id to a plain-view annotation so an LLM reading tiny
-/// output can name the exact trait that fired and locate its file: `desc (id)`,
-/// or a bare `id` when the description is empty. Plain (LLM/tiny) render paths
-/// only — the colored terminal views omit the id to keep the aligned comment
-/// gutter legible.
+/// Append the trait/finding id to a plain (uncolored) annotation so a reader of
+/// piped output can name the exact trait that fired: `desc (id)`, or a bare
+/// `id` when the description is empty. The colored views omit the id to keep
+/// the aligned comment gutter legible.
 fn annotate_desc(desc: &str, id: &str) -> String {
     // Engine ids can carry sample text (an entitlement key, an import name).
     let id = sample_text(id);
@@ -177,51 +175,20 @@ pub(crate) fn filter_findings_for_formula(findings: &[Finding]) -> Vec<Finding> 
         .collect()
 }
 
-/// Format the report as compact, context-centric text for small LLMs.
-///
-/// The code shows as the file's own source (or an ASCII-forward byte window for
-/// binaries), and each finding is announced on a *preceding* comment-marker line —
-/// `{marker} SEV LINE[:COL] desc (id)` — so the annotation reads as a comment
-/// describing the line that immediately follows it, while the source itself stays
-/// unaltered. `SEV` is one of `H`/`S`/`N`/`B`/`C`/`F` (hostile…filtered); `LINE` is
-/// a 1-based line number — or, for a minified one-liner / binary slice, an absolute
-/// byte offset written `@OFFSET`; `id` is the trait/finding id that fired, so a
-/// reader can name and locate the exact trait (a bare `id` when `desc` is empty).
-/// Context lines carry no annotation and render bare.
-///
-/// ```text
-/// # hdr: path<TAB>type size score; per finding, a `{marker} SEV LINE[:COL] desc (id)`
-/// # line (or `@OFFSET` for a byte unit) above the source it describes.
-/// evil.sh <TAB> shell 4.2KB 142
-/// # H 20:1 decode+exec base64 (exec/decode-exec-base64)
-/// exec(base64.b64decode(p))
-/// # N @0 obfuscator.io bundle (obfuscation/obfuscator-io)
-/// const _0x1=_0x2;function _0x3(){…
-/// ```
-/// The header drawn above each file's context block.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HeaderStyle {
-    /// `path • type • sha256` plus a rule — cleave's terminal view, and the
-    /// base an embedding host extends with a verdict badge + subtitle.
-    Rich,
-    /// `path\ttype size score` — the compact machine/LLM line.
-    Minimal,
-}
+/// Findings and suppressions below this criticality are hidden.
+const MIN_CRIT: Criticality = Criticality::Notable;
 
 /// Options for the context view, shared by cleave's `--format annotate` and
-/// an embedding host's LLM view. Both render the same way; only the knobs differ.
+/// an embedding host's terminal views. All render the same way; only the knobs
+/// differ.
 #[derive(Clone, Copy, Debug)]
 pub struct TinyOpts {
     /// Max findings shown per file, ranked by `crit × conf` (highest first).
     pub top_n: usize,
     /// Findings at or above this criticality bypass `top_n` entirely — they
     /// are always shown, however many there are. `top_n` then caps only the
-    /// lower-criticality remainder. `None` applies `top_n` uniformly. The
-    /// `tiny` (LLM) view sets this to `Suspicious` so no suspicious/hostile
-    /// trait is ever dropped from machine-read output.
+    /// lower-criticality remainder. `None` applies `top_n` uniformly.
     pub always_crit: Option<Criticality>,
-    /// Hide findings below this criticality.
-    pub min_crit: Criticality,
     /// Lines of context per hit (hit ± `(n-1)/2`). `None` keeps the full
     /// captured window.
     pub context_lines: Option<usize>,
@@ -229,27 +196,8 @@ pub struct TinyOpts {
     /// markers between windows) and the rows either side of a hex match. cleave
     /// sets this; an embedding host shows only the hit lines/rows.
     pub full_context: bool,
-    /// The header drawn above the context block.
-    pub header: HeaderStyle,
-    /// Allow ANSI color (still gated on a tty). The terminal view sets this;
-    /// the `tiny` view never colors — it's machine/LLM output.
+    /// Allow ANSI color (still gated on a tty).
     pub color: bool,
-    /// Reduce a standalone/root file's on-disk path to its basename in headers.
-    /// The `tiny` (LLM) view sets this — the directory is noise and can leak a
-    /// corpus label; the terminal view keeps the full path. Archive *members*
-    /// are always shown archive-relative (`a.zip/member`) regardless.
-    pub basename_root: bool,
-    /// Context-eligible (top-scored) files fill their trait selection with the
-    /// best remaining low-tier (component/baseline) traits — ranked by
-    /// `crit × conf` — until this many traits show in total. Notable+ traits and
-    /// composite-referenced components are always shown and never truncated by
-    /// this budget; the fill only tops up. `0` disables (the terminal view).
-    ///
-    /// This is what keeps an undetected file readable to an LLM consumer: a
-    /// benign binary with nothing notable still shows its strongest low-tier
-    /// traits (imports, capabilities, structure), so a downstream grader can
-    /// judge the program's functionality instead of receiving zero bytes.
-    pub low_tier_fill: usize,
     /// Focused selection and rendering (an embedding host's compact terminal view).
     /// `Some(fc)` changes two things:
     ///   - selection: when a file carries any finding at or above `fc`, only
@@ -262,34 +210,8 @@ pub struct TinyOpts {
     ///     hit at or above `fc` keeps at least one following row/line of
     ///     context — the continuation tends to carry the payoff.
     ///
-    /// `None` (every built-in preset) renders as before.
+    /// `None` ([`Self::terminal`]) renders as before.
     pub focus_crit: Option<Criticality>,
-    /// Windows drawn per finding id in a file, in file order; `0` draws every
-    /// captured location (capture keeps up to three per atomic trait). The
-    /// LLM view draws one: a trait's second and third location repeat the
-    /// evidence its first already showed, and over a 96-sample corpus the
-    /// repeats were 11% of the render with no grade that depended on them.
-    pub windows_per_finding: usize,
-    /// Context windows drawn per file — highest criticality first, counting a
-    /// composite leg at its withheld composite's, then the most story per byte
-    /// across trait families; ties in file order. `0` draws them all. A finding
-    /// whose only window falls past the cap still lists as a location-less
-    /// note, so the cap costs evidence, never findings. The LLM view allows
-    /// 64 within [`Self::window_bytes`].
-    pub max_windows: usize,
-    /// Bytes of window content drawn per file, strongest windows first; `0`
-    /// is unlimited. A byte budget rather than a count because windows differ
-    /// in weight: a byte window is four 64-byte rows, a source window one to
-    /// three lines. A flat count of 16 took a 63 MB installer's 100+ windows
-    /// (30k tokens) down to the sixteen that carried its grade, but also cut
-    /// a 28 KB minified extension's 68 line windows to 16 and lost its grade
-    /// (eval, chmod, shell spawn all fell past the cap). The LLM view budgets
-    /// 12 KiB: ~40 byte windows or ~80 source windows.
-    pub window_bytes: usize,
-    /// Byte windows open on the row the match starts in and run one row past
-    /// the match, instead of the criticality-sized margin either side. The
-    /// leading rows were machine code and padding a model reads nothing from.
-    pub lean_rows: bool,
     /// Card layout (an embedding host's terminal view). The caller prints the artifact's
     /// own header (verdict rule, name, hash), so cleave renders only the body:
     /// the root file gets *no* header or divider rule, every file renders
@@ -297,22 +219,8 @@ pub struct TinyOpts {
     /// line, and colorized rows drop the `H`/`S` severity gutter — the tinted
     /// comment marker carries severity instead. Plain (piped) rows keep their
     /// severity letters, which are the only carrier without color. `false`
-    /// (every built-in preset) renders as before.
+    /// ([`Self::terminal`]) renders as before.
     pub card: bool,
-    /// Opt-in audit aid: list every suspicious/hostile finding the render
-    /// left out — composites included — as a location-less
-    /// `{marker} SEV desc (id)` line at the top of the file's block.
-    ///
-    /// Off in every built-in preset. The LLM view (scan's `--format interpret`,
-    /// which renders with [`Self::tiny`]) shows
-    /// evidence, never conclusions: a composite's id, description and grade
-    /// are cleave's own verdict, and a grader shown them agrees with them —
-    /// including when the composite is wrong. What keeps that view complete
-    /// is the leg guarantee instead (`evidence_legs`): every atom a
-    /// suspicious/hostile composite transitively rests on renders in the
-    /// member it matched in, whatever its criticality, so the grader sees all
-    /// the evidence and draws its own conclusion.
-    pub elevated_roster: bool,
 }
 
 impl TinyOpts {
@@ -329,53 +237,11 @@ impl TinyOpts {
             // of those regardless, and `top_n` bounds only the notable remainder.
             top_n: 40,
             always_crit: Some(Criticality::Suspicious),
-            min_crit: Criticality::Notable,
             context_lines: Some(2),
             full_context: true,
-            header: HeaderStyle::Rich,
             color: true,
-            basename_root: false,
-            low_tier_fill: 0,
             focus_crit: None,
             card: false,
-            elevated_roster: false,
-            windows_per_finding: 0,
-            max_windows: 0,
-            window_bytes: 0,
-            lean_rows: false,
-        }
-    }
-
-    /// The plain LLM view embedding hosts print: minimal header, never colored, paths
-    /// reduced to basename. Unlike the terminal view it casts a *wide* net —
-    /// top 250 findings down to Component — so the model sees the whole picture,
-    /// including the low-severity context that keeps it from over-calling
-    /// legitimate-but-aggressive software. The signer/product/version/trust
-    /// headline comes from `file.identity` (see `render_identity`).
-    #[must_use]
-    pub fn tiny() -> Self {
-        Self {
-            header: HeaderStyle::Minimal,
-            color: false,
-            basename_root: true,
-            top_n: 250,
-            // Component+: cast a wide net. The low-severity findings (cert
-            // chains, module names, normal structure) aren't just noise — they
-            // give the model the benign-context counterweight that keeps it from
-            // over-calling legitimate-but-aggressive software (installers,
-            // archivers). Raising this floor regressed WinRAR benign→hostile.
-            min_crit: Criticality::Component,
-            // Every context file shows its top 15 traits even when nothing
-            // notable fired, so a benign binary still reads as *something* —
-            // its strongest imports/capabilities/structure — rather than
-            // rendering empty. An empty render tells the LLM nothing, and a
-            // file wrongly graded hostile could never be talked back down.
-            low_tier_fill: 15,
-            windows_per_finding: 1,
-            max_windows: 64,
-            window_bytes: 12 * 1024,
-            lean_rows: true,
-            ..Self::terminal()
         }
     }
 }
@@ -394,63 +260,18 @@ pub struct HeaderBadge<'a> {
     pub subtitle: Option<&'a str>,
 }
 
-/// Max files that draw source/hex context in the LLM/tiny view, highest score
-/// first. The long tail still lists its findings as bare notes, but spends no
-/// budget on context windows — mirroring a report viewer, which renders content for
-/// only its top-scoring files. Four lost two benign samples on scan's LLM
-/// fixtures once rendered for real (2026-11-23).
-const MAX_CONTEXT_FILES: usize = 5;
-
-/// Hook scripts a package installer runs on its own at install, upgrade or
-/// removal (macOS pkg `preinstall`/`postinstall`, Debian maintainer scripts,
-/// RPM-style `pre`/`postremove`). What an installer does to the machine is in
-/// them, beside the bulk of payload binaries that outscore them on breadth.
-const INSTALL_HOOKS: [&str; 12] = [
-    "preinstall",
-    "postinstall",
-    "preupgrade",
-    "postupgrade",
-    "preflight",
-    "postflight",
-    "preinst",
-    "postinst",
-    "prerm",
-    "postrm",
-    "preremove",
-    "postremove",
-];
-
-/// A path's last component, past both `/` and the archive delimiter.
-fn base_name(path: &str) -> &str {
-    path.rsplit(['/', '!']).next().unwrap_or(path)
-}
-
-/// Whether `path` names an installer hook script ([`INSTALL_HOOKS`]).
-fn is_install_hook(path: &str) -> bool {
-    let name = base_name(path);
-    INSTALL_HOOKS.iter().any(|h| name.eq_ignore_ascii_case(h))
-}
-
-/// `Analysis incomplete` lines for the files `keep` admits, plus the report's
-/// own gaps when it has no files at all.
+/// `Analysis incomplete` lines for every file with gaps, plus the report's own
+/// gaps when it has no files at all.
 ///
 /// Reported independently of finding/severity focus: incomplete analysis must
-/// remain visible even when no malware trait matched. The LLM view admits no
-/// file: `flow-graph-limited` tells a reader deciding whether to trust silence
-/// something, but a grader can act on none of it, and on a large source tree
-/// the lines ran to hundreds. A report with no files at all keeps its own gap
-/// (an archive cleave could not open), the one thing it can say.
-fn gap_lines(
-    report: &AnalysisReport,
-    opts: &TinyOpts,
-    keep: impl Fn(&FileAnalysis) -> bool,
-) -> String {
+/// remain visible even when no malware trait matched.
+fn gap_lines(report: &AnalysisReport) -> String {
     const MAX_FILES: usize = 200;
     let mut gaps = String::new();
     let affected: Vec<_> = report
         .files
         .iter()
-        .filter(|f| !f.analysis_gaps.is_empty() && keep(f))
+        .filter(|f| !f.analysis_gaps.is_empty())
         .collect();
     for file in affected.iter().take(MAX_FILES) {
         let reasons = file
@@ -461,7 +282,7 @@ fn gap_lines(
             .join(", ");
         gaps.push_str(&format!(
             "Analysis incomplete for {:?}: {reasons}\n",
-            tiny_path(&file.path, opts.basename_root)
+            tiny_path(&file.path, false)
         ));
     }
     if affected.len() > MAX_FILES {
@@ -479,14 +300,14 @@ fn gap_lines(
             .join(", ");
         gaps.push_str(&format!(
             "Analysis incomplete for {:?}: {reasons}\n",
-            tiny_path(&report.target.path, opts.basename_root)
+            tiny_path(&report.target.path, false)
         ));
     }
     gaps
 }
 
 /// Render the report as a colored, context-centric view per `opts`. Color is
-/// auto-disabled when stdout isn't a terminal (so `… | llm` stays plain text);
+/// auto-disabled when stdout isn't a terminal (so piped output stays plain text);
 /// that plain mode renders each source line unaltered, preceding any line that
 /// carries a finding with a `{marker} SEV LINE[:COL] desc` annotation, instead
 /// of bold/color.
@@ -496,29 +317,29 @@ pub fn format_context(report: &AnalysisReport, opts: &TinyOpts) -> String {
 }
 
 /// As [`format_context`], but the first file's rich header carries the caller's
-/// [`HeaderBadge`]. Ignored when the header is [`HeaderStyle::Minimal`].
+/// [`HeaderBadge`].
 #[must_use]
 pub fn format_context_badged(
     report: &AnalysisReport,
     opts: &TinyOpts,
     badge: HeaderBadge<'_>,
 ) -> String {
-    // The LLM/tiny view withholds composites; this is the evidence it owes
-    // the reader in their place, per file (see `evidence_legs`).
-    let minimal = matches!(opts.header, HeaderStyle::Minimal);
-    let legs = if minimal {
-        evidence_legs(&report.files)
-    } else {
-        HashMap::new()
-    };
+    // A file whose only output is what the analysis withheld still has
+    // something to say — arguably the most important thing, since a reader
+    // that never sees it reads the silence as a clean file.
     let files: Vec<&FileAnalysis> = report
         .files
         .iter()
-        .filter(|f| file_has_output(f, opts) || f.identity.is_some() || legs.contains_key(&f.id))
+        .filter(|f| {
+            has_shown_suppressions(f, opts)
+                || f.identity.is_some()
+                || f.findings
+                    .iter()
+                    .any(|finding| tiny_should_show(finding, f))
+        })
         .collect();
     if files.is_empty() {
-        let gaps = gap_lines(report, opts, |_| !minimal);
-        return sanitize_terminal_output(&gaps).into_owned();
+        return sanitize_terminal_output(&gap_lines(report)).into_owned();
     }
     let colorize = opts.color && colored::control::SHOULD_COLORIZE.should_colorize();
     let term_width = terminal_width();
@@ -538,147 +359,10 @@ pub fn format_context_badged(
     // members (path for archive members, reconstructed purl for a registry node).
     let id_to_file: HashMap<u32, &FileAnalysis> = files.iter().map(|f| (f.id, *f)).collect();
 
-    /// The id of the fetched-subtree root at or above `file`, or `None` when it
-    /// belongs to the sample's own tree.
-    ///
-    /// A graft root carries `Rel::Fetched`; everything beneath it is an ordinary
-    /// member of that payload, so membership is inherited by walking parents. The
-    /// walk is bounded by the file count so a crafted report with a parent cycle
-    /// terminates instead of spinning.
-    fn fetched_root_of(file: &FileAnalysis, by_id: &HashMap<u32, &FileAnalysis>) -> Option<u32> {
-        use crate::types::Rel;
-        let mut cur = file;
-        for _ in 0..by_id.len() {
-            if cur.rel == Rel::Fetched {
-                return Some(cur.id);
-            }
-            cur = *by_id.get(&cur.parent_id?)?;
-        }
-        None
-    }
-
     let mut emitted = false;
-    // The machine/LLM view shows each distinct finding once across the whole
-    // sample: an identical finding repeated across many archive members (product
-    // name, overlay notes, "no symbol table", …) adds no signal and floods the
-    // context. Root renders first, so its native findings win; near-identical
-    // members then collapse. The terminal view keeps per-member detail.
-    let dedup_across_files = minimal;
-
-    // The LLM/tiny view renders only its highest-ranked files, and only as
-    // code: source/hex windows with the annotations they carry. A file past
-    // the cap renders nothing at all — a long tail of headers and bare notes
-    // is comment without code, and on a large benign archive it buried the
-    // handful of windows under hundreds of lines a grader can read nothing
-    // from. Only files that captured context compete for a slot (a file with
-    // no window could only spend it on bare notes), and never a container:
-    // its bytes are packed member data. A file holding the evidence a hostile or
-    // suspicious composite rests on ranks first, so that evidence is drawn.
-    // Byte-identical copies take one slot between them: a package that ships
-    // its modules twice (`pkg/` and a vendored alias) would otherwise spend
-    // the cap on the same code. A decoded layer stands in for its host: the
-    // host matches the decoded fragments back onto its encoded bytes and so
-    // outscores the layer, but its windows show the encoding (a loader stub, a
-    // char-code array) and the layer's show the program. The layer ranks at
-    // its host's score and the host after every other file. The terminal view
-    // caps nothing.
-    let context_file_ids: HashSet<u32> = if minimal {
-        let mut ranked: Vec<&FileAnalysis> = files
-            .iter()
-            .copied()
-            .filter(|f| !f.context.is_empty() && !container_paths.contains(f.path.as_str()))
-            .collect();
-        let host_of = |f: &FileAnalysis| {
-            f.path
-                .split_once(crate::types::ENCODING_DELIMITER)
-                .map(|(host, _)| host.to_string())
-        };
-        let host_score: HashMap<String, u32> = files
-            .iter()
-            .filter(|f| !f.path.contains(crate::types::ENCODING_DELIMITER))
-            .map(|f| (f.path.clone(), f.score))
-            .collect();
-        // Only a layer that can take the slot (it captured windows) displaces
-        // its host; otherwise the host's slot would go to some unrelated file.
-        let decoded_hosts: HashSet<String> = ranked.iter().filter_map(|f| host_of(f)).collect();
-        let rank_score = |f: &FileAnalysis| match host_of(f) {
-            Some(host) => f.score.max(host_score.get(&host).copied().unwrap_or(0)),
-            None => f.score,
-        };
-        // A host cedes to its layer even when it holds a composite's legs:
-        // those legs matched the decoded fragments, which the layer shows as
-        // code. An installer's hook scripts come next: what it does to the
-        // machine is there, and payload binaries outscore them on breadth.
-        ranked.sort_by_key(|f| {
-            std::cmp::Reverse((
-                !decoded_hosts.contains(&f.path),
-                legs.contains_key(&f.id),
-                is_install_hook(&f.path),
-                rank_score(f),
-            ))
-        });
-        // One slot per executable name: a package's per-architecture builds
-        // of one program (`x64/zalocli`, `arm64/zalocli`) differ in SHA-256
-        // but show the same code.
-        let mut seen_sha = HashSet::new();
-        let mut seen_executable: HashSet<&str> = HashSet::new();
-        ranked
-            .iter()
-            .filter(|f| f.sha256.is_empty() || seen_sha.insert(f.sha256.as_str()))
-            .filter(|f| {
-                !matches!(f.file_type.as_str(), "macho" | "elf" | "pe")
-                    || seen_executable.insert(base_name(&f.path))
-            })
-            .take(MAX_CONTEXT_FILES)
-            .map(|f| f.id)
-            .collect()
-    } else {
-        HashSet::new()
-    };
-    let mut out = gap_lines(report, opts, |_| !minimal);
-
-    // Which artifact each file belongs to: the id of the fetched-subtree root
-    // above it, or None for the sample's own files. A fetched payload is a
-    // separate artifact that happens to be rendered here — someone else's
-    // package, with its own author and its own findings.
-    let artifact_of: HashMap<u32, Option<u32>> = files
-        .iter()
-        .map(|f| (f.id, fetched_root_of(f, &id_to_file)))
-        .collect();
-
-    // Dedup is per artifact, not per report. Collapsing repeats across a
-    // sample's own members is the point — the same product name or "no symbol
-    // table" across a hundred of them is noise. Collapsing them across an
-    // artifact boundary is not: a fetched dependency firing the same finding is
-    // a second, independent occurrence, and since the root renders first it was
-    // the dependency's copy that got dropped. That silently deleted a hostile
-    // finding from the block of the artifact that actually carried it.
-    let mut seen_by_artifact: HashMap<Option<u32>, HashSet<&str>> = HashMap::new();
-    // The subject's root: the shallowest files of the view.
-    let root_depth = files.iter().map(|f| f.depth).min().unwrap_or(0);
+    let mut out = gap_lines(report);
     for &file in &files {
-        // The tiny view renders its context files and nothing else; those earn
-        // the low-tier fill, while the terminal view (fill 0) keeps the strict
-        // selection. One exception: the subject's root keeps its header and
-        // identity lines without a slot. What a package says it is (a wheel's
-        // description, a binary's signer) is no annotation, and it is what
-        // behavior is weighed against; a wheel's root is a container with no
-        // window, so the code-only rule would otherwise drop it.
-        let identity_only = minimal
-            && !context_file_ids.contains(&file.id)
-            && file.depth == root_depth
-            && file.identity.is_some();
-        if minimal && !context_file_ids.contains(&file.id) && !identity_only {
-            continue;
-        }
-        let fill = if minimal { opts.low_tier_fill } else { 0 };
-        // A platform-signed file that raised nothing above notable is told by
-        // its header and identity lines alone in the LLM view.
-        let mut selected = if identity_only || (minimal && vouched_and_quiet(file)) {
-            Vec::new()
-        } else {
-            select_ids(file, opts, fill)
-        };
+        let mut selected = select_ids(file, opts);
 
         // For an archive container, drop findings that were located more
         // specifically in a member below it (same id, native, deeper). What
@@ -692,29 +376,6 @@ pub fn format_context_badged(
                     .get(id)
                     .is_none_or(|&deepest| deepest <= file.depth)
             });
-        }
-
-        // Every suspicious/hostile finding this file owns, for the roster that
-        // guarantees each one reaches the render (`TinyOpts::elevated_roster`).
-        // Ownership mirrors the selection: not an inherited copy of a member's
-        // finding, and — on a container — not native deeper down.
-        let mut elevated: Vec<&Finding> = Vec::new();
-        if opts.elevated_roster {
-            for f in &file.findings {
-                let owned = f.src.is_none() || file.composite_sources.contains_key(f.id.as_str());
-                let deeper = is_container
-                    && id_max_native_depth
-                        .get(f.id.as_str())
-                        .is_some_and(|&deepest| deepest > file.depth);
-                if f.crit >= Criticality::Suspicious
-                    && owned
-                    && !deeper
-                    && elevated.iter().all(|e| e.id != f.id)
-                {
-                    elevated.push(f);
-                }
-            }
-            elevated.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
         }
 
         // Card layout: a file earns its block only by carrying focus-grade
@@ -737,41 +398,9 @@ pub fn format_context_badged(
             }
         }
 
-        // Collapse findings already shown by an earlier file in the LLM view.
-        // Done after container filtering so the surviving, container-specific
-        // ids are what register as seen.
-        //
-        // A decoded layer is exempt. Its host matches the decoded fragments
-        // back onto the encoded bytes and renders first, so the host's copy —
-        // annotating an unreadable run of char codes or hex — would win, and
-        // the layer, the one place that finding reads as code, would be left
-        // with nothing to draw.
-        let decoded_layer = file.path.contains(crate::types::ENCODING_DELIMITER);
-        if dedup_across_files && !decoded_layer {
-            let seen = seen_by_artifact
-                .entry(artifact_of.get(&file.id).copied().flatten())
-                .or_default();
-            selected.retain(|&id| seen.insert(id));
-        }
-
-        // Owed evidence renders here whatever the filters above decided: its
-        // criticality, a container's deeper-member rule, or an earlier copy.
-        let owed: HashSet<&str> = legs.get(&file.id).into_iter().flatten().copied().collect();
-        if let Some(ids) = legs.get(&file.id) {
-            for &id in ids {
-                if !selected.contains(&id) {
-                    selected.push(id);
-                }
-            }
-        }
-
         // Cheap pre-filter: nothing selected, no identity and nothing withheld →
         // nothing to show.
-        if selected.is_empty()
-            && elevated.is_empty()
-            && file.identity.is_none()
-            && !has_shown_suppressions(file, opts)
-        {
+        if selected.is_empty() && file.identity.is_none() && !has_shown_suppressions(file, opts) {
             continue;
         }
 
@@ -794,112 +423,53 @@ pub fn format_context_badged(
             selected.clone()
         };
 
-        // The LLM view withholds composites, but capture's overlap dedup let a
-        // composite's note outrank its own leg's at the same span — so the
-        // located evidence left with the conclusion and the leg rendered as a
-        // bare note (an agent skill's `curl --data-binary @file` line never
-        // reached the grader). Hand such notes to the omitted legs instead.
-        let notes = crate::context::notes(&file.findings, &file.context);
-        let relabeled = if minimal {
-            relabel_composite_notes(file, &notes, &context_selected)
-        } else {
-            None
-        };
-        let view_notes: &[Vec<Note>] = relabeled.as_deref().unwrap_or(&notes);
-
-        // The ids actually drawn as byte/source windows by `render_context`: a
+        // The ids actually drawn as byte/source windows by the context pass: a
         // context note whose id the window view will render. This is the single
         // source of truth for the windowed-vs-location-less split — a selected
         // finding not in this set renders as a location-less note instead.
-        let plan = window_plan(file, view_notes, &context_selected, opts);
+        let notes = crate::context::notes(&file.findings, &file.context);
+        let plan = window_plan(file, &notes, &context_selected);
         let windowed: HashSet<&str> = plan
             .iter()
             .filter_map(|w| w.ids.as_ref())
             .flat_map(|ids| ids.iter().copied())
-            .collect();
-        // Findings that hold a note but whose every window the plan cut: they
-        // were capped, not dominated, so the no-anchor block must still list
-        // them (see `render_no_anchor`'s dominance rule).
-        let context_sel: HashSet<&str> = context_selected.iter().copied().collect();
-        let capped: HashSet<&str> = view_notes
-            .iter()
-            .flatten()
-            .map(|n| n.id.as_str())
-            .filter(|id| context_sel.contains(id) && !windowed.contains(id))
             .collect();
 
         // Nested files (archive members, embedded payloads) indent under their
         // container, so reserve those columns when sizing the body and rule.
         let eff_width = term_width.saturating_sub(2 * file.depth as usize);
 
-        // Render the body first so a Rich header's rule can be sized to fit the
+        // Render the body first so the header's rule can be sized to fit the
         // widest line it actually produced. Location-less findings lead the
         // context (a file-level note) rather than floating, orphaned, after it.
         let mut body = String::new();
         if let Some(identity) = &file.identity {
             render_identity(&mut body, identity, colorize, is_terminal_view(opts));
         }
-        let findings_start = body.len();
-        // Byte ranges of the source windows the plan draws: a text window
-        // renders nearly every row it holds, so evidence inside one is on
-        // screen whatever note it carries. Binary windows render only the rows
-        // around their own notes, so they vouch for nothing here.
-        let drawn: Vec<(u64, u64)> = if is_binary_file_type(&file.file_type) {
-            Vec::new()
-        } else {
-            file.context
-                .iter()
-                .zip(&plan)
-                .filter(|(_, w)| w.ids.is_some())
-                .map(|(c, _)| (c.loc, c.loc + c.data.len() as u64))
-                .collect()
-        };
-        // The LLM view draws annotations only beside the code they describe:
-        // a location-less note or a withheld-pattern line has no code under it.
-        if !minimal {
-            render_no_anchor(
+        render_no_anchor(
+            &mut body,
+            file,
+            &selected,
+            &windowed,
+            &id_to_file,
+            opts,
+            colorize,
+        );
+        // Source files render line-by-line; binaries render each match window
+        // as raw bytes wrapped into hex|ascii rows at the effective width.
+        if is_binary_file_type(&file.file_type) {
+            render_hex_context(
                 &mut body,
                 file,
-                &selected,
-                &ContextCoverage {
-                    notes: &notes,
-                    windowed: &windowed,
-                    capped: &capped,
-                    drawn: &drawn,
-                },
-                &owed,
-                &id_to_file,
+                &plan,
+                &context_selected,
+                eff_width,
                 opts,
                 colorize,
             );
+        } else {
+            render_text_chunks(&mut body, file, &plan, opts, eff_width, colorize);
         }
-        render_context(
-            &mut body,
-            file,
-            &context_selected,
-            &plan,
-            &owed,
-            opts,
-            eff_width,
-            colorize,
-        );
-        // The roster leads the file's findings, listing each elevated finding
-        // the render above did not name. Checked against the rendered text, so
-        // whatever path dropped it — withheld composite, one note per row, a
-        // window cap, cross-file dedup — the finding still surfaces.
-        let marker = comment_marker(&file.file_type);
-        let roster: String = elevated
-            .iter()
-            .filter(|f| !mentions_id(&body[findings_start..], &f.id))
-            .map(|f| {
-                format!(
-                    "{marker} {} {}\n",
-                    f.crit.letter(),
-                    annotate_desc(&display_description(&f.desc), &f.id)
-                )
-            })
-            .collect();
-        body.insert_str(findings_start, &roster);
         render_suppressions(&mut body, file, opts, colorize);
 
         // Skip a file whose body came out empty: a lone header advertising
@@ -935,10 +505,7 @@ pub fn format_context_badged(
             block.push_str(&body);
             out.push_str(&block);
         } else {
-            match opts.header {
-                HeaderStyle::Rich => rich_header(&mut block, file, eff_width, adorn, &body),
-                HeaderStyle::Minimal => minimal_header(&mut block, file, opts.basename_root),
-            }
+            rich_header(&mut block, file, eff_width, adorn, &body);
             block.push_str(&body);
             indent_block(&mut out, &block, file.depth);
         }
@@ -950,45 +517,6 @@ pub fn format_context_badged(
         out.push('\n');
     }
     sanitize_terminal_output(&out).into_owned()
-}
-
-/// The atoms `roots`' composites rest on within `file`, resolved through any
-/// nested composites: an id some finding here composes from `trait_refs` is
-/// expanded, every other id is an atom. Roots that are atoms contribute
-/// nothing. A `BTreeSet` so every consumer iterates in one stable order.
-fn composite_atoms<'a>(
-    file: &'a FileAnalysis,
-    roots: impl IntoIterator<Item = &'a Finding>,
-) -> BTreeSet<&'a str> {
-    use crate::types::Istr;
-    let refs_of: HashMap<&str, &[Istr]> = file
-        .findings
-        .iter()
-        .filter(|f| !f.trait_refs.is_empty())
-        .map(|f| (f.id.as_str(), f.trait_refs.as_slice()))
-        .collect();
-    let mut stack: Vec<&str> = roots
-        .into_iter()
-        .flat_map(|f| f.trait_refs.iter().map(Istr::as_str))
-        .collect();
-    let mut seen = HashSet::new();
-    let mut atoms = BTreeSet::new();
-    while let Some(id) = stack.pop() {
-        if !seen.insert(id) {
-            continue;
-        }
-        match refs_of.get(id) {
-            Some(refs) => stack.extend(refs.iter().map(Istr::as_str)),
-            None => {
-                atoms.insert(id);
-            }
-        }
-    }
-    atoms
-}
-
-fn tiny_field(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// `--format annotate`, cleave's default: colored, top-20, notable+, 3-line windows.
@@ -1121,11 +649,7 @@ fn rich_header(
         // hash stay dim; the identity headline (what · who · trust) renders
         // brighter so "what is this / who signed it" pops at a glance.
         let mut s = format!("• {file_type_display}").bright_black().to_string();
-        if let Some(headline) = file
-            .identity
-            .as_ref()
-            .and_then(|id| identity_headline(id, true))
-        {
+        if let Some(headline) = file.identity.as_ref().and_then(identity_headline) {
             s.push_str(&format!(" {} {headline}", "·".bright_black()));
         }
         if !sha256.is_empty() {
@@ -1183,25 +707,6 @@ fn tiny_should_show(finding: &Finding, file: &FileAnalysis) -> bool {
     file.findings
         .iter()
         .any(|f| f.trait_refs.iter().any(|id| id == &finding.id))
-}
-
-/// Format byte size as human-readable string (compact)
-fn format_size(bytes: u64) -> String {
-    if bytes == 0 {
-        return String::new();
-    }
-    const KB: u64 = 1024;
-    const MB: u64 = 1024 * KB;
-    const GB: u64 = 1024 * MB;
-    if bytes >= GB {
-        format!("{:.1}GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.1}MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{}KB", bytes / KB)
-    } else {
-        format!("{}B", bytes)
-    }
 }
 
 /// Get terminal width, defaulting to 100 if unavailable. Public so an embedding host can

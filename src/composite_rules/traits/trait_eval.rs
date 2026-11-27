@@ -225,7 +225,7 @@ impl TraitDefinition {
         None
     }
 
-    /// Check for empty not: arrays (common LLM mistake).
+    /// Check for empty not: arrays (common authoring mistake).
     /// Returns a warning message if found, None otherwise.
     #[must_use]
     pub(crate) fn check_empty_not_array(&self) -> Option<String> {
@@ -240,7 +240,7 @@ impl TraitDefinition {
         None
     }
 
-    /// Check for empty unless: arrays (common LLM mistake).
+    /// Check for empty unless: arrays (common authoring mistake).
     /// Returns a warning message if found, None otherwise.
     #[must_use]
     pub(crate) fn check_empty_unless_array(&self) -> Option<String> {

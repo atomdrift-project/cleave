@@ -201,7 +201,7 @@ use std::sync::Arc;
 /// resurrect a dominated finding as an unanchored note, live or stored.
 #[test]
 fn slim_member_retained_spans_preserve_rendering() {
-    use crate::output::{TinyOpts, format_context, format_tiny};
+    use crate::output::{TinyOpts, format_context};
     use crate::types::{ContextLine, Criticality, Evidence, Facts, FindingKind};
     use crate::{AnalysisReport, FileAnalysis, Finding, TargetInfo};
 
@@ -250,16 +250,13 @@ fn slim_member_retained_spans_preserve_rendering() {
     };
     let full = report(file);
     let slim = report(slim);
-    assert!(!format_tiny(&full).contains("Overlapping behavior"));
-    assert_eq!(format_tiny(&full), format_tiny(&slim));
-    assert_eq!(
-        format_context(&full, &TinyOpts::terminal()),
-        format_context(&slim, &TinyOpts::terminal())
-    );
+    let terminal = |report: &AnalysisReport| format_context(report, &TinyOpts::terminal());
+    assert!(!terminal(&full).contains("Overlapping behavior"));
+    assert_eq!(terminal(&full), terminal(&slim));
     for report in [&full, &slim] {
         let stored = crate::types::compact_from_files(&report.files, Facts::Full);
         let decoded = crate::report_input::decode(&serde_json::to_vec(&stored).unwrap()).unwrap();
-        assert_eq!(format_tiny(&decoded.report), format_tiny(report));
+        assert_eq!(terminal(&decoded.report), terminal(report));
     }
 }
 

@@ -90,7 +90,7 @@ fn is_zero_usize(n: &usize) -> bool {
 }
 
 // ========================================================================
-// Context Model — the LLM/output surface that replaces raw Evidence.
+// Context Model — the output surface that replaces raw Evidence.
 //
 // A file's `context` is a merged, render-ready set of lines: the matched
 // content shown once, in file order, annotated with the findings that touch
@@ -186,10 +186,10 @@ pub struct Note {
 /// top of the snapshot instead of being lost. Derivation matches compact
 /// conversion's historical rules: skip `archive:`-located evidence, take
 /// `[byte_offset, match_len-or-value-len]`, sort by offset, keep the widest
-/// span when offsets tie, and cap at [`MAX_EV_LOCS`]. One definition so fold
+/// span when offsets tie, and cap at `MAX_EV_LOCS`. One definition so fold
 /// and convert never drift.
 #[must_use]
-pub(crate) fn finding_spans(finding: &Finding) -> Vec<[u64; 2]> {
+pub fn finding_spans(finding: &Finding) -> Vec<[u64; 2]> {
     let mut ev_spans = evidence_spans(&finding.evidence);
     if let Some(pre) = &finding.precomputed_spans {
         ev_spans.extend(pre.iter().copied());
@@ -785,11 +785,10 @@ pub struct SuppressionLeg {
 /// A trait that matched the file but was withheld or demoted by its own
 /// `unless:`/`downgrade:` legs.
 ///
-/// Recorded so a downstream reader — an LLM grading the file, a human reviewing
-/// a verdict — can see what the engine decided *not* to say and judge that call
-/// on the evidence, instead of taking silence for absence. Only notable-or-above
-/// suppressions are recorded: below that the engine withholds constantly and
-/// none of it changes an assessment.
+/// Recorded so a downstream reader can see what the engine decided *not* to
+/// say and judge that call on the evidence, instead of taking silence for
+/// absence. Only notable-or-above suppressions are recorded: below that the
+/// engine withholds constantly and none of it changes an assessment.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Suppression {
     /// The trait that matched.

@@ -5,8 +5,8 @@
 //! layer (`index.js##script@N`) is where the whole payload chain is readable —
 //! decrypt, write to a temp dir, spawn. Decoded layers were analyzed outside
 //! the orchestration that captures context, so their findings had no windows,
-//! and the LLM view, which draws annotations only beside code, dropped the
-//! layer entirely: the one file that showed what the package does.
+//! and a view that draws annotations only beside code dropped the layer
+//! entirely: the one file that showed what the package does.
 //!
 //! The fixture is inert: the decoded text is never executed, and the marker
 //! trait lives in a private traits dir so live rule changes cannot move it.
@@ -102,7 +102,7 @@ fn analyze(root: &Path, path: &Path) -> Vec<u8> {
 }
 
 #[test]
-fn decoded_script_layer_renders_its_code_in_the_llm_view() {
+fn decoded_script_layer_captures_windows_on_its_own_text() {
     let dir = tempfile::tempdir().unwrap();
     let path = setup(dir.path());
     let loaded = cleave::report_input::decode(&analyze(dir.path(), &path)).unwrap();
@@ -121,14 +121,13 @@ fn decoded_script_layer_renders_its_code_in_the_llm_view() {
         "the marker matches in the decoded text: {:?}",
         layer.findings.iter().map(|f| &f.id).collect::<Vec<_>>()
     );
+    let line = format!("const {MARKER}=_fs.readFileSync(__filename);");
     assert!(
-        !layer.context.is_empty(),
-        "a decoded layer must capture windows on its own text"
-    );
-
-    let tiny = cleave::output::format_tiny(&loaded.report);
-    assert!(
-        tiny.contains(&format!("const {MARKER}=_fs.readFileSync(__filename);")),
-        "the decoded payload must reach the LLM view as code:\n{tiny}"
+        layer
+            .context
+            .iter()
+            .any(|window| String::from_utf8_lossy(&window.data).contains(&line)),
+        "a decoded layer must capture windows on its own text: {:?}",
+        layer.context
     );
 }

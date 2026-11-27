@@ -277,7 +277,7 @@ pub struct CompactTrait {
     pub uses: Vec<u32>,
     /// Machine-readable identity of a dependency this finding is about, set by a
     /// consumer that resolved the reference and graded what it fetched. `desc`
-    /// carries the same facts as prose for a human or an LLM; this is the copy a
+    /// carries the same facts as prose for a reader; this is the copy a
     /// program reads to link the finding to a specific artifact without parsing
     /// the sentence. `None` for ordinary findings, which are about the file
     /// itself.

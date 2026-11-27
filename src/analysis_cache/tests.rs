@@ -1047,7 +1047,7 @@ fn test_roundtrip() {
 ///
 /// This guards the whole class generically: a fixture exercising every such
 /// field is round-tripped through the *real* cache store/load, and both the
-/// tiny render and the compact JSON must come out byte-identical. A new
+/// terminal render and the compact JSON must come out byte-identical. A new
 /// output-feeding field marked `#[serde(skip)]` will fail this test.
 #[test]
 fn cache_roundtrip_preserves_rendered_outputs() {
@@ -1112,7 +1112,14 @@ fn cache_roundtrip_preserves_rendered_outputs() {
         ))
         .expect("compact serialization")
     };
-    let tiny_before = crate::output::format_tiny(&report);
+    let rendered = |r: &AnalysisReport| {
+        let opts = crate::output::TinyOpts {
+            color: false,
+            ..crate::output::TinyOpts::terminal()
+        };
+        crate::output::format_context(r, &opts)
+    };
+    let rendered_before = rendered(&report);
     let compact_before = compact(&report);
 
     // The fixture must actually exercise the transient fields, else the test
@@ -1126,8 +1133,8 @@ fn cache_roundtrip_preserves_rendered_outputs() {
         "fixture must produce compact `from` (from composite_sources): {compact_before}"
     );
     assert!(
-        tiny_before.contains("# S 2:1 exec call"),
-        "fixture must anchor a note in the render: {tiny_before:?}"
+        rendered_before.contains("# S 2:1 exec call"),
+        "fixture must anchor a note in the render: {rendered_before:?}"
     );
 
     // Round-trip through the real cache store/load (zstd + serde, both layers).
@@ -1137,8 +1144,8 @@ fn cache_roundtrip_preserves_rendered_outputs() {
         report_cache_lookup_conn(&conn, sha, "opts", 1700000000).expect("cache hit expected");
 
     assert_eq!(
-        tiny_before,
-        crate::output::format_tiny(&restored),
+        rendered_before,
+        rendered(&restored),
         "render anchoring (context windows) lost across cache round-trip"
     );
     assert_eq!(

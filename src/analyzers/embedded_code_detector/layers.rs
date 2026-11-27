@@ -268,8 +268,8 @@ pub(super) fn decode_variation_selector_payload(content: &str) -> Option<(String
 /// orchestration that normally runs capture, so without this its findings
 /// carry no windows: the decoded payload — often the one place the real
 /// behavior is readable — reached the report as bare notes, and a view that
-/// draws only code (the LLM render) dropped it entirely. Mirrors the
-/// embedded-binary path in `analyzers::utils`.
+/// draws only code dropped it entirely. Mirrors the embedded-binary path in
+/// `analyzers::utils`.
 fn capture_layer_context(
     report: &mut crate::types::AnalysisReport,
     decoded: &[u8],

@@ -18,7 +18,7 @@ mod finalize;
 
 /// How many low-tier (component/baseline) traits to keep for a file that would
 /// otherwise be stripped down to no findings, so it still carries a minimal clue
-/// for downstream LLM consumers. See [`AnalysisReport::strip_unmatched_traits`].
+/// for downstream consumers. See [`AnalysisReport::strip_unmatched_traits`].
 const RESCUE_LOW_TIER_KEEP: usize = 3;
 
 /// Represents an extracted payload (e.g., base64, hex, XOR)
@@ -97,7 +97,7 @@ impl std::str::FromStr for Criticality {
 }
 
 impl Criticality {
-    /// Single-letter tag used in compact/LLM output:
+    /// Single-letter tag used in compact and plain output:
     /// `H`ostile, `S`uspicious, `N`otable, `B`aseline, `C`omponent, `F`iltered,
     /// `E`xception (assembly-only; not normally emitted).
     #[must_use]
@@ -146,7 +146,7 @@ impl Criticality {
     /// strongest findings earn the widest window — a hostile hit's verdict most
     /// depends on the code surrounding it, a baseline's least. This is the single
     /// source of truth shared by context capture (which reserves this many lines)
-    /// and the LLM/tiny render (which draws them); the two must not drift. A bare
+    /// and the context render (which draws them); the two must not drift. A bare
     /// `Component`/`Exception`/`Filtered` renders as a single line regardless
     /// (radius 0) — a component a composite drew on instead inherits that
     /// composite's radius at the call site.
@@ -167,8 +167,8 @@ impl Criticality {
     /// far more trailing than leading context, since a payload (shellcode, an
     /// unpacked stub, a config blob) runs *forward* from the match. As with the
     /// source path the strongest findings earn the widest window; the single
-    /// source of truth for both capture (which reserves the bytes) and the LLM
-    /// render (which clips to them). `Exception`/`Filtered` never reach the binary
+    /// source of truth for both capture (which reserves the bytes) and any
+    /// render that clips to them. `Exception`/`Filtered` never reach the binary
     /// view, so they carry no margin.
     #[must_use]
     pub fn hex_context(self) -> (u64, u64) {
@@ -268,7 +268,7 @@ pub struct AnalysisReport {
     /// authors, document title, build path, unique ids), each tagged
     /// claimed-vs-verified. Attached only when filefacts found a
     /// non-empty identity, so most files omit it. Rendered as a headline
-    /// in terminal/tiny output and diffed as a high-signal change.
+    /// in terminal output and diffed as a high-signal change.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub identity: Option<filefacts::Identity>,
     /// Synthetic key-value tree for `type: value` matchers on file

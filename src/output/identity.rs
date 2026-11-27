@@ -4,31 +4,6 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-/// Minimal `path\ttype size score` header for the tiny/LLM view.
-pub(super) fn minimal_header(out: &mut String, file: &FileAnalysis, basename_root: bool) {
-    out.push_str(&tiny_field(&tiny_path(&file.path, basename_root)));
-    out.push('\t');
-    out.push_str(&tiny_field(&file.file_type));
-    out.push(' ');
-    out.push_str(&format_size(file.size));
-    out.push(' ');
-    out.push_str(&file.score.to_string());
-    // The minimal header is tiny's only identity surface (no rich header),
-    // so carry the same concise headline here for the LLM reader.
-    if let Some(headline) = file
-        .identity
-        .as_ref()
-        .and_then(|id| identity_headline(id, false))
-    {
-        out.push('\t');
-        out.push_str(&headline);
-    }
-    out.push('\n');
-    // The signer/product headline is rendered separately from the normalized
-    // `file.identity` (see `render_identity`), so a recognized vendor's
-    // signature always reaches the model up front — no finding-list crowding.
-}
-
 /// Render the normalized identity headline: who/what the file claims to
 /// be, its signer/trust tier, and origin artifacts. A few dense,
 /// scannable lines that answer "is this what it says it is?" — the
@@ -274,7 +249,7 @@ pub(super) fn render_identity(
 ///
 /// Each slot is dropped when absent or when it would merely echo another.
 /// Returns `None` when there is nothing worth showing.
-pub(crate) fn identity_headline(id: &filefacts::Identity, colorize: bool) -> Option<String> {
+pub(crate) fn identity_headline(id: &filefacts::Identity) -> Option<String> {
     use filefacts::Trust;
 
     // what — canonical identity; fold the version in for package-style names.
@@ -315,7 +290,7 @@ pub(crate) fn identity_headline(id: &filefacts::Identity, colorize: bool) -> Opt
 
     // provenance — trust tier when signed, else the producing tool.
     let third = if !matches!(id.trust, Trust::Unsigned | Trust::AdHoc) {
-        Some(trust_text(id, colorize))
+        Some(trust_text(id))
     } else {
         id.producer
             .as_ref()
@@ -329,7 +304,7 @@ pub(crate) fn identity_headline(id: &filefacts::Identity, colorize: bool) -> Opt
         parts.push(("·", w));
     }
     if let Some(w) = who {
-        let v = if who_adhoc && colorize {
+        let v = if who_adhoc {
             w.as_str().dimmed().italic().to_string()
         } else {
             w
@@ -345,52 +320,16 @@ pub(crate) fn identity_headline(id: &filefacts::Identity, colorize: bool) -> Opt
     let mut s = String::new();
     for (i, (sym, text)) in parts.iter().enumerate() {
         if i > 0 {
-            if colorize {
-                s.push_str(&format!(" {} ", sym.bright_black()));
-            } else {
-                s.push_str(&format!(" {sym} "));
-            }
+            s.push_str(&format!(" {} ", sym.bright_black()));
         }
         s.push_str(text);
     }
     Some(s)
 }
 
-/// Whether a file is signed by the platform vendor with a signature that
-/// verified one of its claims, and raised nothing above notable.
-///
-/// Such a file's header and identity lines already say what it is (a
-/// Microsoft-signed C runtime, an Apple system library). Listing its
-/// capabilities, the file and memory APIs every runtime imports, spends the
-/// LLM view's budget on facts that argue neither way and pushes the
-/// artifact's own code further down the page.
-pub(super) fn vouched_and_quiet(file: &FileAnalysis) -> bool {
-    use filefacts::Trust;
-    let Some(id) = &file.identity else {
-        return false;
-    };
-    let vouched = matches!(id.trust, Trust::Platform | Trust::System)
-        && [
-            &id.name,
-            &id.identifier,
-            &id.organization,
-            &id.team_id,
-            &id.version,
-            &id.project,
-        ]
-        .into_iter()
-        .flatten()
-        .any(|c| c.verified);
-    vouched
-        && !file
-            .findings
-            .iter()
-            .any(|f| f.src.is_none() && f.crit >= Criticality::Suspicious)
-}
-
 /// The trust tier word, colored by tier and suffixed with `✓` when a
 /// signature cryptographically verified one of the identity claims.
-pub(super) fn trust_text(id: &filefacts::Identity, colorize: bool) -> String {
+pub(super) fn trust_text(id: &filefacts::Identity) -> String {
     use filefacts::Trust;
     let word = match id.trust {
         Trust::System => "system",
@@ -419,9 +358,6 @@ pub(super) fn trust_text(id: &filefacts::Identity, colorize: bool) -> String {
     } else {
         word.to_string()
     };
-    if !colorize {
-        return text;
-    }
     match id.trust {
         Trust::System | Trust::Platform => text.as_str().green().to_string(),
         Trust::DeveloperId | Trust::CaSigned => text.as_str().cyan().to_string(),

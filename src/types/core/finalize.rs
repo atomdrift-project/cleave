@@ -21,7 +21,7 @@ impl AnalysisReport {
     ///
     /// As an exception, a file that would otherwise be left with no
     /// notable-or-higher finding keeps its `RESCUE_LOW_TIER_KEEP` best
-    /// low-tier traits. An empty findings list tells a downstream LLM consumer
+    /// low-tier traits. An empty findings list tells a downstream consumer
     /// nothing about the file; a few weak traits at least give it a clue.
     ///
     /// Returns `(components_removed, baselines_removed)`.
@@ -77,7 +77,7 @@ impl AnalysisReport {
         };
 
         // Top-level findings are cleared at finalize and never serve as the
-        // per-file LLM clue, so they follow the base rule with no rescue.
+        // per-file clue, so they follow the base rule with no rescue.
         let mut components = 0usize;
         let mut baselines = 0usize;
         self.findings.retain(|f| {

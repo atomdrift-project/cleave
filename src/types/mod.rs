@@ -59,14 +59,13 @@ pub use istr::Istr;
 
 pub use filefacts_view::FilefactsView;
 
-pub(crate) use file_analysis::{
-    ARCHIVE_DELIMITER, ENCODING_DELIMITER, encode_archive_path, encode_decoded_path,
-};
+pub use file_analysis::{ARCHIVE_DELIMITER, ENCODING_DELIMITER};
 pub use file_analysis::{FileAnalysis, Rel, Role};
+pub(crate) use file_analysis::{encode_archive_path, encode_decoded_path};
 
 pub use traits_findings::{
     ContextLine, Evidence, Finding, FindingKind, Note, StructuralFeature, Suppression,
-    SuppressionKind, SuppressionLeg, Trait, TraitKind,
+    SuppressionKind, SuppressionLeg, Trait, TraitKind, finding_spans,
 };
 pub(crate) use traits_findings::{
     MAX_EVIDENCE_PER_TRAIT, MIN_RECORDED_SUPPRESSION, SuppressionSink, deduplicate_evidence,

@@ -117,7 +117,7 @@ fn write_identity(out: &mut String, id: &crate::types::IdentityDiff) {
             let _ = writeln!(
                 out,
                 "    {}",
-                crate::output::identity_headline(cur, true).unwrap_or_default()
+                crate::output::identity_headline(cur).unwrap_or_default()
             );
         }
         return;

@@ -253,8 +253,17 @@ pub fn run(
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use crate::output::format_tiny;
+    use crate::output::{TinyOpts, format_context};
     use crate::types::{Facts, compact_from_files};
+
+    /// The terminal view, uncolored so two renders compare as text.
+    fn rendered(report: &AnalysisReport) -> String {
+        let opts = TinyOpts {
+            color: false,
+            ..TinyOpts::terminal()
+        };
+        format_context(report, &opts)
+    }
 
     fn report() -> AnalysisReport {
         let mut report = AnalysisReport::new(TargetInfo::default());
@@ -298,8 +307,8 @@ mod tests {
         let report = report();
         let loaded = decode(&serde_json::to_vec(&report).expect("encode")).expect("decode");
         assert!(loaded.warnings.is_empty());
-        assert_eq!(format_tiny(&report), format_tiny(&loaded.report));
-        assert!(format_tiny(&loaded.report).contains("eval(data)"));
+        assert_eq!(rendered(&report), rendered(&loaded.report));
+        assert!(rendered(&loaded.report).contains("eval(data)"));
     }
 
     #[test]
@@ -318,7 +327,7 @@ mod tests {
             loaded.report.files[0].findings[0].trait_refs[0].as_str(),
             "micro-behaviors/process::eval"
         );
-        assert_eq!(format_tiny(&report), format_tiny(&loaded.report));
+        assert_eq!(rendered(&report), rendered(&loaded.report));
     }
 
     #[test]

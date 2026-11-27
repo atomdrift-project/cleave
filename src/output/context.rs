@@ -1,228 +1,8 @@
-//! Context window rendering: ASCII, text, hex and source lines.
+//! Context window rendering: hex rows and source lines.
 
 // Split out of the parent module for size; it shares the parent's namespace.
 #[allow(clippy::wildcard_imports)]
 use super::*;
-
-/// Emit the merged context. Source files render line-by-line; binaries render
-/// each match window as raw bytes wrapped into hex|ascii rows at `term_width`.
-pub(super) fn render_context(
-    out: &mut String,
-    file: &FileAnalysis,
-    selected: &[&str],
-    plan: &[Planned<'_>],
-    owed: &HashSet<&str>,
-    opts: &TinyOpts,
-    term_width: usize,
-    colorize: bool,
-) {
-    if is_binary_file_type(&file.file_type) {
-        // The machine/LLM view (Minimal header) renders binary windows as
-        // ASCII-forward rows with an xxd-style offset gutter — no hex column —
-        // which a local model reads far more cheaply than a hex|ascii dump.
-        // The terminal view keeps the hex|ascii rows.
-        if matches!(opts.header, HeaderStyle::Minimal) {
-            render_ascii_context(out, file, plan, opts);
-        } else {
-            render_hex_context(out, file, plan, selected, term_width, opts, colorize);
-        }
-    } else {
-        render_text_chunks(out, file, plan, owed, opts, term_width, colorize);
-    }
-}
-
-/// Render binary context for the machine/LLM view: each run of matched bytes as
-/// ASCII-forward rows — printable bytes verbatim, non-printables as C-string
-/// escapes — preceded by one `{marker} SEV OFFSET desc` line per detection in
-/// that run, so the detections describe the bytes that follow. Every row opens
-/// with an xxd-style gutter (the absolute byte offset of its first byte in
-/// unpadded hex), `:` when a detection matched inside the row and `-` when it is
-/// surrounding context, so any byte is addressable without the terminal view's
-/// hex column and a clipped run needs no `…` marker.
-///
-/// A captured window is split into one block per contiguous run its own
-/// annotations cover. Capture merges overlapping windows, and low-tier traits
-/// this view does not list bridge them: on `/bin/ls` sixteen listed detections
-/// arrived as a single 1.5 KB window, so the block stopped describing the bytes
-/// it held. Splitting on the gaps restores the property that makes the view
-/// readable — every block is contiguous data that its own annotations account
-/// for.
-pub(super) fn render_ascii_context(
-    out: &mut String,
-    file: &FileAnalysis,
-    plan: &[Planned<'_>],
-    opts: &TinyOpts,
-) {
-    use std::fmt::Write;
-    let marker = comment_marker(&file.file_type);
-    let mut emitted = false;
-    for (line, w) in file.context.iter().zip(plan) {
-        let Some(ids) = &w.ids else {
-            continue;
-        };
-        // Distinct planned findings on this window. (Placement already capped
-        // locations per trait; merging can pool several here.)
-        let mut seen = HashSet::new();
-        let notes: Vec<&Note> = w
-            .notes
-            .iter()
-            .filter(|n| ids.contains(n.id.as_str()) && seen.insert(n.id.as_str()))
-            .collect();
-        if notes.is_empty() {
-            continue;
-        }
-
-        let blocks = ascii_blocks(line, notes, opts.lean_rows);
-
-        for (start, end, mut block_notes) in blocks {
-            // A blank line sets each block apart — from the file-level
-            // annotations above the first one, and from the preceding block.
-            if emitted || (!out.is_empty() && !out.ends_with("\n\n")) {
-                out.push('\n');
-            }
-            emitted = true;
-
-            // Strongest first: the block leads with the worst thing in it.
-            block_notes.sort_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.off.cmp(&b.off)));
-            // Each annotation carries the hex offset of the bytes it fired on,
-            // in the same base and form as the row gutter below, so a detection
-            // can be pointed at its bytes even when a block holds several. The
-            // text view has always shown `LINE:COL` here.
-            for note in &block_notes {
-                let _ = writeln!(
-                    out,
-                    "{marker} {} {:x} {}",
-                    note.crit.letter(),
-                    note.off,
-                    annotate_desc(&display_description(&note.desc), &note.id)
-                );
-            }
-
-            let mut row = start;
-            while row < end {
-                let row_end = (row + ASCII_ROW).min(end);
-                let row_lo = line.loc + row as u64;
-                let row_hi = line.loc + row_end as u64;
-                // `:` marks a row a detection actually matched in, `-` a row of
-                // surrounding context — the same distinction the terminal
-                // view's gutter draws.
-                let hit = block_notes
-                    .iter()
-                    .any(|n| n.off < row_hi && n.off + u64::from(n.len.max(1)) > row_lo);
-                let _ = writeln!(
-                    out,
-                    "{row_lo:x}{} {}",
-                    if hit { ':' } else { '-' },
-                    ascii_printable(&line.data[row..row_end])
-                );
-                row = row_end;
-            }
-        }
-    }
-}
-
-/// Split a binary window into contiguous blocks around its selected notes.
-pub(super) fn ascii_blocks<'a>(
-    line: &'a ContextLine,
-    mut notes: Vec<&'a Note>,
-    lean: bool,
-) -> Vec<(usize, usize, Vec<&'a Note>)> {
-    let len = line.data.len();
-    let within = |off: u64| {
-        usize::try_from(off.saturating_sub(line.loc))
-            .unwrap_or(usize::MAX)
-            .min(len)
-    };
-    notes.sort_by_key(|n| n.off);
-    let mut blocks: Vec<(usize, usize, Vec<&Note>)> = Vec::new();
-    for note in notes {
-        let (before, after) = if lean {
-            (0, ASCII_ROW as u64)
-        } else {
-            note.crit.hex_context()
-        };
-        let lo = within(note.off).saturating_sub(before as usize);
-        let hi = within(note.off.saturating_add(u64::from(note.len.max(1))))
-            .saturating_add(after as usize)
-            .min(len);
-        match blocks.last_mut() {
-            Some((_, end, group)) if lo <= *end => {
-                *end = (*end).max(hi);
-                group.push(note);
-            }
-            _ => blocks.push((lo, hi, vec![note])),
-        }
-    }
-    blocks
-}
-
-/// Bytes per gutter-prefixed row in the ASCII-forward view. Wider than xxd's 16
-/// so the escaped stream stays token-cheap for a model, while every row still
-/// carries an addressable offset.
-pub(super) const ASCII_ROW: usize = 64;
-
-/// Minimum `<printable>\0` pairs to treat a run as UTF-16LE ASCII and collapse
-/// it to text. PE version-info / Authenticode strings are UTF-16LE and sit at
-/// mid-file offsets (no BOM for [`crate::file_io::normalize_text_encoding`] to
-/// catch), so without this `ProductName` renders as `P<00>r<00>o<00>…`.
-pub(super) const UTF16_RUN: usize = 4;
-
-/// The printable projection of a byte window: printable ASCII verbatim, a
-/// UTF-16LE ASCII run collapsed to its text, and every other byte — NUL,
-/// control, high-bit, machine code — a single space, runs of them one space.
-///
-/// What the model reads in a window is the strings: a path, a method name, a
-/// key, an import. Machine-code bytes between them are not evidence it can
-/// use, but rendered as `\xNN` escapes they cost three to four tokens each,
-/// and a 54 MB ELF's 107 windows came to 40k tokens. Measured on
-/// 32 benchmark renders graded by a model, five runs each: this
-/// projection cut the prompts 21% overall (a binary-heavy render 41.5k →
-/// 27.6k tokens) with every grade unchanged, where dropping the context rows
-/// or collapsing runs to a `.{n}` marker each flipped a known-bad .NET
-/// sample. The string boundaries stay visible (each non-printable run is a
-/// space), which is what kept `get_Threshold set_Threshold …` readable as
-/// separate names.
-pub(super) fn ascii_printable(data: &[u8]) -> String {
-    let printable = |b: u8| (0x20..=0x7e).contains(&b);
-    let mut s = String::with_capacity(data.len());
-    let mut i = 0;
-    let mut gap = false;
-    while i < data.len() {
-        let mut run = 0;
-        while i + run * 2 + 1 < data.len()
-            && printable(data[i + run * 2])
-            && data[i + run * 2 + 1] == 0
-        {
-            run += 1;
-        }
-        if run >= UTF16_RUN {
-            if gap {
-                s.push(' ');
-                gap = false;
-            }
-            for k in 0..run {
-                s.push(data[i + k * 2] as char);
-            }
-            i += run * 2;
-            continue;
-        }
-        let b = data[i];
-        if printable(b) {
-            if gap {
-                s.push(' ');
-                gap = false;
-            }
-            s.push(b as char);
-        } else {
-            gap = true;
-        }
-        i += 1;
-    }
-    if gap {
-        s.push(' ');
-    }
-    s
-}
 
 /// A physical line within a textual chunk: its absolute byte range in the file
 /// and the 1-based source position of its first content byte. Splitting a
@@ -290,19 +70,17 @@ pub(super) fn chunk_rows(chunk: &ContextLine) -> Vec<ChunkRow> {
 /// Render textual context: every stored chunk is an already-sized byte window.
 /// Each chunk is split into physical rows and rendered `grep -n`-style — numbered
 /// lines with a `# SEV desc` trailer on hits (colored) or a `{marker} SEV
-/// line:col desc` annotation before each hit (LLM). A chunk that is a slice of an
+/// line:col desc` annotation before each hit (plain). A chunk that is a slice of an
 /// ultra-long line has a single row, rendered as one `line:col` pseudo-line
 /// clipped to the content width with `…` marking the trimmed sides.
 pub(super) fn render_text_chunks(
     out: &mut String,
     file: &FileAnalysis,
     plan: &[Planned<'_>],
-    owed: &HashSet<&str>,
     opts: &TinyOpts,
     term_width: usize,
     colorize: bool,
 ) {
-    let minimal = matches!(opts.header, HeaderStyle::Minimal);
     let marker = comment_marker(&file.file_type);
 
     // Chunks the plan draws, each with the finding ids it annotates.
@@ -327,24 +105,16 @@ pub(super) fn render_text_chunks(
         .unwrap_or(1);
 
     // Fixed content column so comments align; long lines truncate to it. The
-    // machine/LLM view has no terminal to fit and carries its description on a
-    // preceding annotation line, so it shows a generous window of the code —
-    // minified code carries its signal far past column 35. The card layout's
-    // 3-space lead is two columns wider than the severity gutter.
+    // card layout's 3-space lead is two columns wider than the severity gutter.
     let prefix = if opts.card {
         CARD_ROW_LEAD.len() + loc_width + 2
     } else {
         src_prefix(loc_width)
     };
-    let content_width = if minimal {
-        SRC_LLM_WIDTH
-    } else {
-        term_width
-            .saturating_sub(prefix + 2 + SRC_COMMENT_BUDGET)
-            .clamp(24, 100)
-    };
+    let content_width = term_width
+        .saturating_sub(prefix + 2 + SRC_COMMENT_BUDGET)
+        .clamp(24, 100);
     let layout = SourceLayout {
-        owed,
         marker,
         loc_width,
         content_width,
@@ -352,11 +122,6 @@ pub(super) fn render_text_chunks(
         colorize,
         card: opts.card,
     };
-
-    // Set the context off from any file-level annotations above it (LLM view).
-    if minimal && !out.is_empty() && !out.ends_with("\n\n") {
-        out.push('\n');
-    }
 
     let mut emitted = false;
     for (chunk, chunk_notes, ids) in shown {
@@ -576,12 +341,6 @@ pub(super) const HEX_MARGIN_HOSTILE: usize = 2;
 /// Comment width reserved on source lines — enough that typical descriptions
 /// land in full; the code column takes the rest.
 pub(super) const SRC_COMMENT_BUDGET: usize = 56;
-/// Source content window for the machine/LLM (Minimal-header) view, where there
-/// is no terminal width to fit. Wide enough that a minified line's match keeps
-/// real surrounding context, while still bounding token cost per line. A
-/// 200-column window, centred on the match, flipped a benign extension in
-/// scan's 72 LLM fixtures to hostile (2026-11-23).
-pub(super) const SRC_LLM_WIDTH: usize = 512;
 /// Fixed columns ahead of a row's hex cells: the 1-char gutter, a space, the
 /// offset, and a two-space separator.
 pub(super) const fn row_prefix(loc_width: usize) -> usize {
@@ -684,7 +443,6 @@ pub(super) struct SourceRow<'a> {
 /// How every row of one file's source context is laid out.
 #[derive(Clone, Copy)]
 pub(super) struct SourceLayout<'a> {
-    pub(super) owed: &'a HashSet<&'a str>,
     pub(super) marker: &'a str,
     pub(super) loc_width: usize,
     pub(super) content_width: usize,
@@ -695,7 +453,7 @@ pub(super) struct SourceLayout<'a> {
 
 /// Render one physical source row (a slice of a textual chunk). Colored: a
 /// 1-char severity gutter, the line number, the code clipped to a fixed width
-/// (with its match highlighted), then an aligned `// desc` comment. Plain (LLM):
+/// (with its match highlighted), then an aligned `// desc` comment. Plain:
 /// the code verbatim, preceded — when it carries a finding — by a `{marker} SEV
 /// LINE:COL DESC` annotation line. `byte_base`/`line_no`/`col_base` are the
 /// absolute offset and 1-based source position of the row's first byte;
@@ -711,7 +469,6 @@ pub(super) fn render_source_line(out: &mut String, row: &SourceRow<'_>, layout: 
         comment,
     } = *row;
     let SourceLayout {
-        owed,
         marker,
         loc_width,
         content_width,
@@ -807,11 +564,11 @@ pub(super) fn render_source_line(out: &mut String, row: &SourceRow<'_>, layout: 
         return;
     }
 
-    // Plain (LLM) view: a finding is announced on its own comment-marker line —
+    // Plain view: a finding is announced on its own comment-marker line —
     //   {marker} SEV LINE:COL - DESC
     // placed immediately *before* the source row it describes, which then renders
     // verbatim (windowed to a fixed width, `...` marking any trim) with no prefix
-    // or trailer. Keeping the code clear of cleave's columns lets the model read it
+    // or trailer. Keeping the code clear of cleave's columns lets a reader take it
     // as the file's own source; the preceding annotation — comment marker, a single
     // severity letter, the location, then the description — marks it unmistakably
     // as cleave's detection, not text from the file. COL is the 1-based column of
@@ -825,22 +582,8 @@ pub(super) fn render_source_line(out: &mut String, row: &SourceRow<'_>, layout: 
     };
     let match_disp = comment.and_then(|n| to_disp(n.off));
 
-    // The strongest note leads; every other owed note on the row — a
-    // suspicious/hostile atom, or the leg of a withheld composite (see
-    // `evidence_legs`), whatever its grade — follows on its own line. Keeping
-    // only the strongest hid the rest of the row's evidence from the reader.
-    let owes = |n: &Note| owed.contains(n.id.as_str());
-    let mut announced: Vec<&Note> = comment
-        .filter(|&n| n.crit >= Criticality::Notable || owes(n))
-        .into_iter()
-        .collect();
-    for &n in notes {
-        if owes(n) && announced.iter().all(|a| a.id != n.id) {
-            announced.push(n);
-        }
-    }
-    let announced_none = announced.is_empty();
-    for n in announced {
+    let announced = comment.filter(|n| n.crit >= Criticality::Notable);
+    if let Some(n) = announced {
         out.push_str(marker);
         out.push(' ');
         out.push(n.crit.letter());
@@ -860,9 +603,9 @@ pub(super) fn render_source_line(out: &mut String, row: &SourceRow<'_>, layout: 
     let (b0, b1, win_lead, win_trail) = source_window(&display, content_width, match_disp);
     let (lead, trail) = (win_lead || cut_left, win_trail || cut_right);
     // A bare context row that starts mid-line (a slice of an ultra-long line)
-    // is a fragment with neither a finding nor the line's start; dropping
-    // these cut the LLM prompt ~12% with every fixture grade unchanged.
-    if lead && announced_none {
+    // is a fragment with neither a finding nor the line's start, so it is
+    // dropped.
+    if lead && announced.is_none() {
         return;
     }
     let slice = display.get(b0..b1).unwrap_or("");

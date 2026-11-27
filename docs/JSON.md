@@ -144,7 +144,7 @@ because the most common suppressors are `crit: exception` composites, stripped
 from the report before anything could resolve them; the span is enough to pull
 the bytes from the file.
 
-cleave's LLM view
+The card layout (`TinyOpts::card`, an embedding host's terminal view)
 renders each as a `withheld`/`downgraded` line naming the trait, the legs, and
 their spans. A file is never skipped from that output for having nothing but
 withheld traits to report, and a per-file cap on how many are listed still ends

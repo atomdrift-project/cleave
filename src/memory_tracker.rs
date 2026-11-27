@@ -318,8 +318,10 @@ const PURGE_INTERVAL_SECS: u64 = 300;
 /// The watchdog monitors RSS every `interval` and:
 /// 1. Warning threshold crossed → log warning + full memory stats
 /// 2. Critical threshold crossed → attempt cache clear, log error + full stats
-/// 3. Critical threshold sustained for >30s → `on_sustained_overload` runs
-///    once (the `cleave` binary exits; a server might shed load or restart)
+/// 3. Critical threshold sustained for >30s → `on_sustained_overload` runs,
+///    and runs again on every later check while the overload lasts, so a
+///    caller can escalate: the `cleave` binary exits at once, while a server
+///    can first shed its heaviest work and exit only if that did not help.
 /// 4. Every 5 minutes (`PURGE_INTERVAL_SECS`) → run jemalloc arena purge,
 ///    log RSS before/after and the reclaimed delta.
 ///
@@ -329,13 +331,12 @@ const PURGE_INTERVAL_SECS: u64 = 300;
 pub fn start_periodic_logging(
     interval: Duration,
     limit: u64,
-    on_sustained_overload: impl FnOnce() + Send + 'static,
+    mut on_sustained_overload: impl FnMut() + Send + 'static,
 ) -> MemoryLoggerHandle {
     let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let shutdown_clone = shutdown.clone();
 
     let handle = std::thread::spawn(move || {
-        let mut on_sustained_overload = Some(on_sustained_overload);
         let mut overloaded_since: Option<Instant> = None;
         let mut last_purge = Instant::now();
         let warning = limit.saturating_sub(512 * 1024 * 1024);
@@ -384,16 +385,14 @@ pub fn start_periodic_logging(
                 );
                 log_all_memory_stats();
 
-                if overloaded_secs > 30
-                    && let Some(on_overload) = on_sustained_overload.take()
-                {
+                if overloaded_secs > 30 {
                     tracing::error!(
                         rss_mb = rss_after_mb,
                         limit_mb = limit / 1024 / 1024,
                         overloaded_secs = overloaded_secs,
                         "Memory cap exceeded for >30s"
                     );
-                    on_overload();
+                    on_sustained_overload();
                 }
             } else if rss > warning {
                 // Below cap but approaching it — log but don't enforce

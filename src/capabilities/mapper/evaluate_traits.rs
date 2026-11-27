@@ -438,7 +438,10 @@ impl super::CapabilityMapper {
         // Check cancellation before each trait — this is the innermost
         // loop that processes ~9000 traits per file, and is the main reason
         // analysis can't be interrupted once it enters trait evaluation.
+        // The traits skipped from here on are missing, so the report says so
+        // (and is never cached) rather than reading as complete.
         if trait_ctx.is_cancelled() {
+            trait_ctx.record_cancelled();
             return None;
         }
 

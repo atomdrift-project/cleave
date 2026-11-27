@@ -1,5 +1,9 @@
 #![allow(clippy::unwrap_used)]
-use super::mask_markup_comments;
+
+/// The masker with no cancellation flag, which therefore always finishes.
+fn mask_markup_comments(source: &[u8]) -> Option<Vec<u8>> {
+    super::mask_markup_comments(source, None).unwrap()
+}
 
 #[test]
 fn leaves_sources_without_comments_unallocated() {

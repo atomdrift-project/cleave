@@ -502,7 +502,10 @@ impl ArchiveAnalyzer {
         // analyzing. This is the universal per-member chokepoint (every archive
         // path and the nested-archive recursion routes through it), so the top
         // archive's members — fanned across the whole rayon pool — are all named.
-        let _breadcrumb = crate::breadcrumb::scope("member", relative_path);
+        // Filed under the request's cancellation flag so its caller can ask
+        // which member its own analysis is on.
+        let _breadcrumb =
+            crate::breadcrumb::scope("member", relative_path, self.cancelled.as_deref());
 
         let wrapped_binary = crate::analyzers::embedded_images::has_wrapped_binary(file_type, data);
         if let Some(reason) = self.archive_member_analysis_skip_reason(file_type, relative_path)

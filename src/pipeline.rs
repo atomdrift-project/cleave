@@ -1297,6 +1297,19 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // Findings here are already final — the low-value filter ran above.
     crate::context::capture(&mut report, file_data, file_type, &Default::default());
 
+    // A cancellation that landed after the last checkpoint above still cut
+    // evaluation short somewhere: mark the report incomplete so neither cache
+    // nor an in-process waiter takes it for a full analysis.
+    if options
+        .cancellation
+        .as_ref()
+        .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+    {
+        report
+            .analysis_gaps
+            .record(types::AnalysisGap::EvaluationDeadline);
+    }
+
     // Store result in per-file cache (cross-context: shared with archive member analysis)
     analysis_cache::file_analysis_cache_store(
         &sha256_hex,

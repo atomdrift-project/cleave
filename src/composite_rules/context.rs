@@ -277,15 +277,15 @@ impl<'a> FindingScope<'a> {
 #[derive(Debug, Default, Clone)]
 pub(crate) struct FileEvalCaches {
     kv_offsets: Arc<OnceLock<FxHashMap<String, u64>>>,
-    lossy_utf8: Arc<OnceLock<String>>,
+    lossy_utf8: Arc<OnceLock<Scanned<String>>>,
     string_exact_index: Arc<OnceLock<FxHashMap<String, Vec<u32>>>>,
     string_exact_index_ci: Arc<OnceLock<FxHashMap<String, Vec<u32>>>>,
     encoded_string_indices: Arc<OnceLock<Vec<u32>>>,
     literal_string_indices: Arc<OnceLock<Vec<u32>>>,
     flow_call_index: Arc<OnceLock<FxHashMap<(u64, usize), Vec<usize>>>>,
     flow_targets: Arc<OnceLock<Vec<String>>>,
-    html_comment_free_source: Arc<OnceLock<Option<Vec<u8>>>>,
-    comment_free_source: Arc<OnceLock<Option<Vec<u8>>>>,
+    html_comment_free_source: Arc<OnceLock<Scanned<Option<Vec<u8>>>>>,
+    comment_free_source: Arc<OnceLock<Scanned<Option<Vec<u8>>>>>,
     commentless_ast: Arc<once_cell::sync::OnceCell<Option<tree_sitter::Tree>>>,
 }
 
@@ -365,10 +365,10 @@ pub(crate) struct EvaluationContext<'a> {
     pub flow_targets: Arc<OnceLock<Vec<String>>>,
     /// Lazily masked copy used only by `type: text` rules that explicitly
     /// ignore markup comments. `None` means the file had no such comments.
-    pub cached_html_comment_free_source: Arc<OnceLock<Option<Vec<u8>>>>,
+    pub cached_html_comment_free_source: Arc<OnceLock<Scanned<Option<Vec<u8>>>>>,
     /// Lazily masked copy used only by `type: text` rules that ignore source
     /// comments. `None` means the file had no comment spans to mask.
-    pub cached_comment_free_source: Arc<OnceLock<Option<Vec<u8>>>>,
+    pub cached_comment_free_source: Arc<OnceLock<Scanned<Option<Vec<u8>>>>>,
     /// Offset-preserving AST view for queries that explicitly ignore comments.
     /// Only successful views (including no comments) are cached per input.
     pub cached_commentless_ast: Arc<once_cell::sync::OnceCell<Option<tree_sitter::Tree>>>,
@@ -421,7 +421,7 @@ pub(crate) struct EvaluationContext<'a> {
     /// where `from_utf8_lossy` actually allocates. Rebuilding it per rule cost
     /// both CPU (a 487 MB disk image spent ~185 CPU-s re-transcoding) and peak
     /// RSS (one transient copy per concurrent rule instead of one shared).
-    pub cached_lossy_utf8: Arc<OnceLock<String>>,
+    pub cached_lossy_utf8: Arc<OnceLock<Scanned<String>>>,
     /// Byte-preserving source normalization used by filefacts AST parsing.
     pub cached_ast_source_utf8: Arc<OnceLock<String>>,
     /// True while evaluating a `crit: exception` composite. A directory trait
@@ -553,21 +553,49 @@ impl<'a> EvaluationContext<'a> {
 
     /// Raw bytes with HTML / ASP.NET comments masked, computed once per file
     /// and only when an opted-in text condition asks for them.
+    ///
+    /// A build cut short by cancellation yields an empty view, so the asking
+    /// condition matches nothing (never the unmasked bytes), and the report
+    /// is marked incomplete.
     pub(crate) fn html_comment_free_source(&self) -> Option<&[u8]> {
-        self.cached_html_comment_free_source
-            .get_or_init(|| mask_markup_comments(self.binary_data))
-            .as_deref()
+        let masked = self
+            .cached_html_comment_free_source
+            .get_or_init(|| mask_markup_comments(self.binary_data, self.cancellation));
+        self.masked_view(masked)
     }
 
     /// Raw bytes with source-comment bodies masked (filefacts' comment spans),
     /// computed once per file and only when an opted-in text condition asks.
+    /// Cancellation is handled as in [`Self::html_comment_free_source`].
     pub(crate) fn comment_free_source(&self) -> Option<&[u8]> {
-        self.cached_comment_free_source
-            .get_or_init(|| {
-                let spans = &self.report.filefacts.as_ref()?.comment_spans;
-                mask_spans(self.binary_data, spans)
-            })
-            .as_deref()
+        let masked = self.cached_comment_free_source.get_or_init(|| {
+            let Some(facts) = self.report.filefacts.as_ref() else {
+                return Ok(None);
+            };
+            mask_spans(self.binary_data, &facts.comment_spans, self.cancellation)
+        });
+        self.masked_view(masked)
+    }
+
+    fn masked_view<'s>(&self, masked: &'s Scanned<Option<Vec<u8>>>) -> Option<&'s [u8]> {
+        match masked {
+            Ok(view) => view.as_deref(),
+            Err(Cancelled) => {
+                self.record_cancelled();
+                Some(&[])
+            }
+        }
+    }
+
+    /// Mark this file's report incomplete because the analysis was cancelled
+    /// partway through evaluation: the rules skipped or cut short report no
+    /// match, so the report must not read as complete or be cached. Shares the
+    /// deadline gap, which carries exactly that meaning for a run that stopped
+    /// early.
+    pub(crate) fn record_cancelled(&self) {
+        self.report
+            .analysis_gaps
+            .record(crate::types::AnalysisGap::EvaluationDeadline);
     }
 
     /// This context over `source`, a masked copy of the file (comments
@@ -736,8 +764,16 @@ impl<'a> EvaluationContext<'a> {
         if let Some(s) = self.cached_source_utf8 {
             return s;
         }
-        self.cached_lossy_utf8
-            .get_or_init(|| String::from_utf8_lossy(self.binary_data).into_owned())
+        match self
+            .cached_lossy_utf8
+            .get_or_init(|| lossy_utf8(self.binary_data, self.cancellation))
+        {
+            Ok(text) => text,
+            Err(Cancelled) => {
+                self.record_cancelled();
+                ""
+            }
+        }
     }
 
     pub(crate) fn string_exact_index(&self) -> &FxHashMap<String, Vec<u32>> {
@@ -1067,23 +1103,87 @@ pub(crate) struct StringParams<'a> {
     pub arch_clamp: Option<(usize, usize)>,
 }
 
+/// A whole-file scan was abandoned because the analysis was cancelled. Kept
+/// distinct from every real result so a partial scan is never mistaken for —
+/// or cached as — a complete one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Cancelled;
+
+/// The result of a whole-file scan that polls for cancellation.
+pub(crate) type Scanned<T> = Result<T, Cancelled>;
+
+/// Bytes a whole-file scan covers between polls of the cancellation flag:
+/// one relaxed load per few MB is free, and even an unoptimized scan answers
+/// within milliseconds.
+const CANCEL_POLL_BYTES: usize = 4 << 20;
+
+/// Fails once `flag` is raised.
+fn poll(flag: Option<&std::sync::atomic::AtomicBool>) -> Scanned<()> {
+    if flag.is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed)) {
+        Err(Cancelled)
+    } else {
+        Ok(())
+    }
+}
+
+/// `String::from_utf8_lossy(data).into_owned()`, byte for byte, polling
+/// `cancel` as it goes: input dense with invalid bytes transcodes a sequence at
+/// a time, so a large one is not a single fast copy.
+fn lossy_utf8(data: &[u8], cancel: Option<&std::sync::atomic::AtomicBool>) -> Scanned<String> {
+    let mut text = String::with_capacity(data.len());
+    let mut since_poll = 0usize;
+    for chunk in data.utf8_chunks() {
+        text.push_str(chunk.valid());
+        if !chunk.invalid().is_empty() {
+            text.push(char::REPLACEMENT_CHARACTER);
+        }
+        since_poll += chunk.valid().len() + chunk.invalid().len();
+        if since_poll >= CANCEL_POLL_BYTES {
+            since_poll = 0;
+            poll(cancel)?;
+        }
+    }
+    Ok(text)
+}
+
 /// `source` with every span's bytes blanked to spaces, keeping line breaks so
 /// line-based matching and evidence lines are unchanged. `None` when there is
 /// nothing to mask; spans past the end are clipped.
-fn mask_spans(source: &[u8], spans: &[(usize, usize)]) -> Option<Vec<u8>> {
+///
+/// Each byte is visited at most once whatever the spans: overlapping or
+/// nested spans (a comment inside a comment, spans listed out of order) skip
+/// what an earlier span already blanked, so the work is linear in the input.
+fn mask_spans(
+    source: &[u8],
+    spans: &[(usize, usize)],
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Scanned<Option<Vec<u8>>> {
     if spans.is_empty() {
-        return None;
+        return Ok(None);
     }
+    let mut ordered = spans.to_vec();
+    ordered.sort_unstable();
     let mut masked = source.to_vec();
-    for &(start, len) in spans {
+    let (mut covered, mut since_poll) = (0usize, 0usize);
+    for (start, len) in ordered {
         let end = start.saturating_add(len).min(masked.len());
-        for byte in masked.get_mut(start..end).into_iter().flatten() {
+        let start = start.max(covered);
+        let Some(span) = masked.get_mut(start..end) else {
+            continue;
+        };
+        for byte in span.iter_mut() {
             if !matches!(*byte, b'\n' | b'\r') {
                 *byte = b' ';
             }
         }
+        covered = end;
+        since_poll += end - start;
+        if since_poll >= CANCEL_POLL_BYTES {
+            since_poll = 0;
+            poll(cancel)?;
+        }
     }
-    Some(masked)
+    Ok(Some(masked))
 }
 
 /// Elements whose contents the HTML tokenizer reads as raw text, so a `<!--`
@@ -1108,7 +1208,13 @@ const RAW_TEXT_ELEMENTS: [&[u8]; 9] = [
 /// read or ends the walk. Text such as `<-- E` repeated across a 70 MB
 /// simulation log with no `>` anywhere once made this quadratic — a closing
 /// `>` was sought from every `<` — and held one analysis for hours.
-fn mask_markup_comments(source: &[u8]) -> Option<Vec<u8>> {
+///
+/// Polls `cancel` every few MB of progress and abandons the walk once it is
+/// raised.
+fn mask_markup_comments(
+    source: &[u8],
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Scanned<Option<Vec<u8>>> {
     /// End of the tag whose attributes start at `at`: just past the first
     /// `>` outside quotes, or `None` when the tag runs to end of input.
     fn tag_end(source: &[u8], mut at: usize) -> Option<usize> {
@@ -1162,10 +1268,15 @@ fn mask_markup_comments(source: &[u8]) -> Option<Vec<u8>> {
     }
 
     let mut source_pos = 0usize;
+    let mut next_poll = CANCEL_POLL_BYTES;
     let mut output: Option<Vec<u8>> = None;
     // Everything below starts at a `<`; skip straight to the next one.
     while let Some(rel) = memchr::memchr(b'<', &source[source_pos..]) {
         source_pos += rel;
+        if source_pos >= next_poll {
+            poll(cancel)?;
+            next_poll = source_pos + CANCEL_POLL_BYTES;
+        }
         if source[source_pos..].starts_with(b"<!--") {
             let body_start = source_pos + 4;
             let body_end = memchr::memmem::find(&source[body_start..], b"-->")
@@ -1209,11 +1320,14 @@ fn mask_markup_comments(source: &[u8]) -> Option<Vec<u8>> {
         }
         source_pos += 1;
     }
-    output
+    Ok(output)
 }
 
 #[cfg(test)]
 mod markup_comment_tests;
+
+#[cfg(test)]
+mod adversarial_text_tests;
 
 #[cfg(test)]
 mod pooled_finding_tests;

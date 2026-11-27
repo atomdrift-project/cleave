@@ -368,6 +368,7 @@ impl CompositeTrait {
         let _timing = crate::composite_rules::trait_timing::Recorder::start(&self.id);
         let _performance =
             crate::validation_performance::RuleTimer::start(&self.id, &self.defined_in, ctx);
+        let _breadcrumb = rule_breadcrumb(ctx, || self.shared_id());
 
         // Check unless conditions (file-level skip). Deferred when recording —
         // see the identical note on `TraitDefinition::evaluate_with_gates`.

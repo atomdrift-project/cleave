@@ -280,7 +280,9 @@ fn create_private_dir(path: &Path) -> Result<()> {
 fn test_cache_dir() -> PathBuf {
     static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     DIR.get_or_init(|| {
-        let dir = std::env::temp_dir().join("cleave-test-cache");
+        // Per process: a directory shared across runs serves one run's stored
+        // reports to the next, so "nothing stored yet" assertions fail on rerun.
+        let dir = std::env::temp_dir().join(format!("cleave-test-cache-{}", std::process::id()));
         let _ = fs::create_dir_all(&dir);
         dir
     })

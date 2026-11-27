@@ -50,6 +50,21 @@ fn record_rule_timeout(report: &crate::types::AnalysisReport, elapsed: Duration)
     true
 }
 
+/// Inputs at least this large name the rule evaluating them in the thread's
+/// breadcrumb ([`crate::breadcrumb::rule_scope`]), so a rule that never
+/// returns — which the timing above, taken on return, never reports — is
+/// visible to the caller while it runs. Below this a rule has too little to
+/// scan to run long, and the hot evaluation loop skips the bookkeeping.
+const RULE_BREADCRUMB_MIN_BYTES: usize = 64 << 10;
+
+fn rule_breadcrumb(
+    ctx: &EvaluationContext<'_>,
+    id: impl FnOnce() -> crate::types::Istr,
+) -> Option<crate::breadcrumb::RuleScope> {
+    (ctx.binary_data.len() >= RULE_BREADCRUMB_MIN_BYTES)
+        .then(|| crate::breadcrumb::rule_scope(ctx.cancellation, id()))
+}
+
 /// Debug log threshold for rule evaluation (500ms).
 /// Rules exceeding this emit an info-level log.
 const RULE_EVAL_DEBUG_DURATION: Duration = Duration::from_millis(600);

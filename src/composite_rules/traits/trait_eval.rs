@@ -795,6 +795,7 @@ impl TraitDefinition {
         let start = crate::composite_rules::trait_timing::EvalTimer::start();
         let _performance =
             crate::validation_performance::RuleTimer::start(&self.id, &self.defined_in, ctx);
+        let _breadcrumb = rule_breadcrumb(ctx, || self.shared_id());
 
         // The positive condition runs before `unless:`, which is consulted only
         // when it matched: a trait whose condition fails produces nothing

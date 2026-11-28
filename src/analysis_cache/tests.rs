@@ -1418,3 +1418,32 @@ fn merged_payload_carries_its_incomplete_gaps_to_the_parent() {
     assert!(parent.analysis_gaps.contains(YaraIncomplete));
     assert!(evaluation_incomplete(&parent));
 }
+
+/// A fresh process starts a dozen analysis threads that each open their own
+/// connection at once. The first rebuilds the WAL index under an exclusive
+/// lock for a few milliseconds; none of the others may fail for that.
+#[test]
+fn concurrent_opens_of_an_idle_cache_all_succeed() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cache.db");
+    drop(open_connection(&path).unwrap());
+    let threads = 16;
+    for round in 0..20 {
+        let barrier = std::sync::Barrier::new(threads);
+        let failures: Vec<String> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..threads)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        open_connection(&path).err().map(|e| e.to_string())
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .filter_map(|h| h.join().unwrap())
+                .collect()
+        });
+        assert!(failures.is_empty(), "round {round}: {failures:?}");
+    }
+}

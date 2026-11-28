@@ -174,7 +174,7 @@ fn a_refusal_says_what_was_wrong_and_what_to_do() {
             && community.message.contains("includes only the oss feed")
             && community
                 .message
-                .contains("https://console.atomdrift.org/plans"),
+                .contains("https://console.atomdrift.org/me/plan"),
         "{}",
         community.message
     );

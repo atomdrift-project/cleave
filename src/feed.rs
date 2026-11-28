@@ -126,12 +126,13 @@ impl Feed {
     }
 
     /// Where to get a plan that opens this feed: the zero-day feed comes only
-    /// with a team plan, so its link starts a team; the others' is the Plan tab.
+    /// with a team plan, so its link starts a team; the others' is the Plan
+    /// tab of whoever opens it, at `/me/plan`.
     #[must_use]
     pub fn plans(self) -> String {
         match self {
             Feed::ZeroDay => format!("{CONSOLE_COM}teams#new"),
-            Feed::Supporter | Feed::Oss => format!("{CONSOLE_ORG}plans"),
+            Feed::Supporter | Feed::Oss => format!("{CONSOLE_ORG}me/plan"),
         }
     }
 
@@ -1092,7 +1093,7 @@ mod tests {
         assert_eq!(Ask::Needs(Feed::ZeroDay).console(), CONSOLE_COM);
         assert_eq!(Ask::Expired(Feed::Supporter).console(), CONSOLE_ORG);
         assert_eq!(Feed::ZeroDay.plans(), format!("{CONSOLE_COM}teams#new"));
-        assert_eq!(Feed::Supporter.plans(), format!("{CONSOLE_ORG}plans"));
+        assert_eq!(Feed::Supporter.plans(), format!("{CONSOLE_ORG}me/plan"));
         assert_eq!(Ask::Login.feed(), None);
         assert_eq!(Ask::Needs(Feed::ZeroDay).feed(), Some(Feed::ZeroDay));
         assert_eq!(Ask::Expired(Feed::Supporter).feed(), Some(Feed::Supporter));

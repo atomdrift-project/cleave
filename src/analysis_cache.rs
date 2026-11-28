@@ -587,12 +587,18 @@ fn db_path() -> Option<&'static Path> {
         .as_deref()
 }
 
+/// The longest a new connection waits on another's lock while it sets up.
+const SETUP_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(50);
+
 /// Open a new connection to `path` with WAL mode and the cache schema.
 fn open_connection(path: &Path) -> Result<Connection, rusqlite::Error> {
     let conn = Connection::open(path)?;
-    // Set this before even the journal/schema pragmas: opening a reader is
-    // also optional work and must not inherit rusqlite's five-second default.
-    conn.busy_timeout(std::time::Duration::ZERO)?;
+    // Setup gets a short, bounded wait rather than none: when a process starts,
+    // each analysis thread opens a connection at once, and the first one
+    // rebuilds the WAL index under an exclusive lock held for a few
+    // milliseconds. With no wait every other thread failed and ran uncached.
+    // It must still never inherit rusqlite's five-second default.
+    conn.busy_timeout(SETUP_BUSY_TIMEOUT)?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.execute_batch(
@@ -619,6 +625,8 @@ fn open_connection(path: &Path) -> Result<Connection, rusqlite::Error> {
         CREATE INDEX IF NOT EXISTS idx_file_analysis_last_accessed
             ON file_analysis_cache(last_accessed);",
     )?;
+    // Lookups are optional work and must never park an analysis worker.
+    conn.busy_timeout(std::time::Duration::ZERO)?;
     tracing::debug!(path = %path.display(), "Analysis cache connection opened");
     Ok(conn)
 }
@@ -642,6 +650,15 @@ fn is_corruption_error(err: &rusqlite::Error) -> bool {
             },
             _
         )
+    )
+}
+
+/// Whether `err` is another connection holding a lock (`SQLITE_BUSY` or
+/// `SQLITE_LOCKED`): transient, and retried on this thread's next lookup.
+fn is_busy_error(err: &rusqlite::Error) -> bool {
+    matches!(
+        err.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
     )
 }
 
@@ -675,7 +692,18 @@ fn with_conn<T>(f: impl FnOnce(&Connection) -> T) -> Option<T> {
                     }
                     open_connection(path)
                 })
-                .map_err(|e| tracing::warn!("Analysis cache unavailable: {}", e))
+                .map_err(|e| {
+                    // Contention outlasting the setup wait is expected under a
+                    // sibling process and costs only this one lookup. Anything
+                    // else (permissions, a full disk) persists, so say it once
+                    // rather than on every lookup of every thread.
+                    static WARNED: AtomicBool = AtomicBool::new(false);
+                    if is_busy_error(&e) || WARNED.swap(true, Ordering::Relaxed) {
+                        tracing::debug!("Analysis cache unavailable: {}", e);
+                    } else {
+                        tracing::warn!("Analysis cache unavailable: {}", e);
+                    }
+                })
                 .ok();
         }
         opt.as_ref().map(f)

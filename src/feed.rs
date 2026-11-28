@@ -5,7 +5,7 @@
 //!
 //! | feed | delay | needs |
 //! |---|---|---|
-//! | `zero-day` | up to 15 minutes | a team plan: Basic, Enhanced, or Critical |
+//! | `zero-day` | up to 15 minutes | a Zero-Day plan: Basic, Enhanced, or Critical |
 //! | `supporter` | up to 48 hours | a Supporter plan or better |
 //! | `oss` | up to 8 days, the public roll-up | nothing |
 //!
@@ -420,7 +420,7 @@ mod feed_slugs {
 }
 
 /// How this run came to its feed, for a version report beside the feed's
-/// name: `auto, Basic plan`, or `named, not signed in: …`. Reads only the
+/// name: `auto, Zero-Day Basic plan`, or `named, not signed in: …`. Reads only the
 /// disk.
 #[must_use]
 pub fn describe() -> String {
@@ -983,8 +983,9 @@ pub fn connect(ask: Ask, label: &str) -> anyhow::Result<Connected> {
 pub fn plan_name(tier: &str) -> String {
     match tier {
         "free" => "Community".to_string(),
-        "business" => "Basic".to_string(),
-        "oem" => "Critical".to_string(),
+        "business" => "Zero-Day Basic".to_string(),
+        "enhanced" => "Zero-Day Enhanced".to_string(),
+        "oem" => "Zero-Day Critical".to_string(),
         other => {
             let mut chars = other.chars();
             chars
@@ -1199,9 +1200,9 @@ mod tests {
     fn a_plan_is_named_as_the_dashboard_names_it() {
         assert_eq!(plan_name("free"), "Community");
         assert_eq!(plan_name("supporter"), "Supporter");
-        assert_eq!(plan_name("business"), "Basic");
-        assert_eq!(plan_name("enhanced"), "Enhanced");
-        assert_eq!(plan_name("oem"), "Critical");
+        assert_eq!(plan_name("business"), "Zero-Day Basic");
+        assert_eq!(plan_name("enhanced"), "Zero-Day Enhanced");
+        assert_eq!(plan_name("oem"), "Zero-Day Critical");
         // A tier this build has never heard of is still shown, not hidden.
         assert_eq!(plan_name("platinum"), "Platinum");
         assert_eq!(plan_name(""), "");

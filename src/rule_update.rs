@@ -653,7 +653,7 @@ fn sign_in_device(
     }
 }
 
-/// The line a sign-in ends on: `✓ Signed in · Basic plan · zero-day,
+/// The line a sign-in ends on: `✓ Signed in · Zero-Day Basic plan · zero-day,
 /// supporter, oss`, from what the rules service just said about `token`.
 fn signed_in(token: &crate::feed::Token) -> String {
     use colored::Colorize;

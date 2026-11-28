@@ -74,6 +74,16 @@ pub const VARIABLES: &[Variable] = &[
         "Skip the background check for a newer release.",
     ),
     var(
+        "CLEAVE_FEED",
+        Configuration,
+        "Rule feed: auto, zero-day, supporter or oss.",
+    ),
+    var(
+        "CLEAVE_TOKEN",
+        Configuration,
+        "Token for the paid feeds, read before the saved login.",
+    ),
+    var(
         "CLEAVE_RAYON_THREADS",
         Configuration,
         "Worker threads (default: all CPUs).",
@@ -304,6 +314,11 @@ pub const VARIABLES: &[Variable] = &[
         "CLEAVE_UPDATE_URL",
         Testing,
         "Check for releases at this URL.",
+    ),
+    var(
+        "CLEAVE_CONSOLE_URL",
+        Testing,
+        "Sign in against this console (debug builds only).",
     ),
     var(
         "CLEAVE_BATCH_HEX_FIXTURE",

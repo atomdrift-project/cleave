@@ -410,10 +410,6 @@ opt-level = 3
 [profile.dev.package.aho-corasick]
 opt-level = 3
 
-# TEMPORARY: filefacts' `source.data_only`, `source.embedded` and
-# `binary.installer.python_version` are not pushed yet. Remove this section
-# once filefacts is pushed and `cargo update -p filefacts` runs.
-
 [patch.crates-io]
 # Fold Unicode ranges by visiting only mapped code points.
 regex-syntax = { git = "https://github.com/tstromberg/regex" }

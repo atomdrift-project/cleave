@@ -125,7 +125,15 @@ fn explicit_traits_dir_from(override_dir: Option<PathBuf>, env: Option<String>) 
 fn checked_explicit_dir() -> Option<anyhow::Result<PathBuf>> {
     let explicit = explicit_traits_dir()?;
     let path = PathBuf::from(&explicit);
-    Some(if path.exists() {
+    let feed = crate::feed::current();
+    // A named feed is insisted on; an override would quietly replace it.
+    // (scan pins the named feed's own tree, which is no conflict.)
+    Some(if crate::feed::explicit() && path != installed_dir(feed) {
+        Err(anyhow::anyhow!(
+            "--feed={} conflicts with the traits directory override ({explicit}), which would win: drop one",
+            feed.slug()
+        ))
+    } else if path.exists() {
         tracing::debug!("Using traits from explicit override: {}", path.display());
         Ok(path)
     } else {
@@ -148,18 +156,28 @@ pub fn resolve_and_ensure() -> anyhow::Result<PathBuf> {
 ///
 /// When a paid feed that was not named on the command line cannot be
 /// installed — refused, or offline — the run falls back (to the best feed the
-/// plan opens, or `oss-delayed`) rather than scan with no rules at all. A
-/// feed named with `--feed` fails instead.
+/// plan opens, or `oss`) rather than scan with no rules at all. A feed named
+/// with `--feed` fails instead.
 fn ensure_data_dir() -> anyhow::Result<PathBuf> {
     let data_dir = default_traits_dir();
     if has_traits(&data_dir) {
+        // A Windows install from before packed storage is reinstalled packed,
+        // which restores rules endpoint protection quarantined. Once per
+        // process: a failure leaves the tree in hand, and the next run tries
+        // again.
+        static REPACK: std::sync::Once = std::sync::Once::new();
         if cfg!(windows)
             && crate::rule_update::installed(&data_dir).is_some_and(|i| !i.packed_rules)
         {
-            tracing::warn!(
-                dir = %data_dir.display(),
-                "this Windows rule install predates packed storage; run `cleave update-rules` to restore rules quarantined by endpoint protection"
-            );
+            REPACK.call_once(|| {
+                if let Err(error) = crate::rule_update::update(&data_dir, false, true) {
+                    tracing::warn!(
+                        dir = %data_dir.display(),
+                        %error,
+                        "could not repack this Windows rule install; using it as it is"
+                    );
+                }
+            });
         }
         tracing::debug!("Using traits from data directory: {}", data_dir.display());
         return Ok(data_dir);
@@ -175,8 +193,12 @@ fn ensure_data_dir() -> anyhow::Result<PathBuf> {
             }
             ensure_data_dir()
         }
+        // A refusal already says what to do; anything else is the network or
+        // the disk, and the next run tries again by itself.
+        Err(e @ crate::rule_update::Error::Refused(_)) => Err(anyhow::anyhow!("{e}")),
         Err(e) => Err(anyhow::anyhow!(
-            "Failed to install traits from the update bucket: {e}\n\nRun 'cleave update-rules' to install."
+            "could not install the {}: {e}",
+            crate::feed::current()
         )),
     }
 }
@@ -192,7 +214,7 @@ pub fn try_resolve() -> anyhow::Result<PathBuf> {
             Ok(data_dir)
         } else {
             Err(anyhow::anyhow!(
-                "Traits not found at {} (run 'cleave update-rules' to install)",
+                "no rules are installed at {}",
                 data_dir.display()
             ))
         }
@@ -279,8 +301,8 @@ fn installed_root() -> PathBuf {
 /// Move trees left by older cleaves to their feed's name, once per process,
 /// before anything resolves or installs the default tree: the Uplink-era
 /// `traits-enriched/` (each ruleset as it cleared QA) becomes
-/// `traits-zero-day/`, and `traits-oss/`, or the pre-split `traits/`, becomes
-/// `traits-oss-delayed/`. Atomic renames, so a host that is offline right
+/// `traits-zero-day/`, and `traits-oss-delayed/`, or the pre-split `traits/`,
+/// becomes `traits-oss/`. Atomic renames, so a host that is offline right
 /// after an upgrade still has rules.
 fn migrate_legacy_install() {
     use crate::feed::Feed;
@@ -289,8 +311,8 @@ fn migrate_legacy_install() {
         let root = installed_root();
         let renames = [
             ("traits-enriched", Feed::ZeroDay),
-            ("traits-oss", Feed::OssDelayed),
-            ("traits", Feed::OssDelayed),
+            ("traits-oss-delayed", Feed::Oss),
+            ("traits", Feed::Oss),
         ];
         for (legacy, feed) in renames {
             migrate_legacy_dir(&root.join(legacy), &installed_dir(feed));
@@ -742,7 +764,7 @@ mod tests {
         use crate::feed::Feed;
         assert!(installed_dir(Feed::ZeroDay).ends_with("atomdrift/cleave/traits-zero-day"));
         assert!(installed_dir(Feed::Supporter).ends_with("atomdrift/cleave/traits-supporter"));
-        assert!(installed_dir(Feed::OssDelayed).ends_with("atomdrift/cleave/traits-oss-delayed"));
+        assert!(installed_dir(Feed::Oss).ends_with("atomdrift/cleave/traits-oss"));
     }
 
     /// A git-managed traits checkout must still report a version. It carries no

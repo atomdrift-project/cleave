@@ -1217,7 +1217,9 @@ pub fn version_report(tool: &str, tool_version: &str) -> String {
         traits_repo::Edition::Feed(_) => String::new(),
     };
     format!(
-        "{tool:<7} {tool_version}\n{embeds}traits  {}  {}{built}{at}\nrules   {} ({} atomic, {} composite, {} yara)",
+        "{tool:<7} {tool_version}\n{embeds}feed    {} ({})\ntraits  {}  {}{built}{at}\nrules   {} ({} atomic, {} composite, {} yara)",
+        feed::current().slug(),
+        feed::describe(),
         info.traits_edition,
         info.traits_version.as_deref().unwrap_or("not installed"),
         info.trait_count + info.composite_count + info.yara_rules,

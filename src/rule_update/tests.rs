@@ -149,17 +149,17 @@ fn a_refusal_says_what_was_wrong_and_what_to_do() {
         tid,
         Source::File,
         Feed::ZeroDay,
-        refused(&[Feed::Supporter, Feed::OssDelayed], Some("supporter")),
+        refused(&[Feed::Supporter, Feed::Oss], Some("supporter")),
     );
     let message = &supporter.message;
     assert!(
-        message.contains("Early Supporter plan")
-            && message.contains("does not include the zero-day feed")
-            && message.contains(" feed supporter`")
-            && message.contains("plans"),
+        message.contains("Supporter plan includes the supporter feed (up to 48 hours after QA)")
+            && message.contains("not the zero-day feed (up to 15 minutes)")
+            && message.contains("`--feed=supporter`")
+            && message.contains("https://console.atomdrift.com/teams#new"),
         "{message}"
     );
-    assert_eq!(supporter.opened, [Feed::Supporter, Feed::OssDelayed]);
+    assert_eq!(supporter.opened, [Feed::Supporter, Feed::Oss]);
     assert!(supporter.recognised);
 
     // Community opens only the open-source feed: upgrade, nothing to switch to.
@@ -167,26 +167,22 @@ fn a_refusal_says_what_was_wrong_and_what_to_do() {
         tid,
         Source::File,
         Feed::Supporter,
-        refused(&[Feed::OssDelayed], Some("free")),
+        refused(&[Feed::Oss], Some("free")),
     );
     assert!(
         community.message.contains("Community plan")
+            && community.message.contains("includes only the oss feed")
             && community
                 .message
-                .contains("includes only the opensource feed"),
+                .contains("https://console.atomdrift.org/plans"),
         "{}",
         community.message
     );
     assert!(community.recognised);
 
-    let env = refusal(
-        tid,
-        Source::Env,
-        Feed::ZeroDay,
-        refused(&[Feed::OssDelayed], None),
-    );
+    let env = refusal(tid, Source::Env, Feed::ZeroDay, refused(&[Feed::Oss], None));
     assert!(
-        env.message.contains("ISOTOPE13_TOKEN") && env.message.contains("whole token"),
+        env.message.contains(crate::feed::token_env()) && env.message.contains("whole token"),
         "{}",
         env.message
     );
@@ -196,19 +192,27 @@ fn a_refusal_says_what_was_wrong_and_what_to_do() {
     );
     let saved = refusal(tid, Source::File, Feed::ZeroDay, refused(&[], None));
     assert!(
-        saved.message.contains("isotope13-api.json") && saved.message.contains("disconnected"),
+        saved.message.contains("expired or was revoked") && saved.message.contains(" login`"),
         "{}",
         saved.message
     );
     let issued = refusal(tid, Source::Device, Feed::ZeroDay, refused(&[], None));
     assert!(issued.message.contains("just issued"), "{}", issued.message);
-    for refusal in [&supporter, &community, &env, &saved, &issued] {
+    // Where the token itself is the problem, it is named as the console
+    // names it.
+    for refusal in [&env, &saved, &issued] {
         assert!(refusal.message.contains(tid), "{}", refusal.message);
-        assert!(
-            !refusal.message.to_lowercase().contains("uplink"),
-            "{}",
-            refusal.message
-        );
+    }
+    // Plain words, under Atomdrift's name: no vendor host, no file path. The
+    // variable a CI job sets is named as it is spelled.
+    for refusal in [&supporter, &community, &env, &saved, &issued] {
+        let message = refusal
+            .message
+            .replace(crate::feed::token_env(), "")
+            .to_lowercase();
+        for word in ["uplink", "isotope13", ".json"] {
+            assert!(!message.contains(word), "{message}");
+        }
     }
 
     let status = refusal(
@@ -218,7 +222,7 @@ fn a_refusal_says_what_was_wrong_and_what_to_do() {
         Answer::Status("HTTP 401".into()),
     );
     assert!(
-        status.message.contains("(HTTP 401)") && status.message.contains(crate::feed::DASH_URL),
+        status.message.contains("HTTP 401)") && status.message.contains("zero-day feed"),
         "{}",
         status.message
     );
@@ -231,7 +235,7 @@ fn only_paid_feeds_send_a_token_and_each_has_its_own_base() {
     let public = Channel::Public;
     assert_eq!(public.base(), BASE_URL);
     assert_eq!(public.token(), None);
-    assert_eq!(public.feed(), Feed::OssDelayed);
+    assert_eq!(public.feed(), Feed::Oss);
 
     let token = crate::feed::Token::parse("i13_krypton85_abc").unwrap();
     let zero_day = Channel::Paid(Feed::ZeroDay, token.clone());

@@ -5,24 +5,28 @@
 //!
 //! | feed | delay | needs |
 //! |---|---|---|
-//! | `zero-day` | none | a Business, POC, or Critical plan |
-//! | `supporter` | 72 hours | an Early Supporter plan or better |
-//! | `oss-delayed` | the eight-day public roll-up | nothing |
+//! | `zero-day` | up to 15 minutes | a team plan: Basic, Enhanced, or Critical |
+//! | `supporter` | up to 48 hours | a Supporter plan or better |
+//! | `oss` | up to 8 days, the public roll-up | nothing |
 //!
-//! A run's feed is, in order: `--feed` (or `ATOMDRIFT_FEED`), the choice saved
-//! by `cleave feed <name>` in `<config>/atomdrift/feed`, the zero-day feed when
-//! an isotope13 token is held, else `oss-delayed`. A feed named on the command
-//! line is insisted on: a refusal is an error. Any other choice that the rules
-//! service refuses falls back to the best feed the plan still opens, saying so.
+//! A run's feed is `--feed` (each tool also reads it from its own variable:
+//! `CLEAVE_FEED`, `SCAN_FEED`, `HOOD_FEED`), and `auto` when neither is given: the best feed this computer's login opens, else `oss`. Nothing is
+//! saved between runs but the login itself, so one host can run every feed at
+//! once. A feed named on the command line is insisted on: with no login it
+//! asks for one on a terminal, and a plan that does not include it is an
+//! error. Under `auto`, a feed the rules service refuses falls back to the
+//! best feed the plan does open.
 //!
-//! The paid feeds need a token — `ISOTOPE13_TOKEN`, else the one saved in
-//! `<config>/atomdrift/isotope13-api.json` when this computer was connected.
-//! The token is opaque here: whether it is valid, and which feeds it opens, is
-//! the server's to say, so the saved file holds the token and nothing that
-//! could go stale beside it. It travels only to isotope13's own hosts, in an
-//! `Authorization` header, and never into a log: logs carry its
+//! The paid feeds need a token — the tool's own variable (`CLEAVE_TOKEN`,
+//! `SCAN_TOKEN`, `HOOD_TOKEN`; see [`set_token_env`]), else the one saved in
+//! `<config>/atomdrift/isotope13-api.json` by `<tool> login`. The token is
+//! opaque here: whether it is valid, and which feeds it opens, is the
+//! server's to say. What it last said is kept in the cache (see [`Plan`]) so
+//! that `auto` need not ask on every run; the token file holds nothing that
+//! could go stale beside it. The token travels only to isotope13's own hosts,
+//! in an `Authorization` header, and never into a log: logs carry its
 //! [`Token::fingerprint`], the same one the service's dashboard shows. The
-//! `oss-delayed` feed is fetched with no token, from atomdrift's own bucket.
+//! `oss` feed is fetched with no token, from atomdrift's own bucket.
 
 use std::fmt;
 use std::io;
@@ -32,18 +36,24 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// Environment variable holding a token. Checked before the saved file; how CI
-/// supplies one with no file and no prompt.
-pub const TOKEN_ENV: &str = "ISOTOPE13_TOKEN";
-/// Environment equivalent of `--feed`.
-pub const FEED_ENV: &str = "ATOMDRIFT_FEED";
-/// Where a customer mints a token.
-pub const DASH_URL: &str = "https://dash.isotope13.io/";
+/// The variable a token is read from when the running tool names none.
+const DEFAULT_TOKEN_ENV: &str = "CLEAVE_TOKEN";
+/// The variable the running tool reads a token from; see [`set_token_env`].
+static TOKEN_ENV: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+/// What the rules service last said about a token, under the cache directory.
+const PLAN_FILE: &str = "plan.json";
+/// How long that answer stands in for asking again. Every paid download
+/// refreshes it, so only a plan that opens no paid feed ever reaches it:
+/// `auto` then asks once a day whether the plan has changed.
+const PLAN_TTL: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+/// The Atomdrift console, where a computer is signed in and a plan chosen,
+/// as commercial customers (the zero-day feed) are steered to it.
+pub const CONSOLE_COM: &str = "https://console.atomdrift.com/";
+/// The same console, as open-source users and supporters are steered to it.
+pub const CONSOLE_ORG: &str = "https://console.atomdrift.org/";
 /// The saved token, under `<config>/atomdrift/`. Shared by every atomdrift tool.
 const TOKEN_FILE: &str = "isotope13-api.json";
-/// The saved feed choice, under `<config>/atomdrift/`. Shared likewise.
-const CHOICE_FILE: &str = "feed";
-/// Longer than any token dash mints, short enough that a stray paste of a
+/// Longer than any token the console mints, short enough that a stray paste of a
 /// whole document is refused rather than sent.
 const MAX_TOKEN_LEN: usize = 256;
 
@@ -52,15 +62,15 @@ const MAX_TOKEN_LEN: usize = 256;
 pub enum Feed {
     /// Each ruleset as soon as it clears QA.
     ZeroDay,
-    /// The ruleset that cleared QA at least 72 hours ago.
+    /// The newest zero-day ruleset, republished every 48 hours.
     Supporter,
     /// The open-source roll-up, published every eight days.
-    OssDelayed,
+    Oss,
 }
 
 impl Feed {
     /// Every feed, best first.
-    pub const ALL: [Feed; 3] = [Feed::ZeroDay, Feed::Supporter, Feed::OssDelayed];
+    pub const ALL: [Feed; 3] = [Feed::ZeroDay, Feed::Supporter, Feed::Oss];
 
     /// The name on the command line, in headers, and in JSON.
     #[must_use]
@@ -68,30 +78,61 @@ impl Feed {
         match self {
             Feed::ZeroDay => "zero-day",
             Feed::Supporter => "supporter",
-            Feed::OssDelayed => "oss-delayed",
+            Feed::Oss => "oss",
         }
     }
 
-    /// The feed for a slug the rules service sent.
+    /// The feed a slug names.
     #[must_use]
     pub fn from_slug(slug: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|feed| feed.slug() == slug)
     }
 
-    /// How long a ruleset waits after QA before this feed carries it.
+    /// The feed a name from the rules service means. The service still calls
+    /// the open feed by its old name, `oss-delayed`.
+    pub(crate) fn from_service(name: &str) -> Option<Self> {
+        match name {
+            "oss-delayed" => Some(Feed::Oss),
+            name => Self::from_slug(name),
+        }
+    }
+
+    /// The longest a ruleset waits after QA before this feed carries it:
+    /// pulsar checks for one every 15 minutes, republishes the supporter feed
+    /// every 48 hours, and the public roll-up every eight days.
     #[must_use]
     pub fn delay(self) -> &'static str {
         match self {
-            Feed::ZeroDay => "none",
-            Feed::Supporter => "72 hours",
-            Feed::OssDelayed => "up to 8 days",
+            Feed::ZeroDay => "up to 15 minutes",
+            Feed::Supporter => "up to 48 hours",
+            Feed::Oss => "up to 8 days",
         }
     }
 
     /// Whether fetching this feed takes an isotope13 token.
     #[must_use]
     pub fn needs_token(self) -> bool {
-        self != Feed::OssDelayed
+        self != Feed::Oss
+    }
+
+    /// The console this feed's users are sent to: `.com` for the commercial
+    /// zero-day feed, `.org` for everyone else. The two are one console.
+    #[must_use]
+    pub fn console(self) -> &'static str {
+        match self {
+            Feed::ZeroDay => CONSOLE_COM,
+            Feed::Supporter | Feed::Oss => CONSOLE_ORG,
+        }
+    }
+
+    /// Where to get a plan that opens this feed: the zero-day feed comes only
+    /// with a team plan, so its link starts a team; the others' is the Plan tab.
+    #[must_use]
+    pub fn plans(self) -> String {
+        match self {
+            Feed::ZeroDay => format!("{CONSOLE_COM}teams#new"),
+            Feed::Supporter | Feed::Oss => format!("{CONSOLE_ORG}plans"),
+        }
     }
 
     /// The installed tree's directory name, under `<data>/atomdrift/cleave/`.
@@ -100,7 +141,7 @@ impl Feed {
         match self {
             Feed::ZeroDay => "traits-zero-day",
             Feed::Supporter => "traits-supporter",
-            Feed::OssDelayed => "traits-oss-delayed",
+            Feed::Oss => "traits-oss",
         }
     }
 
@@ -108,7 +149,7 @@ impl Feed {
         match self {
             Feed::ZeroDay => 0,
             Feed::Supporter => 1,
-            Feed::OssDelayed => 2,
+            Feed::Oss => 2,
         }
     }
 }
@@ -119,8 +160,35 @@ impl fmt::Display for Feed {
         f.write_str(match self {
             Feed::ZeroDay => "zero-day feed",
             Feed::Supporter => "supporter feed",
-            Feed::OssDelayed => "opensource feed",
+            Feed::Oss => "oss feed",
         })
+    }
+}
+
+/// What `--feed` asks for: a feed, or `auto`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum Choice {
+    /// The best feed this computer's plan opens; `oss` when not signed in.
+    #[default]
+    Auto,
+    /// Each ruleset as soon as it clears QA.
+    ZeroDay,
+    /// The newest zero-day ruleset, republished every 48 hours.
+    Supporter,
+    /// The open-source roll-up, published every eight days.
+    Oss,
+}
+
+impl Choice {
+    /// The feed named, or `None` for `auto`.
+    #[must_use]
+    pub fn feed(self) -> Option<Feed> {
+        match self {
+            Choice::Auto => None,
+            Choice::ZeroDay => Some(Feed::ZeroDay),
+            Choice::Supporter => Some(Feed::Supporter),
+            Choice::Oss => Some(Feed::Oss),
+        }
     }
 }
 
@@ -134,13 +202,13 @@ pub fn current() -> Feed {
     match CURRENT.load(Ordering::Relaxed) {
         0 => Feed::ZeroDay,
         1 => Feed::Supporter,
-        _ => Feed::OssDelayed,
+        _ => Feed::Oss,
     }
 }
 
-/// Whether this run's feed was named on the command line (`--feed` or
-/// [`FEED_ENV`]), so a refusal is an error rather than a fall back, and a
-/// missing token is asked for.
+/// Whether this run's feed was named (by `--feed` or its environment
+/// variable) rather than `auto`, so a refusal is an error rather than a fall back, and a missing
+/// token is asked for.
 #[must_use]
 pub fn explicit() -> bool {
     EXPLICIT.load(Ordering::Relaxed)
@@ -160,94 +228,83 @@ pub fn select(feed: Feed, explicit: bool) {
     }
 }
 
-/// Decide this run's feed from the flag and what the host holds. Called once,
-/// before anything resolves a traits directory.
+/// Decide this run's feed from `--feed` (clap reads the tool's variable for it).
+/// Called once, before anything resolves a traits directory.
 ///
-/// `flag` is `--feed`; without one, [`FEED_ENV`]. Without either: the saved
-/// choice, else the zero-day feed when a token is held (refused, it falls back
-/// to whatever the plan opens), else `oss-delayed`. A saved paid feed with no
-/// token held any more is `oss-delayed`, with a warning.
+/// `auto` is the best feed the held token's plan opens, as the rules service
+/// last said ([`Plan`]); the zero-day feed when that is not known (a refusal
+/// then falls back, and records what the plan opens); `oss` with no token.
 ///
 /// # Errors
 ///
 /// A saved token file that others can read, or that cannot be read or
 /// parsed: a fault to fix rather than a token to quietly do without.
-pub fn resolve(flag: Option<Feed>) -> anyhow::Result<()> {
-    // The CLIs read the variable through clap; this covers callers that have
-    // no flag to give (hood).
-    let flag = flag.or_else(env_feed);
-    let (feed, from) = match flag {
-        Some(feed) => (feed, "flag"),
-        None => match saved_choice() {
-            Some(feed) if feed.needs_token() && token()?.is_none() => {
-                tracing::warn!(
-                    event = "feed.fallback",
-                    saved = feed.slug(),
-                    "the {feed} needs an isotope13 token and none is held; using the {}",
-                    Feed::OssDelayed
-                );
-                (Feed::OssDelayed, "saved")
-            }
-            Some(feed) => (feed, "saved"),
-            None if token()?.is_some() => (Feed::ZeroDay, "token"),
-            None => (Feed::OssDelayed, "default"),
+pub fn resolve(choice: Choice) -> anyhow::Result<()> {
+    let feed = match choice.feed() {
+        Some(feed) => feed,
+        None => match token()? {
+            None => Feed::Oss,
+            Some((token, _)) => Plan::load()
+                .filter(|plan| plan.is_for(&token))
+                .and_then(|plan| plan.feeds.first().copied())
+                .unwrap_or(Feed::ZeroDay),
         },
     };
-    select(feed, flag.is_some());
+    select(feed, choice != Choice::Auto);
+    let from = if choice == Choice::Auto {
+        "auto"
+    } else {
+        "flag"
+    };
     tracing::info!(event = "feed.mode", feed = feed.slug(), from);
     Ok(())
 }
 
-/// The feed [`FEED_ENV`] names. Anything else there is ignored, with a warning:
-/// a typo must not quietly decide which rules a host scans with.
-fn env_feed() -> Option<Feed> {
-    let value = std::env::var(FEED_ENV).ok()?;
-    let feed = Feed::from_slug(value.trim());
-    if feed.is_none() && !value.trim().is_empty() {
-        tracing::warn!(
-            value = %value.escape_debug(),
-            "{FEED_ENV} names no feed (zero-day, supporter, oss-delayed); ignoring it"
-        );
-    }
-    feed
-}
-
 /// Leave the current feed for the rest of this run, because the rules service
-/// refused it (or could not be reached for a first install) and the feed was
-/// not named on the command line: the best of `opened` — the feeds the plan
-/// opens, best first — is used instead, else `oss-delayed`, and the one
-/// warning says why.
+/// refused it (or could not be reached for a first install) and the feed is
+/// `auto`'s choice rather than named: the best of `opened` — the feeds the
+/// plan opens, best first — is used instead. When the service gave no answer,
+/// the best tree already installed for a lesser feed serves, else `oss`.
 ///
-/// When the host had saved no choice and the token was `recognised`, the feed
-/// fallen back to is saved, so later runs start there instead of asking for a
-/// feed the plan does not include every time.
+/// Landing on the best feed a `recognised` token's plan opens is `auto` doing
+/// its job, and is logged, not warned about; anything else is a warning.
 ///
 /// A traits override pinned to the refused feed's tree (scan pins the
 /// installed tree so a checkout in the working directory cannot supply the
 /// rules) follows, or the new feed's rules would never be resolved.
 pub fn fall_back(opened: &[Feed], recognised: bool, why: &str) {
     let from = current();
+    let installed = || {
+        Feed::ALL
+            .into_iter()
+            .skip_while(|&feed| feed != from)
+            .skip(1)
+            .find(|&feed| crate::traits_repo::has_traits(&crate::traits_repo::installed_dir(feed)))
+    };
     let to = opened
         .iter()
         .copied()
         .find(|&feed| feed != from)
-        .unwrap_or(Feed::OssDelayed);
-    tracing::warn!(
-        event = "feed.fallback",
-        from = from.slug(),
-        to = to.slug(),
-        reason = %why,
-        "the {from} is unavailable; using the {to}"
-    );
-    select(to, false);
-    if recognised && saved_choice().is_none() {
-        match save_choice(to) {
-            Ok(path) => {
-                tracing::info!(event = "feed.saved", feed = to.slug(), path = %path.display())
-            }
-            Err(e) => tracing::debug!(error = %e, "feed choice not saved"),
-        }
+        .or_else(|| if opened.is_empty() { installed() } else { None })
+        .unwrap_or(Feed::Oss);
+    if recognised && opened.first() == Some(&to) {
+        tracing::info!(
+            event = "feed.fallback",
+            from = from.slug(),
+            to = to.slug(),
+            reason = %why,
+            "using the {to}, the best feed this plan opens"
+        );
+    } else {
+        tracing::warn!(
+            event = "feed.fallback",
+            from = from.slug(),
+            to = to.slug(),
+            reason = %why,
+            "the {from} is unavailable; using the {to}"
+        );
     }
+    select(to, false);
     if crate::traits_repo::override_dir()
         .is_some_and(|dir| dir == crate::traits_repo::installed_dir(from))
     {
@@ -255,90 +312,127 @@ pub fn fall_back(opened: &[Feed], recognised: bool, why: &str) {
     }
 }
 
-/// The saved choice's path: `<config>/atomdrift/feed`.
-#[must_use]
-pub fn choice_path() -> Option<PathBuf> {
-    Some(dirs::config_dir()?.join("atomdrift").join(CHOICE_FILE))
+/// What the rules service last said about a token: its plan, and the feeds
+/// that plan opens, best first. A cache, not configuration — losing it costs
+/// `auto` one question to the service — kept so that `auto` lands on the
+/// right feed without asking on every run, and offline.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Plan {
+    /// [`Token::fingerprint`] of the token the answer was about.
+    tid: String,
+    /// The plan's tier as the service names it, when it recognised the token.
+    pub tier: Option<String>,
+    /// The feeds the plan opens, best first.
+    #[serde(with = "feed_slugs")]
+    pub feeds: Vec<Feed>,
+    /// When the service said so, in seconds since the Unix epoch.
+    at: u64,
 }
 
-/// The feed `cleave feed <name>` saved, if any. A file holding anything else is
-/// no choice, with a warning: it is only ever written by this module.
-#[must_use]
-pub fn saved_choice() -> Option<Feed> {
-    let path = choice_path()?;
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return None,
-        Err(e) => {
-            tracing::warn!(path = %path.display(), error = %e, "could not read the saved feed");
-            return None;
+impl Plan {
+    /// The answer for the token this computer holds, if it is recent enough
+    /// to act on. Reads only the disk.
+    #[must_use]
+    pub fn current() -> Option<Self> {
+        let (token, _) = token().ok().flatten()?;
+        Self::load().filter(|plan| plan.is_for(&token))
+    }
+
+    fn is_for(&self, token: &Token) -> bool {
+        self.tid == token.fingerprint() && now().saturating_sub(self.at) < PLAN_TTL.as_secs()
+    }
+
+    fn path() -> Option<PathBuf> {
+        crate::cache::cache_dir()
+            .ok()
+            .map(|dir| dir.join(PLAN_FILE))
+    }
+
+    /// The answer for `token`, if it is recent enough to act on.
+    pub(crate) fn for_token(token: &Token) -> Option<Self> {
+        Self::load().filter(|plan| plan.is_for(token))
+    }
+
+    fn load() -> Option<Self> {
+        let path = Self::path()?;
+        let text = std::fs::read_to_string(&path).ok()?;
+        serde_json::from_str(&text)
+            .inspect_err(
+                |e| tracing::debug!(path = %path.display(), error = %e, "ignoring the cached plan"),
+            )
+            .ok()
+    }
+
+    /// Record what the service said about `token`. A failure to write costs
+    /// only a question next run, so it is logged and otherwise ignored.
+    pub(crate) fn remember(token: &Token, tier: Option<&str>, feeds: &[Feed]) {
+        if feeds.is_empty() {
+            return;
         }
-    };
-    let feed = Feed::from_slug(text.trim());
-    if feed.is_none() {
-        tracing::warn!(path = %path.display(), "the saved feed is not one this build knows; ignoring it");
+        let plan = Self {
+            tid: token.fingerprint(),
+            tier: tier.map(str::to_owned),
+            feeds: feeds.to_vec(),
+            at: now(),
+        };
+        let Some(path) = Self::path() else { return };
+        let written = serde_json::to_vec(&plan)
+            .map_err(|e| e.to_string())
+            .and_then(|json| crate::cache::atomic_write(&path, &json).map_err(|e| e.to_string()));
+        match written {
+            Ok(()) => tracing::debug!(
+                event = "feed.plan",
+                tid = %plan.tid,
+                tier = plan.tier.as_deref().unwrap_or(""),
+                feeds = %plan.feeds.iter().map(|f| f.slug()).collect::<Vec<_>>().join(","),
+                "remembered what the plan opens"
+            ),
+            Err(e) => tracing::debug!(path = %path.display(), error = %e, "plan not cached"),
+        }
     }
-    feed
 }
 
-/// Save `feed` as this host's choice for every later run, by every atomdrift
-/// tool.
-///
-/// # Errors
-///
-/// When there is no config directory, or it cannot be written.
-pub fn save_choice(feed: Feed) -> anyhow::Result<PathBuf> {
-    let path =
-        choice_path().ok_or_else(|| anyhow::anyhow!("no config directory to save the feed in"))?;
-    write_choice(&path, feed)?;
-    Ok(path)
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
-fn write_choice(path: &Path, feed: Feed) -> anyhow::Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)
-            .map_err(|e| anyhow::anyhow!("creating {}: {e}", dir.display()))?;
+/// Feeds as their slugs, so the cache file reads as the CLI spells them.
+mod feed_slugs {
+    use super::Feed;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub(super) fn serialize<S: Serializer>(feeds: &[Feed], s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(feeds.iter().map(|feed| feed.slug()))
     }
-    crate::cache::atomic_write(path, format!("{}\n", feed.slug()).as_bytes())
-        .map_err(|e| anyhow::anyhow!("writing {}: {e}", path.display()))
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Feed>, D::Error> {
+        Vec::<String>::deserialize(d)?
+            .iter()
+            .map(|slug| {
+                Feed::from_slug(slug)
+                    .ok_or_else(|| serde::de::Error::custom(format!("no feed named {slug:?}")))
+            })
+            .collect()
+    }
 }
 
-/// The feeds, one per line, for `cleave feed`: which this run uses, how
-/// delayed each is, and what is installed for it. Reads only the disk.
+/// How this run came to its feed, for a version report beside the feed's
+/// name: `auto, Basic plan`, or `named, not signed in: …`. Reads only the
+/// disk.
 #[must_use]
-pub fn list() -> String {
-    use std::fmt::Write;
-    let mut out = format!("  {:<13} {:<14} INSTALLED\n", "FEED", "DELAY");
-    for feed in Feed::ALL {
-        let mark = if feed == current() { '*' } else { ' ' };
-        let installed = crate::rule_update::installed(&crate::traits_repo::installed_dir(feed))
-            .map_or_else(
-                || "—".to_string(),
-                |i| {
-                    format!(
-                        "{}  {}",
-                        i.commit.chars().take(7).collect::<String>(),
-                        i.date
-                    )
-                },
-            );
-        let _ = writeln!(
-            out,
-            "{mark} {:<13} {:<14} {installed}",
-            feed.slug(),
-            feed.delay()
-        );
-    }
-    let tool = tool();
-    let _ = write!(out, "\nSwitch with `{tool} feed <name>`.");
-    if matches!(token(), Ok(None)) {
-        let _ = write!(
-            out,
-            " The zero-day and supporter feeds need a plan: {DASH_URL}plans"
-        );
-    }
-    out.push('\n');
-    out
+pub fn describe() -> String {
+    let how = if explicit() { "named" } else { "auto" };
+    let plan = match token() {
+        Ok(None) => format!("not signed in: `{} login`", tool()),
+        Err(e) => format!("token unusable: {e}"),
+        Ok(Some(_)) => Plan::current().and_then(|plan| plan.tier).map_or_else(
+            || "signed in".to_string(),
+            |tier| format!("{} plan", plan_name(&tier)),
+        ),
+    };
+    format!("{how}, {plan}")
 }
 
 /// The running tool's name (its executable's file stem, `cleave` by
@@ -360,7 +454,7 @@ impl Token {
     ///
     /// An empty value is no token rather than an empty one, which would be sent
     /// as `Authorization: Bearer ` and refused. Anything with interior
-    /// whitespace or control characters, or longer than any token dash mints,
+    /// whitespace or control characters, or longer than any token the console mints,
     /// is a paste gone wrong and is refused before it is sent anywhere.
     #[must_use]
     pub fn parse(text: &str) -> Option<Self> {
@@ -393,7 +487,7 @@ impl fmt::Debug for Token {
 /// token is replaced by asking for another.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Source {
-    /// [`TOKEN_ENV`].
+    /// The tool's token variable, [`token_env`].
     Env,
     /// The saved file.
     File,
@@ -425,14 +519,38 @@ pub fn token_path() -> Option<PathBuf> {
     Some(dirs::config_dir()?.join("atomdrift").join(TOKEN_FILE))
 }
 
-/// The token to use, if this host has one: [`TOKEN_ENV`], then the saved file.
+/// Name the variable this tool reads a token from — `SCAN_TOKEN` for
+/// atomscan, `HOOD_TOKEN` for hood — before anything reads a token. Each tool
+/// keeps its own, as it keeps its own settings; `CLEAVE_TOKEN` otherwise.
+/// The first call wins.
+pub fn set_token_env(name: &'static str) {
+    if TOKEN_ENV.set(name).is_err() {
+        tracing::debug!(
+            name,
+            kept = token_env(),
+            "the token variable was already named"
+        );
+    }
+}
+
+/// The variable a token is read from before the saved file: how CI supplies
+/// one with no file and no prompt.
+#[must_use]
+pub fn token_env() -> &'static str {
+    TOKEN_ENV.get().copied().unwrap_or(DEFAULT_TOKEN_ENV)
+}
+
+/// The token to use, if this host has one: [`token_env`], then the saved file.
 ///
 /// # Errors
 ///
 /// A saved file that others can read, or that cannot be read or parsed. Each is
 /// a fault to fix rather than a token to quietly do without.
 pub fn token() -> anyhow::Result<Option<(Token, Source)>> {
-    if let Some(token) = std::env::var(TOKEN_ENV).ok().and_then(|v| Token::parse(&v)) {
+    if let Some(token) = std::env::var(token_env())
+        .ok()
+        .and_then(|v| Token::parse(&v))
+    {
         return Ok(Some((token, Source::Env)));
     }
     let Some(path) = token_path() else {
@@ -542,26 +660,77 @@ pub fn interactive() -> bool {
 #[must_use]
 pub fn how_to_get_one() -> String {
     format!(
-        "set {TOKEN_ENV}, or run `{} feed zero-day` (or `supporter`) on a terminal to connect this computer. Plans are at {DASH_URL}plans",
-        tool()
+        "run `{} login` on a terminal, or set {}",
+        tool(),
+        token_env()
     )
 }
 
-/// The welcome: what connecting is for, and the link to approve.
-fn welcome(link: &str) {
+/// Why this computer is being signed in, which heads the prompt and picks
+/// the console it is sent to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ask {
+    /// `<tool> login`: signing in for its own sake.
+    Login,
+    /// A named feed that needs a subscription, and no sign-in held.
+    Needs(Feed),
+    /// A named feed that needs a subscription, and a sign-in that no longer
+    /// works.
+    Expired(Feed),
+}
+
+impl Ask {
+    /// The console to send this computer to: the feed's, or for a plain
+    /// sign-in, the feed this run resolved to.
+    fn console(self) -> &'static str {
+        match self {
+            Ask::Login => current().console(),
+            Ask::Needs(feed) | Ask::Expired(feed) => feed.console(),
+        }
+    }
+
+    /// The feed this sign-in is for, when it is for one.
+    #[must_use]
+    pub fn feed(self) -> Option<Feed> {
+        match self {
+            Ask::Login => None,
+            Ask::Needs(feed) | Ask::Expired(feed) => Some(feed),
+        }
+    }
+
+    /// The prompt's heading, and the line under it.
+    fn heading(self) -> (String, Option<&'static str>) {
+        match self {
+            Ask::Login => ("Sign in to Atomdrift".to_string(), None),
+            Ask::Needs(feed) => (format!("The {feed} requires a subscription."), None),
+            Ask::Expired(feed) => (
+                format!("The {feed} requires a subscription."),
+                Some("This computer's sign-in has expired or was revoked."),
+            ),
+        }
+    }
+}
+
+/// The prompt: why, and the link to approve this computer at.
+fn welcome(ask: Ask, link: &str) {
     use colored::Colorize;
+    let (heading, note) = ask.heading();
+    eprintln!("\n \u{269b}\u{fe0f} {}", heading.bold());
+    if let Some(note) = note {
+        eprintln!("    {}", note.dimmed());
+    }
     eprintln!(
-        "\n⚛️  Connect this computer to your {} plan.\n\n   \
-         Approve it in your browser:  {}\n",
-        "isotope¹³".bold(),
-        link.bold(),
+        "\n    Open this link to approve this computer:\n    {}\n",
+        link.bold()
     );
 }
 
-/// Whether `link` is a plain URL on dash: it is printed to the terminal and
-/// handed to the platform's opener, so it must carry no spaces or controls.
-fn is_dash_link(link: &str) -> bool {
-    link.starts_with(DASH_URL) && link.bytes().all(|b| b.is_ascii_graphic())
+/// Whether `link` is a plain URL on the console, under either of its names:
+/// it is printed to the terminal and handed to the platform's opener, so it
+/// must carry no spaces or controls.
+fn is_console_link(link: &str) -> bool {
+    (link.starts_with(CONSOLE_COM) || link.starts_with(CONSOLE_ORG))
+        && link.bytes().all(|b| b.is_ascii_graphic())
 }
 
 /// Open `url` in the browser this desktop uses, when there is one. Nothing
@@ -628,7 +797,7 @@ impl Progress {
                     }
                     let text = label.lock().map(|l| l.clone()).unwrap_or_default();
                     let mut err = io::stderr().lock();
-                    let _ = write!(err, "\r\x1b[2K   {frame} {text}");
+                    let _ = write!(err, "\r\x1b[2K    {frame} {text}");
                     let _ = err.flush();
                     std::thread::sleep(std::time::Duration::from_millis(80));
                 }
@@ -651,7 +820,7 @@ impl Progress {
     /// Stop, and leave `line` where the progress was.
     pub fn finish(mut self, line: &str) {
         self.clear();
-        eprintln!("   {line}");
+        eprintln!("    {line}");
     }
 
     fn clear(&mut self) {
@@ -674,7 +843,7 @@ impl Drop for Progress {
     }
 }
 
-/// What dash answers when a flow starts.
+/// What the console answers when a flow starts.
 #[derive(Deserialize)]
 struct DeviceStart {
     device_code: String,
@@ -684,15 +853,15 @@ struct DeviceStart {
     interval: u64,
 }
 
-/// What dash answers to a poll: the token once approved, or a reason.
+/// What the console answers to a poll: the token once approved, or a reason.
 #[derive(Deserialize, Default)]
 struct DevicePoll {
     token: Option<String>,
     error: Option<String>,
 }
 
-/// A token dash has just issued to this computer, and the progress line
-/// still showing, for the caller to finish once the token is checked.
+/// A token the console has just issued to this computer, and the progress
+/// line still showing, for the caller to finish once the token is checked.
 #[derive(Debug)]
 pub struct Connected {
     /// The issued token, not yet checked against the rules channel.
@@ -701,45 +870,57 @@ pub struct Connected {
     pub progress: Progress,
 }
 
-/// Connect this computer through dash's device flow: ask for a code, open
-/// the browser on it, and wait for the customer to approve. The token that
-/// comes back is a device's, not one of the org's listed API tokens.
+/// Sign this computer in through the console's device flow: ask for a code,
+/// show why and where to approve it, open the browser on it, and wait. The
+/// token that comes back is a device's, not one of the org's listed API
+/// tokens. Whether a subscription is needed, and getting one, is the
+/// console's business once the link is opened.
 ///
-/// `label` is what dash records the device as, and nothing more.
+/// `label` is what the console records the device as, and nothing more. The
+/// feed asked for goes with it, so the approval page can say when the plan
+/// being approved lacks it and where to get one that has it.
 ///
 /// # Errors
 ///
-/// No terminal to show the link on, dash unreachable, the code expiring
-/// unapproved, or Ctrl-C.
-pub fn connect(label: &str) -> anyhow::Result<Connected> {
+/// No terminal to show the link on, the console unreachable, the code
+/// expiring unapproved, or Ctrl-C.
+pub fn connect(ask: Ask, label: &str) -> anyhow::Result<Connected> {
     use std::time::{Duration, Instant};
     if !interactive() {
         return Err(anyhow::anyhow!(
-            "this computer has no isotope13 token: {}",
+            "signing in needs a terminal: {}",
             how_to_get_one()
         ));
     }
-    let dash = Dash::new()?;
-    let body = serde_json::json!({ "label": label }).to_string();
-    let (status, text) = dash.post("device/code", &body)?;
+    let console = Console::new(ask.console())?;
+    let body =
+        serde_json::json!({ "label": label, "feed": ask.feed().map(Feed::slug) }).to_string();
+    let (status, text) = console.post("device/code", &body)?;
     if status != 200 {
         return Err(anyhow::anyhow!(
-            "{DASH_URL} could not start a connection (HTTP {status})"
+            "{} could not start a sign-in (HTTP {status})",
+            console.base
         ));
     }
     let start: DeviceStart = serde_json::from_str(&text)
-        .map_err(|e| anyhow::anyhow!("{DASH_URL} answered oddly: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("{} answered oddly: {e}", console.base))?;
     let expires = Duration::from_secs(start.expires_in.clamp(60, 3600));
     let interval = Duration::from_secs(start.interval.clamp(1, 60));
     let link = start
         .verification_uri_complete
         .unwrap_or(start.verification_uri);
-    if !is_dash_link(&link) {
+    if !console.local && !is_console_link(&link) {
+        // The host only: a parsed one is plain text, the rest is the server's.
+        let host = reqwest::Url::parse(&link)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_owned))
+            .unwrap_or_default();
         return Err(anyhow::anyhow!(
-            "{DASH_URL} sent an approval link that is not its own"
+            "{} sent an approval link on another site ({host:?}); not opening it",
+            console.base
         ));
     }
-    welcome(&link);
+    welcome(ask, &link);
     open_browser(&link);
     let progress = Progress::start("Waiting for approval…");
 
@@ -750,18 +931,18 @@ pub fn connect(label: &str) -> anyhow::Result<Connected> {
         // Slept in slices so Ctrl-C is noticed within the second.
         for _ in 0..interval.as_secs() {
             if crate::cancellation::is_cancelled() {
-                return Err(anyhow::anyhow!("connection cancelled"));
+                return Err(anyhow::anyhow!("sign-in cancelled"));
             }
             std::thread::sleep(Duration::from_secs(1));
         }
         if started.elapsed() > expires {
             return Err(anyhow::anyhow!(
-                "the code expired before it was approved; run again for a new one"
+                "the approval code expired; run again for a new one"
             ));
         }
-        let (status, text) = match dash.post("device/token", &poll) {
+        let (status, text) = match console.post("device/token", &poll) {
             Ok(answer) => answer,
-            // One dropped poll is not a verdict; a run of them is dash gone.
+            // One dropped poll is not a verdict; a run of them is the console gone.
             Err(e) if failures < 5 => {
                 failures += 1;
                 tracing::debug!(error = %e, failures, "device poll failed; trying again");
@@ -774,20 +955,22 @@ pub fn connect(label: &str) -> anyhow::Result<Connected> {
         match (status, answer.token) {
             (200, Some(token)) => {
                 let token = Token::parse(&token)
-                    .ok_or_else(|| anyhow::anyhow!("dash issued a token that is not one"))?;
+                    .ok_or_else(|| anyhow::anyhow!("the console issued a token that is not one"))?;
                 tracing::info!(event = "feed.device", outcome = "connected", tid = %token.fingerprint());
                 return Ok(Connected { token, progress });
             }
             (202, _) => {}
             (410, _) => {
                 return Err(anyhow::anyhow!(
-                    "the code expired or was already used; run again for a new one"
+                    "the approval code expired or was already used; run again for a new one"
                 ));
             }
             (status, _) => {
                 let reason = answer.error.unwrap_or_default();
                 return Err(anyhow::anyhow!(
-                    "{DASH_URL} refused the connection (HTTP {status} {reason})"
+                    "{} refused the sign-in (HTTP {status} {})",
+                    console.base,
+                    reason.escape_debug()
                 ));
             }
         }
@@ -799,8 +982,7 @@ pub fn connect(label: &str) -> anyhow::Result<Connected> {
 pub fn plan_name(tier: &str) -> String {
     match tier {
         "free" => "Community".to_string(),
-        "supporter" => "Early Supporter".to_string(),
-        "business" => "Business".to_string(),
+        "business" => "Basic".to_string(),
         "oem" => "Critical".to_string(),
         other => {
             let mut chars = other.chars();
@@ -821,37 +1003,43 @@ pub fn tilde(path: &Path) -> String {
     }
 }
 
-/// How dash is reached: TLS only, no redirects, and a short deadline per call,
-/// so a device code can go nowhere but dash.
+/// How the console is reached: TLS only, no redirects, and a short deadline
+/// per call, so a device code can go nowhere but the console.
 ///
-/// A debug build honours `ISOTOPE13_DASH_URL`, so the flow can be run against
-/// `node local.js`; a release build has no override.
-struct Dash {
+/// A debug build honours `CLEAVE_CONSOLE_URL`, so the flow can be run against
+/// a local console; a release build has no override.
+struct Console {
     base: String,
+    /// Whether `base` is the debug override, whose links are its own.
+    local: bool,
     http: reqwest::blocking::Client,
 }
 
-impl Dash {
-    fn new() -> anyhow::Result<Self> {
+impl Console {
+    fn new(console: &str) -> anyhow::Result<Self> {
         #[cfg(debug_assertions)]
-        let local = std::env::var("ISOTOPE13_DASH_URL")
+        let local = std::env::var("CLEAVE_CONSOLE_URL")
             .ok()
             .filter(|v| !v.is_empty());
         #[cfg(not(debug_assertions))]
         let local: Option<String> = None;
-        let base = local.map_or_else(
-            || DASH_URL.to_string(),
+        let base = local.as_ref().map_or_else(
+            || console.to_string(),
             |local| format!("{}/", local.trim_end_matches('/')),
         );
         let http = reqwest::blocking::Client::builder()
-            .https_only(base == DASH_URL)
+            .https_only(local.is_none())
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(std::time::Duration::from_secs(10))
             .timeout(std::time::Duration::from_secs(30))
             .user_agent(concat!("cleave/", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|e| anyhow::anyhow!("http client: {e}"))?;
-        Ok(Self { base, http })
+        Ok(Self {
+            base,
+            local: local.is_some(),
+            http,
+        })
     }
 
     fn post(&self, path: &str, json: &str) -> anyhow::Result<(u16, String)> {
@@ -877,19 +1065,58 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_plain_dash_links_are_opened() {
-        assert!(is_dash_link(
-            "https://dash.isotope13.io/device?code=AB-12&x=1"
+    fn only_plain_console_links_are_opened() {
+        // The console answers under either name, whichever was asked.
+        assert!(is_console_link(
+            "https://console.atomdrift.com/device/AB-12?x=1"
         ));
-        assert!(!is_dash_link("https://evil.example/device"));
-        assert!(!is_dash_link("https://dash.isotope13.io/x\x1b[2J"));
-        assert!(!is_dash_link("https://dash.isotope13.io/ calc.exe"));
+        assert!(is_console_link(
+            "https://console.atomdrift.org/device/AB-12"
+        ));
+        assert!(!is_console_link("https://evil.example/device"));
+        assert!(!is_console_link(
+            "https://console.atomdrift.org.evil.example/"
+        ));
+        assert!(!is_console_link(
+            "http://console.atomdrift.org/device/AB-12"
+        ));
+        assert!(!is_console_link("https://console.atomdrift.org/x\x1b[2J"));
+        assert!(!is_console_link("https://console.atomdrift.org/ calc.exe"));
+    }
+
+    #[test]
+    fn commercial_users_are_steered_to_dot_com() {
+        assert_eq!(Feed::ZeroDay.console(), CONSOLE_COM);
+        assert_eq!(Feed::Supporter.console(), CONSOLE_ORG);
+        assert_eq!(Feed::Oss.console(), CONSOLE_ORG);
+        assert_eq!(Ask::Needs(Feed::ZeroDay).console(), CONSOLE_COM);
+        assert_eq!(Ask::Expired(Feed::Supporter).console(), CONSOLE_ORG);
+        assert_eq!(Feed::ZeroDay.plans(), format!("{CONSOLE_COM}teams#new"));
+        assert_eq!(Feed::Supporter.plans(), format!("{CONSOLE_ORG}plans"));
+        assert_eq!(Ask::Login.feed(), None);
+        assert_eq!(Ask::Needs(Feed::ZeroDay).feed(), Some(Feed::ZeroDay));
+        assert_eq!(Ask::Expired(Feed::Supporter).feed(), Some(Feed::Supporter));
+    }
+
+    #[test]
+    fn the_prompt_says_why_in_one_sentence() {
+        assert_eq!(
+            Ask::Needs(Feed::ZeroDay).heading(),
+            (
+                "The zero-day feed requires a subscription.".to_string(),
+                None
+            )
+        );
+        let (heading, note) = Ask::Expired(Feed::Supporter).heading();
+        assert_eq!(heading, "The supporter feed requires a subscription.");
+        assert!(note.is_some_and(|n| n.contains("expired or was revoked")));
+        assert_eq!(Ask::Login.heading().0, "Sign in to Atomdrift");
     }
 
     #[test]
     fn feeds_are_named_and_ordered_best_first() {
         let slugs: Vec<_> = Feed::ALL.iter().map(|f| f.slug()).collect();
-        assert_eq!(slugs, ["zero-day", "supporter", "oss-delayed"]);
+        assert_eq!(slugs, ["zero-day", "supporter", "oss"]);
         for feed in Feed::ALL {
             assert_eq!(Feed::from_slug(feed.slug()), Some(feed));
             // The CLI spells a feed the way the rules service does.
@@ -900,36 +1127,79 @@ mod tests {
         }
         assert_eq!(Feed::from_slug("Zero-Day"), None);
         assert_eq!(Feed::from_slug("enriched"), None);
+        // The old name is the rules service's, never the CLI's.
+        assert_eq!(Feed::from_slug("oss-delayed"), None);
+        assert_eq!(Feed::from_service("oss-delayed"), Some(Feed::Oss));
+        assert_eq!(Feed::from_service("supporter"), Some(Feed::Supporter));
         assert_eq!(Feed::ZeroDay.to_string(), "zero-day feed");
-        assert_eq!(Feed::OssDelayed.to_string(), "opensource feed");
+        assert_eq!(Feed::Oss.to_string(), "oss feed");
         assert!(Feed::ZeroDay.needs_token() && Feed::Supporter.needs_token());
-        assert!(!Feed::OssDelayed.needs_token());
+        assert!(!Feed::Oss.needs_token());
     }
 
     #[test]
-    fn the_hint_names_the_feed_command_and_the_plans() {
+    fn a_choice_is_auto_or_a_feed_spelled_alike() {
+        assert_eq!(Choice::default(), Choice::Auto);
+        assert_eq!(Choice::Auto.feed(), None);
+        let names: Vec<_> = <Choice as clap::ValueEnum>::value_variants()
+            .iter()
+            .map(|c| {
+                clap::ValueEnum::to_possible_value(c)
+                    .unwrap()
+                    .get_name()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(names, ["auto", "zero-day", "supporter", "oss"]);
+        for choice in <Choice as clap::ValueEnum>::value_variants() {
+            if let Some(feed) = choice.feed() {
+                let name = clap::ValueEnum::to_possible_value(choice).unwrap();
+                assert_eq!(name.get_name(), feed.slug());
+            }
+        }
+    }
+
+    #[test]
+    fn a_plan_is_for_one_token_and_goes_stale() {
+        let token = Token::parse("i13_krypton85_abc").unwrap();
+        let other = Token::parse("i13_krypton85_def").unwrap();
+        let plan = Plan {
+            tid: token.fingerprint(),
+            tier: Some("supporter".into()),
+            feeds: vec![Feed::Supporter, Feed::Oss],
+            at: now(),
+        };
+        assert!(plan.is_for(&token));
+        assert!(!plan.is_for(&other), "another token's answer");
+        let stale = Plan {
+            at: now() - PLAN_TTL.as_secs(),
+            ..plan.clone()
+        };
+        assert!(!stale.is_for(&token));
+
+        // Written as the CLI spells the feeds, and read back the same.
+        let json = serde_json::to_string(&plan).unwrap();
+        assert!(json.contains(r#""feeds":["supporter","oss"]"#), "{json}");
+        assert_eq!(serde_json::from_str::<Plan>(&json).unwrap(), plan);
+        // A feed this build does not know makes the whole answer unusable.
+        let unknown = json.replace(r#"["supporter""#, r#"["platinum""#);
+        assert!(serde_json::from_str::<Plan>(&unknown).is_err());
+    }
+
+    #[test]
+    fn the_hint_names_the_login_command() {
         let hint = how_to_get_one();
-        assert!(hint.contains(" feed zero-day`"), "{hint}");
-        assert!(hint.contains(TOKEN_ENV), "{hint}");
-        assert!(hint.contains("plans"), "{hint}");
+        assert!(hint.contains(" login`"), "{hint}");
+        assert!(hint.contains(token_env()), "{hint}");
         assert!(!hint.to_lowercase().contains("uplink"), "{hint}");
-    }
-
-    #[test]
-    fn a_saved_choice_is_one_slug_per_file() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("atomdrift").join(CHOICE_FILE);
-        write_choice(&path, Feed::Supporter).unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "supporter\n");
-        write_choice(&path, Feed::ZeroDay).unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "zero-day\n");
     }
 
     #[test]
     fn a_plan_is_named_as_the_dashboard_names_it() {
         assert_eq!(plan_name("free"), "Community");
-        assert_eq!(plan_name("supporter"), "Early Supporter");
-        assert_eq!(plan_name("business"), "Business");
+        assert_eq!(plan_name("supporter"), "Supporter");
+        assert_eq!(plan_name("business"), "Basic");
+        assert_eq!(plan_name("enhanced"), "Enhanced");
         assert_eq!(plan_name("oem"), "Critical");
         // A tier this build has never heard of is still shown, not hidden.
         assert_eq!(plan_name("platinum"), "Platinum");

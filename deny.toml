@@ -64,6 +64,7 @@ allow-git = [
     "https://github.com/atomdrift-project/stng.git",
     "https://github.com/atomdrift-project/unpack.git",
     "https://github.com/copper-project/cu-bincode",
+    "https://github.com/tstromberg/regex",
     "https://github.com/tstromberg/tree-sitter",
     "https://github.com/tstromberg/tree-sitter-bash",
 ]

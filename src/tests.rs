@@ -299,8 +299,8 @@ fn rules_label_names_the_feed_and_a_seven_char_revision() {
         "zero-day feed: c4521a7"
     );
     assert_eq!(
-        rules_label_for(&Edition::Feed(Feed::OssDelayed), Some("9f00e12ab")),
-        "opensource feed: 9f00e12"
+        rules_label_for(&Edition::Feed(Feed::Oss), Some("9f00e12ab")),
+        "oss feed: 9f00e12"
     );
     assert_eq!(
         rules_label_for(&Edition::Feed(Feed::Supporter), None),

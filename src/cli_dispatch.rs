@@ -356,9 +356,8 @@ pub(crate) fn dispatch_command(
         ) => anyhow::bail!(
             "this cleave was built without the `lint` feature, which provides the rule linter"
         ),
-        Some(cli::Command::Feed { name: None }) => cleave::feed::list(),
-        Some(cli::Command::Feed { name: Some(feed) }) => {
-            cleave::rule_update::switch(feed)?;
+        Some(cli::Command::Login) => {
+            cleave::rule_update::login()?;
             return Ok(None);
         }
         Some(cli::Command::UpdateRules { force }) => {

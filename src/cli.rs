@@ -121,12 +121,19 @@ pub struct Args {
     #[arg(long, value_name = "DIR")]
     pub traits_dir: Option<String>,
 
-    /// Rule feed for this run: zero-day, supporter, or oss-delayed. Overrides
-    /// the feed saved by `cleave feed <name>`. A paid feed with no token held
-    /// connects this computer on a terminal, and a refusal stops the run
-    /// instead of falling back.
-    #[arg(long, global = true, value_enum, env = "ATOMDRIFT_FEED")]
-    pub feed: Option<crate::feed::Feed>,
+    /// Rule feed: auto (the best your plan opens), zero-day, supporter, or
+    /// oss. A named paid feed asks you to sign in on a terminal when this
+    /// computer is not signed in; one your plan does not include stops the
+    /// run instead of falling back.
+    #[arg(
+        long,
+        global = true,
+        value_enum,
+        env = "CLEAVE_FEED",
+        default_value_t,
+        value_name = "FEED"
+    )]
+    pub feed: crate::feed::Choice,
 
     /// Warn when a single rule takes longer than this many milliseconds to evaluate.
     /// During validation this is a soft rule-performance failure (CPU time where available).
@@ -579,12 +586,9 @@ pub enum Command {
         max_size: Option<u64>,
     },
 
-    /// Show the rule feeds, or switch to one (zero-day, supporter, oss-delayed)
-    Feed {
-        /// Feed to switch to; omit to list them
-        #[arg(value_enum)]
-        name: Option<crate::feed::Feed>,
-    },
+    /// Sign in to Atomdrift, for the zero-day and supporter feeds. Shared
+    /// with atomscan and hood.
+    Login,
 
     /// Update trait rules from the upstream repository
     #[command(name = "update-rules")]

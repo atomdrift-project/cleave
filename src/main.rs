@@ -328,13 +328,13 @@ fn run() -> Result<()> {
 
     let disabled = args.disabled_components();
     apply_runtime_overrides(args.traits_dir.as_deref());
-    // The rule feed: `--feed`, the saved choice, or what the held token
-    // implies. A named paid feed with no token is asked for one here, once,
-    // rather than by whichever rules download would otherwise need it first.
-    // `cleave feed` manages feeds itself, and loads no rules.
+    // The rule feed: `--feed`, else the best the login opens. A named paid
+    // feed with no login is asked for one here, once, rather than by
+    // whichever rules download would otherwise need it first. `cleave login`
+    // logs in itself, and loads no rules.
     cleave::feed::resolve(args.feed)?;
-    let is_feed_command = matches!(args.command, Some(cli::Command::Feed { .. }));
-    if !is_feed_command {
+    let is_login = matches!(args.command, Some(cli::Command::Login));
+    if !is_login {
         cleave::rule_update::sign_in()?;
     }
     // `cleave validate` defaults to deterministic scoring with YARA disabled;
@@ -342,12 +342,12 @@ fn run() -> Result<()> {
     // Skip the ~4 s (release) / ~18 s (debug) compile of 14 k+ inline YARA
     // rules that the prefetch triggers. Trait-structure validation doesn't
     // require YARA to have compiled either — mapper loading is independent.
-    // The prefetch would also install a missing feed, which `cleave feed`
-    // must not do just to list them.
-    if !disabled.yara && !is_validate_command && !is_feed_command {
+    // The prefetch would also install a missing feed, which `cleave login`
+    // must not do.
+    if !disabled.yara && !is_validate_command && !is_login {
         cleave::prefetch_yara_engine(!disabled.third_party);
     }
-    // `Version` prints its own banner, and `feed` reports the feed itself;
+    // `Version` prints its own banner, and `login` reports the plan itself;
     // `Validate` emits a single summary line and stays terse on success.
     // `iter-files` is JSONL for a pipeline whatever the format, and a banner
     // ahead of its first record breaks every reader of it.
@@ -356,7 +356,7 @@ fn run() -> Result<()> {
         Some(
             cli::Command::Version
                 | cli::Command::Validate { .. }
-                | cli::Command::Feed { .. }
+                | cli::Command::Login
                 | cli::Command::IterFiles { .. }
         )
     ) {

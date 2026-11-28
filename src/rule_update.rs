@@ -11,8 +11,8 @@
 //!
 //! # Feeds
 //!
-//! Three feeds publish the same layout (see [`crate::feed`]). `oss-delayed` is
-//! the public bucket, rolled up every eight days and fetched with no token.
+//! Three feeds publish the same layout (see [`crate::feed`]). `oss` is the
+//! public bucket, rolled up every eight days and fetched with no token.
 //! `zero-day` and `supporter` are served by the rules Worker, which checks a
 //! subscription token and answers from the private bucket, or refuses with
 //! the feeds the token's plan does open.
@@ -228,10 +228,7 @@ pub fn update(dir: &Path, force: bool, quiet: bool) -> Result<(), Error> {
     let (key, source) = resolve(&manifest).map_err(Error::Other)?;
     let artifact = artifact_for(&manifest, &key).map_err(Error::Other)?;
 
-    if !force
-        && installed(dir)
-            .is_some_and(|i| i.commit.starts_with(&key) && (!cfg!(windows) || i.packed_rules))
-    {
+    if !force && holds(dir, &key) {
         if !quiet {
             print_status(&format!("Already up to date: {} ({})", key, artifact.date));
             warn_if_behind(&manifest);
@@ -249,7 +246,15 @@ pub fn update(dir: &Path, force: bool, quiet: bool) -> Result<(), Error> {
             source
         ));
     }
-    install(dir, artifact, &source, &channel).map_err(Error::Other)?;
+    if !install(dir, artifact, &source, &channel, force).map_err(Error::Other)? {
+        if !quiet {
+            print_status(&format!(
+                "Already up to date: {key} ({}), installed by a concurrent update",
+                artifact.date
+            ));
+        }
+        return Ok(());
+    }
     tracing::info!(
         event = "feed.rules",
         feed = channel.feed().slug(),
@@ -328,7 +333,7 @@ pub fn pin(dir: &Path, commit: &str) -> Result<(), Error> {
         .map_err(Error::Other)?;
     let artifact = artifact_for(&manifest, &key).map_err(Error::Other)?;
     print_status(&format!("Pinning traits to {} ({})...", key, artifact.date));
-    install(dir, artifact, &format!("pin:{key}"), &channel).map_err(Error::Other)?;
+    install(dir, artifact, &format!("pin:{key}"), &channel, true).map_err(Error::Other)?;
     print_status(&format!("Traits pinned to {} at {}", key, dir.display()));
     compile_installed(dir, false);
     Ok(())
@@ -417,7 +422,7 @@ impl Channel {
 
     fn feed(&self) -> crate::feed::Feed {
         match self {
-            Channel::Public => crate::feed::Feed::OssDelayed,
+            Channel::Public => crate::feed::Feed::Oss,
             Channel::Paid(feed, _) => *feed,
         }
     }
@@ -471,98 +476,80 @@ pub fn refresh(force: bool, quiet: bool) -> Result<(), Error> {
     }
 }
 
-/// Switch this host to `feed`: connect this computer if the feed needs a token
-/// and none is held, install the feed's rules, and only then save the choice
-/// for every later run. What `cleave feed <name>` runs.
-///
-/// # Errors
-///
-/// No token and no terminal to connect on, a plan that does not include the
-/// feed, or a failed download. Nothing is saved on any of them.
-pub fn switch(feed: crate::feed::Feed) -> Result<(), Error> {
-    crate::feed::select(feed, true);
-    sign_in()?;
-    let dir = crate::traits_repo::installed_dir(feed);
-    update(&dir, false, false)?;
-    let saved = crate::feed::save_choice(feed).map_err(|e| Error::Other(format!("{e:#}")))?;
-    let installed = installed(&dir).map_or_else(String::new, |i| {
-        format!(
-            " ({} {})",
-            i.commit.chars().take(7).collect::<String>(),
-            i.date
-        )
-    });
-    print_status(&format!(
-        "✓ Using the {feed}{installed}. Saved to {}.",
-        crate::feed::tilde(&saved)
-    ));
-    // A pin to another feed's tree (scan pins the installed tree) follows the
-    // switch; any other override is the operator's, and still wins.
-    match crate::traits_repo::override_dir() {
-        Some(dir)
-            if crate::feed::Feed::ALL
-                .into_iter()
-                .any(|other| dir == crate::traits_repo::installed_dir(other)) =>
-        {
-            crate::traits_repo::set_override_dir(Some(crate::traits_repo::installed_dir(feed)));
-        }
-        Some(dir) => print_status(&format!(
-            "Note: the traits directory is overridden ({}), and the override still wins.",
-            dir.display()
-        )),
-        None => {}
-    }
-    Ok(())
-}
-
-/// The token a named paid feed needs, asked for now if this host holds none.
-/// Does nothing for `oss-delayed`, or for a feed that was not named on the
-/// command line (that one falls back instead of asking).
+/// The sign-in a named paid feed needs, asked for now if this host holds
+/// none; and the feed's rules, installed now if they are not yet. Does
+/// nothing for `oss`, or under `auto` (which falls back instead of asking).
 ///
 /// Called once, before anything fetches rules, so the asking happens at the
-/// start of a run rather than inside whichever download happens first — and
-/// happens once, rather than once per download that fails without it.
+/// start of a run, ahead of anything else it prints, rather than inside
+/// whichever download happens first. A first install is what finds a saved
+/// sign-in that no longer works, so it happens here too.
 ///
 /// # Errors
 ///
-/// No token and no terminal to ask on, or none accepted.
+/// No token and no terminal to ask on, none accepted, or the feed's rules
+/// cannot be installed.
 pub fn sign_in() -> Result<(), Error> {
+    use crate::feed::Ask;
     let feed = crate::feed::current();
     if !feed.needs_token() || !crate::feed::explicit() {
         return Ok(());
     }
     match crate::feed::token().map_err(|e| Error::Refused(Refusal::new(format!("{e:#}"))))? {
-        Some(_) => Ok(()),
-        None if crate::feed::interactive() => connect_device(Some(feed), None).map(drop),
+        None if crate::feed::interactive() => connect_device(Ask::Needs(feed), None).map(drop),
         None => Err(needs_a_token()),
+        Some(_) => {
+            let dir = crate::traits_repo::installed_dir(feed);
+            // Only into the feed's own tree: an override is the operator's.
+            if installed(&dir).is_none() && crate::traits_repo::install_target() == dir {
+                update(&dir, false, false)
+            } else {
+                Ok(())
+            }
+        }
     }
 }
 
-/// Connect this computer to its isotope13 plan, check the token it is issued,
-/// and save it. What `hood connect` runs, and what scan runs when
-/// `--analyze=remote` finds no token.
+/// Sign this computer in to Atomdrift: approve it at the console, check the
+/// token it is issued, and save it for every atomdrift tool. What
+/// `<tool> login` runs. Signing in again replaces the saved token.
 ///
 /// # Errors
 ///
-/// No terminal to show the code on, no approval, or a token the rules service
-/// does not recognise.
-pub fn connect() -> Result<(), Error> {
+/// No terminal to approve on, no approval, or a token the rules service does
+/// not recognise.
+pub fn login() -> Result<(), Error> {
+    use colored::Colorize;
     if !crate::feed::interactive() {
-        return Err(needs_a_token());
+        return Err(Error::Refused(Refusal::new(format!(
+            "signing in needs a terminal; on a host without one, set {}",
+            crate::feed::token_env()
+        ))));
     }
-    let feed = crate::feed::current();
-    connect_device(feed.needs_token().then_some(feed), None).map(drop)
+    connect_device(crate::feed::Ask::Login, None)?;
+    if std::env::var_os(crate::feed::token_env()).is_some() {
+        let note = format!(
+            "{} is set, and is used instead of this sign-in while it is.",
+            crate::feed::token_env()
+        );
+        eprintln!("    {}\n", note.dimmed());
+    }
+    Ok(())
 }
 
 fn needs_a_token() -> Error {
     Error::Refused(Refusal::new(format!(
-        "the {} needs an isotope13 token: {}",
+        "The {} requires a subscription: {}",
         crate::feed::current(),
         crate::feed::how_to_get_one()
     )))
 }
 
-/// How long a newly issued token may take to reach the rules Worker. Dash
+/// A device sign-in that failed in this process. A run that needs rules in
+/// several places asks once, and says why once.
+static SIGN_IN_FAILED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// How long a newly issued token may take to reach the rules Worker. The console
 /// writes it to KV a moment before handing it over; KV takes up to a minute
 /// to reach every edge, and the Worker caches a miss for another minute. A
 /// check that lands first is not believed until both have run out.
@@ -570,27 +557,43 @@ const ISSUE_PROPAGATION: Duration = Duration::from_secs(150);
 /// How often a newly issued token is checked again while it propagates.
 const ISSUE_RECHECK: Duration = Duration::from_secs(5);
 
-/// Connect, check, save: the one place a token is asked for.
+/// Sign in, check, save: the one place a token is asked for, and at most
+/// once per process — a failure is remembered and returned again unasked.
 ///
-/// The issued token is checked against `feed` — the paid feed this run needs —
-/// or, when only connecting, against the zero-day feed: either way the answer
-/// says whether the rules service knows the token and which feeds its plan
-/// opens. Returns the feed's manifest when the token opened it.
+/// The issued token is checked against the paid feed this run needs, or for
+/// a plain sign-in against the zero-day feed: either way the answer says
+/// whether the rules service knows the token and which feeds its plan opens.
+/// Returns the feed's manifest when the token opened it.
 ///
-/// A token dash has just issued is real, so it is saved whatever plan it is
-/// on. What it is not, yet, is everywhere — so a check that does not
+/// A token the console has just issued is real, so it is saved whatever plan
+/// it is on. What it is not, yet, is everywhere — so a check that does not
 /// recognise it waits out KV's propagation before believing that.
 fn connect_device(
-    feed: Option<crate::feed::Feed>,
+    ask: crate::feed::Ask,
+    connect: Option<Duration>,
+) -> Result<Option<(Vec<u8>, crate::feed::Token)>, Error> {
+    if let Some(why) = SIGN_IN_FAILED.get() {
+        return Err(Error::Refused(Refusal::new(why.clone())));
+    }
+    let signed_in = sign_in_device(ask, connect);
+    if let Err(error) = &signed_in {
+        let _ = SIGN_IN_FAILED.set(error.to_string());
+    }
+    signed_in
+}
+
+fn sign_in_device(
+    ask: crate::feed::Ask,
     connect: Option<Duration>,
 ) -> Result<Option<(Vec<u8>, crate::feed::Token)>, Error> {
     use crate::feed::{Connected, Feed, Source};
-    // What dash records the device as: the tool and the OS, nothing that
-    // names the person or the machine.
+    // What the console records the device as: the tool and the OS, nothing
+    // that names the person or the machine.
     let label = format!("{} on {}", crate::feed::tool(), std::env::consts::OS);
-    let Connected { token, progress } =
-        crate::feed::connect(&label).map_err(|e| Error::Refused(Refusal::new(format!("{e:#}"))))?;
-    progress.set("Approved. Connecting…");
+    let Connected { token, progress } = crate::feed::connect(ask, &label)
+        .map_err(|e| Error::Refused(Refusal::new(format!("{e:#}"))))?;
+    progress.set("Approved. Signing in…");
+    let feed = ask.feed();
 
     let probe = feed.unwrap_or(Feed::ZeroDay);
     let started = std::time::Instant::now();
@@ -609,7 +612,7 @@ fn connect_device(
                 // A second stage, so a wait that is KV catching up reads as
                 // one — and a wait that never ends names which side to look at.
                 progress.set(&format!(
-                    "Approved. Waiting for the rules service to see the new token… {waited}s"
+                    "Approved. Waiting for the rules service to see this sign-in… {waited}s"
                 ));
                 std::thread::sleep(ISSUE_RECHECK);
             }
@@ -618,24 +621,15 @@ fn connect_device(
     };
     let tid = token.fingerprint();
     match checked {
-        Ok(Opened { manifest, tier }) => {
-            let plan = tier.as_deref().map(crate::feed::plan_name);
-            progress.finish(&match plan {
-                Some(plan) => format!("✓ Connected on the {plan} plan."),
-                None => "✓ Connected.".to_string(),
-            });
+        Ok(Opened { manifest, .. }) => {
+            progress.finish(&signed_in(&token));
             save_issued(&token);
             Ok(Some((manifest, token)))
         }
-        // Only connecting: a recognised token is a connection, whatever its
-        // plan includes.
-        Err(Answer::Refused {
-            tier: Some(tier), ..
-        }) if feed.is_none() => {
-            progress.finish(&format!(
-                "✓ Connected on the {} plan.",
-                crate::feed::plan_name(&tier)
-            ));
+        // A plain sign-in: a recognised token is signed in, whatever its plan
+        // includes.
+        Err(Answer::Refused { tier: Some(_), .. }) if feed.is_none() => {
+            progress.finish(&signed_in(&token));
             save_issued(&token);
             Ok(None)
         }
@@ -644,36 +638,63 @@ fn connect_device(
             let saved = save_issued(&token);
             let refused = refusal(&tid, Source::Device, probe, answer);
             Err(Error::Refused(Refusal {
-                message: format!("connected, but {}.{saved}", refused.message),
+                message: format!(
+                    "Signed in, but {}.{saved}",
+                    lowercase_first(&refused.message)
+                ),
                 ..refused
             }))
         }
         Err(Answer::Refused { tier: None, .. }) => Err(Error::Refused(Refusal::new(format!(
-            "isotope13 issued token {tid}, but the rules service had not seen it after {}s; run again in a minute",
+            "Signed in, but the rules service had not seen this sign-in ({tid}) after {}s; try again in a minute",
             ISSUE_PROPAGATION.as_secs()
         )))),
         Err(answer) => Err(Error::Refused(refusal(&tid, Source::Device, probe, answer))),
     }
 }
 
+/// The line a sign-in ends on: `✓ Signed in · Basic plan · zero-day,
+/// supporter, oss`, from what the rules service just said about `token`.
+fn signed_in(token: &crate::feed::Token) -> String {
+    use colored::Colorize;
+    let mut line = format!("{} Signed in", "✓".green());
+    if let Some(plan) = crate::feed::Plan::for_token(token) {
+        let dot = "·".dimmed();
+        if let Some(tier) = &plan.tier {
+            line += &format!(" {dot} {} plan", crate::feed::plan_name(tier));
+        }
+        let feeds: Vec<_> = plan.feeds.iter().map(|feed| feed.slug()).collect();
+        line += &format!(" {dot} {}", feeds.join(", ").dimmed());
+    }
+    line
+}
+
+/// `s` with its first letter lowercased, to follow a clause.
+fn lowercase_first(s: &str) -> String {
+    let mut chars = s.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_lowercase().chain(chars).collect()
+    })
+}
+
 /// Save a token this computer was just issued, and say where, quietly. A
 /// token that could not be saved still opens the feed for this run; the
-/// next one connects again. Returns what was said, for an error to carry.
+/// next one signs in again. Returns what was said, for an error to carry.
 fn save_issued(token: &crate::feed::Token) -> String {
     use colored::Colorize;
     let said = match crate::feed::save(token) {
-        Ok(path) => format!("Token saved to {}", crate::feed::tilde(&path)),
-        Err(e) => format!("The token could not be saved ({e}); it is used for this run only"),
+        Ok(path) => format!("Saved to {}", crate::feed::tilde(&path)),
+        Err(e) => format!("Could not be saved ({e}); used for this run only"),
     };
-    eprintln!("   {}\n", said.dimmed());
+    eprintln!("    {}\n", said.dimmed());
     format!(" {said}.")
 }
 
 /// A paid feed's manifest, and the token that opened it.
 ///
 /// A feed named on the command line whose saved token the Worker no longer
-/// recognises — revoked, or this computer disconnected — is reached by
-/// connecting again, on a terminal; any other refusal is an error that says
+/// recognises — revoked, or this computer signed out — is reached by signing
+/// in again, on a terminal; any other refusal is an error that says
 /// what was wrong, where the token came from, and which feeds the plan does
 /// open, and [`refresh`] turns it into a fall back when the feed was not
 /// named. No token at all is the same error — the CLIs ask through
@@ -696,12 +717,14 @@ fn paid_manifest(
         Answer::Refused { tier: None, .. } | Answer::Status(_)
     );
     if source == Source::File && unknown && crate::feed::explicit() && crate::feed::interactive() {
-        print_status(&format!(
-            "✗ {}.\n",
-            refusal(&token.fingerprint(), source, feed, answer).message
-        ));
-        return connect_device(Some(feed), connect)?
-            .ok_or_else(|| Error::Other(format!("connected, but the {feed} did not answer")));
+        tracing::info!(
+            event = "feed.token",
+            tid = %token.fingerprint(),
+            refused = %answer,
+            "the saved sign-in no longer works; signing in again"
+        );
+        return connect_device(crate::feed::Ask::Expired(feed), connect)?
+            .ok_or_else(|| Error::Other(format!("signed in, but the {feed} did not answer")));
     }
     Err(Error::Refused(refusal(
         &token.fingerprint(),
@@ -711,10 +734,9 @@ fn paid_manifest(
     )))
 }
 
-/// A paid feed's manifest, and the plan the token that opened it is on.
+/// A paid feed's manifest, as the token opened it.
 struct Opened {
     manifest: Vec<u8>,
-    tier: Option<String>,
 }
 
 /// Ask the rules Worker for `feed` with a token: what it opened, or what it
@@ -727,7 +749,13 @@ fn check_token(
     connect: Option<Duration>,
 ) -> Result<Result<Opened, Answer>, Error> {
     let tid = token.fingerprint();
-    let answer = match download(&Channel::Paid(feed, token.clone()), MANIFEST, connect) {
+    let fetched = download(&Channel::Paid(feed, token.clone()), MANIFEST, connect);
+    // Whatever else the answer was, it said what the token's plan opens.
+    match &fetched {
+        Ok(got) => crate::feed::Plan::remember(token, got.tier.as_deref(), &got.feeds),
+        Err(err) => crate::feed::Plan::remember(token, err.tier.as_deref(), &err.feeds),
+    }
+    let answer = match fetched {
         Ok(got) if got.feed == Some(feed) => {
             tracing::info!(
                 event = "feed.token",
@@ -739,7 +767,6 @@ fn check_token(
             );
             return Ok(Ok(Opened {
                 manifest: got.bytes,
-                tier: got.tier,
             }));
         }
         // The Worker names the feed it served; anything else is not the feed
@@ -796,8 +823,9 @@ impl std::fmt::Display for Answer {
     }
 }
 
-/// A refusal in words someone can act on — what was wrong, where the token
-/// came from, and what to do about it — with the feeds the plan does open.
+/// A refusal in words someone can act on — what was wrong and what to do
+/// about it — with the feeds the plan does open. Where the token itself is
+/// the problem, its fingerprint is named, as the console names it.
 fn refusal(
     tid: &str,
     source: crate::feed::Source,
@@ -805,14 +833,8 @@ fn refusal(
     answer: Answer,
 ) -> Refusal {
     use crate::feed::Source;
-    let dash = crate::feed::DASH_URL;
-    let env = crate::feed::TOKEN_ENV;
-    let saved = || {
-        crate::feed::token_path().map_or_else(
-            || "the saved token".to_string(),
-            |p| p.display().to_string(),
-        )
-    };
+    let env = crate::feed::token_env();
+    let tool = crate::feed::tool();
     let message = match (&answer, source) {
         (
             Answer::Refused {
@@ -824,28 +846,32 @@ fn refusal(
             let plan = crate::feed::plan_name(tier);
             match opened.iter().find(|open| open.needs_token()) {
                 Some(best) => format!(
-                    "isotope13 token {tid} is on the {plan} plan, which does not include the {feed}; it includes the {best}: run `{} feed {}`, or upgrade at {dash}plans",
-                    crate::feed::tool(),
-                    best.slug()
+                    "Your {plan} plan includes the {best} ({} after QA), not the {feed} ({}): use `--feed={}` or `--feed=auto`, or see plans with it at {}",
+                    best.delay(),
+                    feed.delay(),
+                    best.slug(),
+                    feed.plans()
                 ),
                 None => format!(
-                    "isotope13 token {tid} is on the {plan} plan, which includes only the {}; upgrade at {dash}plans for the supporter and zero-day feeds",
-                    crate::feed::Feed::OssDelayed
+                    "The {feed} ({} after QA) requires a subscription, and your {plan} plan includes only the {} ({}): see plans at {}",
+                    feed.delay(),
+                    crate::feed::Feed::Oss,
+                    crate::feed::Feed::Oss.delay(),
+                    feed.plans()
                 ),
             }
         }
         (Answer::Refused { tier: None, .. }, Source::Env) => format!(
-            "isotope13 does not recognise the token in {env} ({tid}): check it holds the whole token, and that it has not been revoked at {dash}"
+            "The token in {env} ({tid}) is not recognised: check it is the whole token, and that it has not been revoked"
         ),
         (Answer::Refused { tier: None, .. }, Source::File) => format!(
-            "isotope13 no longer recognises this computer's token ({tid}, saved at {}): it was revoked, or the computer was disconnected",
-            saved()
+            "This computer's sign-in ({tid}) has expired or was revoked: run `{tool} login`"
         ),
         (Answer::Refused { tier: None, .. }, Source::Device) => {
-            format!("isotope13 does not recognise the token it just issued ({tid})")
+            format!("The sign-in just issued ({tid}) is not recognised yet; try again in a minute")
         }
         (Answer::Status(status), _) => {
-            format!("isotope13 refused token {tid} for the {feed} ({status}); see {dash}")
+            format!("The {feed} refused this computer's sign-in ({tid}, {status})")
         }
     };
     match answer {
@@ -858,21 +884,24 @@ fn refusal(
     }
 }
 
+/// Whether `dir` already holds `commit`'s tree, in the storage this platform
+/// needs (packed on Windows).
+fn holds(dir: &Path, commit: &str) -> bool {
+    installed(dir)
+        .is_some_and(|i| i.commit.starts_with(commit) && (!cfg!(windows) || i.packed_rules))
+}
+
 /// Download a bundle, verify its sha256, and atomically swap it into `dir`.
-fn install(dir: &Path, artifact: &Artifact, source: &str, channel: &Channel) -> Result<(), String> {
-    // Patient: the manifest fetch already reached the bucket.
-    let bytes = download(channel, &artifact.file, None)
-        .map_err(|e| e.message)?
-        .bytes;
-
-    let got = hex(Sha256::digest(&bytes).as_slice());
-    if got != artifact.sha256 {
-        return Err(format!(
-            "sha256 mismatch for {}: got {got}, manifest says {}",
-            artifact.file, artifact.sha256
-        ));
-    }
-
+///
+/// Returns `false`, having changed nothing, when `force` is unset and a
+/// concurrent updater installed this revision while we waited for the lock.
+fn install(
+    dir: &Path,
+    artifact: &Artifact,
+    source: &str,
+    channel: &Channel,
+    force: bool,
+) -> Result<bool, String> {
     let parent = dir.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
 
@@ -896,6 +925,30 @@ fn install(dir: &Path, artifact: &Artifact, source: &str, channel: &Channel) -> 
         Err(e) if e.kind() == io::ErrorKind::Unsupported => {}
         Err(e) => return Err(format!("locking {}: {e}", lock_path.display())),
     }
+    // First use starts many updaters at once (every thread of a server, every
+    // test in a suite) and all but one queue here. Re-installing the revision
+    // the winner just put in place would pull the tree out from under its
+    // readers — sending them back here — and churn the fixed backup path,
+    // whose best-effort removal can leave a partial tree that wedges the next
+    // swap with ENOTEMPTY.
+    if !force && holds(dir, &artifact.commit) {
+        tracing::debug!(dir = %dir.display(), commit = %artifact.commit, "installed by a concurrent updater");
+        return Ok(false);
+    }
+
+    // Patient: the manifest fetch already reached the bucket.
+    let bytes = download(channel, &artifact.file, None)
+        .map_err(|e| e.message)?
+        .bytes;
+
+    let got = hex(Sha256::digest(&bytes).as_slice());
+    if got != artifact.sha256 {
+        return Err(format!(
+            "sha256 mismatch for {}: got {got}, manifest says {}",
+            artifact.file, artifact.sha256
+        ));
+    }
+
     let staging = sibling(parent, &format!(".{name}-staging"));
     let backup = sibling(parent, &format!(".{name}-backup"));
     remove_any(&staging);
@@ -917,7 +970,8 @@ fn install(dir: &Path, artifact: &Artifact, source: &str, channel: &Channel) -> 
     let rendered = toml::to_string(&meta).map_err(|e| format!("rendering sidecar: {e}"))?;
     std::fs::write(staging.join(SIDECAR), rendered).map_err(|e| format!("writing sidecar: {e}"))?;
 
-    swap_into_place(&staging, dir, &backup)
+    swap_into_place(&staging, dir, &backup)?;
+    Ok(true)
 }
 
 /// Extract a rules bundle without giving archive entries filesystem semantics.
@@ -1100,6 +1154,8 @@ struct Fetched {
     bytes: Vec<u8>,
     /// `x-isotope13-feed`; absent from the public bucket.
     feed: Option<crate::feed::Feed>,
+    /// `x-isotope13-feeds`: what the token opens, best first.
+    feeds: Vec<crate::feed::Feed>,
     /// The plan the token resolved to, when the Worker recognised it.
     tier: Option<String>,
 }
@@ -1244,20 +1300,21 @@ fn download_once(
     // Echoed by the Worker; only a plain identifier is believed.
     let tier = header(TIER_HEADER)
         .filter(|t| !t.is_empty() && t.len() <= 32 && t.bytes().all(|b| b.is_ascii_alphanumeric()));
+    let feeds = header(FEEDS_HEADER).map_or_else(Vec::new, |feeds| {
+        feeds
+            .split(',')
+            .filter_map(|name| crate::feed::Feed::from_service(name.trim()))
+            .collect()
+    });
     if !status.is_success() {
         return Err(FetchError {
             status: Some(status.as_u16()),
             message: format!("GET {url}: {status}"),
-            feeds: header(FEEDS_HEADER).map_or_else(Vec::new, |feeds| {
-                feeds
-                    .split(',')
-                    .filter_map(|slug| crate::feed::Feed::from_slug(slug.trim()))
-                    .collect()
-            }),
+            feeds,
             tier,
         });
     }
-    let feed = header(FEED_HEADER).and_then(|slug| crate::feed::Feed::from_slug(&slug));
+    let feed = header(FEED_HEADER).and_then(|name| crate::feed::Feed::from_service(&name));
     let mut bytes = Vec::new();
     resp.take(MAX_DOWNLOAD_BYTES + 1)
         .read_to_end(&mut bytes)
@@ -1273,7 +1330,12 @@ fn download_once(
             ..FetchError::default()
         });
     }
-    Ok(Fetched { bytes, feed, tier })
+    Ok(Fetched {
+        bytes,
+        feed,
+        feeds,
+        tier,
+    })
 }
 
 fn hex(bytes: &[u8]) -> String {

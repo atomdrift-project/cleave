@@ -198,6 +198,7 @@ pub(crate) fn analyzer_for_file_type_arc(
         // Flatpak bundles remain opaque until their container format is
         // supported by the archive extractor.
         | FileType::Flatpak
+        | FileType::Gguf
         | FileType::Data => Some(Box::new(
             generic::GenericAnalyzer::new(*file_type).with_engine(engine.clone()),
         )),
@@ -456,6 +457,7 @@ impl FileTypeExt for FileType {
             | FileType::Xz
             | FileType::Lzma
             | FileType::Zst
+            | FileType::Deflate
             | FileType::PkgMacos
             | FileType::Cab => {
                 vec!["archive"]

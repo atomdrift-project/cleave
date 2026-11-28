@@ -391,6 +391,84 @@ pub(crate) fn xor_encoded_pe(fileid: &filefacts::FileId, data: &[u8]) -> Option<
     })
 }
 
+/// Bytes of one chat template analyzed; real templates are a few KiB.
+const MAX_GGUF_TEMPLATE: u64 = 1 << 20;
+/// Chat templates analyzed per model.
+const MAX_GGUF_TEMPLATES: usize = 8;
+
+/// A GGUF model's chat templates and the bytes past its last tensor, at the
+/// offsets filefacts recorded. Each is analyzed as a file of its own, so a
+/// template is read as the text it is and the trailing bytes as whatever
+/// they identify as: a program, or a raw deflate stream that inflates like
+/// any other compressed file. The tensor data is never touched.
+pub(crate) fn gguf_layers(
+    parsed: &filefacts::ParsedFile<'_>,
+    data: &[u8],
+) -> Vec<ExtractedPayload> {
+    let values = parsed.values();
+    let slice = |offset: u64, length: u64| {
+        let start = usize::try_from(offset).ok()?;
+        let end = start.checked_add(usize::try_from(length).ok()?)?;
+        Some((start, data.get(start..end)?))
+    };
+    let mut layers: Vec<ExtractedPayload> = values
+        .get("gguf.chat_templates")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(MAX_GGUF_TEMPLATES)
+        .filter_map(|t| {
+            slice(
+                t["offset"].as_u64()?,
+                t["length"].as_u64()?.min(MAX_GGUF_TEMPLATE),
+            )
+        })
+        .map(|(offset, bytes)| gguf_layer(bytes, "gguf-chat-template", offset, GGUF_TEMPLATE_NAME))
+        .collect();
+    // Zero padding after the last tensor is a writer's alignment, not data.
+    if parsed
+        .metrics()
+        .get("gguf.trailing_nonzero_bytes")
+        .is_some()
+        && let Some(end) = values
+            .get("gguf.data_end")
+            .and_then(serde_json::Value::as_u64)
+        && let Some((offset, tail)) = slice(end, (data.len() as u64).saturating_sub(end))
+    {
+        let tail = &tail[..tail.len().min(MAX_DECOMPRESSED_SIZE)];
+        layers.push(gguf_layer(tail, "gguf-trailing-data", offset, ""));
+    }
+    layers
+}
+
+/// Bytes of a GGUF header that rules read. A header is the metadata table
+/// and the tensor index, a few MiB even with a large vocabulary.
+const MAX_GGUF_HEADER: usize = 64 << 20;
+
+/// What rules may read of a GGUF model: everything before
+/// `gguf.data_offset`, at most [`MAX_GGUF_HEADER`]. Past it are the weights.
+pub(crate) fn gguf_header<'a>(
+    parsed: Option<&filefacts::ParsedFile<'_>>,
+    data: &'a [u8],
+) -> &'a [u8] {
+    let end = parsed
+        .and_then(|p| p.values().get("gguf.data_offset")?.as_u64())
+        .and_then(|offset| usize::try_from(offset).ok())
+        .map_or(MAX_GGUF_HEADER, |offset| offset.min(MAX_GGUF_HEADER));
+    &data[..end.min(data.len())]
+}
+
+/// The name Hugging Face repositories give a chat template on disk. A
+/// template is plain text, which content alone does not type.
+pub(crate) const GGUF_TEMPLATE_NAME: &str = "chat_template.jinja";
+
+/// One model layer, typed as a file called `file_name` would be.
+fn gguf_layer(bytes: &[u8], encoding: &str, offset: usize, file_name: &str) -> ExtractedPayload {
+    let file_type =
+        filefacts::FileId::from_path_and_bytes(std::path::Path::new(file_name), bytes).file_type();
+    unpacked(bytes.to_vec(), encoding, file_type, offset)
+}
+
 /// Recover validated PE images from length-prefixed NRV2B-8 streams.
 /// Compression is neutral; the decoded child receives ordinary analysis.
 pub(crate) fn nrv8_encoded_pes(data: &[u8]) -> Vec<ExtractedPayload> {

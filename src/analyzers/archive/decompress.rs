@@ -220,7 +220,12 @@ pub(super) fn dispatch_decompressed_file(
             dest_dir,
             guard,
         ),
-        FileType::Gz | FileType::Bz2 | FileType::Xz | FileType::Lzma | FileType::Zst
+        FileType::Gz
+        | FileType::Bz2
+        | FileType::Xz
+        | FileType::Lzma
+        | FileType::Zst
+        | FileType::Deflate
             if decompression_depth >= MAX_RECURSIVE_DECOMPRESSION_LAYERS =>
         {
             persist_decoded_leaf(tmp, dest_dir, stem)
@@ -251,6 +256,14 @@ pub(super) fn dispatch_decompressed_file(
         ),
         FileType::Lzma => decompress_to_file_at_depth(
             lzma_alone_decoder(reopen_decoded(&tmp, stem)?)?,
+            logical_path,
+            dest_dir,
+            decoded_len,
+            guard,
+            decompression_depth + 1,
+        ),
+        FileType::Deflate => decompress_to_file_at_depth(
+            flate2::read::DeflateDecoder::new(reopen_decoded(&tmp, stem)?),
             logical_path,
             dest_dir,
             decoded_len,

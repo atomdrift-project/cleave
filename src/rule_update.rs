@@ -1303,7 +1303,7 @@ fn download_once(
     let feeds = header(FEEDS_HEADER).map_or_else(Vec::new, |feeds| {
         feeds
             .split(',')
-            .filter_map(|name| crate::feed::Feed::from_service(name.trim()))
+            .filter_map(|name| crate::feed::Feed::from_slug(name.trim()))
             .collect()
     });
     if !status.is_success() {
@@ -1314,7 +1314,7 @@ fn download_once(
             tier,
         });
     }
-    let feed = header(FEED_HEADER).and_then(|name| crate::feed::Feed::from_service(&name));
+    let feed = header(FEED_HEADER).and_then(|name| crate::feed::Feed::from_slug(&name));
     let mut bytes = Vec::new();
     resp.take(MAX_DOWNLOAD_BYTES + 1)
         .read_to_end(&mut bytes)

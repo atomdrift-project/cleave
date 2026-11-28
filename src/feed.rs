@@ -88,15 +88,6 @@ impl Feed {
         Self::ALL.into_iter().find(|feed| feed.slug() == slug)
     }
 
-    /// The feed a name from the rules service means. The service still calls
-    /// the open feed by its old name, `oss-delayed`.
-    pub(crate) fn from_service(name: &str) -> Option<Self> {
-        match name {
-            "oss-delayed" => Some(Feed::Oss),
-            name => Self::from_slug(name),
-        }
-    }
-
     /// The longest a ruleset waits after QA before this feed carries it:
     /// pulsar checks for one every 15 minutes, republishes the supporter feed
     /// every 48 hours, and the public roll-up every eight days.
@@ -1129,10 +1120,8 @@ mod tests {
         }
         assert_eq!(Feed::from_slug("Zero-Day"), None);
         assert_eq!(Feed::from_slug("enriched"), None);
-        // The old name is the rules service's, never the CLI's.
+        // The open feed's old name is no longer one.
         assert_eq!(Feed::from_slug("oss-delayed"), None);
-        assert_eq!(Feed::from_service("oss-delayed"), Some(Feed::Oss));
-        assert_eq!(Feed::from_service("supporter"), Some(Feed::Supporter));
         assert_eq!(Feed::ZeroDay.to_string(), "zero-day feed");
         assert_eq!(Feed::Oss.to_string(), "oss feed");
         assert!(Feed::ZeroDay.needs_token() && Feed::Supporter.needs_token());

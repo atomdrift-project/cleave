@@ -726,3 +726,71 @@ fn xor_encoded_pe_is_a_decoded_payload() {
 
 #[path = "encoded_payload_xor_test.rs"]
 mod xor_regressions;
+
+// ── GGUF model layers ──
+
+/// A GGUF v3 model: a chat template, one F32 tensor of 16 floats, then
+/// `trailing` past the last tensor.
+fn gguf(template: &str, trailing: &[u8]) -> Vec<u8> {
+    fn string(out: &mut Vec<u8>, s: &[u8]) {
+        out.extend_from_slice(&(s.len() as u64).to_le_bytes());
+        out.extend_from_slice(s);
+    }
+    let mut out = b"GGUF".to_vec();
+    out.extend_from_slice(&3u32.to_le_bytes());
+    out.extend_from_slice(&1u64.to_le_bytes()); // tensors
+    out.extend_from_slice(&1u64.to_le_bytes()); // metadata
+    string(&mut out, b"tokenizer.chat_template");
+    out.extend_from_slice(&8u32.to_le_bytes());
+    string(&mut out, template.as_bytes());
+    string(&mut out, b"w");
+    out.extend_from_slice(&1u32.to_le_bytes());
+    out.extend_from_slice(&16u64.to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out.extend_from_slice(&0u64.to_le_bytes());
+    out.resize(out.len().next_multiple_of(32), 0);
+    out.extend(std::iter::repeat_n(0x11, 64));
+    out.extend_from_slice(trailing);
+    out
+}
+
+fn layers(file: &[u8]) -> Vec<super::ExtractedPayload> {
+    super::gguf_layers(&filefacts::open(file), file)
+}
+
+const TEMPLATE: &str = "{% for message in messages %}{{ message.content }}{% endfor %}";
+
+#[test]
+fn gguf_template_and_trailing_bytes_are_layers() {
+    let mut tail = b"MZ".to_vec();
+    tail.resize(512, 0x90);
+    let file = gguf(TEMPLATE, &tail);
+    let found = layers(&file);
+    assert_eq!(found.len(), 2);
+    assert_eq!(found[0].encoding_chain, ["gguf-chat-template"]);
+    assert_eq!(found[0].data, TEMPLATE.as_bytes());
+    let at = found[0].original_offset;
+    assert_eq!(&file[at..at + TEMPLATE.len()], TEMPLATE.as_bytes());
+    assert_ne!(found[0].detected_type, filefacts::FileType::Unknown);
+    assert_eq!(found[1].encoding_chain, ["gguf-trailing-data"]);
+    assert_eq!(found[1].data, tail);
+    assert_eq!(found[1].original_offset, file.len() - tail.len());
+}
+
+#[test]
+fn gguf_zero_padding_and_truncation_yield_only_the_template() {
+    for file in [
+        gguf(TEMPLATE, &[0; 64]),
+        gguf(TEMPLATE, b"")[..200].to_vec(), // a header-only carve
+    ] {
+        let found = layers(&file);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].encoding_chain, ["gguf-chat-template"]);
+    }
+}
+
+#[test]
+fn non_gguf_bytes_yield_no_layers() {
+    assert!(layers(b"GGUF\x09\x00\x00\x00 not a model").is_empty());
+    assert!(layers(b"plain text").is_empty());
+}

@@ -226,32 +226,42 @@ pub(crate) fn report_from_file_analysis(
     report
 }
 
-/// Rebase a decoded child's absolute or basename-relative temporary path.
+/// Rebase a decoded child's temporary path onto the decoded layer's name.
+/// An absolute temporary path names the layer, `decoded`; a bare basename
+/// names `member`, which is the layer itself unless the layer is one
+/// compressed stream, whose single member is named after it.
 pub(super) fn rebase_decoded_child_path(
     path: &str,
     temporary: &std::path::Path,
     decoded: &str,
+    member: &str,
 ) -> String {
-    let full = temporary.to_string_lossy();
-    let name = temporary
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("");
-    let suffix = path.strip_prefix(full.as_ref()).or_else(|| {
-        if name.is_empty() {
-            None
-        } else {
-            path.strip_prefix(name)
-        }
-    });
-    match suffix {
-        Some(suffix)
-            if suffix.is_empty() || suffix.starts_with("!!") || suffix.starts_with("##") =>
-        {
-            format!("{decoded}{suffix}")
-        }
+    let is_rest = |s: &str| s.is_empty() || s.starts_with("!!") || s.starts_with("##");
+    if let Some(rest) = path.strip_prefix(temporary.to_string_lossy().as_ref())
+        && is_rest(rest)
+    {
+        return format!("{decoded}{rest}");
+    }
+    let name = temporary.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    match path.strip_prefix(name) {
+        Some(rest) if !name.is_empty() && is_rest(rest) => format!("{member}{rest}"),
         _ => path.to_string(),
     }
+}
+
+/// Where a decoded layer's bare-named children live. A compressed stream
+/// holds one member named after the stream; a decoded layer has no file
+/// name, so its member takes the layer's own, as an extension-less `foo`
+/// stream holds `foo`.
+fn decoded_member_root(virtual_path: &str, detected_type: FileType) -> String {
+    if detected_type.group() != filefacts::Group::Compressed {
+        return virtual_path.to_string();
+    }
+    let leaf = virtual_path
+        .rsplit(['/', '#', '!'])
+        .next()
+        .unwrap_or_default();
+    format!("{virtual_path}!!{leaf}")
 }
 
 mod binary;
@@ -306,7 +316,10 @@ pub(crate) fn process_encoded_payloads(
                 .preview
                 .to_ascii_lowercase()
                 .starts_with("untrusted comment: signature");
-        let crit = if is_unknown_unicode_escape || is_detached_signature_data {
+        // Every model carries a chat template; its findings come from its own
+        // analysis, so its presence alone is baseline.
+        let is_chat_template = payload.encoding_chain.as_slice() == ["gguf-chat-template"];
+        let crit = if is_unknown_unicode_escape || is_detached_signature_data || is_chat_template {
             types::Criticality::Baseline
         } else if payload.encoding_chain.as_slice() == ["nrv2b-8"] {
             // Static decompression is neutral; infer intent from child analysis.
@@ -343,6 +356,10 @@ pub(crate) fn process_encoded_payloads(
             "Base64-encoded PE recovered from image".to_string()
         } else if payload.encoding_chain.as_slice() == ["url"] {
             "Percent-encoded content decoded".to_string()
+        } else if is_chat_template {
+            "GGUF model chat template".to_string()
+        } else if payload.encoding_chain.as_slice() == ["gguf-trailing-data"] {
+            "Data past a GGUF model's last tensor".to_string()
         } else if payload.detected_type == FileType::Unknown {
             // Successful decoding alone does not establish an embedded payload.
             // Uniform padding, identifiers and arbitrary data can also decode.
@@ -439,9 +456,20 @@ pub(crate) fn process_encoded_payloads(
             });
             break;
         }
-        let temp_file = tempfile::NamedTempFile::new().and_then(|mut temp_file| {
-            std::io::Write::write_all(&mut temp_file, &payload.data).map(|()| temp_file)
-        });
+        // A chat template has no content signature; its conventional name
+        // types it, as it did when the layer was extracted.
+        let suffix = if payload.encoding_chain.as_slice() == ["gguf-chat-template"] {
+            extractors::encoded_payload::GGUF_TEMPLATE_NAME
+        } else {
+            ""
+        };
+        let temp_file =
+            tempfile::Builder::new()
+                .suffix(suffix)
+                .tempfile()
+                .and_then(|mut temp_file| {
+                    std::io::Write::write_all(&mut temp_file, &payload.data).map(|()| temp_file)
+                });
         let temp_file = match temp_file {
             Ok(temp_file) => Some(temp_file),
             Err(error) => {
@@ -464,10 +492,7 @@ pub(crate) fn process_encoded_payloads(
             // MIME attachments and recovered media executables are real
             // child files. Keep their attribution rather than claiming the
             // enclosing mail or image directly implements PE behavior.
-            if payload.encoding_chain.as_slice() == ["mime-base64"]
-                || payload.encoding_chain.as_slice() == ["media-base64-pe"]
-                || payload.encoding_chain.as_slice() == ["media-xor-pe"]
-            {
+            if is_child_file(&payload.encoding_chain) {
                 let virtual_path = types::encode_decoded_path(
                     &path.display().to_string(),
                     &payload.encoding_chain,
@@ -478,21 +503,22 @@ pub(crate) fn process_encoded_payloads(
                 entry.path = virtual_path.clone();
                 entry.depth = 1;
                 entry.encoding = Some(payload.encoding_chain.clone());
+                let member = decoded_member_root(&virtual_path, payload.detected_type);
+                let rebase = |p: &str| {
+                    rebase_decoded_child_path(p, temp_file.path(), &virtual_path, &member)
+                };
                 for child in &mut children {
-                    child.path =
-                        rebase_decoded_child_path(&child.path, temp_file.path(), &virtual_path);
+                    child.path = rebase(&child.path);
                     child.depth += 1;
                     for finding in &mut child.findings {
                         if let Some(source) = &mut finding.source_file {
-                            *source =
-                                rebase_decoded_child_path(source, temp_file.path(), &virtual_path);
+                            *source = rebase(source);
                         }
                     }
                 }
                 for finding in &mut entry.findings {
                     if let Some(source) = &mut finding.source_file {
-                        *source =
-                            rebase_decoded_child_path(source, temp_file.path(), &virtual_path);
+                        *source = rebase(source);
                     }
                 }
                 report.files.push(entry);
@@ -621,7 +647,28 @@ pub(crate) fn encoded_payloads(
     if file_type == FileType::Pe {
         payloads.extend(extractors::encoded_payload::nrv8_encoded_pes(file_data));
     }
+    if file_type == FileType::Gguf
+        && let Some(ctx) = file_ctx
+    {
+        payloads.extend(extractors::encoded_payload::gguf_layers(
+            &ctx.parsed,
+            file_data,
+        ));
+    }
     payloads
+}
+
+/// Whether a decoded payload is a file of its own rather than a decoding of
+/// its host: a MIME attachment, an executable recovered from an image, or a
+/// part of a model file. Its findings stay attributed to it.
+fn is_child_file(chain: &[String]) -> bool {
+    matches!(
+        chain,
+        [only] if matches!(
+            only.as_str(),
+            "mime-base64" | "media-base64-pe" | "media-xor-pe" | "gguf-chat-template" | "gguf-trailing-data"
+        )
+    )
 }
 
 /// A finished report for these bytes from the analysis caches: the
@@ -939,7 +986,7 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     };
     // Release the parsed file before analyzing decoded children. The report now
     // owns the identity and filefacts projections used by later stages.
-    let (mut report, encoded_payloads, stage_stng_ms, stage_structural_ms) = {
+    let (mut report, encoded_payloads, rule_data, stage_stng_ms, stage_structural_ms) = {
         let (file_ctx, stage_stng_ms, prefetched_yara) = if file_type.is_archive() {
             (None, 0u64, None)
         } else if let Some(ftypes) = binary_yara_ftypes {
@@ -970,6 +1017,16 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
 
         let encoded_payloads =
             encoded_payloads(file_type, file_data, stng_strings, file_ctx.as_ref());
+        // What the passes after analysis read of this file: all of it, but
+        // only a model's header, never gigabytes of weights.
+        let rule_data = if file_type == FileType::Gguf {
+            extractors::encoded_payload::gguf_header(
+                file_ctx.as_ref().map(|c| &c.parsed),
+                file_data,
+            )
+        } else {
+            file_data
+        };
 
         // Create unified analysis input - all analyzers receive the same pre-extracted data
         let mut input = analyzers::AnalysisInput::with_payloads(
@@ -1136,6 +1193,7 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         (
             report,
             encoded_payloads,
+            rule_data,
             stage_stng_ms,
             structural_start.elapsed().as_millis() as u64,
         )
@@ -1149,7 +1207,7 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         encoded_payloads,
         &mut report,
         path,
-        file_data,
+        rule_data,
         file_type,
         analysis_depth,
         options,
@@ -1176,7 +1234,7 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // The YARA policy archive members follow too (rule sources, large source
     // maps and licence files): see `engine::yara_skip_reason`.
     let yara_skipped =
-        crate::engine::yara_skip_reason(&path.display().to_string(), file_type, file_data.len())
+        crate::engine::yara_skip_reason(&path.display().to_string(), file_type, rule_data.len())
             .is_some();
     if !handled_yara_internally
         && !report
@@ -1192,7 +1250,7 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         // traits instead of being discarded by a late findings-only scan.
         engine.evaluate_and_merge_findings_with_precomputed(
             &mut report,
-            file_data,
+            rule_data,
             crate::capabilities::AnalysisBorrow::new(None),
             None,
             None,
@@ -1221,7 +1279,7 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // more distant ancestors as context.
     capability_mapper.reeval_parent_scope_in_file_tree(
         &mut report,
-        file_data,
+        rule_data,
         crate::composite_rules::FileType::from(file_type),
     );
 
@@ -1352,3 +1410,5 @@ pub(super) fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
 
 #[cfg(test)]
 mod carrier_tests;
+#[cfg(test)]
+mod gguf_tests;

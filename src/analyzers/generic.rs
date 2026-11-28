@@ -732,15 +732,23 @@ impl Analyzer for GenericAnalyzer {
 
         // Use data and strings from input (no file read, no string extraction).
         // Reuse the threaded context, else open one on the same `input.data`.
-        let content = String::from_utf8_lossy(input.data);
         let fallback = input.open_ctx_fallback();
         let source_ctx = input.parsed_ctx.or(fallback.as_ref());
+        // A model is gigabytes of weights past its header. Rules see the
+        // header; the parts worth reading are analyzed as decoded layers.
+        let header = (self.file_type == FileType::Gguf).then(|| {
+            crate::extractors::encoded_payload::gguf_header(
+                source_ctx.map(|c| &c.parsed),
+                input.data,
+            )
+        });
+        let content = String::from_utf8_lossy(header.unwrap_or(input.data));
         let mut report = self.analyze_source_internal(
             input.path,
             &content,
             Some(input.strings),
             Some(input.data),
-            None,
+            header,
             input.sha256.clone(),
             self.engine.compact_members(),
             source_ctx,

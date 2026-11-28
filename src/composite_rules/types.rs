@@ -705,6 +705,10 @@ pub(crate) enum FileType {
     Xz,
     /// LZMA-alone compressed single file (.lzma)
     Lzma,
+    /// Raw (headerless) deflate stream holding a program
+    Deflate,
+    /// GGUF model file; rules see its header, not its weights
+    Gguf,
     /// npm package (.tgz)
     #[archive]
     #[package]
@@ -971,6 +975,7 @@ impl From<filefacts::FileType> for FileType {
             Ff::Markdown => Self::Markdown,
             Ff::Text => Self::Text,
             Ff::Data | Ff::Ani | Ff::Nrbf | Ff::FatBootSector => Self::Data,
+            Ff::Gguf => Self::Gguf,
             Ff::PgpSignature => Self::PgpSignature,
             Ff::Yaml => Self::Yaml,
             // Archives / packages
@@ -988,6 +993,7 @@ impl From<filefacts::FileType> for FileType {
             Ff::Bz2 => Self::Bz2,
             Ff::Xz => Self::Xz,
             Ff::Lzma => Self::Lzma,
+            Ff::Deflate => Self::Deflate,
             Ff::Zst => Self::Zst,
             Ff::SevenZ => Self::SevenZ,
             Ff::Rar => Self::Rar,
@@ -1394,6 +1400,8 @@ impl FileType {
             Self::Bz2 => "bz2",
             Self::Xz => "xz",
             Self::Lzma => "lzma",
+            Self::Deflate => "deflate",
+            Self::Gguf => "gguf",
             Self::Npm => "npm",
             Self::Nupkg => "nupkg",
             Self::GoModule => "go_module",

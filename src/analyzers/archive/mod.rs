@@ -1502,6 +1502,13 @@ impl ArchiveAnalyzer {
                 data.len() as u64,
                 guard,
             ),
+            FileType::Deflate => decompress_to_file(
+                flate2::read::DeflateDecoder::new(Cursor::new(data)),
+                archive_path,
+                dest_dir,
+                data.len() as u64,
+                guard,
+            ),
             FileType::Zst => decompress_to_file(
                 zstd::stream::read::Decoder::new(Cursor::new(data))
                     .context("Failed to create zstd decoder")?,

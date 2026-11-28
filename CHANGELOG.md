@@ -2,6 +2,34 @@
 
 All notable changes to cleave. Versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.2.0 (2026-11-28)
+
+### Security
+
+- Text full of `<--` with no closing `>` stalled the markup masker for hours; it is linear now.
+
+### Features
+
+- Analyze GGUF models: rules read the header, and chat templates and bytes past the tensors are scanned separately.
+- Inflate raw headerless deflate streams like any other compressed file instead of ignoring them.
+- Pull .NET BinaryFormatter gadgets out of compound files, raw or base64, even when sectors split them.
+- `--feed` now defaults to auto, using the best feed your plan opens; sign in with cleave login.
+- Rename the feed variable to `CLEAVE_FEED` and the open feed to oss; the old names are gone.
+- Removed `--format=tiny`; it lives in atomscan now, where it belongs.
+- Capture a script's leading comment block as context, so a benign installer explaining itself is not judged blind.
+- Interpret output carries decoded layers, so triage sees what the payload actually was.
+- Report the archive member and rule an analysis is stuck on, and stop promptly when cancelled.
+- `validate` rejects identical fixtures filed under different severities, which only failed randomly with a warm cache.
+
+### Fixes
+
+- Shell scripts with a shebang and long options are no longer dismissed as CLI help text.
+- A cancelled analysis is marked incomplete and never cached, rather than passing for a clean result.
+
+### Optimizations
+
+- Wait briefly on the cache's startup lock, instead of running every thread but one uncached.
+
 ## 3.1.0 (2026-11-22)
 
 ### Features

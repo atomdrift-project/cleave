@@ -138,3 +138,57 @@ fn severity_uses_members_and_ignores_scores_and_filtered_findings() {
     };
     assert!(evaluate(vec![(target, Ok(report))]).is_err());
 }
+
+/// Identical samples of one type under different severities can only be told
+/// apart by a filename rule, and they share one analysis: with a warm cache
+/// each is judged by whichever was stored last. Such a set is an error naming
+/// every member, including a pair held in .xz storage under different logical
+/// names. The same bytes under one severity, the same bytes detected as
+/// different types, and different bytes are all fine.
+#[test]
+fn identical_fixtures_with_different_expectations_are_rejected() {
+    use std::io::Write;
+    let root = tempfile::tempdir().unwrap();
+    let put = |name: &str, bytes: &[u8]| {
+        let path = root.path().join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, bytes).unwrap();
+    };
+    let xz = |bytes: &[u8]| {
+        let mut encoder = xz2::write::XzEncoder::new(Vec::new(), 6);
+        encoder.write_all(bytes).unwrap();
+        encoder.finish().unwrap()
+    };
+    let loader = xz(b"MZ same loader bytes");
+    put("notable/sys010/ixed.7.2.win.xz", &loader);
+    put("suspicious/sys010/php_pdo.win.xz", &loader);
+    put("hostile/a/one.js", b"eval(atob(payload))");
+    put("hostile/b/two.js", b"eval(atob(payload))");
+    let script = b"export function client() { return fetch('/api'); }\n";
+    put("baseline/review/client.js", script);
+    put("notable/review/client.spec.ts", script);
+    put("baseline/other.txt", b"unrelated");
+    let targets = discover_targets(root.path()).unwrap();
+    let digests = fixture_state::fixture_digests(&targets);
+
+    let conflicts = conflicting_duplicate_fixtures(&targets, &digests);
+    assert_eq!(conflicts.len(), 1, "{conflicts:?}");
+    let line = &conflicts[0];
+    assert!(
+        line.contains("N: ") && line.contains("notable/sys010/ixed.7.2.win.xz"),
+        "{line}"
+    );
+    assert!(
+        line.contains("S: ") && line.contains("suspicious/sys010/php_pdo.win.xz"),
+        "{line}"
+    );
+    assert!(
+        !line.contains("hostile/") && !line.contains("client"),
+        "{line}"
+    );
+
+    std::fs::remove_file(root.path().join("suspicious/sys010/php_pdo.win.xz")).unwrap();
+    let targets = discover_targets(root.path()).unwrap();
+    let digests = fixture_state::fixture_digests(&targets);
+    assert!(conflicting_duplicate_fixtures(&targets, &digests).is_empty());
+}

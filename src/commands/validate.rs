@@ -290,6 +290,24 @@ pub fn run_with_options(
         ),
         None => fixture_state::Plan::full(targets.len()),
     };
+    {
+        let computed;
+        let digests = match &incremental {
+            Some((_, _, _, digests)) => digests,
+            None => {
+                computed = fixture_state::fixture_digests(&targets);
+                &computed
+            }
+        };
+        let conflicts = conflicting_duplicate_fixtures(&targets, digests);
+        if !conflicts.is_empty() {
+            anyhow::bail!(
+                "{} set(s) of byte-identical fixtures expect different severities; the analysis of identical bytes is shared, so only a filename rule could tell them apart and the result would depend on which was analyzed first. Keep one fixture per content:\n{}",
+                conflicts.len(),
+                conflicts.join("\n")
+            );
+        }
+    }
     let plan_ms = plan_started.elapsed().as_millis();
 
     crate::rule_sources::release_unused(&traits_dir);
@@ -797,6 +815,90 @@ fn discover_targets(root: &Path) -> Result<Vec<Target>> {
     Ok(targets)
 }
 
+/// The sample a fixture holds and the path it is analyzed under.
+///
+/// A final .xz suffix is storage, not part of the sample's format. An
+/// XZ-format sample is therefore stored as name.xz.xz. Decode only one
+/// layer, retaining its logical basename for filename-sensitive rules.
+fn read_fixture(fixture: &Path) -> Result<(PathBuf, Vec<u8>)> {
+    // Resolve symlinks first: a hard link to a relative symlink would dangle.
+    let source = std::fs::canonicalize(fixture)
+        .with_context(|| format!("resolving fixture {}", fixture.display()))?;
+    let stored =
+        std::fs::read(&source).with_context(|| format!("reading fixture {}", fixture.display()))?;
+    if fixture.extension().is_none_or(|ext| ext != "xz") {
+        return Ok((fixture.to_path_buf(), stored));
+    }
+    let stream =
+        xz2::stream::Stream::new_stream_decoder(128 * 1024 * 1024, xz2::stream::CONCATENATED)?;
+    let mut decoder =
+        xz2::read::XzDecoder::new_stream(stored.as_slice(), stream).take(512 * 1024 * 1024 + 1);
+    let mut decoded = Vec::new();
+    decoder
+        .read_to_end(&mut decoded)
+        .with_context(|| format!("decoding fixture storage {}", safe_path(fixture)))?;
+    if decoded.len() > 512 * 1024 * 1024 {
+        anyhow::bail!("decoded fixture exceeds 512 MiB: {}", safe_path(fixture));
+    }
+    Ok((fixture.with_extension(""), decoded))
+}
+
+/// Fixtures holding identical samples of one detected type but filed under
+/// different severities, one line per set: `  N: a, S: b`.
+///
+/// Cleave analyzes the same bytes of the same type once and shares the
+/// result across names (see `named_file_report_lookup`): what a filename
+/// rule decided under the first name is kept, by design, because filename
+/// rules are low-fidelity. Two such fixtures can then only both pass when
+/// nothing is cached; with a warm cache each is judged by whichever was
+/// stored last and the suite fails at random (2026-11-27: `ixed.7.2.win.xz`
+/// and `php_pdo.win.xz`). Rejecting the set makes that a deterministic
+/// authoring error.
+///
+/// Candidates are fixtures with identical stored bytes, from the digests the
+/// incremental plan already read; only those are decoded and typed, the way
+/// the analysis will see them. A fixture that cannot be read is skipped; its
+/// analysis reports the failure.
+fn conflicting_duplicate_fixtures(targets: &[Target], digests: &[Option<[u8; 32]>]) -> Vec<String> {
+    use std::collections::BTreeMap;
+
+    let mut by_digest: BTreeMap<[u8; 32], Vec<&Target>> = BTreeMap::new();
+    for (target, digest) in targets.iter().zip(digests) {
+        if let Some(digest) = digest {
+            by_digest.entry(*digest).or_default().push(target);
+        }
+    }
+    let mut conflicts = Vec::new();
+    for set in by_digest.into_values() {
+        if set.iter().all(|t| t.expected == set[0].expected) {
+            continue;
+        }
+        // Identical stored bytes decode identically; only the type, read
+        // from the logical name and the sample, can still tell them apart.
+        let mut by_type: BTreeMap<String, Vec<&Target>> = BTreeMap::new();
+        for target in set {
+            if let Ok((logical, data)) = read_fixture(target.path()) {
+                let file_type = crate::analyzers::detect_file_type_from_data(&logical, &data);
+                by_type
+                    .entry(file_type.label().to_string())
+                    .or_default()
+                    .push(target);
+            }
+        }
+        for same in by_type.into_values() {
+            if same.iter().any(|t| t.expected != same[0].expected) {
+                let members = same
+                    .iter()
+                    .map(|t| format!("{}: {}", t.expected.letter(), safe_path(t.path())))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                conflicts.push(format!("  {members}"));
+            }
+        }
+    }
+    conflicts
+}
+
 /// One non-directory entry of the fixture tree, as its directory listed it.
 struct FixtureEntry {
     path: PathBuf,
@@ -1106,38 +1208,12 @@ impl NeutralStage {
 
     /// Place `fixture` at its neutral path and return that path.
     fn stage(&self, fixture: &Path) -> Result<PathBuf> {
-        // Resolve symlinks first: a hard link to a relative symlink would dangle.
+        let (logical, data) = read_fixture(fixture)?;
+        // Unless storage was decoded, the stored file is the sample itself and
+        // can be hard-linked into place instead of written.
+        let compressed = logical != fixture;
         let source = std::fs::canonicalize(fixture)
             .with_context(|| format!("resolving fixture {}", fixture.display()))?;
-        let stored = std::fs::read(&source)
-            .with_context(|| format!("reading fixture {}", fixture.display()))?;
-        // A final .xz suffix is storage, not part of the sample's format.
-        // An XZ-format sample is therefore stored as name.xz.xz. Decode only
-        // one layer, retaining its logical basename for filename-sensitive rules.
-        let compressed = fixture.extension().is_some_and(|ext| ext == "xz");
-        let logical = if compressed {
-            fixture.with_extension("")
-        } else {
-            fixture.to_path_buf()
-        };
-        let data = if compressed {
-            let stream = xz2::stream::Stream::new_stream_decoder(
-                128 * 1024 * 1024,
-                xz2::stream::CONCATENATED,
-            )?;
-            let mut decoder = xz2::read::XzDecoder::new_stream(stored.as_slice(), stream)
-                .take(512 * 1024 * 1024 + 1);
-            let mut decoded = Vec::new();
-            decoder
-                .read_to_end(&mut decoded)
-                .with_context(|| format!("decoding fixture storage {}", safe_path(fixture)))?;
-            if decoded.len() > 512 * 1024 * 1024 {
-                anyhow::bail!("decoded fixture exceeds 512 MiB: {}", safe_path(fixture));
-            }
-            decoded
-        } else {
-            stored
-        };
         let dest = self
             .dir
             .path()
